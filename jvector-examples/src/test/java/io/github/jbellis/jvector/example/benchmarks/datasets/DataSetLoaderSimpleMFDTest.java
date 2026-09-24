@@ -70,6 +70,58 @@ public class DataSetLoaderSimpleMFDTest {
     }
 
     // ========================================================================
+    // Profiles
+    // ========================================================================
+
+    @Test
+    public void profileKeysResolveThroughSpecs() throws IOException {
+        writeTestDataFiles(cacheDir);
+        Files.createDirectories(cacheDir.resolve("fast"));
+        writeLocalOverrideDataFiles(cacheDir.resolve("fast"));
+        Files.writeString(cacheDir.resolve("catalog_entries.yaml"),
+                "test-ds:\n" +
+                "  base: test_base.fvecs\n" +
+                "  query: test_query.fvecs\n" +
+                "  gt: test_gt.ivecs\n" +
+                "\"test-ds:fast\":\n" +
+                "  base: fast/test_base.fvecs\n" +
+                "  query: fast/test_query.fvecs\n" +
+                "  gt: fast/test_gt.ivecs\n" +
+                "\"sub-ds:default\":\n" +
+                "  base: test_base.fvecs\n" +
+                "  query: test_query.fvecs\n" +
+                "  gt: test_gt.ivecs\n");
+        var loader = new DataSetLoaderSimpleMFD(null, cacheDir.toString(), false, testMetadata);
+
+        // default profile: bare entry
+        var plain = loader.loadDataSet(DataSetSpec.parse("test-ds")).orElseThrow();
+        assertEquals("test-ds", plain.getName());
+        assertEquals(5, plain.getDataSet().getBaseRavv().size());
+
+        // explicit profile: the name:profile entry, with metadata falling back to the bare name
+        var fast = loader.loadDataSet(DataSetSpec.parse("test-ds:fast")).orElseThrow();
+        assertEquals("test-ds:fast", fast.getName());
+        assertEquals(1, fast.getDataSet().getBaseRavv().size());
+
+        // default profile also matches a name:default entry when no bare entry exists
+        var sub = loader.loadDataSet(DataSetSpec.parse("sub-ds")).orElseThrow();
+        assertEquals("sub-ds:default", sub.getName());
+        assertEquals(5, sub.getDataSet().getBaseRavv().size());
+
+        // unknown profile is simply not found, not an error
+        assertTrue(loader.loadDataSet(DataSetSpec.parse("test-ds:slow")).isEmpty());
+
+        // the literal-key path still resolves the profile key as written
+        assertEquals("test-ds:fast", loader.loadDataSet("test-ds:fast").orElseThrow().getName());
+        assertTrue(loader.loadDataSet("sub-ds").isEmpty());
+
+        // through the facade, the sugared name and wrappers compose with the profile
+        var ds = DataSets.loadDataSet("test-ds:fast(mmap)", java.util.List.of(loader)).orElseThrow().getDataSet();
+        assertTrue(ds instanceof MMapCachedDataSet);
+        assertEquals(1, ds.getBaseRavv().size());
+    }
+
+    // ========================================================================
     // Basic loading
     // ========================================================================
 

@@ -75,6 +75,7 @@ public final class InMemoryCachedDataSet implements DataSetWrapper {
         RandomAccessVectorValues source = origin.getBaseRavv();
         if (source instanceof ListRandomAccessVectorValues) {
             this.baseRavv = source;
+            logger.info("Base vectors of '{}' are already heap-resident; adopting {} vectors as-is", origin.getName(), source.size());
             return;
         }
         long start = System.nanoTime();

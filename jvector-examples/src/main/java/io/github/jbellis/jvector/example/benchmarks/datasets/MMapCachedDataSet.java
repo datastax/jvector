@@ -84,6 +84,8 @@ public final class MMapCachedDataSet implements DataSetWrapper {
         RandomAccessVectorValues source = origin.getBaseRavv();
         if (source instanceof MappedFvecsRandomAccessVectorValues) {
             this.baseRavv = source;
+            logger.info("Serving {} base vectors of '{}' from mapped file {}",
+                    source.size(), origin.getName(), ((MappedFvecsRandomAccessVectorValues) source).getPath());
             return;
         }
         Path file = cacheDir.resolve(safeFileName(origin.getName()) + "-" + source.size() + "x" + source.dimension() + ".fvecs");
