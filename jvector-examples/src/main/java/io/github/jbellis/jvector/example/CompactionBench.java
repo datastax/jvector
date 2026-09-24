@@ -23,7 +23,7 @@ import io.github.jbellis.jvector.example.util.AccuracyMetrics;
 import io.github.jbellis.jvector.example.util.CompactionPartitionSource;
 import io.github.jbellis.jvector.example.yaml.TestDataPartition.Distribution;
 import io.github.jbellis.jvector.graph.GraphSearcher;
-import io.github.jbellis.jvector.graph.ListRandomAccessVectorValues;
+import io.github.jbellis.jvector.graph.RandomAccessVectorValues;
 import io.github.jbellis.jvector.graph.SearchResult;
 import io.github.jbellis.jvector.graph.disk.OnDiskGraphIndex;
 import io.github.jbellis.jvector.graph.disk.OnDiskGraphIndexCompactor;
@@ -33,7 +33,6 @@ import io.github.jbellis.jvector.graph.similarity.DefaultSearchScoreProvider;
 import io.github.jbellis.jvector.util.Bits;
 import io.github.jbellis.jvector.util.FixedBitSet;
 import io.github.jbellis.jvector.vector.VectorSimilarityFunction;
-import io.github.jbellis.jvector.vector.types.VectorFloat;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -121,7 +120,7 @@ public final class CompactionBench {
     private static BenchResult runConfig(DataSet ds, PartitionConfig cfg) throws Exception {
         String datasetName = ds.getName();
         logger.info("Compaction bench [{}] config {}: {} vectors",
-                datasetName, cfg.dirName(), ds.getBaseVectors().size());
+                datasetName, cfg.dirName(), ds.getBaseRavv().size());
 
         // 1. Fetch pre-built partitions from S3 (cached locally).
         List<Path> partitionPaths = CompactionPartitionSource.ensurePartitions(
@@ -137,15 +136,14 @@ public final class CompactionBench {
 
     private static BenchResult compactAndMeasure(DataSet ds, PartitionConfig cfg,
                                                  List<Path> partitionPaths, Path tempDir) throws Exception {
-        List<VectorFloat<?>> baseVectors = ds.getBaseVectors();
-        int dimension = ds.getDimension();
+        RandomAccessVectorValues baseVectors = ds.getBaseRavv();
         VectorSimilarityFunction vsf = ds.getSimilarityFunction();
         String datasetName = ds.getName();
         int numPartitions = cfg.numPartitions;
 
         // Load graphs and set up ordinal mapping: partition i's local ordinals shift by the sum of
         // all prior partition sizes, preserving the original base-vector ordering so global ordinal
-        // k maps back to baseVectors.get(k) by construction.
+        // k maps back to baseVectors ordinal k by construction.
         List<ReaderSupplier> rss = new ArrayList<>(numPartitions);
         List<OnDiskGraphIndex> graphs = new ArrayList<>(numPartitions);
         List<OrdinalMapper> remappers = new ArrayList<>(numPartitions);
@@ -184,8 +182,8 @@ public final class CompactionBench {
             rss.clear();
 
             // Search the compacted graph: measure recall and search latency in one pass.
-            // Global ordinal k maps back to baseVectors.get(k) by construction.
-            SearchStats search = searchCompacted(compactPath, ds, baseVectors, dimension, vsf);
+            // Global ordinal k maps back to baseVectors ordinal k by construction.
+            SearchStats search = searchCompacted(compactPath, ds, baseVectors, vsf);
             logger.info(String.format(
                     "%n" +
                     "  ┌─ Compaction result: %s [%s]%n" +
@@ -244,11 +242,10 @@ public final class CompactionBench {
      * mean and p99 per-query latency (ms) and throughput (queries/sec, single-threaded sequential).
      */
     private static SearchStats searchCompacted(Path indexPath, DataSet ds,
-                                               List<VectorFloat<?>> baseVectors,
-                                               int dimension, VectorSimilarityFunction vsf) throws Exception {
+                                               RandomAccessVectorValues ravv,
+                                               VectorSimilarityFunction vsf) throws Exception {
         var queryVectors = ds.getQueryVectors();
         var groundTruth = ds.getGroundTruth();
-        var ravv = new ListRandomAccessVectorValues(baseVectors, dimension);
 
         try (var rs = ReaderSupplierFactory.open(indexPath)) {
             var graph = OnDiskGraphIndex.load(rs);

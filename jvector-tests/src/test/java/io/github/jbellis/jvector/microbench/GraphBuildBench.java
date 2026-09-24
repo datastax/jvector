@@ -19,7 +19,7 @@ package io.github.jbellis.jvector.microbench;
 import io.github.jbellis.jvector.example.benchmarks.datasets.DataSet;
 import io.github.jbellis.jvector.example.benchmarks.datasets.DataSets;
 import io.github.jbellis.jvector.graph.GraphIndexBuilder;
-import io.github.jbellis.jvector.graph.ListRandomAccessVectorValues;
+import io.github.jbellis.jvector.graph.RandomAccessVectorValues;
 import org.openjdk.jmh.annotations.Benchmark;
 import org.openjdk.jmh.annotations.BenchmarkMode;
 import org.openjdk.jmh.annotations.Fork;
@@ -41,13 +41,13 @@ public class GraphBuildBench {
     @State(Scope.Benchmark)
     public static class Parameters {
         final DataSet ds;
-        final ListRandomAccessVectorValues ravv;
+        final RandomAccessVectorValues ravv;
 
         public Parameters() {
             this.ds = DataSets.loadDataSet("glove-100-angular").orElseThrow(
                     () -> new RuntimeException("Unable to load dataset: glove-100-angular")
             ).getDataSet();
-            this.ravv = new ListRandomAccessVectorValues(ds.getBaseVectors(), ds.getBaseVectors().get(0).length());
+            this.ravv = ds.getBaseRavv();
         }
     }
 

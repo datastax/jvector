@@ -33,6 +33,21 @@ Datasets are grouped into categories. The categories can be arbitrarily chosen f
 
 Dataset similarity functions are configured in `jvector-examples/yaml-configs/dataset-metadata.yml`.
 
+Each entry may carry a loader *profile* and a list of *wrappers* that change how the base vectors are held after loading. Two forms are accepted:
+
+```yaml
+regression-tests:
+  - cap-1M                        # name only: default profile, base vectors cached in heap memory
+  - cohere-english-v3-1M(mmap)    # sugared: name, then wrappers in parentheses
+  - name: cohere-english-v3-10M   # structured
+    profile: default              # optional; "default" when omitted
+    wrappers:                     # optional; applied left to right
+      - mmap
+      - lru: { grain: 4096, capacityMb: 512 }   # a wrapper with options
+```
+
+The sugared form is `name`, `name:profile`, `name(wrapper,...)` or `name:profile(wrapper,...)`, where a wrapper may carry options in brackets as in `lru[grain=4096,capacityMb=512]`, and is also accepted anywhere a dataset name is (command-line patterns, `dataset:` in an index-parameters file). Built-in wrappers are `memory` (cache the base vectors in heap memory, the default when no wrappers are given), `mmap` (serve them from a memory-mapped fvecs file) and `lru` (a bounded least-recently-used cache of vector grains in front of the mapped file, for datasets larger than memory; options `grain` (vectors per grain) and `capacityMb`, defaulting to `-Djvector.dataset.lru.grain` and `-Djvector.dataset.lru.capacityMb` or 1024 and a quarter of the heap). Loaders that do not understand profiles accept `default` and reject any other profile.
+
 Example `datasets.yml`:
 
 ```yaml

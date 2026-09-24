@@ -126,7 +126,7 @@ public class AutoBenchYAML {
                     DataSet ds = DataSets.loadDataSet(datasetName).orElseThrow(
                             () -> new RuntimeException("Dataset " + datasetName + " not found")
                     ).getDataSet();
-                    logger.info("Dataset loaded: {} with {} vectors", datasetName, ds.getBaseVectors().size());
+                    logger.info("Dataset loaded: {} with {} vectors", datasetName, ds.getBaseRavv().size());
 
                     String normalizedDatasetName = datasetName;
                     if (normalizedDatasetName.endsWith(".hdf5")) {

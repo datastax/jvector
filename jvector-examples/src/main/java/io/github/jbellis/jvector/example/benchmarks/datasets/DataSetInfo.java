@@ -114,6 +114,14 @@ public class DataSetInfo implements DataSetProperties {
         return baseProperties.isDuplicateVectorFree();
     }
 
+    /**
+     * {@inheritDoc}
+     */
+    @Override
+    public LoadBehavior loadBehavior() {
+        return baseProperties.loadBehavior();
+    }
+
     /// Returns the fully loaded and scrubbed {@link DataSet}.
     ///
     /// On the first invocation this triggers the deferred load pipeline, which may involve

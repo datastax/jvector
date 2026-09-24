@@ -331,7 +331,7 @@ public class Grid {
                                             "Compressor '%s' was provided but failed to encode vectors for dataset '%s'. " +
                                                     "Aborting to prevent false recall results.", compressor, ds.getName()));
                                 }
-                                System.out.format("%s: %s encoded %d vectors [%.2f MB] in %.2fs%n", ds.getName(), compressor, ds.getBaseVectors().size(), (cv.ramBytesUsed() / 1024f / 1024f), encodingTimeS);
+                                System.out.format("%s: %s encoded %d vectors [%.2f MB] in %.2fs%n", ds.getName(), compressor, ds.getBaseRavv().size(), (cv.ramBytesUsed() / 1024f / 1024f), encodingTimeS);
                             }
                         }
 
@@ -506,13 +506,16 @@ public class Grid {
         var identityMapper = new OrdinalMapper.IdentityMapper(floatVectors.size() - 1);
         var builder = new RandomAccessOnDiskGraphIndexWriter.Builder(onHeapGraph, outPath);
         builder.withMapper(identityMapper);
+        // suppliers are invoked from several writer threads; a value-shared reader (e.g. a memory-mapped
+        // dataset) must be read through per-thread copies or the threads overwrite each other's vectors
+        var vectors = floatVectors.threadLocalSupplier();
 
         Map<FeatureId, IntFunction<Feature.State>> suppliers = new EnumMap<>(FeatureId.class);
         for (var featureId : features) {
             switch (featureId) {
                 case INLINE_VECTORS:
                     builder.with(new InlineVectors(floatVectors.dimension()));
-                    suppliers.put(FeatureId.INLINE_VECTORS, ordinal -> new InlineVectors.State(floatVectors.getVector(ordinal)));
+                    suppliers.put(FeatureId.INLINE_VECTORS, ordinal -> new InlineVectors.State(vectors.get().getVector(ordinal)));
                     break;
                 case FUSED_PQ:
                     if (pq == null) {
@@ -528,7 +531,7 @@ public class Grid {
                             ? constructionMetrics.index("NVQ").timeCompute(() -> NVQuantization.compute(floatVectors, nSubVectors))
                             : NVQuantization.compute(floatVectors, nSubVectors);
                     builder.with(new NVQ(nvq));
-                    suppliers.put(FeatureId.NVQ_VECTORS, ordinal -> new NVQ.State(nvq.encode(floatVectors.getVector(ordinal))));
+                    suppliers.put(FeatureId.NVQ_VECTORS, ordinal -> new NVQ.State(nvq.encode(vectors.get().getVector(ordinal))));
                     break;
 
             }
@@ -885,7 +888,7 @@ public class Grid {
                                                                 searchCompressorObj, ds.getName()));
                                                     }
                                                     System.out.format("%s: %s encoded %d vectors [%.2f MB] for search%n",
-                                                            ds.getName(), searchCompressorObj, ds.getBaseVectors().size(),
+                                                            ds.getName(), searchCompressorObj, ds.getBaseRavv().size(),
                                                             (cvArg.ramBytesUsed() / 1024f / 1024f));
                                                 }
                                             }

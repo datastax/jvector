@@ -15,7 +15,9 @@
  */
 package io.github.jbellis.jvector.example.benchmarks.datasets;
 
+import io.github.jbellis.jvector.example.util.MappedFvecsRandomAccessVectorValues;
 import io.github.jbellis.jvector.example.util.SiftLoader;
+import io.github.jbellis.jvector.graph.RandomAccessVectorValues;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.yaml.snakeyaml.Yaml;
@@ -44,6 +46,7 @@ import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
@@ -144,6 +147,13 @@ import java.util.stream.Stream;
 ///     true
 /// );
 /// ```
+///
+/// ### Profiles
+///
+/// A catalog key may be `name:profile`, e.g. `sift1m:label_00`, so one dataset can ship several
+/// variants of its files. {@link #loadDataSet(DataSetSpec)} resolves a spec against these keys:
+/// the default profile matches the bare `name` entry or `name:default`, any other profile matches
+/// only `name:profile`. {@link #loadDataSet(String)} treats its argument as a literal key.
 ///
 /// ### Metadata
 ///
@@ -385,8 +395,39 @@ public class DataSetLoaderSimpleMFD implements DataSetLoader {
         }
     }
 
+    /// Looks up `dataSetName` as a literal catalog key, so a key written as `sift1m:label_00` is
+    /// found by that exact string. Metadata is looked up by the same key and then, for a
+    /// `name:profile` key, by the bare name.
     @Override
     public Optional<DataSetInfo> loadDataSet(String dataSetName) {
+        int colon = dataSetName.indexOf(':');
+        List<String> metadataKeys = colon > 0
+                ? List.of(dataSetName, dataSetName.substring(0, colon))
+                : List.of(dataSetName);
+        return load(dataSetName, metadataKeys);
+    }
+
+    /// Profile-aware lookup. Catalog keys are `name` or `name:profile`. A spec with the default
+    /// profile matches the bare `name` entry first and then `name:default`; any other profile
+    /// matches only `name:profile`. Metadata is looked up by the matched catalog key first and then
+    /// by the bare name, so datasets whose profiles share properties need a single metadata entry.
+    /// Nothing is downloaded or loaded unless a catalog key matches.
+    @Override
+    public Optional<DataSetInfo> loadDataSet(DataSetSpec spec) {
+        String name = spec.getName();
+        List<String> candidates = spec.isDefaultProfile()
+                ? List.of(name, name + ":" + DataSetSpec.DEFAULT_PROFILE)
+                : List.of(name + ":" + spec.getProfile());
+        for (String key : candidates) {
+            if (catalog.containsKey(key)) {
+                return load(key, key.equals(name) ? List.of(key) : List.of(key, name));
+            }
+        }
+        logger.debug("No catalog entry for {} (tried {})", spec, candidates);
+        return Optional.empty();
+    }
+
+    private Optional<DataSetInfo> load(String dataSetName, List<String> metadataKeys) {
         var entry = catalog.get(dataSetName);
         if (entry == null) return Optional.empty();
 
@@ -418,17 +459,28 @@ public class DataSetLoaderSimpleMFD implements DataSetLoader {
 
         logger.info("Dataset files ready for '{}' in {}s", dataSetName, String.format("%.2f", (System.nanoTime() - startTime) / 1e9));
 
-        var props = metadata.getProperties(dataSetName)
-                .orElseThrow(() -> new IllegalArgumentException(
-                        String.format(
-                                "Dataset '%s' was found in dataset catalog, but no metadata entry was found in dataset-metadata.yml. ",
-                                dataSetName)));
+        DataSetProperties props = resolveProperties(dataSetName, metadataKeys);
         return Optional.of(new DataSetInfo(props, () -> {
-            var baseVectors = SiftLoader.readFvecs(effectiveCacheDir.resolve(baseFile).toString());
+            // base vectors stay on disk behind a memory-mapped reader; DataSets' wrappers decide whether
+            // they are subsequently cached in heap memory
+            RandomAccessVectorValues baseVectors;
+            try {
+                baseVectors = new MappedFvecsRandomAccessVectorValues(effectiveCacheDir.resolve(baseFile));
+            } catch (IOException e) {
+                throw new UncheckedIOException(e);
+            }
             var queryVectors = SiftLoader.readFvecs(effectiveCacheDir.resolve(queryFile).toString());
             var gtVectors = SiftLoader.readIvecs(effectiveCacheDir.resolve(gtFile).toString());
             return DataSetUtils.processDataSet(dataSetName, props, baseVectors, queryVectors, gtVectors);
         }));
+    }
+
+    /// Returns the first metadata entry found under `metadataKeys`, in order, named after `dataSetName`.
+    private DataSetProperties resolveProperties(String dataSetName, List<String> metadataKeys) {
+        return metadata.getProperties(dataSetName, metadataKeys)
+                .orElseThrow(() -> new IllegalArgumentException(String.format(
+                        "Dataset '%s' was found in dataset catalog, but no metadata entry was found in dataset-metadata.yml under %s. ",
+                        dataSetName, metadataKeys)));
     }
 
     // ========================================================================================

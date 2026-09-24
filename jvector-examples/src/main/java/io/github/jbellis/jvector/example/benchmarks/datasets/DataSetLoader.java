@@ -47,4 +47,29 @@ public interface DataSetLoader {
      * @return a {@link DataSetInfo} handle for the dataset, if found
      */
     Optional<DataSetInfo> loadDataSet(String dataSetName);
+
+    /**
+     * Looks up a dataset by {@link DataSetSpec}, honoring the spec's loader profile.
+     *
+     * <p>The default implementation is for loaders that do not understand profiles: it delegates to
+     * {@link #loadDataSet(String)} with the spec's name, accepts the {@value DataSetSpec#DEFAULT_PROFILE}
+     * profile silently, and throws if the dataset was found but a different profile was requested. A loader
+     * that does not recognise the name returns empty regardless of profile, so a later loader in the chain
+     * may still serve it.
+     *
+     * <p>Loaders that understand profiles override this method. Wrapper names on the spec are not the
+     * loader's concern; {@link DataSets} applies them to the loaded dataset.
+     *
+     * @param spec the dataset name and profile
+     * @return a {@link DataSetInfo} handle for the dataset, if found
+     * @throws IllegalArgumentException if this loader found the dataset but cannot honor a non-default profile
+     */
+    default Optional<DataSetInfo> loadDataSet(DataSetSpec spec) {
+        Optional<DataSetInfo> found = loadDataSet(spec.getName());
+        if (found.isPresent() && !spec.isDefaultProfile()) {
+            throw new IllegalArgumentException(getClass().getSimpleName() + " does not support dataset profiles, but profile '"
+                    + spec.getProfile() + "' was requested for dataset '" + spec.getName() + "'");
+        }
+        return found;
+    }
 }

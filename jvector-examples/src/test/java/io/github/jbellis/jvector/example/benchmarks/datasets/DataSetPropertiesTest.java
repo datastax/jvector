@@ -350,7 +350,7 @@ public class DataSetPropertiesTest {
             public RandomAccessVectorValues getBaseRavv() { return null; }
             public String getName() { return "sentinel"; }
             public VectorSimilarityFunction getSimilarityFunction() { return VectorSimilarityFunction.COSINE; }
-            public List<VectorFloat<?>> getBaseVectors() { return Collections.emptyList(); }
+
             public List<VectorFloat<?>> getQueryVectors() { return Collections.emptyList(); }
             public List<? extends List<Integer>> getGroundTruth() { return Collections.emptyList(); }
         };

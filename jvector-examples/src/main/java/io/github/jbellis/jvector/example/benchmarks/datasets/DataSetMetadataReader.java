@@ -25,6 +25,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 
@@ -115,6 +116,26 @@ public class DataSetMetadataReader {
             props.putIfAbsent(DataSetProperties.KEY_NAME, datasetKey);
             return new DataSetProperties.PropertyMap(props);
         });
+    }
+
+    /// Looks up the {@link DataSetProperties} for a dataset under several candidate keys, in order,
+    /// naming the result after `datasetName` rather than after the key that matched. This lets a
+    /// profile-specific catalog key such as `sift1m:label_00` share the metadata entry of its bare
+    /// name `sift1m` while still reporting the full name.
+    ///
+    /// @param datasetName the name to report for the dataset when the entry has no explicit name
+    /// @param lookupKeys  keys to try, in order; each is resolved like {@link #getProperties(String)}
+    /// @return the first entry found, or empty if none of the keys match
+    public Optional<DataSetProperties> getProperties(String datasetName, List<String> lookupKeys) {
+        for (String key : lookupKeys) {
+            var entry = findEntry(key);
+            if (entry.isPresent()) {
+                var props = new HashMap<>(entry.get());
+                props.putIfAbsent(DataSetProperties.KEY_NAME, datasetName);
+                return Optional.of(new DataSetProperties.PropertyMap(props));
+            }
+        }
+        return Optional.empty();
     }
 
     private Optional<Map<String, Object>> findEntry(String datasetKey) {
