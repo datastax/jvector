@@ -20,7 +20,7 @@ import io.github.jbellis.jvector.disk.IndexWriter;
 import io.github.jbellis.jvector.disk.RandomAccessReader;
 import io.github.jbellis.jvector.disk.RandomAccessWriter;
 import io.github.jbellis.jvector.disk.ReaderSupplier;
-import io.github.jbellis.jvector.graph.ImmutableGraphIndex;
+import io.github.jbellis.jvector.graph.GraphIndex;
 import io.github.jbellis.jvector.graph.disk.feature.Feature;
 import io.github.jbellis.jvector.graph.disk.feature.FeatureId;
 import org.slf4j.Logger;
@@ -109,7 +109,7 @@ public interface GraphIndexFormat {
          * @param suppliers per-feature functions that produce a {@link Feature.State} for a given original ordinal
          * @throws IOException if an I/O error occurs while writing
          */
-        void write(ImmutableGraphIndex.View view, Map<FeatureId, IntFunction<Feature.State>> suppliers) throws IOException;
+        void write(GraphIndex.View view, Map<FeatureId, IntFunction<Feature.State>> suppliers) throws IOException;
     }
 
     /**

@@ -25,8 +25,12 @@
 package io.github.jbellis.jvector.graph;
 
 import io.github.jbellis.jvector.annotations.Experimental;
+import io.github.jbellis.jvector.disk.IndexWriter;
 import io.github.jbellis.jvector.disk.RandomAccessReader;
 import io.github.jbellis.jvector.graph.ConcurrentNeighborMap.Neighbors;
+import io.github.jbellis.jvector.graph.disk.OnDiskGraphIndexWriter;
+import io.github.jbellis.jvector.graph.disk.OnDiskParallelGraphIndexWriter;
+import io.github.jbellis.jvector.graph.disk.OnDiskSequentialGraphIndexWriter;
 import io.github.jbellis.jvector.graph.diversity.DiversityProvider;
 import io.github.jbellis.jvector.graph.similarity.ScoreFunction;
 import io.github.jbellis.jvector.util.Accountable;
@@ -39,7 +43,9 @@ import io.github.jbellis.jvector.util.ThreadSafeGrowableBitSet;
 import org.agrona.collections.IntArrayList;
 
 import java.io.DataOutput;
+import java.io.FileNotFoundException;
 import java.io.IOException;
+import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
@@ -52,7 +58,7 @@ import java.util.concurrent.locks.StampedLock;
 import java.util.stream.IntStream;
 
 /**
- * An {@link ImmutableGraphIndex} that offers concurrent access; for typical graphs you will get significant
+ * An {@link GraphIndex} that offers concurrent access; for typical graphs you will get significant
  * speedups in construction and searching as you add threads.
  *
  * <p>The base layer (layer 0) contains all nodes, while higher layers are stored in sparse maps.
@@ -393,6 +399,21 @@ public class OnHeapGraphIndex implements MutableGraphIndex {
     @Override
     public boolean allMutationsCompleted() {
         return allMutationsCompleted;
+    }
+
+    @Override
+    public PersistableGraphIndex.GraphIndexWriterBuilder getParallelWriterBuilder(Path path) throws FileNotFoundException {
+        return new OnDiskParallelGraphIndexWriter.Builder(this, path);
+    }
+
+    @Override
+    public PersistableGraphIndex.GraphIndexWriterBuilder getWriterBuilder(Path path) throws FileNotFoundException {
+        return new OnDiskGraphIndexWriter.Builder(this, path);
+    }
+
+    @Override
+    public PersistableGraphIndex.GraphIndexWriterBuilder getWriterBuilder(IndexWriter out) {
+        return new OnDiskSequentialGraphIndexWriter.Builder(this, out);
     }
 
     /**

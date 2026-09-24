@@ -20,7 +20,7 @@ import io.github.jbellis.jvector.disk.IndexWriter;
 import io.github.jbellis.jvector.disk.RandomAccessReader;
 import io.github.jbellis.jvector.disk.RandomAccessWriter;
 import io.github.jbellis.jvector.disk.ReaderSupplier;
-import io.github.jbellis.jvector.graph.ImmutableGraphIndex;
+import io.github.jbellis.jvector.graph.GraphIndex;
 import io.github.jbellis.jvector.graph.OnHeapGraphIndex;
 import io.github.jbellis.jvector.graph.disk.feature.Feature;
 import io.github.jbellis.jvector.graph.disk.feature.FeatureId;
@@ -168,7 +168,7 @@ abstract class AbstractGraphIndexFormat implements GraphIndexFormat {
         final int entryNode;
         try (var view = ctx.graph.getView()) {
             var en = view.entryNode();
-            entryNode = en == null ? ImmutableGraphIndex.ENTRY_NODE_ABSENT : ctx.ordinalMapper.oldToNew(en.node);
+            entryNode = en == null ? GraphIndex.ENTRY_NODE_ABSENT : ctx.ordinalMapper.oldToNew(en.node);
         }
         var commonHeader = new CommonHeader(getVersion(), ctx.dimension, entryNode, layerInfo, ctx.ordinalMapper.maxOrdinal() + 1);
         var header = new Header(commonHeader, ctx.featureMap);
@@ -190,7 +190,7 @@ abstract class AbstractGraphIndexFormat implements GraphIndexFormat {
         final int entryNode;
         try (var view = ctx.graph.getView()) {
             var en = view.entryNode();
-            entryNode = en == null ? ImmutableGraphIndex.ENTRY_NODE_ABSENT : ctx.ordinalMapper.oldToNew(en.node);
+            entryNode = en == null ? GraphIndex.ENTRY_NODE_ABSENT : ctx.ordinalMapper.oldToNew(en.node);
         }
         var commonHeader = new CommonHeader(getVersion(), ctx.dimension, entryNode, layerInfo, ctx.ordinalMapper.maxOrdinal() + 1);
         var header = new Header(commonHeader, ctx.featureMap);
