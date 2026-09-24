@@ -242,7 +242,8 @@ public class ParallelWriteExample {
 
         // Build suppliers for inline features (NVQ only - FUSED_ADC needs neighbors)
         Map<FeatureId, IntFunction<Feature.State>> inlineSuppliers = new EnumMap<>(FeatureId.class);
-        inlineSuppliers.put(FeatureId.NVQ_VECTORS, ordinal -> new NVQ.State(nvq.encode(floatVectors.getVector(ordinal))));
+        var vectors = floatVectors.threadLocalSupplier(); // suppliers run on parallel writer threads
+        inlineSuppliers.put(FeatureId.NVQ_VECTORS, ordinal -> new NVQ.State(nvq.encode(vectors.get().getVector(ordinal))));
 
         // FUSED_ADC supplier needs graph view, provided at write time
         var identityMapper = new OrdinalMapper.IdentityMapper(floatVectors.size() - 1);

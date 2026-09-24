@@ -650,7 +650,8 @@ public class CompactorBenchmark {
 
             try (var writer = writerBuilder.build()) {
                 var suppliers = new EnumMap<FeatureId, IntFunction<Feature.State>>(FeatureId.class);
-                suppliers.put(FeatureId.INLINE_VECTORS, ordinal -> new InlineVectors.State(ravvPerSource.getVector(ordinal)));
+                var vectors = ravvPerSource.threadLocalSupplier(); // the parallel writer calls suppliers from worker threads
+                suppliers.put(FeatureId.INLINE_VECTORS, ordinal -> new InlineVectors.State(vectors.get().getVector(ordinal)));
 
                 if (indexPrecision == IndexPrecision.FUSEDPQ) {
                     var view = graph.getView();
@@ -756,7 +757,8 @@ public class CompactorBenchmark {
 
         try (var writer = writerBuilder.build()) {
             var suppliers = new EnumMap<FeatureId, IntFunction<Feature.State>>(FeatureId.class);
-            suppliers.put(FeatureId.INLINE_VECTORS, ord -> new InlineVectors.State(full.getVector(ord)));
+            var vectors = full.threadLocalSupplier(); // the parallel writer calls suppliers from worker threads
+            suppliers.put(FeatureId.INLINE_VECTORS, ord -> new InlineVectors.State(vectors.get().getVector(ord)));
 
             if (indexPrecision == IndexPrecision.FUSEDPQ) {
                 var view = graph.getView();
