@@ -16,6 +16,7 @@
 
 package io.github.jbellis.jvector.example.yaml;
 
+import io.github.jbellis.jvector.example.benchmarks.datasets.DataSetSpec;
 import io.github.jbellis.jvector.graph.disk.OnDiskGraphIndex;
 import org.yaml.snakeyaml.LoaderOptions;
 import org.yaml.snakeyaml.constructor.Constructor;
@@ -50,8 +51,14 @@ public class MultiConfig {
     private static final java.util.concurrent.atomic.AtomicReference<File> DEFAULT_FILE_USED =
             new java.util.concurrent.atomic.AtomicReference<>();
 
+    /// Loads the per-dataset config from `index-parameters/<name>.yml`, falling back to `default.yml`.
+    ///
+    /// `datasetName` may be a {@link DataSetSpec} in sugared form (e.g. `cap-1M(mmap)`): the config
+    /// file is looked up by the bare name, and when the spec carries a profile or wrappers the
+    /// resulting config's `dataset` is set to the full spec so that loading honors it.
     public static MultiConfig getDefaultConfig(String datasetName) throws FileNotFoundException {
-        var name = defaultDirectory + datasetName;
+        DataSetSpec spec = datasetName.endsWith(".yml") ? null : DataSetSpec.parse(datasetName);
+        var name = defaultDirectory + (spec == null ? datasetName : spec.getName());
         if (!name.endsWith(".yml")) {
             name += ".yml";
         }
@@ -67,7 +74,7 @@ public class MultiConfig {
 
         var config = getConfig(configFile);
 
-        if (useDefault) {
+        if (useDefault || (spec != null && (spec.hasWrappers() || !spec.isDefaultProfile()))) {
             config.dataset = datasetName;
         }
 
