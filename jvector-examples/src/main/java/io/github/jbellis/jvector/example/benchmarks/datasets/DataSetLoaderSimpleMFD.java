@@ -15,7 +15,9 @@
  */
 package io.github.jbellis.jvector.example.benchmarks.datasets;
 
+import io.github.jbellis.jvector.example.util.MappedFvecsRandomAccessVectorValues;
 import io.github.jbellis.jvector.example.util.SiftLoader;
+import io.github.jbellis.jvector.graph.RandomAccessVectorValues;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.yaml.snakeyaml.Yaml;
@@ -424,7 +426,14 @@ public class DataSetLoaderSimpleMFD implements DataSetLoader {
                                 "Dataset '%s' was found in dataset catalog, but no metadata entry was found in dataset-metadata.yml. ",
                                 dataSetName)));
         return Optional.of(new DataSetInfo(props, () -> {
-            var baseVectors = SiftLoader.readFvecs(effectiveCacheDir.resolve(baseFile).toString());
+            // base vectors stay on disk behind a memory-mapped reader; DataSets' wrappers decide whether
+            // they are subsequently cached in heap memory
+            RandomAccessVectorValues baseVectors;
+            try {
+                baseVectors = new MappedFvecsRandomAccessVectorValues(effectiveCacheDir.resolve(baseFile));
+            } catch (IOException e) {
+                throw new UncheckedIOException(e);
+            }
             var queryVectors = SiftLoader.readFvecs(effectiveCacheDir.resolve(queryFile).toString());
             var gtVectors = SiftLoader.readIvecs(effectiveCacheDir.resolve(gtFile).toString());
             return DataSetUtils.processDataSet(dataSetName, props, baseVectors, queryVectors, gtVectors);

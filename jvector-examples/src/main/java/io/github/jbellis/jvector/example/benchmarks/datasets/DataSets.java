@@ -25,11 +25,16 @@ import java.util.Collection;
 import java.util.List;
 import java.util.Optional;
 
-/// Facade for locating datasets across multiple {@link DataSetLoader} implementations.
+/// Facade for locating datasets across multiple {@link DataSetLoader} implementations and
+/// layering {@link DataSetWrapper}s over what they load.
 ///
 /// Returns a {@link DataSetInfo} handle whose vector data is loaded lazily on the first
 /// call to {@link DataSetInfo#getDataSet()}, allowing callers to inspect dataset metadata
 /// (name, similarity function) without incurring the cost of reading vectors into memory.
+///
+/// Unless wrapper providers are given explicitly, {@link #defaultWrappers} apply, which cache
+/// base vectors in heap memory so that datasets behave as they did when loaders read everything
+/// into lists.
 ///
 /// @see DataSetInfo
 /// @see DataSetLoader
@@ -48,7 +53,10 @@ public class DataSets {
 
     }};
 
-    /// Loads a dataset by name using the {@link #defaultLoaders}.
+    /// Wrappers applied when none are given explicitly: the base vectors are cached in heap memory.
+    public static final List<DataSetWrapper.Provider> defaultWrappers = new ArrayList<>(List.of(InMemoryCachedDataSet.PROVIDER));
+
+    /// Loads a dataset by name using the {@link #defaultLoaders} and {@link #defaultWrappers}.
     ///
     /// @param dataSetName the logical dataset name (e.g. {@code "ada002-100k"})
     /// @return a lazy {@link DataSetInfo} handle, or empty if no loader recognises the name
@@ -56,12 +64,26 @@ public class DataSets {
         return loadDataSet(dataSetName, defaultLoaders);
     }
 
-    /// Loads a dataset by name, trying each loader in order until one matches.
+    /// Loads a dataset by name, trying each loader in order until one matches, and applying the
+    /// {@link #defaultWrappers}.
     ///
     /// @param dataSetName the logical dataset name (e.g. {@code "ada002-100k"})
     /// @param loaders     the loaders to try, in priority order
     /// @return a lazy {@link DataSetInfo} handle, or empty if no loader recognises the name
     public static Optional<DataSetInfo> loadDataSet(String dataSetName, Collection<DataSetLoader> loaders) {
+        return loadDataSet(dataSetName, loaders, defaultWrappers);
+    }
+
+    /// Loads a dataset by name, trying each loader in order until one matches, then applies exactly
+    /// the given wrapper providers, in order, when the dataset is first materialised.
+    ///
+    /// @param dataSetName the logical dataset name
+    /// @param loaders     the loaders to try, in priority order
+    /// @param wrappers    the wrappers to layer over the loaded dataset, outermost last; may be empty
+    /// @return a lazy {@link DataSetInfo} handle, or empty if no loader recognises the name
+    public static Optional<DataSetInfo> loadDataSet(String dataSetName,
+                                                    Collection<DataSetLoader> loaders,
+                                                    Collection<DataSetWrapper.Provider> wrappers) {
         logger.info("loading dataset [{}]", dataSetName);
         if (dataSetName.endsWith(".hdf5")) {
             throw new InvalidParameterException("DataSet names are not meant to be file names. Did you mean " + dataSetName.replace(".hdf5", "") + "? ");
@@ -72,10 +94,24 @@ public class DataSets {
             Optional<DataSetInfo> dataSetLoaded = loader.loadDataSet(dataSetName);
             if (dataSetLoaded.isPresent()) {
                 logger.info("dataset [{}] found with loader [{}]", dataSetName, loader.getClass().getSimpleName());
-                return dataSetLoaded;
+                return Optional.of(wrap(dataSetLoaded.get(), wrappers));
             }
         }
         logger.warn("Unable to find dataset [{}] with any dataset loader.", dataSetName);
         return Optional.empty();
+    }
+
+    private static DataSetInfo wrap(DataSetInfo info, Collection<DataSetWrapper.Provider> wrappers) {
+        if (wrappers.isEmpty()) {
+            return info;
+        }
+        List<DataSetWrapper.Provider> providers = List.copyOf(wrappers);
+        return new DataSetInfo(info, () -> {
+            DataSet ds = info.getDataSet();
+            for (DataSetWrapper.Provider provider : providers) {
+                ds = provider.wrap(ds);
+            }
+            return ds;
+        });
     }
 }

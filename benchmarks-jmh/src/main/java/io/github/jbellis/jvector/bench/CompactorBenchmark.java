@@ -249,7 +249,6 @@ public class CompactorBenchmark {
     // ---------- Benchmark state ----------
     private RandomAccessVectorValues ravv;
     private List<VectorFloat<?>> queryVectors;
-    private List<VectorFloat<?>> baseVectors;
     private List<? extends List<Integer>> groundTruth;
     private DataSet ds;
     private VectorSimilarityFunction similarityFunction;
@@ -399,7 +398,6 @@ public class CompactorBenchmark {
 
                 if (datasetPortion == 1.0) {
                     ravv = ds.getBaseRavv();
-                    baseVectors = ds.getBaseVectors();
                 } else {
                     int totalVectors = ds.getBaseRavv().size();
                     int portionedSize = (int) (totalVectors * datasetPortion);
@@ -408,8 +406,7 @@ public class CompactorBenchmark {
                                 "datasetPortion=" + datasetPortion + " yields " + portionedSize
                                         + " vectors, fewer than numPartitions=" + numPartitions);
                     }
-                    baseVectors = ds.getBaseVectors().subList(0, portionedSize);
-                    ravv = new ListRandomAccessVectorValues(baseVectors, ds.getDimension());
+                    ravv = ds.getBaseRavv().range(0, portionedSize);
                 }
 
                 similarityFunction = ds.getSimilarityFunction();
@@ -428,7 +425,6 @@ public class CompactorBenchmark {
                 }
             } else {
                 ravv = null;
-                baseVectors = null;
                 dimension = -1;
 
                 if (needsRecallData) {
@@ -469,7 +465,7 @@ public class CompactorBenchmark {
             }
 
             if (workloadMode == WorkloadMode.PARTITION || workloadMode == WorkloadMode.PARTITION_AND_COMPACT) {
-                var partitionedData = DataSetPartitioner.partition(baseVectors, numPartitions, splitDistribution);
+                var partitionedData = DataSetPartitioner.partition(ravv, numPartitions, splitDistribution);
                 vectorsPerSourceCount = partitionedData.sizes;
             } else {
                 vectorsPerSourceCount = null;
@@ -479,7 +475,7 @@ public class CompactorBenchmark {
                 if (jfrPartitioning) {
                     jfrPartitioningRecorder.start(JFR_DIR, "partitioning-" + jfrParamSuffix() + ".jfr", jfrObjectCount);
                 }
-                buildPartitions(ds, baseVectors);
+                buildPartitions(ravv);
                 if (jfrPartitioningRecorder.isActive()) {
                     jfrPartitioningRecorder.stop();
                 }
@@ -595,7 +591,7 @@ public class CompactorBenchmark {
         }
     }
 
-    private void buildPartitions(DataSet ds, List<VectorFloat<?>> baseVectors) throws Exception {
+    private void buildPartitions(RandomAccessVectorValues baseVectors) throws Exception {
 
         var partitionedData = DataSetPartitioner.partition(baseVectors, numPartitions, splitDistribution);
         vectorsPerSourceCount = partitionedData.sizes;
@@ -604,9 +600,9 @@ public class CompactorBenchmark {
                 numPartitions, partitionsBaseDir.toAbsolutePath(), graphDegree, beamWidth, splitDistribution, vectorsPerSourceCount,
                 indexPrecision, parallelWriteThreads, resolvedVectorizationProvider);
 
-        int dimension = baseVectors.get(0).length();
+        int dimension = baseVectors.dimension();
         for (int i = 0; i < numPartitions; i++) {
-            List<VectorFloat<?>> vectorsPerSource = partitionedData.vectors.get(i);
+            RandomAccessVectorValues ravvPerSource = partitionedData.vectors.get(i);
 
             // Round-robin assignment of partition files to storage paths, but still keep canonical base dir name stable.
             Path baseDirForThisSegment = storagePaths.get(i % storagePaths.size());
@@ -616,9 +612,8 @@ public class CompactorBenchmark {
             }
 
             log.info("Building partition {}/{}: vectors={} -> {}",
-                    i + 1, numPartitions, vectorsPerSource.size(), outputPath.toAbsolutePath());
+                    i + 1, numPartitions, ravvPerSource.size(), outputPath.toAbsolutePath());
 
-            var ravvPerSource = new ListRandomAccessVectorValues(vectorsPerSource, dimension);
             BuildScoreProvider bspPerSource;
             ProductQuantization pq = null;
             PQVectors pqVectors = null;
@@ -713,7 +708,7 @@ public class CompactorBenchmark {
         return compactionTimeMs;
     }
 
-    private long buildFromScratch(List<VectorFloat<?>> baseVectors) throws Exception {
+    private long buildFromScratch(RandomAccessVectorValues baseVectors) throws Exception {
         if (scratchOutputPath.getParent() != null) {
             Files.createDirectories(scratchOutputPath.getParent());
         }
@@ -721,8 +716,8 @@ public class CompactorBenchmark {
             Files.delete(scratchOutputPath);
         }
 
-        int dimension = baseVectors.get(0).length();
-        var full = new ListRandomAccessVectorValues(baseVectors, dimension);
+        int dimension = baseVectors.dimension();
+        var full = baseVectors;
 
         log.info("Building from scratch: vectors={} dim={} sim={} deg={} bw={} precision={} pwThreads={} vp={} -> {}",
                 full.size(), dimension, similarityFunction,
@@ -843,7 +838,7 @@ public class CompactorBenchmark {
                     break;
 
                 case BUILD:
-                    durationMs = buildFromScratch(baseVectors);
+                    durationMs = buildFromScratch(ravv);
                     if (measureRecall) {
                         searchStats = runRecall(scratchOutputPath);
                         recall = searchStats.recall;

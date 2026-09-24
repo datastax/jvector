@@ -23,21 +23,29 @@ import io.github.jbellis.jvector.vector.types.VectorFloat;
 
 import java.util.List;
 
+/// A {@link DataSet} assembled from its parts: a base-vector {@link RandomAccessVectorValues} of any
+/// kind, plus heap-resident query vectors and ground truth.
 public class SimpleDataSet implements DataSet {
     private final String name;
     private final VectorSimilarityFunction similarityFunction;
-    private final List<VectorFloat<?>> baseVectors;
+    private final RandomAccessVectorValues baseRavv;
     private final List<VectorFloat<?>> queryVectors;
     private final List<? extends List<Integer>> groundTruth;
-    private RandomAccessVectorValues baseRavv;
 
+    /// Creates a dataset over an arbitrary base-vector reader.
+    ///
+    /// @param name               the dataset name
+    /// @param similarityFunction the similarity function the dataset was built for
+    /// @param baseRavv           the base vectors; must be non-empty
+    /// @param queryVectors       the query vectors; must be non-empty and match the base dimension
+    /// @param groundTruth        one neighbor list per query vector
     public SimpleDataSet(String name,
                          VectorSimilarityFunction similarityFunction,
-                         List<VectorFloat<?>> baseVectors,
+                         RandomAccessVectorValues baseRavv,
                          List<VectorFloat<?>> queryVectors,
                          List<? extends List<Integer>> groundTruth)
     {
-        if (baseVectors.isEmpty()) {
+        if (baseRavv.size() == 0) {
             throw new IllegalArgumentException("Base vectors must not be empty");
         }
         if (queryVectors.isEmpty()) {
@@ -47,7 +55,7 @@ public class SimpleDataSet implements DataSet {
             throw new IllegalArgumentException("Ground truth vectors must not be empty");
         }
 
-        if (baseVectors.get(0).length() != queryVectors.get(0).length()) {
+        if (baseRavv.dimension() != queryVectors.get(0).length()) {
             throw new IllegalArgumentException("Base and query vectors must have the same dimensionality");
         }
         if (queryVectors.size() != groundTruth.size()) {
@@ -56,24 +64,44 @@ public class SimpleDataSet implements DataSet {
 
         this.name = name;
         this.similarityFunction = similarityFunction;
-        this.baseVectors = baseVectors;
+        this.baseRavv = baseRavv;
         this.queryVectors = queryVectors;
         this.groundTruth = groundTruth;
 
         System.out.format("%n%s: %d base and %d query vectors created, dimensions %d%n",
-                name, baseVectors.size(), queryVectors.size(), baseVectors.get(0).length());
+                name, baseRavv.size(), queryVectors.size(), baseRavv.dimension());
+    }
+
+    /// Creates a dataset over heap-resident base vectors, served through a {@link ListRandomAccessVectorValues}.
+    ///
+    /// @param name               the dataset name
+    /// @param similarityFunction the similarity function the dataset was built for
+    /// @param baseVectors        the base vectors; must be non-empty
+    /// @param queryVectors       the query vectors; must be non-empty and match the base dimension
+    /// @param groundTruth        one neighbor list per query vector
+    public SimpleDataSet(String name,
+                         VectorSimilarityFunction similarityFunction,
+                         List<VectorFloat<?>> baseVectors,
+                         List<VectorFloat<?>> queryVectors,
+                         List<? extends List<Integer>> groundTruth)
+    {
+        this(name, similarityFunction, listRavv(baseVectors), queryVectors, groundTruth);
+    }
+
+    private static RandomAccessVectorValues listRavv(List<VectorFloat<?>> baseVectors) {
+        if (baseVectors.isEmpty()) {
+            throw new IllegalArgumentException("Base vectors must not be empty");
+        }
+        return new ListRandomAccessVectorValues(baseVectors, baseVectors.get(0).length());
     }
 
     @Override
     public int getDimension() {
-        return getBaseVectors().get(0).length();
+        return baseRavv.dimension();
     }
 
     @Override
     public RandomAccessVectorValues getBaseRavv() {
-        if (baseRavv == null) {
-            baseRavv = new ListRandomAccessVectorValues(getBaseVectors(), getDimension());
-        }
         return baseRavv;
     }
 
@@ -85,11 +113,6 @@ public class SimpleDataSet implements DataSet {
     @Override
     public VectorSimilarityFunction getSimilarityFunction() {
         return similarityFunction;
-    }
-
-    @Override
-    public List<VectorFloat<?>> getBaseVectors() {
-        return baseVectors;
     }
 
     @Override

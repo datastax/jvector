@@ -16,6 +16,7 @@
 
 package io.github.jbellis.jvector.example.benchmarks.datasets;
 
+import io.github.jbellis.jvector.graph.RandomAccessVectorValues;
 import io.github.jbellis.jvector.vector.VectorSimilarityFunction;
 import io.github.jbellis.jvector.vector.VectorUtil;
 import io.github.jbellis.jvector.vector.types.VectorFloat;
@@ -42,10 +43,22 @@ public class DataSetUtils {
 
     /**
      * Processes a dataset using the configured load behavior from the dataset metadata.
+     * <p>
+     * With {@link DataSetProperties.LoadBehavior#NO_SCRUB} the base vectors are used exactly as given, so a
+     * memory-mapped reader stays memory-mapped. {@link DataSetProperties.LoadBehavior#LEGACY_SCRUB} must
+     * inspect and rewrite every vector, so it first copies them into heap memory via
+     * {@link InMemoryCachedDataSet#readAllVectors(RandomAccessVectorValues)}.
+     *
+     * @param pathStr      the dataset name
+     * @param props        the dataset properties, supplying the similarity function and load behavior
+     * @param baseVectors  the base vectors, from any kind of reader
+     * @param queryVectors the query vectors
+     * @param groundTruth  one neighbor list per query vector
+     * @return the dataset
      */
     public static DataSet processDataSet(String pathStr,
                                          DataSetProperties props,
-                                         List<VectorFloat<?>> baseVectors,
+                                         RandomAccessVectorValues baseVectors,
                                          List<VectorFloat<?>> queryVectors,
                                          List<List<Integer>> groundTruth) {
         var vsf = props.similarityFunction()
@@ -56,7 +69,7 @@ public class DataSetUtils {
             case NO_SCRUB:
                 return new SimpleDataSet(pathStr, vsf, baseVectors, queryVectors, groundTruth);
             case LEGACY_SCRUB:
-                return legacyScrubDataSet(pathStr, vsf, baseVectors, queryVectors, groundTruth);
+                return legacyScrubDataSet(pathStr, vsf, InMemoryCachedDataSet.readAllVectors(baseVectors), queryVectors, groundTruth);
             default:
                 throw new IllegalArgumentException("Unsupported load behavior: " + props.loadBehavior());
         }
@@ -64,7 +77,7 @@ public class DataSetUtils {
 
     /**
      * @deprecated Benchmark loaders should use
-     * {@link #processDataSet(String, DataSetProperties, List, List, List)}
+     * {@link #processDataSet(String, DataSetProperties, RandomAccessVectorValues, List, List)}
      * so that load behavior is controlled explicitly by dataset metadata.
      */
     @Deprecated(forRemoval = true)

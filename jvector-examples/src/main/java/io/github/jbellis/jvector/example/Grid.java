@@ -331,7 +331,7 @@ public class Grid {
                                             "Compressor '%s' was provided but failed to encode vectors for dataset '%s'. " +
                                                     "Aborting to prevent false recall results.", compressor, ds.getName()));
                                 }
-                                System.out.format("%s: %s encoded %d vectors [%.2f MB] in %.2fs%n", ds.getName(), compressor, ds.getBaseVectors().size(), (cv.ramBytesUsed() / 1024f / 1024f), encodingTimeS);
+                                System.out.format("%s: %s encoded %d vectors [%.2f MB] in %.2fs%n", ds.getName(), compressor, ds.getBaseRavv().size(), (cv.ramBytesUsed() / 1024f / 1024f), encodingTimeS);
                             }
                         }
 
@@ -885,7 +885,7 @@ public class Grid {
                                                                 searchCompressorObj, ds.getName()));
                                                     }
                                                     System.out.format("%s: %s encoded %d vectors [%.2f MB] for search%n",
-                                                            ds.getName(), searchCompressorObj, ds.getBaseVectors().size(),
+                                                            ds.getName(), searchCompressorObj, ds.getBaseRavv().size(),
                                                             (cvArg.ramBytesUsed() / 1024f / 1024f));
                                                 }
                                             }
