@@ -16,17 +16,21 @@
 
 package io.github.jbellis.jvector.example.util;
 
+import io.github.jbellis.jvector.graph.RandomAccessVectorValues;
 import io.github.jbellis.jvector.vector.VectorizationProvider;
 import io.github.jbellis.jvector.vector.types.VectorFloat;
 import io.github.jbellis.jvector.vector.types.VectorTypeSupport;
 
 import java.io.BufferedInputStream;
+import java.io.BufferedOutputStream;
 import java.io.DataInputStream;
 import java.io.FileInputStream;
 import java.io.IOException;
 import java.io.UncheckedIOException;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
@@ -58,6 +62,29 @@ public class SiftLoader {
             throw new UncheckedIOException(ex);
         }
         return vectors;
+    }
+
+    /// Writes every vector of `vectors` to `path` in fvecs format (little-endian `int` dimension
+    /// followed by the little-endian `float` components), overwriting any existing file.
+    ///
+    /// @param path    the file to write
+    /// @param vectors the vectors to write, in ordinal order
+    /// @throws IOException if the file cannot be written
+    public static void writeFvecs(Path path, RandomAccessVectorValues vectors) throws IOException {
+        int dimension = vectors.dimension();
+        var record = ByteBuffer.allocate(Integer.BYTES + dimension * Float.BYTES).order(ByteOrder.LITTLE_ENDIAN);
+        var scratch = vectorTypeSupport.createFloatVector(dimension);
+        try (var out = new BufferedOutputStream(Files.newOutputStream(path), 1 << 20)) {
+            for (int i = 0; i < vectors.size(); i++) {
+                vectors.getVectorInto(i, scratch, 0);
+                record.clear();
+                record.putInt(dimension);
+                for (int d = 0; d < dimension; d++) {
+                    record.putFloat(scratch.get(d));
+                }
+                out.write(record.array());
+            }
+        }
     }
 
     public static List<List<Integer>> readIvecs(String filename) {
