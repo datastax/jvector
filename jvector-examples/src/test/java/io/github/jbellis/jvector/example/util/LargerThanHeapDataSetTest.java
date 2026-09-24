@@ -61,8 +61,9 @@ public class LargerThanHeapDataSetTest {
             writeRandomFvecs(file, count, dimension);
         }
         long maxHeap = Runtime.getRuntime().maxMemory();
-        System.out.printf("larger-than-heap: %.1f MB of vectors, max heap %.1f MB, lru capacity %.1f MB%n",
-                expectedBytes / (1024.0 * 1024.0), maxHeap / (1024.0 * 1024.0), capacityBytes / (1024.0 * 1024.0));
+        System.out.printf("larger-than-heap: %.1f MB of vectors, max heap %.1f MB, lru capacity %.1f MB, vector provider %s%n",
+                expectedBytes / (1024.0 * 1024.0), maxHeap / (1024.0 * 1024.0), capacityBytes / (1024.0 * 1024.0),
+                VectorizationProvider.getInstance().getClass().getSimpleName());
 
         var vts = VectorizationProvider.getInstance().getVectorTypeSupport();
         var query = vts.createFloatVector(dimension);

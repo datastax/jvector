@@ -54,8 +54,9 @@ public class FvecsLoadEconomyTest {
         if (!Files.exists(file) || Files.size(file) != expectedBytes) {
             writeRandomFvecs(file, count, dimension);
         }
-        System.out.printf("fvecs economy: %d vectors x %d dims (%.1f MB), %d rounds%n",
-                count, dimension, expectedBytes / (1024.0 * 1024.0), rounds);
+        System.out.printf("fvecs economy: %d vectors x %d dims (%.1f MB), %d rounds, vector provider %s%n",
+                count, dimension, expectedBytes / (1024.0 * 1024.0), rounds,
+                VectorizationProvider.getInstance().getClass().getSimpleName());
         System.out.printf("%-8s %14s %14s %14s %14s %14s%n",
                 "round", "stream-load", "map+cache", "map-only", "scan-stream", "scan-cached");
 
