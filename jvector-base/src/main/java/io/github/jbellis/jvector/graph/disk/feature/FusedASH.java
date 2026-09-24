@@ -61,6 +61,7 @@ public class FusedASH extends AbstractFeature implements FusedFeature {
     private final ThreadLocal<byte[]> reusableNeighborhoodBytes;
     private final ThreadLocal<float[]> reusableScores;
     private final ThreadLocal<byte[]> writeScratch;
+    private final ThreadLocal<AsymmetricHashing.QuantizedVector[]> packingRefs;
 
     public FusedASH(int maxDegree, AsymmetricHashing ash) {
         this(maxDegree, ash, FusedASHLayout.chooseBlockSize(maxDegree));
@@ -88,6 +89,7 @@ public class FusedASH extends AbstractFeature implements FusedFeature {
         this.reusableNeighborhoodBytes = ThreadLocal.withInitial(() -> new byte[featureSize]);
         this.reusableScores = ThreadLocal.withInitial(() -> new float[maxDegree]);
         this.writeScratch = ThreadLocal.withInitial(() -> new byte[featureSize]);
+        this.packingRefs = ThreadLocal.withInitial(() -> new AsymmetricHashing.QuantizedVector[maxDegree]);
     }
 
     @Override
@@ -162,19 +164,39 @@ public class FusedASH extends AbstractFeature implements FusedFeature {
         byte[] scratch = writeScratch.get();
         Arrays.fill(scratch, (byte) 0);
 
+        var refs = ash.bitsPerDimension == 1 ? null : packingRefs.get();
         var neighbors = state.view.getNeighborsIterator(0, state.nodeId);
         int count = 0;
-        while (neighbors.hasNext()) {
-            int node = neighbors.nextInt();
-            if (count >= maxDegree) {
-                throw new IOException("Node " + state.nodeId + " has more than maxDegree=" + maxDegree + " neighbors");
+        try {
+            while (neighbors.hasNext()) {
+                int node = neighbors.nextInt();
+                if (count >= maxDegree) {
+                    throw new IOException("Node " + state.nodeId + " has more than maxDegree=" + maxDegree + " neighbors");
+                }
+
+                var compressed = state.compressedVectorFunction.apply(node);
+                if (ash.bitsPerDimension == 1) {
+                    packForFused(scratch, count, compressed);
+                } else {
+                    refs[count] = compressed;
+                }
+                count++;
             }
 
-            var compressed = state.compressedVectorFunction.apply(node);
-            packForFused(scratch, count, compressed);
-            count++;
-        }
+            if (ash.bitsPerDimension != 1) {
+                for (int first = 0; first < count; first += blockSize) {
+                    int offset = FusedASHLayout.blockOffset(first / blockSize, ash.quantizedDim, ash.bitsPerDimension, blockSize);
+                    io.github.jbellis.jvector.quantization.FusedASHBlockPacker.pack(scratch, offset, refs, first,
+                            Math.min(blockSize, count - first), ash.quantizedDim, ash.bitsPerDimension, blockSize);
+                }
 
+            }
+        } finally {
+            // Do not retain vectors if a supplier or packing operation fails.
+            if (refs != null) {
+                Arrays.fill(refs, 0, count, null);
+            }
+        }
         writeBytes(out, scratch, featureSize);
     }
 

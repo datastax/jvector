@@ -217,8 +217,13 @@ public final class FusedASHLayout {
             if (code == null || code.length < bytes) {
                 throw new IllegalArgumentException("ASH projection code is missing or too short");
             }
-            for (int group = 0; group < groups; group++) {
-                setPackedNibble(block, blockOffset, lane, group, blockSize, flatNibble(code, group));
+            int fullBytes = groups >>> 1;
+            int destination = blockOffset + lane;
+            for (int i = 0; i < fullBytes; i++, destination += blockSize) {
+                block[destination] = code[i];
+            }
+            if ((groups & 1) != 0) {
+                block[destination] = (byte) ((block[destination] & 0xF0) | (code[fullBytes] & 0x0F));
             }
         }
 
