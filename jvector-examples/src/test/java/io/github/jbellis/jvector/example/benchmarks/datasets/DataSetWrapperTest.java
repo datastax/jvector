@@ -148,6 +148,27 @@ public class DataSetWrapperTest {
         assertEquals(BASE.length * (Integer.BYTES + DIMENSION * Float.BYTES), Files.size(spill));
 
         assertSame(mapped, MMapCachedDataSet.of(mapped));
+
+        // a second spill of the same dataset reuses the file, which is still mapped above, instead of rewriting it
+        var again = new MMapCachedDataSet(heapDataSet(), cacheDir);
+        assertEquals(spill, ((MappedFvecsRandomAccessVectorValues) again.getBaseRavv()).getPath());
+        assertBaseMatches(again.getBaseRavv());
+    }
+
+    @Test
+    public void mmapCacheReplacesStaleSpillFile() throws IOException {
+        Path cacheDir = tempFolder.getRoot().toPath().resolve("stale");
+        Files.createDirectories(cacheDir);
+        Path spill = cacheDir.resolve("heap-ds-6x4.fvecs");
+        Files.write(spill, new byte[] {1, 2, 3}); // wrong size, so it cannot be a valid spill of this dataset
+
+        var mapped = new MMapCachedDataSet(heapDataSet(), cacheDir);
+        assertEquals(spill, ((MappedFvecsRandomAccessVectorValues) mapped.getBaseRavv()).getPath());
+        assertEquals(BASE.length * (Integer.BYTES + DIMENSION * Float.BYTES), Files.size(spill));
+        assertBaseMatches(mapped.getBaseRavv());
+        try (var files = Files.list(cacheDir)) {
+            assertEquals(1, files.count(), "temporary spill files are cleaned up");
+        }
     }
 
     @Test

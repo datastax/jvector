@@ -24,16 +24,21 @@ import org.slf4j.LoggerFactory;
 
 import java.io.IOException;
 import java.io.UncheckedIOException;
+import java.nio.file.AtomicMoveNotSupportedException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
+import java.nio.file.StandardCopyOption;
 
 /// A {@link DataSetWrapper} whose base vectors are served from a memory-mapped fvecs file.
 ///
 /// If the origin's base vectors are already a {@link MappedFvecsRandomAccessVectorValues} (as
 /// produced by {@link DataSetLoaderSimpleMFD}), they are adopted as-is. Otherwise the base
-/// vectors are written once to `<cacheDir>/<name>-<count>x<dimension>.fvecs` (overwriting any
-/// previous file of that name) and mapped from there, so the heap no longer holds them.
+/// vectors are spilled to `<cacheDir>/<name>-<count>x<dimension>.fvecs` and mapped from there, so
+/// the heap no longer holds them. An existing spill file of exactly the expected size is reused
+/// rather than rewritten, both because a mapped file cannot be modified on Windows and because
+/// the spill is then paid once per dataset rather than once per run; delete the file to force a
+/// fresh spill.
 ///
 /// The default cache directory is `$DATASET_CACHE_DIR/mmap` when that variable is set, else
 /// `dataset_cache/mmap` relative to the working directory.
@@ -89,16 +94,38 @@ public final class MMapCachedDataSet implements DataSetWrapper {
             return;
         }
         Path file = cacheDir.resolve(safeFileName(origin.getName()) + "-" + source.size() + "x" + source.dimension() + ".fvecs");
+        long expectedBytes = (long) source.size() * (Integer.BYTES + (long) source.dimension() * Float.BYTES);
         long start = System.nanoTime();
         try {
             Files.createDirectories(cacheDir);
-            SiftLoader.writeFvecs(file, source);
+            boolean reused = Files.isRegularFile(file) && Files.size(file) == expectedBytes;
+            if (!reused) {
+                spill(source, file, cacheDir);
+            }
             this.baseRavv = new MappedFvecsRandomAccessVectorValues(file);
+            logger.info("{} {} base vectors of '{}' {} {} and mapped them in {}s",
+                    reused ? "Reused" : "Spilled", source.size(), origin.getName(), reused ? "from" : "to", file,
+                    String.format("%.2f", (System.nanoTime() - start) / 1e9));
         } catch (IOException e) {
             throw new UncheckedIOException("Failed to spill base vectors of '" + origin.getName() + "' to " + file, e);
         }
-        logger.info("Spilled {} base vectors of '{}' to {} and mapped them in {}s",
-                source.size(), origin.getName(), file, String.format("%.2f", (System.nanoTime() - start) / 1e9));
+    }
+
+    /// Writes `source` to a temporary file beside `file` and moves it into place. The target is never
+    /// rewritten in place: a spill file for the same dataset may already be mapped by another wrapper in
+    /// this JVM, and Windows refuses to modify a file with a live mapping.
+    private static void spill(RandomAccessVectorValues source, Path file, Path cacheDir) throws IOException {
+        Path temp = Files.createTempFile(cacheDir, file.getFileName().toString(), ".tmp");
+        try {
+            SiftLoader.writeFvecs(temp, source);
+            try {
+                Files.move(temp, file, StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING);
+            } catch (AtomicMoveNotSupportedException e) {
+                Files.move(temp, file, StandardCopyOption.REPLACE_EXISTING);
+            }
+        } finally {
+            Files.deleteIfExists(temp);
+        }
     }
 
     private static String safeFileName(String name) {

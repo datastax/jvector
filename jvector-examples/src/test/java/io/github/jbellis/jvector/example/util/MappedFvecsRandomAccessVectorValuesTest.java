@@ -205,8 +205,11 @@ public class MappedFvecsRandomAccessVectorValuesTest {
         for (int i = 0; i < 20; i++) {
             assertVectorEquals(expected[i], mapped.getVector(i), 0);
         }
-        // overwriting an existing file replaces it entirely
-        SiftLoader.writeFvecs(file, new ListRandomAccessVectorValues(vectors.subList(0, 5), 6));
-        assertEquals(5, new MappedFvecsRandomAccessVectorValues(file).size());
+        // overwriting an existing (unmapped) file replaces it entirely; a mapped file must not be
+        // rewritten, since Windows refuses to modify a file with a live mapping
+        Path rewritten = tempFolder.getRoot().toPath().resolve("rewritten.fvecs");
+        SiftLoader.writeFvecs(rewritten, new ListRandomAccessVectorValues(vectors, 6));
+        SiftLoader.writeFvecs(rewritten, new ListRandomAccessVectorValues(vectors.subList(0, 5), 6));
+        assertEquals(5, new MappedFvecsRandomAccessVectorValues(rewritten).size());
     }
 }
