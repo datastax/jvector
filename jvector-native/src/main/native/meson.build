@@ -25,32 +25,91 @@ hwy_inc = include_directories('third_party/highway')
 
 # Each ISA variant: name, JV_ISA namespace, and extra compiler flags.
 # These all compile jvector_simd_kernels.cpp (the generic kernel file).
-isa_variants = [
-  {
-    'name'     : 'avx3',
-    'namespace': 'AVX3',
-    'args'     : ['-march=skylake-avx512',
-                  '-DHWY_COMPILE_ONLY_STATIC',
-                  '-DJV_REQUIRE_HWY_AVX3'],
-  },
-  {
-    'name'     : 'avx2',
-    'namespace': 'AVX2',
-    'args'     : ['-march=haswell',
-                  '-maes',
-                  '-DHWY_COMPILE_ONLY_STATIC',
-                  '-DJV_REQUIRE_HWY_AVX2'],
-  },
-  {
-    'name'     : 'sse42',
-    'namespace': 'SSE42',
-    'args'     : ['-msse4.2', '-mpclmul', '-maes',
-                  '-DHWY_COMPILE_ONLY_STATIC',
-                  '-DJV_REQUIRE_HWY_SCALAR'],
-  },
-]
+cpu = host_machine.cpu_family()
+
+if cpu == 'x86_64'
+  isa_variants = [
+    {
+      'name'     : 'avx3',
+      'namespace': 'AVX3',
+      'args'     : ['-march=skylake-avx512',
+                    '-DHWY_COMPILE_ONLY_STATIC',
+                    '-DJV_REQUIRE_HWY_AVX3'],
+    },
+    {
+      'name'     : 'avx2',
+      'namespace': 'AVX2',
+      'args'     : ['-march=haswell',
+                    '-maes',
+                    '-DHWY_COMPILE_ONLY_STATIC',
+                    '-DJV_REQUIRE_HWY_AVX2'],
+    },
+    {
+      'name'     : 'sse42',
+      'namespace': 'SSE42',
+      'args'     : ['-msse4.2', '-mpclmul', '-maes',
+                    '-DHWY_COMPILE_ONLY_STATIC',
+                    '-DJV_REQUIRE_HWY_SCALAR'],
+    },
+  ]
+elif cpu == 'aarch64'
+  # Three tiers in ascending capability order.  SVE and SVE2 use scalable
+  # Highway targets (HWY_HAVE_SCALABLE=1): Lanes() is a runtime value and
+  # all loop counters are vector-length agnostic.  The fixed-width fast-paths
+  # in calculate_partial_sums_* are gated behind #if !HWY_HAVE_SCALABLE.
+  #
+  #   NEON  — baseline AArch64.  Highway target: HWY_NEON.
+  #           All Graviton generations and all Apple Silicon.
+  #
+  #   SVE   — Graviton 3 / Neoverse V1 and later.  Highway target: HWY_SVE.
+  #           No -msve-vector-bits flag; Highway queries the VL at runtime.
+  #           Requires Clang >= 22 for reliable SVE codegen via Highway.
+  #
+  #   SVE2  — Graviton 4 / Neoverse V2/N2 and later.  Highway target: HWY_SVE2.
+  #           No -msve-vector-bits flag; Highway queries the VL at runtime.
+  #           Requires Clang >= 22 for reliable SVE2 codegen via Highway.
+  isa_variants = [
+    {
+      'name'     : 'neon',
+      'namespace': 'NEON',
+      'args'     : ['-march=armv8-a+crypto',
+                    '-DHWY_COMPILE_ONLY_STATIC',
+                    '-DJV_REQUIRE_HWY_NEON'],
+    },
+  ]
+
+  cpp = meson.get_compiler('cpp')
+  # SVE and SVE2 require Clang >= 22 for correct Highway SVE codegen.
+  # GCC does not have this restriction; only gate on Clang.
+  sve_supported = cpp.get_id() != 'clang' or cpp.version().version_compare('>=22')
+
+  if sve_supported
+    isa_variants += [
+      {
+        'name'     : 'sve',
+        'namespace': 'SVE',
+        'args'     : ['-march=armv8.4-a+sve',
+                      '-DHWY_COMPILE_ONLY_STATIC',
+                      '-DJV_REQUIRE_HWY_SVE'],
+      },
+      {
+        'name'     : 'sve2',
+        'namespace': 'SVE2',
+        'args'     : ['-march=armv9-a+sve2',
+                      '-DHWY_COMPILE_ONLY_STATIC',
+                      '-DJV_REQUIRE_HWY_SVE2'],
+      },
+    ]
+  else
+    warning('Clang ' + cpp.version() + ' detected — SVE and SVE2 tiers require Clang >= 22 and will not be built. Only the NEON tier will be available.')
+  endif
+else
+  error('Unsupported CPU family: ' + cpu + '. Supported: x86_64, aarch64.')
+endif
 
 isa_libs = []
+# Extra -D flags forwarded to jvector_simd.cpp to record which tiers were built.
+dispatch_defines = []
 foreach isa : isa_variants
   lib = static_library(
     'simdKernels_' + isa['name'],
@@ -59,38 +118,41 @@ foreach isa : isa_variants
     cpp_args           : isa['args'] + ['-DJV_ISA=' + isa['namespace'], '-fvisibility=hidden']
   )
   isa_libs += lib
+  dispatch_defines += '-DJV_HAS_' + isa['namespace'].to_upper() + '=1'
 endforeach
 
-# AVX3_DL (Ice Lake) tier: -march=icelake-server enables the full ICX feature
-# set (AVX3 + VNNI, VBMI, VBMI2, IFMA, BITALG, VPOPCNTDQ, GFNI, VAES, VPCLMULQDQ).
-avx3_dl_lib = static_library(
-  'simdKernels_avx3_dl',
-  sources            : 'src/jvector_avx3_dl_kernels.cpp',
-  include_directories: hwy_inc,
-  cpp_args           : [
-    '-march=icelake-server',
-    '-DHWY_COMPILE_ONLY_STATIC',
-    '-DJV_REQUIRE_HWY_AVX3_DL',
-    '-fvisibility=hidden',
-  ],
-)
-isa_libs += avx3_dl_lib
+if cpu == 'x86_64'
+  # AVX3_DL (Ice Lake) tier: -march=icelake-server enables the full ICX feature
+  # set (AVX3 + VNNI, VBMI, VBMI2, IFMA, BITALG, VPOPCNTDQ, GFNI, VAES, VPCLMULQDQ).
+  avx3_dl_lib = static_library(
+    'simdKernels_avx3_dl',
+    sources            : 'src/jvector_avx3_dl_kernels.cpp',
+    include_directories: hwy_inc,
+    cpp_args           : [
+      '-march=icelake-server',
+      '-DHWY_COMPILE_ONLY_STATIC',
+      '-DJV_REQUIRE_HWY_AVX3_DL',
+      '-fvisibility=hidden',
+    ],
+  )
+  isa_libs += avx3_dl_lib
 
-# AVX3_SPR (Sapphire Rapids) tier: -march=sapphirerapids adds AVX512FP16 and
-# AVX512BF16 on top of the icelake-server feature set.
-# Requires GCC >= 12 or Clang >= 14.
-avx3_spr_lib = static_library(
-  'simdKernels_avx3_spr',
-  sources            : 'src/jvector_avx3_spr_kernels.cpp',
-  include_directories: hwy_inc,
-  cpp_args           : [
-    '-march=sapphirerapids',
-    '-DHWY_COMPILE_ONLY_STATIC',
-    '-DJV_REQUIRE_HWY_AVX3_SPR',
-    '-fvisibility=hidden',
-  ],
-)
-isa_libs += avx3_spr_lib
+  # AVX3_SPR (Sapphire Rapids) tier: -march=sapphirerapids adds AVX512FP16 and
+  # AVX512BF16 on top of the icelake-server feature set.
+  # Requires GCC >= 12 or Clang >= 14.
+  avx3_spr_lib = static_library(
+    'simdKernels_avx3_spr',
+    sources            : 'src/jvector_avx3_spr_kernels.cpp',
+    include_directories: hwy_inc,
+    cpp_args           : [
+      '-march=sapphirerapids',
+      '-DHWY_COMPILE_ONLY_STATIC',
+      '-DJV_REQUIRE_HWY_AVX3_SPR',
+      '-fvisibility=hidden',
+    ],
+  )
+  isa_libs += avx3_spr_lib
+endif
 
 # vectorUtil provides a single runtime-dispatch entry point.
 # link_whole pulls every ISA object into the shared library so that no
@@ -103,7 +165,7 @@ vectorutil_lib = shared_library(
   sources            : ['src/jvector_simd.cpp',
                         'third_party/highway/hwy/abort.cc'],
   include_directories: [include_directories('src'), hwy_inc],
-  cpp_args           : ['-DJVECTOR_BUILD', '-fvisibility=hidden'],
+  cpp_args           : ['-DJVECTOR_BUILD', '-fvisibility=hidden'] + dispatch_defines,
   link_whole         : isa_libs,
   version            : meson.project_version(),
   install            : true,
@@ -126,13 +188,18 @@ vectorutil_dep = declare_dependency(
 gtest_dep = dependency('gtest_main', required: false)
 
 if gtest_dep.found()
+  # Select the architecture-specific CPU features test.
+  cpu_features_test_src = cpu == 'x86_64' \
+    ? 'tests/test_x86_cpu_features.cpp' \
+    : 'tests/test_aarch64_cpu_features.cpp'
+
   simd_kernels_test = executable(
     'test_simd_kernels',
     sources     : [
       'tests/test_helpers.cpp',
       'tests/test_similarity.cpp',
       'tests/test_elementwise.cpp',
-      'tests/test_cpu_features.cpp',
+      cpu_features_test_src,
     ],
     dependencies: [vectorutil_dep, gtest_dep],
   )
