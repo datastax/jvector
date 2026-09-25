@@ -21,6 +21,7 @@ import io.github.jbellis.jvector.example.util.BenchmarkSummarizer;
 import io.github.jbellis.jvector.example.util.BenchmarkSummarizer.SummaryStats;
 import io.github.jbellis.jvector.example.util.CheckpointManager;
 import io.github.jbellis.jvector.example.benchmarks.datasets.DataSet;
+import io.github.jbellis.jvector.example.benchmarks.datasets.FloatDataSet;
 import io.github.jbellis.jvector.example.benchmarks.datasets.DataSets;
 import io.github.jbellis.jvector.example.yaml.DatasetCollection;
 import io.github.jbellis.jvector.example.yaml.MultiConfig;
@@ -123,7 +124,7 @@ public class AutoBenchYAML {
 
                 logger.info("Loading dataset: {}", datasetName);
                 try {
-                    DataSet ds = DataSets.loadDataSet(datasetName).orElseThrow(
+                    DataSet<?> ds = DataSets.loadDataSet(datasetName).orElseThrow(
                             () -> new RuntimeException("Dataset " + datasetName + " not found")
                     ).getDataSet();
                     logger.info("Dataset loaded: {} with {} vectors", datasetName, ds.getBaseVectors().size());
@@ -148,15 +149,15 @@ public class AutoBenchYAML {
 
                     List<BenchResult> datasetResults = Grid.runAllAndCollectResults(ds,
                             config.construction.useSavedIndexIfExists,
-                            config.construction.outDegree, 
+                            config.construction.outDegree,
                             config.construction.efConstruction,
-                            config.construction.neighborOverflow, 
+                            config.construction.neighborOverflow,
                             config.construction.addHierarchy,
                             config.construction.refineFinalGraph,
-                            config.construction.getFeatureSets(), 
-                            config.construction.getCompressorParameters(),
-                            config.search.getCompressorParameters(), 
-                            config.search.topKOverquery, 
+                            config.construction.getFeatureSets(ds),
+                            config.construction.getCompressorParameters(ds),
+                            config.search.getCompressorParameters(ds),
+                            config.search.topKOverquery,
                             config.search.useSearchPruning);
                     results.addAll(datasetResults);
 
@@ -167,7 +168,7 @@ public class AutoBenchYAML {
                     // Compaction regression — failures are non-fatal and don't block checkpointing
                     try {
                         logger.info("Running compaction benchmark for dataset: {}", datasetName);
-                        List<BenchResult> datasetCompactionResults = CompactionBench.run(ds);
+                        List<BenchResult> datasetCompactionResults = CompactionBench.run((FloatDataSet) ds);
                         compactionResults.addAll(datasetCompactionResults);
                         logger.info("Compaction benchmark completed for dataset: {} ({} configs)",
                                 datasetName, datasetCompactionResults.size());

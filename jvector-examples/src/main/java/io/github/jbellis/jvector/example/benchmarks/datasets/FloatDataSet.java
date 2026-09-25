@@ -23,7 +23,13 @@ import io.github.jbellis.jvector.vector.types.VectorFloat;
 
 import java.util.List;
 
-public class SimpleDataSet implements DataSet {
+/**
+ * A float32 dataset backed by in-memory {@link VectorFloat} lists.
+ *
+ * <p>Type-specific accessors ({@link #getBaseRavv()}, {@link #getSimilarityFunction()}) live here
+ * rather than on the {@link DataSet} interface.
+ */
+public class FloatDataSet implements DataSet<VectorFloat<?>> {
     private final String name;
     private final VectorSimilarityFunction similarityFunction;
     private final List<VectorFloat<?>> baseVectors;
@@ -31,11 +37,11 @@ public class SimpleDataSet implements DataSet {
     private final List<? extends List<Integer>> groundTruth;
     private RandomAccessVectorValues baseRavv;
 
-    public SimpleDataSet(String name,
-                         VectorSimilarityFunction similarityFunction,
-                         List<VectorFloat<?>> baseVectors,
-                         List<VectorFloat<?>> queryVectors,
-                         List<? extends List<Integer>> groundTruth)
+    public FloatDataSet(String name,
+                        VectorSimilarityFunction similarityFunction,
+                        List<VectorFloat<?>> baseVectors,
+                        List<VectorFloat<?>> queryVectors,
+                        List<? extends List<Integer>> groundTruth)
     {
         if (baseVectors.isEmpty()) {
             throw new IllegalArgumentException("Base vectors must not be empty");
@@ -44,9 +50,8 @@ public class SimpleDataSet implements DataSet {
             throw new IllegalArgumentException("Query vectors must not be empty");
         }
         if (groundTruth.isEmpty()) {
-            throw new IllegalArgumentException("Ground truth vectors must not be empty");
+            throw new IllegalArgumentException("Ground truth must not be empty");
         }
-
         if (baseVectors.get(0).length() != queryVectors.get(0).length()) {
             throw new IllegalArgumentException("Base and query vectors must have the same dimensionality");
         }
@@ -65,26 +70,13 @@ public class SimpleDataSet implements DataSet {
     }
 
     @Override
-    public int getDimension() {
-        return getBaseVectors().get(0).length();
-    }
-
-    @Override
-    public RandomAccessVectorValues getBaseRavv() {
-        if (baseRavv == null) {
-            baseRavv = new ListRandomAccessVectorValues(getBaseVectors(), getDimension());
-        }
-        return baseRavv;
-    }
-
-    @Override
     public String getName() {
         return name;
     }
 
     @Override
-    public VectorSimilarityFunction getSimilarityFunction() {
-        return similarityFunction;
+    public int getDimension() {
+        return baseVectors.get(0).length();
     }
 
     @Override
@@ -100,5 +92,16 @@ public class SimpleDataSet implements DataSet {
     @Override
     public List<? extends List<Integer>> getGroundTruth() {
         return groundTruth;
+    }
+
+    public RandomAccessVectorValues getBaseRavv() {
+        if (baseRavv == null) {
+            baseRavv = new ListRandomAccessVectorValues(baseVectors, getDimension());
+        }
+        return baseRavv;
+    }
+
+    public VectorSimilarityFunction getSimilarityFunction() {
+        return similarityFunction;
     }
 }

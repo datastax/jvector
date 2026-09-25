@@ -16,7 +16,7 @@
 
 package io.github.jbellis.jvector.example.reporting;
 
-import io.github.jbellis.jvector.example.benchmarks.datasets.DataSet;
+import io.github.jbellis.jvector.example.benchmarks.datasets.FloatDataSet;
 
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
@@ -114,7 +114,7 @@ public final class DatasetInfoWriter {
                                   String basePath,
                                   String queryPath,
                                   String groundTruthPath,
-                                  DataSet ds) {
+                                  FloatDataSet ds) {
         return new Row(
                 datasetName,
                 basePath,

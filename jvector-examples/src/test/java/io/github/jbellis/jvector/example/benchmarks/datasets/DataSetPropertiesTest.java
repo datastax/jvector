@@ -345,11 +345,9 @@ public class DataSetPropertiesTest {
         var callCount = new int[]{0};
         var base = new DataSetProperties.PropertyMap(Map.of(DataSetProperties.KEY_NAME, "lazy"));
         // Return a dummy non-null sentinel so the cache works (null would defeat the null-check)
-        var sentinel = new DataSet() {
+        var sentinel = new DataSet<VectorFloat<?>>() {
             public int getDimension() { return 0; }
-            public RandomAccessVectorValues getBaseRavv() { return null; }
             public String getName() { return "sentinel"; }
-            public VectorSimilarityFunction getSimilarityFunction() { return VectorSimilarityFunction.COSINE; }
             public List<VectorFloat<?>> getBaseVectors() { return Collections.emptyList(); }
             public List<VectorFloat<?>> getQueryVectors() { return Collections.emptyList(); }
             public List<? extends List<Integer>> getGroundTruth() { return Collections.emptyList(); }

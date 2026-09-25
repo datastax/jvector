@@ -28,7 +28,9 @@ import io.github.jbellis.jvector.example.benchmarks.QueryTester;
 import io.github.jbellis.jvector.example.benchmarks.ThroughputBenchmark;
 import io.github.jbellis.jvector.example.benchmarks.diagnostics.BenchmarkDiagnostics;
 import io.github.jbellis.jvector.example.benchmarks.diagnostics.DiagnosticLevel;
+import io.github.jbellis.jvector.example.benchmarks.datasets.ByteDataSet;
 import io.github.jbellis.jvector.example.benchmarks.datasets.DataSet;
+import io.github.jbellis.jvector.example.benchmarks.datasets.FloatDataSet;
 import io.github.jbellis.jvector.example.reporting.*;
 import io.github.jbellis.jvector.example.reporting.RunArtifacts;
 import io.github.jbellis.jvector.example.util.CompressorParameters;
@@ -38,11 +40,14 @@ import io.github.jbellis.jvector.example.yaml.MetricSelection;
 import io.github.jbellis.jvector.graph.ImmutableGraphIndex;
 import io.github.jbellis.jvector.graph.GraphIndexBuilder;
 import io.github.jbellis.jvector.graph.GraphSearcher;
+import io.github.jbellis.jvector.graph.ListRandomAccessByteVectorValues;
+import io.github.jbellis.jvector.graph.RandomAccessByteVectorValues;
 import io.github.jbellis.jvector.graph.RandomAccessVectorValues;
 import io.github.jbellis.jvector.graph.disk.*;
 import io.github.jbellis.jvector.graph.disk.feature.Feature;
 import io.github.jbellis.jvector.graph.disk.feature.FeatureId;
 import io.github.jbellis.jvector.graph.disk.feature.FusedPQ;
+import io.github.jbellis.jvector.graph.disk.feature.InlineByteVectors;
 import io.github.jbellis.jvector.graph.disk.feature.InlineVectors;
 import io.github.jbellis.jvector.graph.disk.feature.NVQ;
 import io.github.jbellis.jvector.graph.similarity.BuildScoreProvider;
@@ -56,6 +61,8 @@ import io.github.jbellis.jvector.quantization.ProductQuantization;
 import io.github.jbellis.jvector.quantization.VectorCompressor;
 import io.github.jbellis.jvector.util.ExplicitThreadLocal;
 import io.github.jbellis.jvector.util.PhysicalCoreExecutor;
+import io.github.jbellis.jvector.vector.ByteVectorSimilarityFunction;
+import io.github.jbellis.jvector.vector.types.ByteSequence;
 import io.github.jbellis.jvector.vector.types.VectorFloat;
 
 import java.io.FileNotFoundException;
@@ -94,7 +101,7 @@ public class Grid {
         return indexBuildTimes.get(datasetName);
     }
 
-    static void runAll(DataSet ds,
+    static void runAll(DataSet<?> ds,
                        boolean enableIndexCache,
                        List<Integer> mGrid,
                        List<Integer> efConstructionGrid,
@@ -102,8 +109,8 @@ public class Grid {
                        List<Boolean> addHierarchyGrid,
                        List<Boolean> refineFinalGraphGrid,
                        List<? extends Set<FeatureId>> featureSets,
-                       List<Function<DataSet, CompressorParameters>> buildCompressors,
-                       List<Function<DataSet, CompressorParameters>> compressionGrid,
+                       List<Function<FloatDataSet, CompressorParameters>> buildCompressors,
+                       List<Function<FloatDataSet, CompressorParameters>> compressionGrid,
                        Map<Integer, List<Double>> topKGrid,
                        List<Boolean> usePruningGrid,
                        RunArtifacts artifacts
@@ -158,7 +165,7 @@ public class Grid {
     }
 
     // Overload for legacy callers that do not use yaml-configs
-    static void runAll(DataSet ds,
+    static void runAll(DataSet<?> ds,
                        boolean enableIndexCache,
                        List<Integer> mGrid,
                        List<Integer> efConstructionGrid,
@@ -166,8 +173,8 @@ public class Grid {
                        List<Boolean> addHierarchyGrid,
                        List<Boolean> refineFinalGraphGrid,
                        List<? extends Set<FeatureId>> featureSets,
-                       List<Function<DataSet, CompressorParameters>> buildCompressors,
-                       List<Function<DataSet, CompressorParameters>> compressionGrid,
+                       List<Function<FloatDataSet, CompressorParameters>> buildCompressors,
+                       List<Function<FloatDataSet, CompressorParameters>> compressionGrid,
                        Map<Integer, List<Double>> topKGrid,
                        List<Boolean> usePruningGrid) throws IOException
     {
@@ -218,12 +225,12 @@ public class Grid {
                             float neighborOverflow,
                             boolean addHierarchy,
                             boolean refineFinalGraph,
-                            Function<DataSet, CompressorParameters> buildCompressor,
-                            List<Function<DataSet, CompressorParameters>> compressionGrid,
+                            Function<FloatDataSet, CompressorParameters> buildCompressor,
+                            List<Function<FloatDataSet, CompressorParameters>> compressionGrid,
                             Map<Integer, List<Double>> topKGrid,
                             List<Boolean> usePruningGrid,
                             RunArtifacts artifacts,
-                            DataSet ds,
+                            DataSet<?> ds,
                             Path workDirectory) throws IOException
     {
         // Prepare to collect index construction metrics for reporting....
@@ -234,16 +241,22 @@ public class Grid {
             diagnostics.startMonitoring("testDirectory", workDirectory);
             diagnostics.startMonitoring("indexCache", Paths.get(indexCacheDir));
             diagnostics.capturePrePhaseSnapshot("Graph Build");
-            System.out.printf("%s: Dataset similarity function is %s%n", ds.getName(), ds.getSimilarityFunction());
+            FloatDataSet floatDs = ds instanceof FloatDataSet ? (FloatDataSet) ds : null;
+            ByteDataSet byteDs = ds instanceof ByteDataSet ? (ByteDataSet) ds : null;
+            if (floatDs != null) {
+                System.out.printf("%s: Dataset similarity function is %s%n", ds.getName(), floatDs.getSimilarityFunction());
+            } else if (byteDs != null) {
+                System.out.printf("%s: Dataset similarity function is %s%n", ds.getName(), byteDs.getByteSimilarityFunction());
+            }
 
             // Resolve build compressor (and label quant type) so we can record compute time
             VectorCompressor<?> buildCompressorObj = null;
             String buildQuantType = null;
 
-            if (buildCompressor != null) {
-                var buildParams = buildCompressor.apply(ds);
+            if (buildCompressor != null && floatDs != null) {
+                var buildParams = buildCompressor.apply(floatDs);
                 buildQuantType = quantTypeOf(buildParams); // "PQ", "BQ", or null
-                buildCompressorObj = getCompressor(buildCompressor, ds, constructionMetrics, Phase.INDEX, buildQuantType);
+                buildCompressorObj = getCompressor(buildCompressor, floatDs, constructionMetrics, Phase.INDEX, buildQuantType);
             }
 
             // Used in logging
@@ -288,7 +301,7 @@ public class Grid {
                     // At least one index needs to be built (b/c not in cache or cache is disabled)
                     // We pass the handles map so buildOnDisk knows exactly where to write
                     var result = buildOnDisk(missing, M, efConstruction, neighborOverflow, addHierarchy, refineFinalGraph,
-                            ds, outputDir, buildCompressorObj, handles, constructionMetrics);
+                            floatDs, outputDir, buildCompressorObj, handles, constructionMetrics);
                     indexes.putAll(result.indexes);
                     indexFileSizes.putAll(result.fileSizes);
                 }
@@ -314,24 +327,28 @@ public class Grid {
                         } else {
                             constructionMetrics.resetSearch(); // per (index, cpSupplier) config
 
-                            var searchParams = cpSupplier.apply(ds);
-                            String searchQuantType = quantTypeOf(searchParams); // "PQ", "BQ", or null
-                            var compressor = getCompressor(cpSupplier, ds, constructionMetrics, Phase.SEARCH, searchQuantType);
-
-                            if (compressor == null) {
+                            if (floatDs == null) {
                                 cv = null;
-                                System.out.format("%s: No search compressor configured, FULL PRECISION vectors will be used for search%n", ds.getName());
                             } else {
-                                long start = System.nanoTime();
-                                cv = constructionMetrics.search(searchQuantType)
-                                        .timeEncode(() -> compressor.encodeAll(ds.getBaseRavv()));
-                                double encodingTimeS = (System.nanoTime() - start) / 1_000_000_000.0;
-                                if (cv == null) {
-                                    throw new IllegalStateException(String.format(
-                                            "Compressor '%s' was provided but failed to encode vectors for dataset '%s'. " +
-                                                    "Aborting to prevent false recall results.", compressor, ds.getName()));
+                                var searchParams = cpSupplier.apply(floatDs);
+                                String searchQuantType = quantTypeOf(searchParams); // "PQ", "BQ", or null
+                                var compressor = getCompressor(cpSupplier, floatDs, constructionMetrics, Phase.SEARCH, searchQuantType);
+
+                                if (compressor == null) {
+                                    cv = null;
+                                    System.out.format("%s: No search compressor configured, FULL PRECISION vectors will be used for search%n", ds.getName());
+                                } else {
+                                    long start = System.nanoTime();
+                                    cv = constructionMetrics.search(searchQuantType)
+                                            .timeEncode(() -> compressor.encodeAll(floatDs.getBaseRavv()));
+                                    double encodingTimeS = (System.nanoTime() - start) / 1_000_000_000.0;
+                                    if (cv == null) {
+                                        throw new IllegalStateException(String.format(
+                                                "Compressor '%s' was provided but failed to encode vectors for dataset '%s'. " +
+                                                        "Aborting to prevent false recall results.", compressor, ds.getName()));
+                                    }
+                                    System.out.format("%s: %s encoded %d vectors [%.2f MB] in %.2fs%n", ds.getName(), compressor, floatDs.getBaseVectors().size(), (cv.ramBytesUsed() / 1024f / 1024f), encodingTimeS);
                                 }
-                                System.out.format("%s: %s encoded %d vectors [%.2f MB] in %.2fs%n", ds.getName(), compressor, ds.getBaseVectors().size(), (cv.ramBytesUsed() / 1024f / 1024f), encodingTimeS);
                             }
                         }
 
@@ -385,7 +402,7 @@ public class Grid {
                                                                         float neighborOverflow,
                                                                         boolean addHierarchy,
                                                                         boolean refineFinalGraph,
-                                                                        DataSet ds,
+                                                                        FloatDataSet ds,
                                                                         Path outputDir,
                                                                         VectorCompressor<?> buildCompressor,
                                                                         Map<Set<FeatureId>, OnDiskGraphIndexCache.WriteHandle> handles,
@@ -503,7 +520,21 @@ public class Grid {
                                                              ConstructionMetrics constructionMetrics)
             throws FileNotFoundException
     {
-        var identityMapper = new OrdinalMapper.IdentityMapper(floatVectors.size() - 1);
+        return builderWithSuppliers(features, onHeapGraph, outPath, floatVectors, null, pq, constructionMetrics);
+    }
+
+    private static BuilderWithSuppliers builderWithSuppliers(Set<FeatureId> features,
+                                                             ImmutableGraphIndex onHeapGraph,
+                                                             Path outPath,
+                                                             RandomAccessVectorValues floatVectors,
+                                                             RandomAccessByteVectorValues byteVectors,
+                                                             ProductQuantization pq,
+                                                             ConstructionMetrics constructionMetrics)
+            throws FileNotFoundException
+    {
+        int dimension = floatVectors != null ? floatVectors.dimension() : byteVectors.dimension();
+        int size = floatVectors != null ? floatVectors.size() : byteVectors.size();
+        var identityMapper = new OrdinalMapper.IdentityMapper(size - 1);
         var builder = new RandomAccessOnDiskGraphIndexWriter.Builder(onHeapGraph, outPath);
         builder.withMapper(identityMapper);
 
@@ -511,8 +542,15 @@ public class Grid {
         for (var featureId : features) {
             switch (featureId) {
                 case INLINE_VECTORS:
-                    builder.with(new InlineVectors(floatVectors.dimension()));
+                    builder.with(new InlineVectors(dimension));
                     suppliers.put(FeatureId.INLINE_VECTORS, ordinal -> new InlineVectors.State(floatVectors.getVector(ordinal)));
+                    break;
+                case INLINE_BYTE_VECTORS:
+                    if (byteVectors == null) {
+                        throw new IllegalArgumentException("INLINE_BYTE_VECTORS requested but no byte vectors provided");
+                    }
+                    builder.with(new InlineByteVectors(dimension));
+                    suppliers.put(FeatureId.INLINE_BYTE_VECTORS, ordinal -> new InlineByteVectors.State(byteVectors.getVector(ordinal)));
                     break;
                 case FUSED_PQ:
                     if (pq == null) {
@@ -523,14 +561,16 @@ public class Grid {
                     builder.with(new FusedPQ(onHeapGraph.maxDegree(), pq));
                     break;
                 case NVQ_VECTORS:
-                    int nSubVectors = floatVectors.dimension() == 2 ? 1 : 2;
+                    if (byteVectors != null) {
+                        throw new IllegalArgumentException("NVQ_VECTORS is not supported for INT8 (byte) datasets");
+                    }
+                    int nSubVectors = dimension == 2 ? 1 : 2;
                     var nvq = (constructionMetrics != null)
                             ? constructionMetrics.index("NVQ").timeCompute(() -> NVQuantization.compute(floatVectors, nSubVectors))
                             : NVQuantization.compute(floatVectors, nSubVectors);
                     builder.with(new NVQ(nvq));
                     suppliers.put(FeatureId.NVQ_VECTORS, ordinal -> new NVQ.State(nvq.encode(floatVectors.getVector(ordinal))));
                     break;
-
             }
         }
         return new BuilderWithSuppliers(builder, suppliers);
@@ -571,8 +611,26 @@ public class Grid {
                                                                           float neighborOverflow,
                                                                           boolean addHierarchy,
                                                                           boolean refineFinalGraph,
-                                                                          DataSet ds,
+                                                                          DataSet<?> ds,
                                                                           Path testDirectory)
+            throws IOException
+    {
+        if (ds instanceof ByteDataSet) {
+            return buildInMemoryByte(featureSets, M, efConstruction, neighborOverflow, addHierarchy, refineFinalGraph,
+                    (ByteDataSet) ds, testDirectory);
+        }
+        return buildInMemoryFloat(featureSets, M, efConstruction, neighborOverflow, addHierarchy, refineFinalGraph,
+                (FloatDataSet) ds, testDirectory);
+    }
+
+    private static Map<Set<FeatureId>, ImmutableGraphIndex> buildInMemoryFloat(List<? extends Set<FeatureId>> featureSets,
+                                                                               int M,
+                                                                               int efConstruction,
+                                                                               float neighborOverflow,
+                                                                               boolean addHierarchy,
+                                                                               boolean refineFinalGraph,
+                                                                               FloatDataSet ds,
+                                                                               Path testDirectory)
             throws IOException
     {
         var floatVectors = ds.getBaseRavv();
@@ -593,16 +651,10 @@ public class Grid {
         var onHeapGraph = builder.build(floatVectors);
         double buildTimeS = (System.nanoTime() - start) / 1_000_000_000.0;
         System.out.format("Build (%s) M=%d overflow=%.2f ef=%d in %.2fs%n",
-                          "full res",
-                          M,
-                          neighborOverflow,
-                          efConstruction,
-                          buildTimeS);
+                          "full res", M, neighborOverflow, efConstruction, buildTimeS);
         for (int i = 0; i <= onHeapGraph.getMaxLevel(); i++) {
             System.out.format("  L%d: %d nodes, %.2f avg degree%n",
-                              i,
-                              onHeapGraph.size(i),
-                              onHeapGraph.getAverageDegree(i));
+                              i, onHeapGraph.size(i), onHeapGraph.getAverageDegree(i));
         }
         int n = 0;
         for (var features : featureSets) {
@@ -617,11 +669,68 @@ public class Grid {
                 writer.write(bws.suppliers);
                 System.out.format("Wrote %s in %.2fs%n", features, (System.nanoTime() - start) / 1_000_000_000.0);
             }
-
             var index = OnDiskGraphIndex.load(ReaderSupplierFactory.open(graphPath));
             indexes.put(features, index);
         }
         indexBuildTimes.put(ds.getName(), buildTimeS);
+        return indexes;
+    }
+
+    private static Map<Set<FeatureId>, ImmutableGraphIndex> buildInMemoryByte(List<? extends Set<FeatureId>> featureSets,
+                                                                              int M,
+                                                                              int efConstruction,
+                                                                              float neighborOverflow,
+                                                                              boolean addHierarchy,
+                                                                              boolean refineFinalGraph,
+                                                                              ByteDataSet ds,
+                                                                              Path testDirectory)
+            throws IOException
+    {
+        for (var features : featureSets) {
+            if (features.contains(FeatureId.FUSED_PQ) || features.contains(FeatureId.NVQ_VECTORS)) {
+                throw new IllegalArgumentException(
+                        "FUSED_PQ and NVQ_VECTORS are not supported for INT8 datasets; got: " + features);
+            }
+        }
+
+        var rabvv = ds.getBaseByteRavv();
+        ByteVectorSimilarityFunction bvsf = ds.getByteSimilarityFunction();
+
+        Map<Set<FeatureId>, ImmutableGraphIndex> indexes = new HashMap<>();
+        long start;
+
+        try (GraphIndexBuilder builder = GraphIndexBuilder.builder(rabvv, bvsf, M)
+                .withBeamWidth(efConstruction)
+                .withNeighborOverflow(neighborOverflow)
+                .withAlpha(1.2f)
+                .withSimdExecutor(PhysicalCoreExecutor.pool())
+                .withParallelExecutor(FilteredForkJoinPool.createFilteredPool())
+                .build())
+        {
+            start = System.nanoTime();
+            var onHeapGraph = builder.build(rabvv);
+            double buildTimeS = (System.nanoTime() - start) / 1_000_000_000.0;
+            System.out.format("Build (INT8) M=%d overflow=%.2f ef=%d in %.2fs%n",
+                              M, neighborOverflow, efConstruction, buildTimeS);
+            for (int i = 0; i <= onHeapGraph.getMaxLevel(); i++) {
+                System.out.format("  L%d: %d nodes, %.2f avg degree%n",
+                                  i, onHeapGraph.size(i), onHeapGraph.getAverageDegree(i));
+            }
+
+            int n = 0;
+            for (var features : featureSets) {
+                var graphPath = testDirectory.resolve("graph" + n++);
+                var bws = builderWithSuppliers(features, onHeapGraph, graphPath, null, rabvv, null, null);
+                try (var writer = bws.builder.build()) {
+                    start = System.nanoTime();
+                    writer.write(bws.suppliers);
+                    System.out.format("Wrote %s in %.2fs%n", features, (System.nanoTime() - start) / 1_000_000_000.0);
+                }
+                var index = OnDiskGraphIndex.load(ReaderSupplierFactory.open(graphPath));
+                indexes.put(features, index);
+            }
+            indexBuildTimes.put(ds.getName(), buildTimeS);
+        }
         return indexes;
     }
 
@@ -827,7 +936,7 @@ public class Grid {
     }
 
     public static List<BenchResult> runAllAndCollectResults(
-            DataSet ds,
+            DataSet<?> ds,
             boolean enableIndexCache,
             List<Integer> mGrid,
             List<Integer> efConstructionGrid,
@@ -835,8 +944,8 @@ public class Grid {
             List<Boolean> addHierarchyGrid,
             List<Boolean> refineFinalGraphGrid,
             List<? extends Set<FeatureId>> featureSets,
-            List<Function<DataSet, CompressorParameters>> buildCompressors,
-            List<Function<DataSet, CompressorParameters>> compressionGrid,
+            List<Function<FloatDataSet, CompressorParameters>> buildCompressors,
+            List<Function<FloatDataSet, CompressorParameters>> compressionGrid,
             Map<Integer, List<Double>> topKGrid,
             List<Boolean> usePruningGrid) throws IOException {
 
@@ -853,8 +962,8 @@ public class Grid {
                     for (boolean addHierarchy : addHierarchyGrid) {
                         for (boolean refineFinalGraph : refineFinalGraphGrid) {
                             for (Set<FeatureId> features : featureSets) {
-                                for (Function<DataSet, CompressorParameters> buildCompressor : buildCompressors) {
-                                    for (Function<DataSet, CompressorParameters> searchCompressor : compressionGrid) {
+                                for (Function<FloatDataSet, CompressorParameters> buildCompressor : buildCompressors) {
+                                    for (Function<FloatDataSet, CompressorParameters> searchCompressor : compressionGrid) {
                                         Path testDirectory = Files.createTempDirectory("bench");
                                         try (var diagnostics = new BenchmarkDiagnostics(getDiagnosticLevel())) {
                                             // Capture initial state
@@ -864,8 +973,9 @@ public class Grid {
                                             Map<Set<FeatureId>, ImmutableGraphIndex> indexes = new HashMap<>();
                                             Map<Set<FeatureId>, Long> indexFileSizes = new HashMap<>();
 
-                                            var compressor = getCompressor(buildCompressor, ds);
-                                            var searchCompressorObj = getCompressor(searchCompressor, ds);
+                                            var floatDs = (FloatDataSet) ds;
+                                            var compressor = getCompressor(buildCompressor, floatDs);
+                                            var searchCompressorObj = getCompressor(searchCompressor, floatDs);
                                             // Encode vectors for reranking if a compressor is provided
                                             CompressedVectors cvArg;
                                             if (features.contains(FeatureId.FUSED_PQ)) {
@@ -877,7 +987,7 @@ public class Grid {
                                                     System.out.format("%s: No search compressor configured, " +
                                                             "FULL PRECISION vectors will be used for search%n", ds.getName());
                                                 } else {
-                                                    cvArg = searchCompressorObj.encodeAll(ds.getBaseRavv());
+                                                    cvArg = searchCompressorObj.encodeAll(floatDs.getBaseRavv());
                                                     if (cvArg == null) {
                                                         throw new IllegalStateException(String.format(
                                                                 "Compressor '%s' was provided but failed to encode vectors for dataset '%s'. " +
@@ -885,7 +995,7 @@ public class Grid {
                                                                 searchCompressorObj, ds.getName()));
                                                     }
                                                     System.out.format("%s: %s encoded %d vectors [%.2f MB] for search%n",
-                                                            ds.getName(), searchCompressorObj, ds.getBaseVectors().size(),
+                                                            ds.getName(), searchCompressorObj, floatDs.getBaseVectors().size(),
                                                             (cvArg.ramBytesUsed() / 1024f / 1024f));
                                                 }
                                             }
@@ -923,7 +1033,7 @@ public class Grid {
                                                 // At least one index needs to be built (b/c not in cache or cache is disabled)
                                                 // We pass the handles map so buildOnDisk knows exactly where to write
                                                 var result = buildOnDisk(missing, m, ef, neighborOverflow, addHierarchy, refineFinalGraph,
-                                                        ds, outputDir, compressor, handles, null);
+                                                        floatDs, outputDir, compressor, handles, null);
                                                 indexes.putAll(result.indexes);
                                                 indexFileSizes.putAll(result.fileSizes);
                                             }
@@ -1024,7 +1134,7 @@ public class Grid {
     }
 
     /** Overload for non-reporting use */
-    private static VectorCompressor<?> getCompressor(Function<DataSet, CompressorParameters> cpSupplier, DataSet ds) {
+    private static VectorCompressor<?> getCompressor(Function<FloatDataSet, CompressorParameters> cpSupplier, FloatDataSet ds) {
         return getCompressor(cpSupplier, ds, null, null, null);
     }
 
@@ -1045,8 +1155,8 @@ public class Grid {
      * @param phase which phase to attribute compute time to (index construction vs search-time setup)
      * @param quantType YAML quantization type label (e.g., PQ/BQ); if null, no quant metric is recorded
      */
-    private static VectorCompressor<?> getCompressor(Function<DataSet, CompressorParameters> cpSupplier,
-                                                     DataSet ds,
+    private static VectorCompressor<?> getCompressor(Function<FloatDataSet, CompressorParameters> cpSupplier,
+                                                     FloatDataSet ds,
                                                      ConstructionMetrics metrics,
                                                      Phase phase,
                                                      String quantType) {
@@ -1091,7 +1201,7 @@ public class Grid {
     }
 
     // Load/save helpers for getCompressor
-    private static VectorCompressor<?> loadFromCache(DataSet ds, String fname, Path path) {
+    private static VectorCompressor<?> loadFromCache(DataSet<?> ds, String fname, Path path) {
         try (var readerSupplier = ReaderSupplierFactory.open(path);
              var rar = readerSupplier.get()) {
             var pq = ProductQuantization.load(rar);
@@ -1115,7 +1225,7 @@ public class Grid {
     }
 
     public static class ConfiguredSystem implements AutoCloseable {
-        DataSet ds;
+        DataSet<?> ds;
         ImmutableGraphIndex index;
         CompressedVectors cv;
         Set<FeatureId> features;
@@ -1124,7 +1234,7 @@ public class Grid {
             return new GraphSearcher(index);
         });
 
-        ConfiguredSystem(DataSet ds, ImmutableGraphIndex index, CompressedVectors cv, Set<FeatureId> features) {
+        ConfiguredSystem(DataSet<?> ds, ImmutableGraphIndex index, CompressedVectors cv, Set<FeatureId> features) {
             this.ds = ds;
             this.index = index;
             this.cv = cv;
@@ -1134,25 +1244,33 @@ public class Grid {
         public SearchScoreProvider scoreProviderFor(VectorFloat<?> queryVector, ImmutableGraphIndex.View view) {
             var scoringView = (ImmutableGraphIndex.ScoringView) view;
             ScoreFunction.ApproximateScoreFunction asf;
+            var floatDs = (FloatDataSet) ds;
             if (features.contains(FeatureId.FUSED_PQ)) {
-                asf = scoringView.approximateScoreFunctionFor(queryVector, ds.getSimilarityFunction());
+                asf = scoringView.approximateScoreFunctionFor(queryVector, floatDs.getSimilarityFunction());
             } else {
                 // if we're not compressing then just use the exact score function
                 if (cv == null) {
-                    return DefaultSearchScoreProvider.exact(queryVector, ds.getSimilarityFunction(), ds.getBaseRavv());
+                    return DefaultSearchScoreProvider.exact(queryVector, floatDs.getSimilarityFunction(), floatDs.getBaseRavv());
                 }
 
-                asf = cv.precomputedScoreFunctionFor(queryVector, ds.getSimilarityFunction());
+                asf = cv.precomputedScoreFunctionFor(queryVector, floatDs.getSimilarityFunction());
             }
-            var rr = scoringView.rerankerFor(queryVector, ds.getSimilarityFunction());
+            var rr = scoringView.rerankerFor(queryVector, floatDs.getSimilarityFunction());
             return new DefaultSearchScoreProvider(asf, rr);
+        }
+
+        public SearchScoreProvider scoreProviderFor(ByteSequence<?> queryBytes, ImmutableGraphIndex.View view) {
+            var diskView = (OnDiskGraphIndex.View) view;
+            var byteDs = (ByteDataSet) ds;
+            var reranker = diskView.byteVectorRerankerFor(queryBytes, byteDs.getByteSimilarityFunction());
+            return new DefaultSearchScoreProvider(reranker);
         }
 
         public GraphSearcher getSearcher() {
             return searchers.get();
         }
 
-        public DataSet getDataSet() {
+        public DataSet<?> getDataSet() {
             return ds;
         }
 
