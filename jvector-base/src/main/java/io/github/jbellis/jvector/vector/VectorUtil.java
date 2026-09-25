@@ -142,6 +142,12 @@ public final class VectorUtil {
     impl.subInPlace(v1, v2);
   }
 
+  /** @see VectorUtilSupport#dotProductMulti */
+  public static void dotProductMulti(VectorFloat<?> vector, VectorFloat<?>[] queries, int count, float[] out) {
+    impl.dotProductMulti(vector, queries, count, out);
+  }
+
+
   public static void subInPlace(VectorFloat<?> vector, float value) {
     impl.subInPlace(vector, value);
   }

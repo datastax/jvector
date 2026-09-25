@@ -144,6 +144,17 @@ public interface VectorUtilSupport {
   float max(VectorFloat<?> v);
   float min(VectorFloat<?> v);
 
+  /**
+   * Dot products of one vector against {@code count} query vectors: {@code out[i] = dot(vector, queries[i])}.
+   * Implementations tile several queries per pass so the vector is loaded once per tile.
+   */
+  default void dotProductMulti(VectorFloat<?> vector, VectorFloat<?>[] queries, int count, float[] out) {
+    for (int i = 0; i < count; i++) {
+      out[i] = dotProduct(vector, queries[i]);
+    }
+  }
+
+
   default float pqDecodedCosineSimilarity(ByteSequence<?> encoded, int clusterCount, VectorFloat<?> partialSums, VectorFloat<?> aMagnitude, float bMagnitude)
   {
     return pqDecodedCosineSimilarity(encoded, 0, encoded.length(), clusterCount, partialSums, aMagnitude, bMagnitude);
