@@ -18,7 +18,7 @@ package io.github.jbellis.jvector.example;
 
 import io.github.jbellis.jvector.disk.ReaderSupplier;
 import io.github.jbellis.jvector.disk.ReaderSupplierFactory;
-import io.github.jbellis.jvector.example.benchmarks.datasets.DataSet;
+import io.github.jbellis.jvector.example.benchmarks.datasets.FloatDataSet;
 import io.github.jbellis.jvector.example.util.AccuracyMetrics;
 import io.github.jbellis.jvector.example.util.CompactionPartitionSource;
 import io.github.jbellis.jvector.example.yaml.TestDataPartition.Distribution;
@@ -97,7 +97,7 @@ public final class CompactionBench {
      * one result per config. A config that fails (e.g. missing partitions) is logged and skipped so
      * the remaining configs still run. Throws if the dataset has no query vectors or ground truth.
      */
-    public static List<BenchResult> run(DataSet ds) throws Exception {
+    public static List<BenchResult> run(FloatDataSet ds) throws Exception {
         var queryVectors = ds.getQueryVectors();
         var groundTruth = ds.getGroundTruth();
         if (queryVectors == null || queryVectors.isEmpty()) {
@@ -118,7 +118,7 @@ public final class CompactionBench {
         return results;
     }
 
-    private static BenchResult runConfig(DataSet ds, PartitionConfig cfg) throws Exception {
+    private static BenchResult runConfig(FloatDataSet ds, PartitionConfig cfg) throws Exception {
         String datasetName = ds.getName();
         logger.info("Compaction bench [{}] config {}: {} vectors",
                 datasetName, cfg.dirName(), ds.getBaseVectors().size());
@@ -135,7 +135,7 @@ public final class CompactionBench {
         }
     }
 
-    private static BenchResult compactAndMeasure(DataSet ds, PartitionConfig cfg,
+    private static BenchResult compactAndMeasure(FloatDataSet ds, PartitionConfig cfg,
                                                  List<Path> partitionPaths, Path tempDir) throws Exception {
         List<VectorFloat<?>> baseVectors = ds.getBaseVectors();
         int dimension = ds.getDimension();
@@ -243,7 +243,7 @@ public final class CompactionBench {
      * Searches every query against the compacted graph, timing each search, and returns recall plus
      * mean and p99 per-query latency (ms) and throughput (queries/sec, single-threaded sequential).
      */
-    private static SearchStats searchCompacted(Path indexPath, DataSet ds,
+    private static SearchStats searchCompacted(Path indexPath, FloatDataSet ds,
                                                List<VectorFloat<?>> baseVectors,
                                                int dimension, VectorSimilarityFunction vsf) throws Exception {
         var queryVectors = ds.getQueryVectors();

@@ -16,8 +16,10 @@
 
 package io.github.jbellis.jvector.example.yaml;
 
-import io.github.jbellis.jvector.example.util.CompressorParameters;
+import io.github.jbellis.jvector.example.benchmarks.datasets.ByteDataSet;
 import io.github.jbellis.jvector.example.benchmarks.datasets.DataSet;
+import io.github.jbellis.jvector.example.util.CompressorParameters;
+import io.github.jbellis.jvector.example.benchmarks.datasets.FloatDataSet;
 
 import java.util.List;
 import java.util.function.Function;
@@ -26,7 +28,23 @@ import java.util.stream.Collectors;
 public class CommonParameters {
     public List<Compression> compression;
 
-    public List<Function<DataSet, CompressorParameters>> getCompressorParameters() {
+    public List<Function<FloatDataSet, CompressorParameters>> getCompressorParameters(DataSet<?> ds) {
+        if (ds instanceof ByteDataSet) {
+            if (compression != null) {
+                for (var c : compression) {
+                    if (c.type != null && !c.type.equalsIgnoreCase("None")) {
+                        throw new IllegalArgumentException(String.format(
+                                "Compression type '%s' is not supported for INT8 dataset '%s'. INT8 datasets do not support compression.",
+                                c.type, ds.getName()));
+                    }
+                }
+            }
+            return List.of(__ -> CompressorParameters.NONE);
+        }
+
+        if (compression == null) {
+            return List.of(__ -> CompressorParameters.NONE);
+        }
         return compression.stream().map(Compression::getCompressorParameters).collect(Collectors.toList());
     }
 }

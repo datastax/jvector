@@ -15,6 +15,7 @@
  */
 package io.github.jbellis.jvector.example.benchmarks.datasets;
 
+import io.github.jbellis.jvector.vector.ByteVectorSimilarityFunction;
 import io.github.jbellis.jvector.example.util.SiftLoader;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -423,6 +424,26 @@ public class DataSetLoaderSimpleMFD implements DataSetLoader {
                         String.format(
                                 "Dataset '%s' was found in dataset catalog, but no metadata entry was found in dataset-metadata.yml. ",
                                 dataSetName)));
+        boolean baseIsBvecs = baseFile.endsWith(".bvecs");
+        boolean queryIsBvecs = queryFile.endsWith(".bvecs");
+        if (baseIsBvecs != queryIsBvecs) {
+            throw new IllegalArgumentException(
+                    "Dataset '" + dataSetName + "': base and query files must use the same format, " +
+                    "but got '" + baseFile + "' and '" + queryFile + "'");
+        }
+
+        if (baseIsBvecs) {
+            ByteVectorSimilarityFunction bvsf = props.byteSimilarityFunction()
+                    .orElseThrow(() -> new IllegalArgumentException(
+                            "Dataset '" + dataSetName + "' uses .bvecs files but has no similarity_function configured"));
+            return Optional.of(new DataSetInfo(props, () -> {
+                var baseVectors = SiftLoader.readBvecs(effectiveCacheDir.resolve(baseFile).toString());
+                var queryVectors = SiftLoader.readBvecs(effectiveCacheDir.resolve(queryFile).toString());
+                var gtVectors = SiftLoader.readIvecs(effectiveCacheDir.resolve(gtFile).toString());
+                return new ByteDataSet(dataSetName, bvsf, baseVectors, queryVectors, gtVectors);
+            }));
+        }
+
         return Optional.of(new DataSetInfo(props, () -> {
             var baseVectors = SiftLoader.readFvecs(effectiveCacheDir.resolve(baseFile).toString());
             var queryVectors = SiftLoader.readFvecs(effectiveCacheDir.resolve(queryFile).toString());

@@ -17,6 +17,7 @@
 package io.github.jbellis.jvector.example.reporting;
 
 import io.github.jbellis.jvector.example.benchmarks.datasets.DataSet;
+import io.github.jbellis.jvector.example.benchmarks.datasets.FloatDataSet;
 import io.github.jbellis.jvector.example.benchmarks.Metric;
 import io.github.jbellis.jvector.example.yaml.MultiConfig;
 import io.github.jbellis.jvector.example.yaml.MetricSelection;
@@ -236,11 +237,11 @@ public final class RunArtifacts {
     public Map<String, List<String>> benchmarksToLog() { return benchmarksToLog; }
     public MetricSelection metricsToLog() { return metricsToLog; }
 
-    public void registerDataset(String datasetName, DataSet ds) throws IOException {
+    public void registerDataset(String datasetName, DataSet<?> ds) throws IOException {
         if (datasetInfoWriter == null) {
             return; // disabled
         }
 
-        datasetInfoWriter.register(DatasetInfoWriter.fromDataSet(datasetName, "", "", "", ds));
+        datasetInfoWriter.register(DatasetInfoWriter.fromDataSet(datasetName, "", "", "", (FloatDataSet) ds));
     }
 }

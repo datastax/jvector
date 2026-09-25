@@ -1,0 +1,23 @@
+yamlSchemaVersion: 1
+onDiskIndexVersion: 6
+
+dataset: sift1m-128-euclidean-int8
+
+construction:
+  outDegree: [32]
+  efConstruction: [100]
+  neighborOverflow: [1.2f]
+  addHierarchy: [No]
+  refineFinalGraph: [No]
+  fusedGraph: [No]
+  compression:
+    - type: None
+  useSavedIndexIfExists: No
+
+search:
+  topKOverquery:
+    10: [1.0]
+    100: [1.0]
+  useSearchPruning: [Yes]
+  compression:
+    - type: None
