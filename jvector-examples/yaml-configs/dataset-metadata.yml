@@ -109,3 +109,6 @@ openai-3072-1m:
 openai-1536-1m:
   similarity_function: DOT_PRODUCT
   load_behavior: NO_SCRUB
+sift1m-128-euclidean-int8:
+  similarity_function: EUCLIDEAN
+  load_behavior: NO_SCRUB

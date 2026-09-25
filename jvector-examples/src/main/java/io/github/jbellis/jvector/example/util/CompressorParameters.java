@@ -16,7 +16,7 @@
 
 package io.github.jbellis.jvector.example.util;
 
-import io.github.jbellis.jvector.example.benchmarks.datasets.DataSet;
+import io.github.jbellis.jvector.example.benchmarks.datasets.FloatDataSet;
 import io.github.jbellis.jvector.quantization.BinaryQuantization;
 import io.github.jbellis.jvector.quantization.NVQuantization;
 import io.github.jbellis.jvector.quantization.ProductQuantization;
@@ -29,12 +29,12 @@ public abstract class CompressorParameters {
         return false;
     }
 
-    public String idStringFor(DataSet ds) {
+    public String idStringFor(FloatDataSet ds) {
         // only required when supportsCaching() is true
         throw new UnsupportedOperationException();
     }
 
-    public abstract VectorCompressor<?> computeCompressor(DataSet ds);
+    public abstract VectorCompressor<?> computeCompressor(FloatDataSet ds);
 
     public static class PQParameters extends CompressorParameters {
         private final int m;
@@ -50,12 +50,12 @@ public abstract class CompressorParameters {
         }
 
         @Override
-        public VectorCompressor<?> computeCompressor(DataSet ds) {
+        public VectorCompressor<?> computeCompressor(FloatDataSet ds) {
             return ProductQuantization.compute(ds.getBaseRavv(), m, k, isCentered, anisotropicThreshold);
         }
 
         @Override
-        public String idStringFor(DataSet ds) {
+        public String idStringFor(FloatDataSet ds) {
             return String.format("PQ_%s_%d_%d_%s_%s", ds.getName(), m, k, isCentered, anisotropicThreshold);
         }
 
@@ -67,7 +67,7 @@ public abstract class CompressorParameters {
 
     public static class BQParameters extends CompressorParameters {
         @Override
-        public VectorCompressor<?> computeCompressor(DataSet ds) {
+        public VectorCompressor<?> computeCompressor(FloatDataSet ds) {
             return new BinaryQuantization(ds.getDimension());
         }
     }
@@ -80,12 +80,12 @@ public abstract class CompressorParameters {
         }
 
         @Override
-        public VectorCompressor<?> computeCompressor(DataSet ds) {
+        public VectorCompressor<?> computeCompressor(FloatDataSet ds) {
             return NVQuantization.compute(ds.getBaseRavv(), nSubVectors);
         }
 
         @Override
-        public String idStringFor(DataSet ds) {
+        public String idStringFor(FloatDataSet ds) {
             return String.format("NVQ_%s_%d_%s", ds.getName(), nSubVectors);
         }
 
@@ -97,7 +97,7 @@ public abstract class CompressorParameters {
 
     private static class NoCompressionParameters extends CompressorParameters {
         @Override
-        public VectorCompressor<?> computeCompressor(DataSet ds) {
+        public VectorCompressor<?> computeCompressor(FloatDataSet ds) {
             return null;
         }
     }

@@ -16,7 +16,7 @@
 
 package io.github.jbellis.jvector.example.util;
 
-import io.github.jbellis.jvector.example.benchmarks.datasets.DataSet;
+import io.github.jbellis.jvector.example.benchmarks.datasets.FloatDataSet;
 import io.github.jbellis.jvector.example.yaml.TestDataPartition;
 import io.github.jbellis.jvector.vector.types.VectorFloat;
 
@@ -39,7 +39,7 @@ public final class DataSetPartitioner {
         }
     }
 
-    public static PartitionedData partition(DataSet ds, int numParts, TestDataPartition.Distribution distribution) {
+    public static PartitionedData partition(FloatDataSet ds, int numParts, TestDataPartition.Distribution distribution) {
         return partition(ds.getBaseVectors(), numParts, distribution);
     }
 

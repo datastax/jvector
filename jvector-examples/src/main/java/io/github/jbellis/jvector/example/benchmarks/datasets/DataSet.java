@@ -16,61 +16,44 @@
 
 package io.github.jbellis.jvector.example.benchmarks.datasets;
 
-import io.github.jbellis.jvector.graph.RandomAccessVectorValues;
-import io.github.jbellis.jvector.vector.VectorSimilarityFunction;
-import io.github.jbellis.jvector.vector.types.VectorFloat;
-
-import java.util.*;
+import java.util.List;
 
 /**
- * This provides a uniform way to access vector test data, regardless of where it comes from or how it is implemented.
+ * Uniform access to vector test data, regardless of element type ({@code VectorFloat<?>} for
+ * float32 datasets, {@code ByteSequence<?>} for int8 datasets).
+ *
+ * <p>Type-specific accessors (RAVV, similarity function) live on the concrete subclasses
+ * {@link FloatDataSet} and {@link ByteDataSet} rather than here.
+ *
+ * @param <V> the vector element type
  */
-public interface DataSet {
-
-    /**
-     * Get dimensions of the vectors in this dataset.
-     * @return the dimensionality
-     */
-    int getDimension();
-
-    /**
-     * Get a random-access view of base vectors.
-     * @return base vectors
-     */
-    RandomAccessVectorValues getBaseRavv();
+public interface DataSet<V> {
 
     /**
      * The symbolic name of this dataset, used for dataset selection and result labeling.
-     * @return the dataset name
      */
     String getName();
 
     /**
-     * The similarity function originally used to build this dataset, and the one that should be used for testing
-     * during indexing and traversal.
-     * @return the similarity function
+     * Dimensionality of the vectors in this dataset.
      */
-    VectorSimilarityFunction getSimilarityFunction();
+    int getDimension();
 
     /**
-     * The base vectors as a list.
-     * @return a list of base vectors
+     * Base vectors as a list.
      */
-    List<VectorFloat<?>> getBaseVectors();
+    List<V> getBaseVectors();
 
     /**
-     * The query vectors as a list.
-     * Each major index corresponds to the self-same index from {@link #getGroundTruth()}.
-     * Ideally, the query vectors are disjoint with respect to the base vectors to improve testing integrity.
-     * @return a list of query vectors
+     * Query vectors as a list.
+     * Each index corresponds to the same index in {@link #getGroundTruth()}.
      */
-    List<VectorFloat<?>> getQueryVectors();
+    List<V> getQueryVectors();
 
     /**
-     * The ground truth as a list.
-     * Each major index corresponds to the self-same index from {@link #getQueryVectors()}.
-     * Each minor index within represents the corresponding ordinal from {@link #getBaseVectors()} and {@link #getBaseRavv()}.
-     * @return a list of query vectors.
+     * Ground truth as a list of neighbor-ordinal lists.
+     * Each major index corresponds to the same index in {@link #getQueryVectors()}.
+     * Each minor index is an ordinal into {@link #getBaseVectors()}.
      */
     List<? extends List<Integer>> getGroundTruth();
 }

@@ -17,7 +17,7 @@
 package io.github.jbellis.jvector.example.yaml;
 
 import io.github.jbellis.jvector.example.util.CompressorParameters;
-import io.github.jbellis.jvector.example.benchmarks.datasets.DataSet;
+import io.github.jbellis.jvector.example.benchmarks.datasets.FloatDataSet;
 import io.github.jbellis.jvector.vector.VectorSimilarityFunction;
 
 import java.util.Map;
@@ -27,7 +27,7 @@ public class Compression {
     public String type;
     public Map<String, String> parameters;
 
-    public Function<DataSet, CompressorParameters> getCompressorParameters() {
+    public Function<FloatDataSet, CompressorParameters> getCompressorParameters() {
         switch (type) {
             case "None":
                 return __ -> CompressorParameters.NONE;

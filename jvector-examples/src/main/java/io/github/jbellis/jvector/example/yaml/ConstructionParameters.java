@@ -16,6 +16,8 @@
 
 package io.github.jbellis.jvector.example.yaml;
 
+import io.github.jbellis.jvector.example.benchmarks.datasets.ByteDataSet;
+import io.github.jbellis.jvector.example.benchmarks.datasets.DataSet;
 import io.github.jbellis.jvector.graph.disk.feature.FeatureId;
 
 import java.util.EnumSet;
@@ -33,40 +35,52 @@ public class ConstructionParameters extends CommonParameters {
     public List<Boolean> fusedGraph;
     public Boolean useSavedIndexIfExists;
 
-    public List<EnumSet<FeatureId>> getFeatureSets() {
+    public List<EnumSet<FeatureId>> getFeatureSets(DataSet<?> ds) {
+        if (ds instanceof ByteDataSet) {
+            if (reranking != null && !reranking.isEmpty()) {
+                throw new IllegalArgumentException(String.format(
+                        "Reranking %s is not supported for INT8 dataset '%s'. INT8 datasets do not support reranking.",
+                        reranking, ds.getName()));
+            }
+            return List.of(EnumSet.of(FeatureId.INLINE_BYTE_VECTORS));
+        }
+
         List<EnumSet<FeatureId>> featureSets = null;
-        for (var fusedItem : fusedGraph) {
-            var newFeatures = reranking.stream().map(item -> {
-                EnumSet<FeatureId> features;
+        if (fusedGraph != null && reranking != null) {
+            for (var fusedItem : fusedGraph) {
+                var newFeatures = reranking.stream().map(item -> {
+                    EnumSet<FeatureId> features;
 
-                switch (item) {
-                    case "FP":
-                        if (fusedItem) {
-                            features = EnumSet.of(FeatureId.INLINE_VECTORS, FeatureId.FUSED_PQ);
-                        } else {
-                            features = EnumSet.of(FeatureId.INLINE_VECTORS);
-                        }
-                        break;
-                    case "NVQ":
-                        if (fusedItem) {
-                            features = EnumSet.of(FeatureId.NVQ_VECTORS, FeatureId.FUSED_PQ);
-                        } else {
-                            features = EnumSet.of(FeatureId.NVQ_VECTORS);
-                        }
-                        break;
-                    default:
-                        throw new IllegalArgumentException("Only 'FP' and 'NVQ' are supported");
+                    switch (item) {
+                        case "FP":
+                            if (fusedItem) {
+                                features = EnumSet.of(FeatureId.INLINE_VECTORS, FeatureId.FUSED_PQ);
+                            } else {
+                                features = EnumSet.of(FeatureId.INLINE_VECTORS);
+                            }
+                            break;
+                        case "NVQ":
+                            if (fusedItem) {
+                                features = EnumSet.of(FeatureId.NVQ_VECTORS, FeatureId.FUSED_PQ);
+                            } else {
+                                features = EnumSet.of(FeatureId.NVQ_VECTORS);
+                            }
+                            break;
+                        default:
+                            throw new IllegalArgumentException("Only 'FP' and 'NVQ' are supported");
+                    }
+
+                    return features;
+                }).collect(Collectors.toList());
+                if (featureSets == null) {
+                    featureSets = newFeatures;
+                } else {
+                    featureSets.addAll(newFeatures);
                 }
-
-                return features;
-            }).collect(Collectors.toList());
-            if (featureSets == null) {
-                featureSets = newFeatures;
-            } else {
-                featureSets.addAll(newFeatures);
             }
         }
 
         return featureSets;
     }
+
 }
