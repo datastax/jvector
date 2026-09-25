@@ -10,7 +10,7 @@ source[1].index  ─┤──► OnDiskGraphIndexCompactor ──► compacted.i
 source[N].index  ─┘
 ```
 
-Each source is an `OnDiskGraphIndex` with an associated `FixedBitSet` marking which of its nodes are live (not deleted). The compactor merges all live nodes into a single graph, remaps ordinals so the output is contiguously numbered, and optionally retrains the Product Quantization codebook for the combined dataset.
+Each source is an `OnDiskGraphIndex` with an associated `FixedBitSet` marking which of its nodes are live (not deleted). The compactor merges all live nodes into a single graph, assigns the output ordinals (dense over the live nodes, grouped by region), and retrains the Product Quantization codebook for outputs that carry one.
 
 ## Usage
 
@@ -22,52 +22,48 @@ List<FixedBitSet> liveNodes = sources.stream()
     .map(s -> { var bs = new FixedBitSet(s.size()); bs.set(0, s.size()); return bs; })
     .collect(toList());
 
-// Sequential ordinal remapping: source[s] node i → global offset[s] + i
-int offset = 0;
-List<OrdinalMapper> remappers = new ArrayList<>();
-for (var src : sources) {
-    remappers.add(new OrdinalMapper.OffsetMapper(offset, src.size()));
-    offset += src.size();
-}
-
 var compactor = new OnDiskGraphIndexCompactor(
-    sources, liveNodes, remappers,
+    sources, liveNodes,
     VectorSimilarityFunction.COSINE,
     /* executor= */ null                  // null = use by default shared threadpool in compactor
 );
 
 compactor.compact(Path.of("compacted.index"));
+
+// Where every source node landed, one mapper per source: oldToNew(i) is the output ordinal of
+// source node i, or OrdinalMapper.OMITTED for a deleted node.
+List<OrdinalMapper> mapping = compactor.ordinalMappers();
 ```
+
+### Output ordinals
+
+The compactor assigns the output ordinals; the caller does not choose them. Live nodes are numbered `0 .. live - 1`, sources in ascending-size order, and within a source by the region of the largest source's hierarchy each node descends to, so nodes that are close in vector space get adjacent ordinals: records are written sequentially, every cell's members are contiguous (the cell join below relies on this), and consecutive nodes explore the same neighbourhood of every target. Callers that keep external references to nodes (a row id to ordinal table, for instance) translate them through `ordinalMappers()` after `compact` returns.
 
 ### Handling Deleted Nodes
 
-Deleted nodes are excluded from the output by marking them as `false` in the corresponding `FixedBitSet`.
+Deleted nodes are excluded from the output by marking them as `false` in the corresponding `FixedBitSet`; they get no output ordinal (`ordinalMappers()` reports `OrdinalMapper.OMITTED` for them).
 
 ```java
 // Example: every 5th node is deleted
 FixedBitSet live = new FixedBitSet(source.size());
-Map<Integer, Integer> oldToNew = new HashMap<>();
-int newOrd = 0;
 for (int i = 0; i < source.size(); i++) {
     if (i % 5 != 0) {
         live.set(i);
-        oldToNew.put(i, newOrd++);
     }
 }
-remappers.add(new OrdinalMapper.MapMapper(oldToNew));
 ```
 
 ## Algorithm
 
-### Ordinal Remapping
+### Ordinal assignment
 
-Each source assigns its own local ordinals. The compactor maps them to a new global ordinal space using user-provided `OrdinalMapper`.
+Each source assigns its own local ordinals. The compactor builds the output mapping at the start of `compact`: sources in ascending-size order, and within a source by the level-1 node of the largest source's hierarchy each node descends to (an exact greedy descent through a resident copy of that source's upper layers, refined by a width-8 beam over level 1, keyed by a breadth-first walk position over the level-1 graph). When the largest source has no hierarchy there are no cells, and level 0 falls back to the graph search.
 
 
 ### PQ Retraining
 
-If the source indexes use FusedPQ, the compactor retrains the Product Quantization codebook on the combined dataset before writing the output. This is done by `PQRetrainer`, which
-performs **balanced proportional sampling** across all sources (up to `ProductQuantization.MAX_PQ_TRAINING_SET_SIZE` vectors total, at least 1000 per source).
+If the sources carry PQ (FusedPQ, or a compressed sidecar), the compactor retrains the Product Quantization codebook on the combined dataset and re-encodes every live node for the output. This is done by `PQRetrainer`, which
+performs **balanced proportional sampling** across all sources (up to `ProductQuantization.MAX_PQ_TRAINING_SET_SIZE` vectors total, at least 1000 per source). The merge itself does not run on these codes: whatever the sources carry, it runs on the vectors (see "The merge store" below), so the input type determines the output format and nothing else.
 
 
 ### Neighbor Selection (per node)
@@ -78,18 +74,18 @@ For each live node at each graph level, the compactor gathers a candidate neighb
 Iterate the node's existing neighbors in its source index. Filter out deleted nodes. Score each with the similarity function. No graph search — neighbors are already precomputed.
 
 **2. Gather from other sources** (`gatherFromOtherSource`)\
-Run a graph search in every other source index starting from that source's entry point. If FusedPQ is available, approximate PQ scoring is used during the search and top results are rescored exactly.
-
-- *Level 0*: a full hierarchical graph search is used (`GraphSearcher.search()`), descending from the entry node down to level 0.
-- *Level L > 0*: the compactor first descends greedily from the source's entry node through each level above L (one `searchOneLayer` call with topK=1 per level, feeding the result into the next via `setEntryPointsFromPreviousLayer()`), then performs the full beam search at level L. This mirrors standard HNSW construction and gives a much better starting point than jumping directly to level L from the global entry node.
+Keep the top `searchTopK` candidates per larger target, scored exactly: at level 0 through the cell join described below, at the upper levels through a graph search of the target. The graph search also stands in at level 0 for a node without a cell; when the target carries PQ codes the traversal scores through them and the top candidates are rescored exactly, otherwise the traversal is exact.
 
 ```
 searchTopK  = max(2,  ceil(degree / numSources) * 4)
-beamWidth   = max(degree, searchTopK) * 2
 ```
 
+- *Level 0* uses pair-asymmetric cross-linking. Sources are processed smallest first, one source at a time. A node gathers candidates only from the sources **larger** than its own, through the **cell join**. Every candidate is also *offered back* to the node it found, with its exact score: since similarity is symmetric, the offer is exactly the candidate that node's own scan of the smaller source would have produced. Each node holds up to 16 offer slots, kept in a banded, spill-to-disk buffer so peak memory is independent of node count. When a source's turn comes, its nodes union the offers they received with their retained same-source edges and their own candidates before diversity selection. The largest source gathers nothing itself; a node of it that received no offers keeps its retained edges unchanged and skips selection entirely.
+- *Level L > 0*: the compactor first descends greedily from the source's entry point through each level above L (one `searchOneLayer` call with topK=1 per level, feeding the result into the next via `setEntryPointsFromPreviousLayer()`), then performs the full beam search at level L. This mirrors standard HNSW construction and gives a much better starting point than jumping directly to level L from the global entry node.
+
+
 **3. Diversity selection** (Vamana-style)\
-Candidates are sorted by score (descending). The compactor selects up to `maxDegree` diverse neighbors using an adaptive alpha:
+Candidates are sorted by exact score (descending). The compactor selects up to `maxDegree` diverse neighbors using an adaptive alpha. At level 0 the pairwise comparisons between a candidate and the already-selected neighbours run on vectors decoded from the wide code (below), and the candidate's pruning threshold is recomputed against the node from the same decoded vector, so both sides of the inequality carry the same quantization bias; the ordering itself always uses the exact scores.
 
 ```
 for alpha in [1.0, 1.2]:
@@ -99,6 +95,18 @@ for alpha in [1.0, 1.2]:
             select c
     if |selected| == maxDegree: stop
 ```
+
+### Cell join
+
+With a hierarchy in the largest source, level-0 candidates come from a scan rather than a search. The output ordinals group every source's nodes by the level-1 node of the largest source they descend to, their *cell*; each source's nodes of a cell form a contiguous ordinal range, so their vectors are contiguous in the merge store (the inverted lists of an IVF index whose centroids are the largest source's level-1 nodes). Level 0 is processed in ranges of consecutive ordinals: for each node of a range a width-16 beam over the level-1 graph, seeded at the node's own cell, picks its probe cells (at most 4,096 members per larger source, best cells first); the range's (cell, node) pairs are then inverted so that each probed cell of each larger source is streamed once and every vector in it is scored against all the range's nodes that probe it (eight queries per pass, the queries kept in L1), keeping each node's best `searchTopK` by exact score. Survivors enter the unchanged pipeline (reverse offers, diversity, write). Nodes without a cell, and merges where the largest source has no hierarchy, use the graph search.
+
+### The merge store
+
+Before level 0 is written, every live vector is copied once into a scratch region of the output file at its output ordinal (`4 × dimension` bytes per node; truncated away when the merge finishes). The cell scan streams it, and survivors, retained edges and offered candidates take their vectors from it, so no source record is read for a candidate during level 0 and every score the output is written from is exact. Outputs that carry PQ (FusedPQ, or a sidecar) get a second cache from the same pass holding the retrained codes by output ordinal: record writes copy neighbour codes from it instead of re-encoding per edge, and for sidecar sources (`compact(graphPath, compressedPath)`) it becomes the merged compressed vectors file.
+
+### Wide code
+
+The compactor also trains a product quantization with four dimensions per subspace (`max(8, dimension / 4)` subspaces of 256 centroids: 192 bytes per node at 768 dimensions) and encodes every live node into a third cache in the same pass. It serves one purpose: the pairwise diversity comparisons at level 0, where a candidate's vector is decoded from its code rather than read from the merge store, so a node's selection touches one row per candidate instead of one per (candidate, neighbour) pair. Candidate scores against the node stay exact. The coarser code also collapses near-duplicates onto one code, which the diversity rule then prunes, so the degree is spent on distinct neighbours; a finer two-dimensional code kept them apart and merged to lower recall.
 
 ### Hierarchical Levels
 
