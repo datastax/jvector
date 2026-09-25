@@ -21,24 +21,15 @@ import io.github.jbellis.jvector.quantization.VectorCompressor;
 import io.github.jbellis.jvector.vector.VectorSimilarityFunction;
 import io.github.jbellis.jvector.vector.VectorizationProvider;
 import io.github.jbellis.jvector.vector.types.ByteSequence;
-import io.github.jbellis.jvector.vector.types.VectorFloat;
 import io.github.jbellis.jvector.vector.types.VectorTypeSupport;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import sun.misc.Unsafe;
 
 import java.io.IOException;
-import java.lang.reflect.Field;
-import java.nio.ByteBuffer;
-import java.nio.MappedByteBuffer;
 import java.nio.channels.FileChannel;
 import java.nio.file.Path;
 import java.nio.file.StandardOpenOption;
-import java.util.ArrayList;
 import java.util.List;
-import java.util.concurrent.Callable;
-import java.util.concurrent.ExecutionException;
-import java.util.concurrent.Future;
 
 /**
  * Generic compaction strategy for any {@link FusedFeature} (PQ today, ASH or other schemes
@@ -56,21 +47,8 @@ import java.util.concurrent.Future;
 public final class FusedCompactionStrategy extends QuantizationCompactionStrategy {
     private static final Logger log = LoggerFactory.getLogger(FusedCompactionStrategy.class);
     private static final VectorTypeSupport vectorTypeSupport = VectorizationProvider.getInstance().getVectorTypeSupport();
-    private static final Unsafe UNSAFE = getUnsafe();
 
-    private static Unsafe getUnsafe() {
-        try {
-            Field f = Unsafe.class.getDeclaredField("theUnsafe");
-            f.setAccessible(true);
-            return (Unsafe) f.get(null);
-        } catch (Exception e) {
-            log.warn("FusedCompactionStrategy can't acquire needed Unsafe access; code-cache will not be explicitly unmapped");
-            return null;
-        }
-    }
-
-    // Non-final: nulled by releaseSources() after compactGraphImpl so the source graphs reachable
-    // through ctx.sources can be GC'd before refinement. onAfterClose must not touch ctx.
+    // Non-final: replaced by onRemappersUpdated when the compactor reassigns ordinals.
     private CompactionContext ctx;
     private final FusedFeature sourceFusedFeature;
     private final VectorCompressorRetrainer retrainer;
@@ -78,9 +56,10 @@ public final class FusedCompactionStrategy extends QuantizationCompactionStrateg
     private VectorCompressor<ByteSequence<?>> retrainedCompressor;
 
     // Transient pre-encode cache: lives in a memory-mapped section appended past the projected
-    // end of the output graph file. Truncated away in onAfterClose. Off-heap; single-mapping
-    // limit (2 GB) caps this at ~10M nodes for typical codeSize.
-    private MappedByteBuffer codeCache;
+    // end of the output graph file. Truncated away in onAfterClose. Off-heap, and chunked across
+    // several mappings so it is not bounded by the 2 GB single-mapping limit — see
+    // PreEncodedCodeCache for why that ceiling used to disable the pass entirely.
+    private PreEncodedCodeCache codeCache;
     private int cacheCodeSize;
     private long cacheTruncateAt;
 
@@ -90,6 +69,11 @@ public final class FusedCompactionStrategy extends QuantizationCompactionStrateg
         this.ctx = ctx;
         this.sourceFusedFeature = sourceFusedFeature;
         this.retrainer = retrainer;
+    }
+
+    @Override
+    public void onRemappersUpdated(CompactionContext refreshed) {
+        this.ctx = refreshed;
     }
 
     @Override
@@ -105,26 +89,13 @@ public final class FusedCompactionStrategy extends QuantizationCompactionStrateg
     }
 
     @Override
-    public MappedByteBuffer getCodeCache() {
+    public PreEncodedCodeCache getCodeCache() {
         return codeCache;
-    }
-
-    @Override
-    public int getCacheCodeSize() {
-        return cacheCodeSize;
     }
 
     @Override
     public boolean writesCodesInline() {
         return true;
-    }
-
-    @Override
-    public void releaseSources() {
-        // ctx is only needed during onAfterHeader/onAfterLevels (pre-encode + entry-node code),
-        // which run inside compactGraphImpl. onAfterClose uses only cacheTruncateAt/codeCache.
-        // Safe to drop here so ctx.sources' in-heap layers/features are reclaimable before refine.
-        ctx = null;
     }
 
     /**
@@ -145,8 +116,10 @@ public final class FusedCompactionStrategy extends QuantizationCompactionStrateg
             throw new IllegalStateException("retrain() must be called before onAfterHeader()");
         }
         try {
-            precomputeCodes(writer);
+            cacheCodeSize = retrainedCompressor.compressedVectorSize();
+            codeCache = precomputeCodeCache(ctx, writer, retrainedCompressor, "Code pre-encode");
             if (codeCache != null) {
+                cacheTruncateAt = writer.projectedOutputSize();
                 writer.enablePqCodeCache(codeCache, cacheCodeSize);
             }
         } catch (IOException e) {
@@ -177,14 +150,11 @@ public final class FusedCompactionStrategy extends QuantizationCompactionStrateg
     @Override
     public void onAfterClose(Path graphPath) {
         if (cacheTruncateAt > 0) {
-            if (codeCache != null && UNSAFE != null) {
-                try {
-                    UNSAFE.invokeCleaner(codeCache);
-                } catch (IllegalArgumentException ignored) {
-                    // duplicated/indirect buffer; not cleanable
-                }
+            if (codeCache != null) {
+                codeCache.close();
             }
             codeCache = null;
+            closeSecondaryCache();
             try (FileChannel fc = FileChannel.open(graphPath, StandardOpenOption.WRITE)) {
                 if (fc.size() > cacheTruncateAt) {
                     fc.truncate(cacheTruncateAt);
@@ -193,76 +163,6 @@ public final class FusedCompactionStrategy extends QuantizationCompactionStrateg
                 throw new RuntimeException("Failed to truncate code-cache section from output file " + graphPath, e);
             }
             cacheTruncateAt = 0;
-        }
-    }
-
-    /** Pre-encode every live node's code into a memory-mapped section past the projected output end. */
-    private void precomputeCodes(CompactWriter writer) throws IOException {
-        cacheCodeSize = retrainedCompressor.compressedVectorSize();
-        long tempSize = (long) (ctx.maxOrdinal + 1) * cacheCodeSize;
-        if (tempSize <= 0 || tempSize > Integer.MAX_VALUE) {
-            log.info("Code pre-encode skipped: required cache size {} bytes exceeds single-mapping limit", tempSize);
-            return;
-        }
-
-        long tempOffset = writer.projectedOutputSize();
-        cacheTruncateAt = tempOffset;
-        long totalSize = tempOffset + tempSize;
-
-        try (FileChannel fc = FileChannel.open(writer.getOutputPath(),
-                StandardOpenOption.READ, StandardOpenOption.WRITE)) {
-            ByteBuffer pad = ByteBuffer.wrap(new byte[]{0});
-            fc.write(pad, totalSize - 1);
-            codeCache = fc.map(FileChannel.MapMode.READ_WRITE, tempOffset, tempSize);
-        }
-
-        final int cs = cacheCodeSize;
-        final VectorCompressor<ByteSequence<?>> compressor = retrainedCompressor;
-        List<Callable<Long>> tasks = new ArrayList<>();
-        int targetTasks = Math.max(ctx.taskWindowSize * 4, 16);
-        for (int s = 0; s < ctx.sources.size(); s++) {
-            final int sIdx = s;
-            final var source = ctx.sources.get(s);
-            final var alive = ctx.liveNodes.get(s);
-            final int upper = alive.length();
-            int chunkSize = Math.max(256, (upper + targetTasks - 1) / targetTasks);
-            for (int chunkStart = 0; chunkStart < upper; chunkStart += chunkSize) {
-                final int cStart = chunkStart;
-                final int cEnd = Math.min(chunkStart + chunkSize, upper);
-                tasks.add(() -> {
-                    // Stream this chunk's records into the page cache before the encode loop;
-                    // the mapping's MADV_RANDOM otherwise faults them one page at a time.
-                    source.prefetchL0Records(cStart, cEnd - 1);
-                    ByteSequence<?> code = vectorTypeSupport.createByteSequence(cs);
-                    VectorFloat<?> vec = vectorTypeSupport.createFloatVector(ctx.dimension);
-                    long count = 0;
-                    try (var view = source.getView()) {
-                        for (int oldOrd = cStart; oldOrd < cEnd; oldOrd++) {
-                            if (!alive.get(oldOrd)) continue;
-                            view.getVectorInto(oldOrd, vec, 0);
-                            code.zero();
-                            compressor.encodeTo(vec, code);
-                            int newOrd = ctx.remappers.get(sIdx).oldToNew(oldOrd);
-                            int offset = newOrd * cs;
-                            for (int i = 0; i < cs; i++) {
-                                codeCache.put(offset + i, code.get(i));
-                            }
-                            count++;
-                        }
-                    }
-                    return count;
-                });
-            }
-        }
-        try {
-            long total = 0;
-            for (Future<Long> f : ctx.executor.invokeAll(tasks)) {
-                total += f.get();
-            }
-            log.info("Code pre-encode: {} nodes encoded into {} MB in-output cache (offset {})",
-                    total, tempSize / (1024 * 1024), tempOffset);
-        } catch (InterruptedException | ExecutionException e) {
-            throw new IOException("Code pre-encode failed", e);
         }
     }
 }

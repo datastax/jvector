@@ -52,10 +52,18 @@ public final class SidecarCompactionStrategy extends QuantizationCompactionStrat
     private static final Logger log = LoggerFactory.getLogger(SidecarCompactionStrategy.class);
     private static final VectorTypeSupport vectorTypeSupport = VectorizationProvider.getInstance().getVectorTypeSupport();
 
-    private final CompactionContext ctx;
+    private CompactionContext ctx;
     private final CompressedVectors formatHandle;
     private final VectorCompressorRetrainer retrainer;
     private VectorCompressor<?> retrainedCompressor;
+
+    // Pre-encoded merged codes, mmapped past the projected end of the output graph file (same
+    // mechanics as FusedCompactionStrategy). Unlike the fused case, the cache must outlive the
+    // graph file close: writeSidecar copies from it, so truncation is deferred until then.
+    private PreEncodedCodeCache codeCache;
+    private int cacheCodeSize;
+    private long cacheTruncateAt;
+    private Path graphPath;
 
     public SidecarCompactionStrategy(CompactionContext ctx,
                                      CompressedVectors formatHandle,
@@ -65,10 +73,28 @@ public final class SidecarCompactionStrategy extends QuantizationCompactionStrat
         this.retrainer = retrainer;
     }
 
+    /**
+     * For sources without any PQ (full-precision merges): trains a merge-time codebook and keeps
+     * its code cache for the compactor's own use (ordinal assignment, cell join, approximate
+     * traversal); nothing quantized is written and the cache region is truncated afterwards.
+     */
+    /** Full-precision sources: the scratch holds the vectors themselves, so nothing is trained and the merge is exact. */
+    static SidecarCompactionStrategy scratchVectors(CompactionContext ctx) {
+        return new SidecarCompactionStrategy(ctx, null, vsf -> new RawVectorCode(ctx.dimension));
+    }
+
+    @Override
+    public void onRemappersUpdated(CompactionContext refreshed) {
+        this.ctx = refreshed;
+    }
+
     @Override
     public void retrain(VectorSimilarityFunction vsf) {
-        log.info("Retraining sidecar compressor ({}) on merged sources",
-                formatHandle.getClass().getSimpleName());
+        if (formatHandle == null) {
+            log.info("Full-precision sources: the scratch region holds the vectors in merged order (nothing is trained, nothing quantized is written)");
+        } else {
+            log.info("Retraining sidecar compressor ({}) on merged sources", formatHandle.getClass().getSimpleName());
+        }
         this.retrainedCompressor = retrainer.retrain(vsf);
     }
 
@@ -79,21 +105,58 @@ public final class SidecarCompactionStrategy extends QuantizationCompactionStrat
 
     @Override
     public boolean writesCodesSidecar() {
-        return true;
+        return formatHandle != null;
+    }
+
+    /**
+     * Pre-encodes every live node's merged code into a transient mmapped section of the output
+     * graph file (fused-strategy mechanics). The cache serves three consumers: approximate
+     * cross-source search scoring, offer/diversity scoring, and {@link #writeSidecar} — which
+     * becomes a cache copy instead of a second full re-read+re-encode pass over the sources.
+     */
+    @Override
+    public void onAfterHeader(CompactWriter writer) throws IOException {
+        if (retrainedCompressor == null) {
+            throw new IllegalStateException("retrain() must be called before onAfterHeader()");
+        }
+        try {
+            cacheCodeSize = retrainedCompressor.compressedVectorSize();
+            codeCache = precomputeCodeCache(ctx, writer, retrainedCompressor,
+                                            formatHandle == null ? "Merge-time code pre-encode" : "Sidecar code pre-encode");
+            if (codeCache != null) {
+                cacheTruncateAt = writer.projectedOutputSize();
+            }
+        } catch (IOException e) {
+            log.warn("Sidecar code pre-encode failed, falling back to re-encode at writeSidecar: {}", e.getMessage());
+            closeCache();
+        }
+    }
+
+    @Override
+    public PreEncodedCodeCache getCodeCache() {
+        return codeCache;
+    }
+
+    @Override
+    public void onAfterClose(Path graphPath) {
+        // Deliberately no truncation here: writeSidecar still needs the cache region. Remember
+        // the path so cleanup can truncate after the sidecar is written.
+        this.graphPath = graphPath;
     }
 
     @Override
     public void writeSidecar(Path compressedPath) throws IOException {
-        if (retrainedCompressor == null) {
-            throw new IllegalStateException("retrain() must be called before writeSidecar()");
+        if (retrainedCompressor == null || formatHandle == null) {
+            throw new IllegalStateException("writeSidecar() needs a retrained sidecar compressor");
         }
         final int vectorsPerChunk = formatHandle.sidecarVectorsPerChunk();
         final int codeSize = retrainedCompressor.compressedVectorSize();
         final int count = ctx.maxOrdinal + 1;
         final int chunkCount = (count + vectorsPerChunk - 1) / vectorsPerChunk;
 
-        log.info("Streaming {} merged ordinals to {} ({} chunks of up to {} entries each)",
-                count, compressedPath, chunkCount, vectorsPerChunk);
+        log.info("Streaming {} merged ordinals to {} ({} chunks of up to {} entries each{})",
+                count, compressedPath, chunkCount, vectorsPerChunk,
+                codeCache != null ? ", from pre-encode cache" : "");
 
         try (var out = new BufferedRandomAccessWriter(compressedPath)) {
             formatHandle.writeSidecarHeader(out, retrainedCompressor, count);
@@ -105,7 +168,9 @@ public final class SidecarCompactionStrategy extends QuantizationCompactionStrat
                 for (int c = batchStart; c < batchEnd; c++) {
                     final int chunkStart = c * vectorsPerChunk;
                     final int chunkEnd = Math.min(chunkStart + vectorsPerChunk, count);
-                    tasks.add(() -> encodeChunk(chunkStart, chunkEnd, codeSize, retrainedCompressor));
+                    tasks.add(codeCache != null
+                            ? () -> copyChunkFromCache(chunkStart, chunkEnd, codeSize)
+                            : () -> encodeChunk(chunkStart, chunkEnd, codeSize, retrainedCompressor));
                 }
                 for (var f : ctx.executor.invokeAll(tasks)) {
                     vectorTypeSupport.writeByteSequence(out, f.get());
@@ -113,9 +178,56 @@ public final class SidecarCompactionStrategy extends QuantizationCompactionStrat
             }
         } catch (InterruptedException | ExecutionException e) {
             throw new IOException("Failed to write compressed sidecar to " + compressedPath, e);
+        } finally {
+            releaseCacheAndTruncate();
         }
         log.info("Wrote compacted compressed sidecar to {}", compressedPath);
     }
+
+    private ByteSequence<?> copyChunkFromCache(int chunkStart, int chunkEnd, int codeSize) {
+        int chunkBytes = (chunkEnd - chunkStart) * codeSize;
+        ByteSequence<?> chunk = vectorTypeSupport.createByteSequence(chunkBytes);
+        chunk.zero();
+        byte[] code = new byte[codeSize];
+        for (int newOrd = chunkStart; newOrd < chunkEnd; newOrd++) {
+            if (resolveSourceForNewOrd(newOrd) == null) continue;  // hole; slot stays zero
+            codeCache.get(newOrd, code);
+            int slotOffset = (newOrd - chunkStart) * codeSize;
+            for (int b = 0; b < codeSize; b++) {
+                chunk.set(slotOffset + b, code[b]);
+            }
+        }
+        return chunk;
+    }
+
+    @Override
+    public void releaseTransientState() {
+        releaseCacheAndTruncate();
+    }
+
+    private void closeCache() {
+        if (codeCache != null) {
+            codeCache.close();
+            codeCache = null;
+        }
+        closeSecondaryCache();
+    }
+
+    private void releaseCacheAndTruncate() {
+        closeCache();
+        if (cacheTruncateAt > 0 && graphPath != null) {
+            try (java.nio.channels.FileChannel fc = java.nio.channels.FileChannel.open(
+                    graphPath, java.nio.file.StandardOpenOption.WRITE)) {
+                if (fc.size() > cacheTruncateAt) {
+                    fc.truncate(cacheTruncateAt);
+                }
+            } catch (IOException e) {
+                throw new RuntimeException("Failed to truncate code-cache section from " + graphPath, e);
+            }
+            cacheTruncateAt = 0;
+        }
+    }
+
 
     @SuppressWarnings("unchecked")
     private ByteSequence<?> encodeChunk(int chunkStart, int chunkEnd, int codeSize, VectorCompressor<?> compressor) throws IOException {
