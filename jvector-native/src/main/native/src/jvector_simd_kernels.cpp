@@ -604,17 +604,17 @@ HWY_INLINE void calculate_partial_sums_f32(const float *HWY_RESTRICT codebook,
     // centroids_per_iter and the horizontal-reduction shuffles are valid.
     using FloatTag = hn::ScalableTag<float>;
     FloatTag tag;
-    constexpr size_t kLanes = hn::MaxLanes(tag);
-    alignas(64) float tmp[kLanes];
+    constexpr size_t kMaxLanes = hn::MaxLanes(tag);
+    alignas(64) float tmp[kMaxLanes];
 
-    if constexpr (kLanes >= 2) {
+    if constexpr (kMaxLanes >= 2) {
         if (size == 2) {
             float qtmp[4] = {query[queryOffset],
                              query[queryOffset + 1],
                              query[queryOffset],
                              query[queryOffset + 1]};
             hn::Vec<FloatTag> queryVec = BroadcastDup128(tag, qtmp);
-            constexpr int centroids_per_iter = static_cast<int>(kLanes / 2);
+            constexpr int centroids_per_iter = static_cast<int>(kMaxLanes / 2);
 
             for (; ii + centroids_per_iter <= clusterCount;
                  ii += centroids_per_iter) {
@@ -632,9 +632,9 @@ HWY_INLINE void calculate_partial_sums_f32(const float *HWY_RESTRICT codebook,
             }
         }
     }
-    if constexpr (kLanes >= 4) {
+    if constexpr (kMaxLanes >= 4) {
         if (size == 4) {
-            constexpr int centroids_per_iter = static_cast<int>(kLanes / 4);
+            constexpr int centroids_per_iter = static_cast<int>(kMaxLanes / 4);
             hn::Vec<FloatTag> queryVec
                     = BroadcastDup128(tag, query + queryOffset);
 
@@ -656,10 +656,10 @@ HWY_INLINE void calculate_partial_sums_f32(const float *HWY_RESTRICT codebook,
             }
         }
     }
-    if constexpr (kLanes >= 8) {
+    if constexpr (kMaxLanes >= 8) {
         if (size == 8) {
             hn::Vec<FloatTag> queryVec = LoadDup256(tag, query + queryOffset);
-            constexpr int centroids_per_iter = static_cast<int>(kLanes / 8);
+            constexpr int centroids_per_iter = static_cast<int>(kMaxLanes / 8);
 
             for (; ii + centroids_per_iter <= clusterCount;
                  ii += centroids_per_iter) {
@@ -681,7 +681,7 @@ HWY_INLINE void calculate_partial_sums_f32(const float *HWY_RESTRICT codebook,
             }
         }
     }
-    if constexpr (kLanes == 16) {
+    if constexpr (kMaxLanes == 16) {
         if (size == 16) {
             const hn::Vec<FloatTag> queryVec
                     = hn::LoadU(tag, query + queryOffset);
@@ -986,12 +986,12 @@ HWY_FLATTEN void calculate_partial_sums_self_magnitude_f32(
 #if !HWY_HAVE_SCALABLE
     // Fixed-width ISAs (x86, NEON): MaxLanes is a compile-time constant so
     // centroids_per_iter and the horizontal-reduction shuffles are valid.
-    constexpr size_t kLanes = hn::MaxLanes(tag);
-    alignas(64) float tmp[kLanes];
+    constexpr size_t kMaxLanes = hn::MaxLanes(tag);
+    alignas(64) float tmp[kMaxLanes];
 
-    if constexpr (kLanes >= 2) {
+    if constexpr (kMaxLanes >= 2) {
         if (size == 2) {
-            constexpr int centroids_per_iter = static_cast<int>(kLanes / 2);
+            constexpr int centroids_per_iter = static_cast<int>(kMaxLanes / 2);
 
             for (; ii + centroids_per_iter <= clusterCount;
                  ii += centroids_per_iter) {
@@ -1008,9 +1008,9 @@ HWY_FLATTEN void calculate_partial_sums_self_magnitude_f32(
             }
         }
     }
-    if constexpr (kLanes >= 4) {
+    if constexpr (kMaxLanes >= 4) {
         if (size == 4) {
-            constexpr int centroids_per_iter = static_cast<int>(kLanes / 4);
+            constexpr int centroids_per_iter = static_cast<int>(kMaxLanes / 4);
 
             for (; ii + centroids_per_iter <= clusterCount;
                  ii += centroids_per_iter) {
@@ -1029,9 +1029,9 @@ HWY_FLATTEN void calculate_partial_sums_self_magnitude_f32(
             }
         }
     }
-    if constexpr (kLanes >= 8) {
+    if constexpr (kMaxLanes >= 8) {
         if (size == 8) {
-            constexpr int centroids_per_iter = static_cast<int>(kLanes / 8);
+            constexpr int centroids_per_iter = static_cast<int>(kMaxLanes / 8);
 
             for (; ii + centroids_per_iter <= clusterCount;
                  ii += centroids_per_iter) {
@@ -1052,7 +1052,7 @@ HWY_FLATTEN void calculate_partial_sums_self_magnitude_f32(
             }
         }
     }
-    if constexpr (kLanes == 16) {
+    if constexpr (kMaxLanes == 16) {
         if (size == 16) {
             for (; ii < clusterCount; ++ii) {
                 const hn::Vec<FloatTag> cv
