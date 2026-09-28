@@ -20,6 +20,7 @@ import io.github.jbellis.jvector.graph.SearchResult;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
+import java.util.function.IntUnaryOperator;
 
 /**
  * Computes accuracy metrics, such as recall and mean average precision.
@@ -36,19 +37,28 @@ public class AccuracyMetrics {
      * @return the recall
      */
     public static double recallFromSearchResults(List<? extends List<Integer>> gt, List<SearchResult> retrieved, int kGT, int kRetrieved) {
+        return recallFromSearchResults(gt, retrieved, kGT, kRetrieved, IntUnaryOperator.identity());
+    }
+
+    /**
+     * As {@link #recallFromSearchResults(List, List, int, int)}, with every retrieved node id passed
+     * through {@code toRow} before it is compared: for a graph whose ordinals are not the dataset's
+     * rows, such as a compacted one.
+     */
+    public static double recallFromSearchResults(List<? extends List<Integer>> gt, List<SearchResult> retrieved, int kGT, int kRetrieved, IntUnaryOperator toRow) {
         if (gt.size() != retrieved.size()) {
             throw new IllegalArgumentException("Insufficient ground truth for the number of retrieved elements");
         }
 
         long correctCount = 0;
         for (int i = 0; i < gt.size(); i++) {
-            correctCount += topKCorrect(gt.get(i), retrieved.get(i), kGT, kRetrieved);
+            correctCount += topKCorrect(gt.get(i), retrieved.get(i), kGT, kRetrieved, toRow);
         }
 
         return (double) correctCount / (kGT * gt.size());
     }
 
-    private static long topKCorrect(List<Integer> gt, SearchResult retrieved, int kGT, int kRetrieved) {
+    private static long topKCorrect(List<Integer> gt, SearchResult retrieved, int kGT, int kRetrieved, IntUnaryOperator toRow) {
         // Exception validation
         var nodes = retrieved.getNodes();
         if (kGT > kRetrieved) {
@@ -77,7 +87,7 @@ public class AccuracyMetrics {
         Set<Integer> seenRetrieved = new HashSet<>((int) (kRetrieved / 0.75f) + 1);
         int hits = 0;
         for (int i = 0; i < kRetrieved; i++) {
-            int p = nodes[i].node;
+            int p = toRow.applyAsInt(nodes[i].node);
             if (!seenRetrieved.add(p)) {
                 throw new IllegalArgumentException("Duplicate retrieved ordinal in top-" + kRetrieved + ": " + p);
             }

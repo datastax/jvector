@@ -19,7 +19,6 @@ package io.github.jbellis.jvector.graph.disk;
 import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
-import java.nio.MappedByteBuffer;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
@@ -38,7 +37,6 @@ import io.github.jbellis.jvector.vector.types.ByteSequence;
 import io.github.jbellis.jvector.vector.types.VectorFloat;
 import io.github.jbellis.jvector.vector.types.VectorTypeSupport;
 
-import static io.github.jbellis.jvector.graph.disk.OnDiskGraphIndexCompactor.SelectedVecCache;
 import static io.github.jbellis.jvector.graph.disk.OnDiskGraphIndexCompactor.WriteResult;
 
 final class CompactWriter implements AutoCloseable {
@@ -71,11 +69,10 @@ final class CompactWriter implements AutoCloseable {
     private ByteSequence<?> entryNodePqCode;
 
     // Optional pre-computed PQ codes by new ordinal. When set, writeInlineNodeRecord copies
-    // codes from this buffer instead of calling pq.encodeTo per neighbor. Each worker thread
-    // gets its own duplicated view via pqCacheViewPerThread so positions don't race.
-    private MappedByteBuffer pqCodeCache;
+    // codes from the cache instead of calling pq.encodeTo per neighbor. The cache handles
+    // per-thread view duplication internally, so positions don't race.
+    private PreEncodedCodeCache pqCodeCache;
     private int pqCodeSize;
-    private ThreadLocal<ByteBuffer> pqCacheViewPerThread;
     private ThreadLocal<byte[]> pqCodeBufPerThread;
 
     CompactWriter(Path outputPath,
@@ -149,16 +146,29 @@ final class CompactWriter implements AutoCloseable {
      * call. Once enabled, neighbor PQ codes are copied from {@code cache} instead of being
      * re-encoded per write.
      *
-     * @param cache       a buffer holding pqCodeSize bytes per new ordinal (length must be at
-     *                    least {@code (maxOrdinal + 1) * pqCodeSize})
+     * @param cache       a cache holding one code per new ordinal, for ordinals
+     *                    {@code 0..maxOrdinal}
      * @param pqCodeSize  bytes per code (== FusedFeature.codeSize() of the source's feature)
      */
-    public void enablePqCodeCache(MappedByteBuffer cache, int pqCodeSize) {
+    public void enablePqCodeCache(PreEncodedCodeCache cache, int pqCodeSize) {
         this.pqCodeCache = cache;
         this.pqCodeSize = pqCodeSize;
-        // Each worker thread gets its own ByteBuffer view so absolute-position seeks don't race.
-        this.pqCacheViewPerThread = ThreadLocal.withInitial(() -> cache.duplicate());
         this.pqCodeBufPerThread = ThreadLocal.withInitial(() -> new byte[pqCodeSize]);
+    }
+
+    /** The pre-encoded code cache, or null when not enabled. Codes are keyed by new ordinal. */
+    PreEncodedCodeCache pqCodeCache() {
+        return pqCodeCache;
+    }
+
+    /**
+     * Whether {@link #writeInlineNodeRecord} reads {@code selectedCache.vecs} — true only for
+     * fused output without the pre-encoded code cache, where neighbor codes are produced by
+     * encoding the neighbor vectors. Callers that can supply neighbor ids without vectors
+     * (the retained-only fast path) use this to skip the vector reads.
+     */
+    boolean needsNeighborVectors() {
+        return fusedPQEnabled && pqCodeCache == null;
     }
 
     public void writeHeader() throws IOException {
@@ -208,6 +218,25 @@ final class CompactWriter implements AutoCloseable {
 
     public void setEntryNodePqCode(ByteSequence<?> code) {
         this.entryNodePqCode = code;
+    }
+
+    private long scratchWatermark = -1;
+
+    /**
+     * Reserves {@code bytes} of transient space past the projected end of the output and returns
+     * its offset. Strategies claim their pre-encode caches through this rather than starting at
+     * {@link #projectedOutputSize()} directly, so that two of them - an inline fused strategy and a
+     * sidecar scratch - can coexist instead of mapping on top of each other. The file is still
+     * truncated back to {@link #projectedOutputSize()} when compaction completes, since every
+     * reserved region lies past it.
+     */
+    public synchronized long reserveScratch(long bytes) {
+        if (scratchWatermark < 0) {
+            scratchWatermark = projectedOutputSize();
+        }
+        long at = scratchWatermark;
+        scratchWatermark += Math.max(0L, bytes);
+        return at;
     }
 
     /**
@@ -289,13 +318,10 @@ final class CompactWriter implements AutoCloseable {
             int k = 0;
             if (pqCodeCache != null) {
                 // Look up neighbors' codes from the pre-encoded mmap'd cache instead of re-encoding.
-                ByteBuffer cacheView = pqCacheViewPerThread.get();
                 byte[] codeBuf = pqCodeBufPerThread.get();
                 for (; k < selectedCache.size; k++) {
                     int newOrd = selectedCache.nodes[k]; // already remapped before this call
-                    int offset = newOrd * pqCodeSize;
-                    cacheView.position(offset);
-                    cacheView.get(codeBuf, 0, pqCodeSize);
+                    pqCodeCache.get(newOrd, codeBuf);
                     bwriter.write(codeBuf, 0, pqCodeSize);
                 }
             } else {
