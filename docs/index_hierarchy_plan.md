@@ -1,9 +1,10 @@
 # Index / IndexBuilder Hierarchy — Implementation Plan
 
 Status: **implemented** (this pass). Branch: `index_hierarchy`.
-Source of the approach: `four_perspectives.md` (the aci "one configuration
-interface, four perspectives" demonstrator), copied to the repo root for
-reference while writing this plan.
+Source of the approach: [`four_perspectives.md`](four_perspectives.md) (the aci
+"one configuration interface, four perspectives" demonstrator), kept alongside
+this plan for reference. Its relative links point into the aci project and don't
+resolve in this repository.
 
 Changes since round 2: `nProbes` is left out entirely for now (per your
 instruction — no IVF-specific parameter is guessed at until the IVF
@@ -546,6 +547,8 @@ nothing else changed.
 | OpenSearch `JVectorWriter.getGraph` | 7-arg constructor, parallel `addGraphNode`, `cleanup` | `withVectorValues(ravv).withScoreProvider(bsp)…build()` |
 | OpenSearch leading-segment merge | existing-graph constructor, `addGraphNode`, `markNodeDeleted`, `cleanup` | `withExistingGraph(loaded)…buildMutable()`, then `addNode`/`markDeleted`/`cleanup` |
 
-`jvector-examples/.../IndexApiExample.java` section 9 runs each old
-construction path next to its new counterpart, including the memtable
-delete pattern (9g) and the compaction rescore pattern (9h).
+`jvector-examples/.../IndexApiExample.java` section 9 shows `MutableHnswIndex`
+on its own (inserting while searching, deletes, and writing with each ordinal
+mapping), and section 11 runs each old construction path next to its new
+counterpart, including the memtable delete pattern (11g) and the compaction
+rescore pattern (11h).

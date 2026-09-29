@@ -32,6 +32,7 @@ import io.github.jbellis.jvector.graph.SearchResult;
 import io.github.jbellis.jvector.graph.disk.GraphIndexWriter;
 import io.github.jbellis.jvector.graph.disk.OnDiskGraphIndex;
 import io.github.jbellis.jvector.graph.disk.OnDiskGraphIndexWriter;
+import io.github.jbellis.jvector.graph.disk.OrdinalMapper;
 import io.github.jbellis.jvector.graph.disk.feature.Feature;
 import io.github.jbellis.jvector.graph.disk.feature.FeatureId;
 import io.github.jbellis.jvector.graph.disk.feature.FusedPQ;
@@ -66,8 +67,10 @@ import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.EnumMap;
+import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Random;
 import java.util.Set;
 import java.util.concurrent.ForkJoinPool;
@@ -75,9 +78,14 @@ import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.concurrent.locks.ReentrantReadWriteLock;
 import java.util.function.IntFunction;
+import java.util.function.IntPredicate;
+import java.util.function.IntUnaryOperator;
 import java.util.stream.IntStream;
 import java.util.stream.Stream;
 
@@ -109,13 +117,18 @@ import java.util.stream.Stream;
  *     ({@link OnDiskGraphIndex}), and reloading a <em>mutable</em> in-memory graph from disk and
  *     appending to it through {@link io.github.jbellis.jvector.graph.HnswIndexBuilder#withExistingGraph}
  *     (OpenSearch's leading-segment merge).</li>
+ *     <li><b>Incremental construction</b> &mdash; {@link MutableHnswIndex}: inserting from several
+ *     threads while searching (Cassandra memtables), tracking memory per insert, deleting, and writing
+ *     the result with each way of mapping graph ordinals to on-disk ordinals.</li>
+ *     <li><b>Search options</b> &mdash; how many candidates to rerank, Cassandra's rerank floor
+ *     across segments, filtered search, threshold search, and resuming a search for more results.</li>
  *     <li><b>Legacy construction reference</b> &mdash; every way a graph was built before this
  *     branch, run side by side with its new-API counterpart, including incremental construction
  *     with deletes (Cassandra memtables) and a mid-build PQ rescore (Cassandra compaction).</li>
  * </ol>
  *
  * <h2>Old construction path &rarr; new API, at a glance</h2>
- * Section 9 runs each of these rows; the "who uses it" column names the call site in each consumer.
+ * Section 11 runs each of these rows; the "who uses it" column names the call site in each consumer.
  * <table class="striped">
  *   <caption>Graph construction</caption>
  *   <tr><th>Before</th><th>Who uses it</th><th>Now</th></tr>
@@ -160,6 +173,9 @@ import java.util.stream.Stream;
  *   <tr><td>{@code new OnDiskParallelGraphIndexWriter.Builder(graph, path)} /
  *           {@code getBuilderFor(RANDOM_ACCESS_PARALLEL, ...)}</td>
  *       <td>{@code persistable.getParallelWriterBuilder(path)}</td></tr>
+ *   <tr><td>{@code OnDiskGraphIndex.write(graph, ravv, path)} (inline vectors, compacted ordinals)</td>
+ *       <td>{@code build().getWriterBuilder(path).with(new InlineVectors(dim)).build().write(...)}
+ *       (section 4); the static convenience still works</td></tr>
  *   <tr><td>{@code new OnDiskSequentialGraphIndexWriter.Builder(graph, indexWriter)} /
  *           {@code getBuilderFor(ON_DISK_SEQUENTIAL, graph, indexWriter)}</td>
  *       <td>{@code persistable.getWriterBuilder(indexWriter)}</td></tr>
@@ -214,7 +230,9 @@ public class IndexApiExample {
             section6FusedPq(ds, pqBuild, workDir);
             section7Nvq(ds, pqBuild, workDir);
             section8DiskToMemory(ds, fullPrecisionGraph, workDir);
-            section9LegacyReference(ds.subset(5_000));
+            section9IncrementalBuild(ds, workDir);
+            section10SearchOptions(ds, workDir);
+            section11LegacyReference(ds.subset(5_000));
         } finally {
             try (Stream<Path> files = Files.list(workDir)) {
                 for (Path p : (Iterable<Path>) files::iterator) {
@@ -383,7 +401,7 @@ public class IndexApiExample {
                 // Required by build() even with a score provider: it drives insertion (node count and
                 // the vector for each node). Callers that stream vectors in and never hold them all in
                 // one RandomAccessVectorValues -- Cassandra's CompactionGraph -- use buildMutable() with
-                // withDimension() instead; see section 9(h).
+                // withDimension() instead; see sections 9 and 11(h).
                 .withVectorValues(ds.ravv)
                 .withScoreProvider(bsp)
                 .withMaxDegree(MAX_DEGREE)
@@ -809,7 +827,7 @@ public class IndexApiExample {
         // OpenSearch also marks the leading segment's deleted docs with markNodeDeleted before cleanup().
         // build() is the shortcut for "append everything, then clean up"; to delete as well, call
         // buildMutable() on the same configuration, addNode the new ordinals, markDeleted, then
-        // cleanup() -- section 9(g) shows that pattern.
+        // cleanup() -- section 9 shows that pattern.
         try (GraphSearcher searcher = extended.searcher()) {
             report("reloaded + extended, in memory", recall(ds, searcher, RERANK_K,
                     q -> DefaultSearchScoreProvider.exact(q, SIMILARITY_FUNCTION, ds.ravv)));
@@ -827,7 +845,352 @@ public class IndexApiExample {
     }
 
     // ---------------------------------------------------------------------------------------------
-    // 9. Legacy construction reference
+    // 9. Incremental construction
+    // ---------------------------------------------------------------------------------------------
+
+    /**
+     * {@link MutableHnswIndex}, from {@code buildMutable()}, for callers that insert vectors as they
+     * arrive rather than all at once. This is Cassandra's memtable index: rows are inserted from many
+     * threads while queries search the same graph, each insert reports the heap it used (Cassandra's
+     * memtable accounting), deleted rows are marked, and {@code cleanup()} runs before flushing.
+     * <p>
+     * Deletes leave holes in the graph's ordinals, which matters when writing: the writer maps each
+     * graph ordinal to an on-disk ordinal, and search results come back as on-disk ordinals. The
+     * three mappings in use are shown at the end.
+     */
+    private static void section9IncrementalBuild(Dataset ds, Path workDir) throws IOException {
+        header("9. Incremental construction: MutableHnswIndex");
+        int n = ds.ravv.size();
+
+        // Delete every 100th ordinal, skipping any that are true nearest neighbors of a query so that
+        // recall stays comparable with the other sections.
+        Set<Integer> trueNeighbors = new HashSet<>();
+        ds.groundTruth.forEach(trueNeighbors::addAll);
+        int[] toDelete = IntStream.range(0, n).filter(o -> o % 100 == 0 && !trueNeighbors.contains(o)).toArray();
+
+        PersistableGraphIndex graph;
+        ExecutorService writers = Executors.newFixedThreadPool(4);
+        try (MutableHnswIndex index = Indexes.hnswBuilder()
+                .withVectorValues(ds.ravv)                  // Cassandra's memtable vectors
+                .withSimilarityFunction(SIMILARITY_FUNCTION)
+                .withMaxDegree(MAX_DEGREE)
+                .withBeamWidth(BEAM_WIDTH)
+                .withNeighborOverflow(1.0f)                  // Cassandra's memtable setting: faster flush
+                .withAlpha(ALPHA)
+                .withAddHierarchy(ADD_HIERARCHY)
+                .buildMutable()) {                           // empty: nothing is inserted yet
+            AtomicLong bytesAdded = new AtomicLong();
+            AtomicInteger next = new AtomicInteger();
+            List<Future<?>> inserts = new ArrayList<>();
+            for (int t = 0; t < 4; t++) {
+                inserts.add(writers.submit(() -> {
+                    int ord;
+                    while ((ord = next.getAndIncrement()) < n) {
+                        bytesAdded.addAndGet(index.addNode(ord, ds.ravv.getVector(ord)));
+                    }
+                }));
+            }
+
+            // Query while the inserts run. A searcher sees every node whose insert has completed, and
+            // never a half-inserted one.
+            for (int quarter = 1; quarter <= 3; quarter++) {
+                while (next.get() < n * quarter / 4) {
+                    Thread.onSpinWait();
+                }
+                try (GraphSearcher searcher = index.searcher()) {
+                    SearchResult r = searcher.search(
+                            DefaultSearchScoreProvider.exact(ds.queries.get(0), SIMILARITY_FUNCTION, ds.ravv), TOP_K, Bits.ALL);
+                    System.out.printf("  searched mid-build with ~%,d nodes inserted: %d results, best node %d%n",
+                            index.graph().size(0), r.getNodes().length, r.getNodes()[0].node);
+                }
+            }
+            awaitAll(inserts);
+            System.out.printf("Inserted %,d nodes; addNode reported %,d bytes, ramBytesUsed() = %,d%n",
+                    n, bytesAdded.get(), index.ramBytesUsed());
+
+            // Deleted nodes drop out of results immediately and are physically removed by cleanup().
+            for (int ord : toDelete) {
+                index.markDeleted(ord);
+            }
+            index.cleanup();
+            graph = index.graph();
+            System.out.printf("Deleted %d nodes; after cleanup() the graph has %,d nodes, ordinals still span [0, %,d)%n",
+                    toDelete.length, graph.size(0), graph.getIdUpperBound());
+            try (GraphSearcher searcher = graph.searcher()) {
+                report("in memory, after deletes", recall(ds, searcher, RERANK_K,
+                        q -> DefaultSearchScoreProvider.exact(q, SIMILARITY_FUNCTION, ds.ravv)));
+            }
+        } finally {
+            writers.shutdown();
+        }
+
+        // --- Writing after deletes: three ways to map graph ordinals to on-disk ordinals ---
+        // The feature suppliers are always called with the graph's own ordinals; only the node ids
+        // stored on disk (and so returned by searches of the loaded graph) change.
+        IntFunction<Feature.State> inlineVector = node -> new InlineVectors.State(ds.ravv.getVector(node));
+
+        // (a) The default: renumber live nodes 0..size-1 in order, closing the holes. OpenSearch relies
+        //     on this and keeps its own on-disk-ordinal -> document table. Passing the same mapping
+        //     explicitly (sequentialRenumbering is what the writer uses when none is given) keeps a
+        //     copy for translating results back.
+        Map<Integer, Integer> compacted = OnDiskGraphIndexWriter.sequentialRenumbering(graph);
+        Path compactedPath = workDir.resolve("incremental-compacted.graph");
+        try (GraphIndexWriter writer = graph.getWriterBuilder(compactedPath)
+                .with(new InlineVectors(DIMENSION))
+                .withMap(compacted)
+                .build()) {
+            writer.write(Feature.singleStateFactory(FeatureId.INLINE_VECTORS, inlineVector));
+        }
+        searchMappedGraph(ds, compactedPath, invert(compacted), "compacted ordinals (the default)");
+
+        // (b) An application-defined mapping. Cassandra maps each graph ordinal straight to the row id
+        //     the flushed row gets, so a search result is a row id with no lookup at read time. Here the
+        //     "row ids" are simply the live ordinals in reverse order. For mappings that are computed
+        //     rather than stored, implement OrdinalMapper and pass it to withMapper() instead.
+        List<Integer> live = new ArrayList<>();
+        for (int ord = graph.getIdUpperBound() - 1; ord >= 0; ord--) {
+            if (graph.containsNode(ord)) {
+                live.add(ord);
+            }
+        }
+        Map<Integer, Integer> rowIds = new HashMap<>();
+        for (int rowId = 0; rowId < live.size(); rowId++) {
+            rowIds.put(live.get(rowId), rowId);
+        }
+        Path rowIdPath = workDir.resolve("incremental-rowids.graph");
+        try (GraphIndexWriter writer = graph.getWriterBuilder(rowIdPath)
+                .with(new InlineVectors(DIMENSION))
+                .withMap(rowIds)
+                .build()) {
+            writer.write(Feature.singleStateFactory(FeatureId.INLINE_VECTORS, inlineVector));
+        }
+        searchMappedGraph(ds, rowIdPath, invert(rowIds), "application ordinals (\"row ids\")");
+
+        // (c) Keep the graph's ordinals, holes included: newToOld returns OMITTED for a hole and the
+        //     random-access writers write a placeholder record there. Results need no translation.
+        //     The sequential writer cannot write holes.
+        PersistableGraphIndex g = graph;
+        OrdinalMapper keepHoles = new OrdinalMapper() {
+            @Override
+            public int maxOrdinal() {
+                return g.getIdUpperBound() - 1;
+            }
+
+            @Override
+            public int oldToNew(int oldOrdinal) {
+                return oldOrdinal;
+            }
+
+            @Override
+            public int newToOld(int newOrdinal) {
+                return g.containsNode(newOrdinal) ? newOrdinal : OrdinalMapper.OMITTED;
+            }
+        };
+        Path holesPath = workDir.resolve("incremental-holes.graph");
+        try (GraphIndexWriter writer = graph.getWriterBuilder(holesPath)
+                .with(new InlineVectors(DIMENSION))
+                .withMapper(keepHoles)
+                .build()) {
+            writer.write(Feature.singleStateFactory(FeatureId.INLINE_VECTORS, inlineVector));
+        }
+        searchMappedGraph(ds, holesPath, ord -> ord, "graph ordinals, holes kept");
+    }
+
+    /** Loads a graph written with an ordinal mapping and measures recall in the original ordinals. */
+    private static void searchMappedGraph(Dataset ds, Path path, IntUnaryOperator toGraphOrdinal, String label) throws IOException {
+        try (ReaderSupplier rs = ReaderSupplierFactory.open(path);
+             OnDiskGraphIndex onDisk = OnDiskGraphIndex.load(rs);
+             GraphSearcher searcher = onDisk.searcher()) {
+            report(String.format("%s, %,d nodes", label, onDisk.size(0)),
+                    recall(ds, ds.groundTruth, searcher, RERANK_K, Bits.ALL, toGraphOrdinal,
+                            q -> new DefaultSearchScoreProvider(scoringView(searcher).rerankerFor(q, SIMILARITY_FUNCTION))));
+        }
+    }
+
+    private static IntUnaryOperator invert(Map<Integer, Integer> oldToNew) {
+        Map<Integer, Integer> newToOld = new HashMap<>();
+        oldToNew.forEach((oldOrd, newOrd) -> newToOld.put(newOrd, oldOrd));
+        return newToOld::get;
+    }
+
+    // ---------------------------------------------------------------------------------------------
+    // 10. Search options
+    // ---------------------------------------------------------------------------------------------
+
+    /**
+     * The {@link GraphSearcher} options the consumers use beyond a plain top-K search, run against the
+     * fused-PQ graph from section 6 (the layout Cassandra searches today).
+     * <p>
+     * Cassandra also calls {@code usePruning(boolean)} per search; that method is now deprecated and
+     * has no effect, so it isn't shown.
+     */
+    private static void section10SearchOptions(Dataset ds, Path workDir) throws IOException {
+        header("10. Search options (on the fused-PQ graph from section 6)");
+        try (ReaderSupplier rs = ReaderSupplierFactory.open(workDir.resolve("fused.graph"));
+             OnDiskGraphIndex onDisk = OnDiskGraphIndex.load(rs);
+             GraphSearcher searcher = onDisk.searcher()) {
+            ScoreProviderFactory fused = q -> {
+                GraphIndex.ScoringView view = scoringView(searcher);
+                return new DefaultSearchScoreProvider(view.approximateScoreFunctionFor(q, SIMILARITY_FUNCTION),
+                                                      view.rerankerFor(q, SIMILARITY_FUNCTION));
+            };
+
+            // --- How many candidates to rerank: search(ssp, topK, rerankK, ...). OpenSearch uses
+            //     k * overQueryFactor; Cassandra takes rerankK from the query (0 = rerankless).
+            for (int rerankK : new int[] {TOP_K, 2 * TOP_K, 5 * TOP_K}) {
+                SearchStats stats = measure(ds, searcher, fused, rerankK);
+                report(String.format("rerankK=%d (%.0f reranked, %.0f visited per query)",
+                        rerankK, stats.reranked, stats.visited), stats.recall);
+            }
+
+            // --- Rerank floor: a query spanning several segments (Cassandra sstables) searches each
+            //     segment's graph in turn. Once one segment has produced K results, candidates in the
+            //     next segment whose approximate score is below the worst approximate score in that top
+            //     K can't improve the merged answer, so they aren't reranked. Cassandra keeps this floor
+            //     in the per-query context (getAnnRerankFloor / updateAnnRerankFloor). Here the second
+            //     "segment" is the NVQ + fused PQ graph from section 7, which holds the same vectors.
+            try (ReaderSupplier rs2 = ReaderSupplierFactory.open(workDir.resolve("nvq-fused.graph"));
+                 OnDiskGraphIndex segment2 = OnDiskGraphIndex.load(rs2);
+                 GraphSearcher searcher2 = segment2.searcher()) {
+                ScoreProviderFactory fused2 = q -> {
+                    GraphIndex.ScoringView view = scoringView(searcher2);
+                    return new DefaultSearchScoreProvider(view.approximateScoreFunctionFor(q, SIMILARITY_FUNCTION),
+                                                          view.rerankerFor(q, SIMILARITY_FUNCTION));
+                };
+                long rerankedWithout = 0;
+                long rerankedWith = 0;
+                int mergedHits = 0;
+                for (int i = 0; i < ds.queries.size(); i++) {
+                    VectorFloat<?> q = ds.queries.get(i);
+                    SearchResult first = searcher.search(fused.forQuery(q), TOP_K, 5 * TOP_K, 0.0f, 0.0f, Bits.ALL);
+                    float floor = first.getWorstApproximateScoreInTopK();
+                    rerankedWithout += searcher2.search(fused2.forQuery(q), TOP_K, 5 * TOP_K, 0.0f, 0.0f, Bits.ALL).getRerankedCount();
+                    SearchResult second = searcher2.search(fused2.forQuery(q), TOP_K, 5 * TOP_K, 0.0f, floor, Bits.ALL);
+                    rerankedWith += second.getRerankedCount();
+
+                    // merge the two segments' results by score, as the query layer would
+                    List<SearchResult.NodeScore> merged = new ArrayList<>(List.of(first.getNodes()));
+                    merged.addAll(List.of(second.getNodes()));
+                    merged.sort((a, b) -> Float.compare(b.score, a.score));
+                    Set<Integer> topK = new HashSet<>();
+                    for (SearchResult.NodeScore ns : merged) {
+                        if (topK.size() == TOP_K) {
+                            break;
+                        }
+                        topK.add(ns.node);
+                    }
+                    for (int ord : topK) {
+                        if (ds.groundTruth.get(i).contains(ord)) {
+                            mergedHits++;
+                        }
+                    }
+                }
+                int queries = ds.queries.size();
+                report(String.format("rerank floor across 2 segments (2nd reranks %.0f, not %.0f)",
+                        rerankedWith / (double) queries, rerankedWithout / (double) queries),
+                        mergedHits / (double) (queries * TOP_K));
+            }
+
+            // --- Filtered search: acceptOrds limits results to the given ordinals. Cassandra passes its
+            //     row filter combined with deleted rows (ordinalsMap.ignoringDeleted); OpenSearch maps
+            //     each ordinal to its Lucene document and checks the query's acceptDocs.
+            IntPredicate even = ord -> ord % 2 == 0;
+            Bits acceptEven = even::test;
+            List<Set<Integer>> filteredTruth = new ArrayList<>();
+            for (VectorFloat<?> q : ds.queries) {
+                filteredTruth.add(bruteForce(ds, q, TOP_K, even));
+            }
+            AtomicBoolean onlyAccepted = new AtomicBoolean(true);
+            double filteredRecall = recall(ds, filteredTruth, searcher, RERANK_K, acceptEven, ord -> {
+                onlyAccepted.compareAndSet(true, even.test(ord));
+                return ord;
+            }, fused);
+            report("filtered to even ordinals (every result accepted: " + onlyAccepted.get() + ")", filteredRecall);
+
+            // --- Threshold search: every vector scoring at least `threshold`, however many there are
+            //     (Cassandra's Euclidean distance bound). topK caps the result count; with a threshold
+            //     the search is exhaustive enough that Cassandra doesn't resume it. The threshold is
+            //     applied to the scores the search traverses with, so it's exact only with exact
+            //     scoring, as here (Cassandra's memtable path). With approximate traversal scores (e.g.
+            //     fused PQ) some results can fall just below it after reranking, and callers filter
+            //     them afterwards.
+            ScoreProviderFactory exact = q -> new DefaultSearchScoreProvider(scoringView(searcher).rerankerFor(q, SIMILARITY_FUNCTION));
+            VectorFloat<?> q0 = ds.queries.get(0);
+            List<Integer> nearest = new ArrayList<>(bruteForce(ds, q0, 25, ord -> true));
+            nearest.sort(Comparator.comparingDouble(ord -> -SIMILARITY_FUNCTION.compare(q0, ds.vectors.get(ord))));
+            float threshold = SIMILARITY_FUNCTION.compare(q0, ds.vectors.get(nearest.get(nearest.size() - 1)));
+            SearchResult withinThreshold = searcher.search(exact.forQuery(q0), 100, 100, threshold, 0.0f, Bits.ALL);
+            long qualifying = IntStream.range(0, ds.ravv.size())
+                    .filter(ord -> SIMILARITY_FUNCTION.compare(q0, ds.vectors.get(ord)) >= threshold).count();
+            boolean allAbove = true;
+            for (SearchResult.NodeScore ns : withinThreshold.getNodes()) {
+                allAbove &= ns.score >= threshold;
+            }
+            System.out.printf("  threshold %.4f: %d results, all at or above it: %s; brute force finds %d%n",
+                    threshold, withinThreshold.getNodes().length, allAbove, qualifying);
+
+            // --- Resuming: after a search, resume(additionalK, rerankK) continues from where the search
+            //     stopped and returns the next results, without starting over. Cassandra's
+            //     AutoResumingNodeScoreIterator does this when filtering downstream of the index removes
+            //     rows and it needs more. Only valid on the same searcher, before its next search.
+            SearchResult firstPage = searcher.search(fused.forQuery(q0), TOP_K, RERANK_K, 0.0f, 0.0f, Bits.ALL);
+            SearchResult secondPage = searcher.resume(TOP_K, RERANK_K);
+            Set<Integer> bothPages = new HashSet<>();
+            for (SearchResult page : List.of(firstPage, secondPage)) {
+                for (SearchResult.NodeScore ns : page.getNodes()) {
+                    bothPages.add(ns.node);
+                }
+            }
+            Set<Integer> top20 = bruteForce(ds, q0, 2 * TOP_K, ord -> true);
+            long found = bothPages.stream().filter(top20::contains).count();
+            System.out.printf("  search + resume: %d + %d results, %d distinct, %d of the true top %d%n",
+                    firstPage.getNodes().length, secondPage.getNodes().length, bothPages.size(), found, 2 * TOP_K);
+        }
+    }
+
+    private static final class SearchStats {
+        final double recall;
+        final double reranked;
+        final double visited;
+
+        SearchStats(double recall, double reranked, double visited) {
+            this.recall = recall;
+            this.reranked = reranked;
+            this.visited = visited;
+        }
+    }
+
+    /** Recall and per-query reranked/visited counts. */
+    private static SearchStats measure(Dataset ds, GraphSearcher searcher, ScoreProviderFactory ssp, int rerankK) {
+        int hits = 0;
+        long reranked = 0;
+        long visited = 0;
+        for (int i = 0; i < ds.queries.size(); i++) {
+            SearchResult result = searcher.search(ssp.forQuery(ds.queries.get(i)), TOP_K, rerankK, 0.0f, 0.0f, Bits.ALL);
+            reranked += result.getRerankedCount();
+            visited += result.getVisitedCount();
+            for (SearchResult.NodeScore ns : result.getNodes()) {
+                if (ds.groundTruth.get(i).contains(ns.node)) {
+                    hits++;
+                }
+            }
+        }
+        int queries = ds.queries.size();
+        return new SearchStats(hits / (double) (queries * TOP_K), reranked / (double) queries, visited / (double) queries);
+    }
+
+    /** The {@code k} ordinals most similar to {@code q} among those {@code accept} allows. */
+    private static Set<Integer> bruteForce(Dataset ds, VectorFloat<?> q, int k, IntPredicate accept) {
+        Set<Integer> top = new HashSet<>();
+        IntStream.range(0, ds.vectors.size()).filter(accept).boxed()
+                .sorted(Comparator.comparingDouble(ord -> -SIMILARITY_FUNCTION.compare(q, ds.vectors.get(ord))))
+                .limit(k)
+                .forEach(top::add);
+        return top;
+    }
+
+    // ---------------------------------------------------------------------------------------------
+    // 11. Legacy construction reference
     // ---------------------------------------------------------------------------------------------
 
     /**
@@ -836,8 +1199,8 @@ public class IndexApiExample {
      * nondeterministic) but should be equivalent.
      */
     @SuppressWarnings("deprecation") // the legacy GraphIndexBuilder constructors are @Deprecated
-    private static void section9LegacyReference(Dataset ds) throws IOException {
-        header(String.format("9. Legacy construction reference (%,d vectors)", ds.ravv.size()));
+    private static void section11LegacyReference(Dataset ds) throws IOException {
+        header(String.format("11. Legacy construction reference (%,d vectors)", ds.ravv.size()));
         BuildScoreProvider exactBsp = BuildScoreProvider.randomAccessScoreProvider(ds.ravv, SIMILARITY_FUNCTION);
 
         // (a) Raw vectors + similarity function, batch build(ravv).
@@ -965,7 +1328,7 @@ public class IndexApiExample {
     }
 
     /**
-     * Section 9(h), new API: Cassandra's compaction pattern on {@link MutableHnswIndex}. One thread
+     * Section 11(h), new API: Cassandra's compaction pattern on {@link MutableHnswIndex}. One thread
      * reads vectors, encodes them, and hands each to a pool for insertion; halfway through it refines
      * the PQ codebook. The supplier passed to {@code rescore} runs with every insert locked out, so it
      * can replace the codes that the old score provider reads.
@@ -1014,7 +1377,7 @@ public class IndexApiExample {
         }
     }
 
-    /** Section 9(h), before: the same pattern on {@link GraphIndexBuilder}, with the caller's own lock. */
+    /** Section 11(h), before: the same pattern on {@link GraphIndexBuilder}, with the caller's own lock. */
     @SuppressWarnings("deprecation")
     private static GraphIndex legacyStreamingCompaction(Dataset ds) throws IOException {
         int n = ds.ravv.size();
@@ -1125,12 +1488,7 @@ public class IndexApiExample {
             this.queries = queries;
             this.groundTruth = new ArrayList<>(queries.size());
             for (VectorFloat<?> q : queries) {
-                Set<Integer> top = new HashSet<>();
-                IntStream.range(0, vectors.size()).boxed()
-                        .sorted(Comparator.comparingDouble(i -> -SIMILARITY_FUNCTION.compare(q, vectors.get(i))))
-                        .limit(TOP_K)
-                        .forEach(top::add);
-                groundTruth.add(top);
+                groundTruth.add(bruteForce(this, q, TOP_K, ord -> true));
             }
         }
 
@@ -1146,11 +1504,20 @@ public class IndexApiExample {
 
     /** Mean recall@{@value #TOP_K} over the dataset's queries. */
     private static double recall(Dataset ds, GraphSearcher searcher, int rerankK, ScoreProviderFactory ssp) {
+        return recall(ds, ds.groundTruth, searcher, rerankK, Bits.ALL, ord -> ord, ssp);
+    }
+
+    /**
+     * Mean recall@{@value #TOP_K} against {@code truth}, searching only {@code acceptOrds} and mapping
+     * each result through {@code toGraphOrdinal} first (for graphs written with an ordinal mapping).
+     */
+    private static double recall(Dataset ds, List<Set<Integer>> truth, GraphSearcher searcher, int rerankK,
+                                 Bits acceptOrds, IntUnaryOperator toGraphOrdinal, ScoreProviderFactory ssp) {
         int hits = 0;
         for (int i = 0; i < ds.queries.size(); i++) {
-            SearchResult result = searcher.search(ssp.forQuery(ds.queries.get(i)), TOP_K, rerankK, 0.0f, 0.0f, Bits.ALL);
+            SearchResult result = searcher.search(ssp.forQuery(ds.queries.get(i)), TOP_K, rerankK, 0.0f, 0.0f, acceptOrds);
             for (SearchResult.NodeScore ns : result.getNodes()) {
-                if (ds.groundTruth.get(i).contains(ns.node)) {
+                if (truth.get(i).contains(toGraphOrdinal.applyAsInt(ns.node))) {
                     hits++;
                 }
             }
