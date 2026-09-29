@@ -22,6 +22,7 @@ import io.github.jbellis.jvector.vector.types.VectorFloat;
 
 import java.io.IOException;
 import java.util.concurrent.ForkJoinPool;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.locks.Lock;
 import java.util.concurrent.locks.ReadWriteLock;
 import java.util.concurrent.locks.ReentrantReadWriteLock;
@@ -73,6 +74,20 @@ public final class MutableHnswIndex implements Index {
      * Inserts a node with the given ordinal and vector. Safe to call from multiple threads at once,
      * and while the graph is being searched. Ordinals need not be dense or arrive in order, but each
      * may only be added once.
+     * <p>
+     * As with {@link GraphIndexBuilder#addGraphNode(int, VectorFloat)}, which this wraps, every node in
+     * the graph must be scoreable <em>by ordinal</em> through the builder's score provider: later
+     * inserts search the graph and score the nodes they visit by ordinal, and pruning and
+     * {@link #cleanup} do the same. {@code vector} is only used for this node's own neighbor search.
+     * So by the time this is called, the score provider must be able to score {@code ordinal}: with
+     * {@link HnswIndexBuilder#withSimilarityFunction}, the vector values contain it; with a PQ score
+     * provider over {@code MutablePQVectors}, its code has been encoded. Cassandra, for example, adds
+     * the vector to its vector values (memtable) or encodes it (compaction) before inserting.
+     * <p>
+     * If that doesn't hold, the failure usually surfaces later, not here: typically an
+     * {@code IndexOutOfBoundsException} from the vector values during a subsequent {@code addNode}
+     * or {@code cleanup()} that visits this node. The same applies to the diversity provider of a
+     * graph given to {@link HnswIndexBuilder#withExistingGraph}.
      *
      * @return an estimate of the number of heap bytes the graph grew by
      */
@@ -219,10 +234,15 @@ public final class MutableHnswIndex implements Index {
      * exclusive operation's tasks could have no worker left to run on and deadlock. managedBlock tells
      * the pool the worker is blocked, so it can start a spare to run those tasks; outside a pool it
      * behaves like a plain lock().
+     * <p>
+     * Every attempt goes through {@link #tryReadLockBehindWriters}, never the untimed
+     * {@code tryLock()}: that one takes the read lock even while an exclusive operation is waiting
+     * for the write lock, so a steady stream of inserts would keep {@link #cleanup} or
+     * {@link #rescore} from ever running.
      */
     private void lockForInsert() {
         Lock readLock = lock.readLock();
-        if (readLock.tryLock()) {
+        if (tryReadLockBehindWriters(readLock)) {
             return;
         }
         try {
@@ -231,20 +251,35 @@ public final class MutableHnswIndex implements Index {
 
                 @Override
                 public boolean block() {
-                    readLock.lock();
+                    readLock.lock(); // queues behind a waiting writer
                     acquired = true;
                     return true;
                 }
 
                 @Override
                 public boolean isReleasable() {
-                    return acquired || (acquired = readLock.tryLock());
+                    return acquired || (acquired = tryReadLockBehindWriters(readLock));
                 }
             });
         } catch (InterruptedException e) {
             // block() uses the uninterruptible lock(), so this is not expected
             Thread.currentThread().interrupt();
             throw new IllegalStateException("interrupted while waiting to insert", e);
+        }
+    }
+
+    /**
+     * Takes the read lock only if it is free and no exclusive operation is queued for the write lock.
+     * Unlike the untimed {@code tryLock()}, the timed form respects queued writers, and a zero timeout
+     * means it never waits.
+     */
+    private static boolean tryReadLockBehindWriters(Lock readLock) {
+        try {
+            return readLock.tryLock(0, TimeUnit.NANOSECONDS);
+        } catch (InterruptedException e) {
+            // let the caller fall back to the uninterruptible lock(), keeping the interrupt visible
+            Thread.currentThread().interrupt();
+            return false;
         }
     }
 

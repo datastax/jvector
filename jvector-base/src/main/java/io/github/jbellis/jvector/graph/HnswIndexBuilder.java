@@ -16,6 +16,7 @@
 
 package io.github.jbellis.jvector.graph;
 
+import io.github.jbellis.jvector.annotations.Experimental;
 import io.github.jbellis.jvector.graph.similarity.BuildScoreProvider;
 import io.github.jbellis.jvector.index.HnswRecipe;
 import io.github.jbellis.jvector.index.IndexBuilderValidation;
@@ -91,9 +92,10 @@ public class HnswIndexBuilder {
     /**
      * Supplies the score provider directly, for scoring that is not a plain exact comparison of
      * the raw vectors (e.g. a PQ/BQ-compressed provider). Mutually exclusive with
-     * {@link #withSimilarityFunction}. {@link #withVectorValues} is still required alongside this:
-     * it is what is actually iterated to drive node insertion, independent of how those nodes are
-     * scored.
+     * {@link #withSimilarityFunction}. {@link #build()} still requires {@link #withVectorValues}
+     * alongside this, since it is what is iterated to drive node insertion, independent of how those
+     * nodes are scored. {@link #buildMutable()} does not: the caller passes each vector to
+     * {@link MutableHnswIndex#addNode}, and {@link #withDimension} supplies the dimension.
      */
     public HnswIndexBuilder withScoreProvider(BuildScoreProvider scoreProvider) {
         this.scoreProvider = scoreProvider;
@@ -177,9 +179,9 @@ public class HnswIndexBuilder {
     }
 
     /**
-     * Whether to add an HNSW-style hierarchy on top of the Vamana index. Not used (and not
-     * required) when building on top of an {@link #withExistingGraph existing graph}, since its
-     * hierarchy is already fixed.
+     * Whether to add an HNSW-style hierarchy on top of the Vamana index. Required when building a
+     * new graph; must not be set together with {@link #withExistingGraph}, whose hierarchy is
+     * already fixed.
      */
     public HnswIndexBuilder withAddHierarchy(boolean addHierarchy) {
         this.addHierarchy = addHierarchy;
@@ -217,8 +219,8 @@ public class HnswIndexBuilder {
     /**
      * Continue building on top of an existing {@link OnHeapGraphIndex} instead of creating
      * a new one. Mutually exclusive with {@link #withMaxDegree}/{@link #withMaxDegrees} and
-     * {@link #withAddHierarchy}, which are ignored (and not required) when this is set, since the
-     * existing graph already carries that information.
+     * {@link #withAddHierarchy}: the existing graph already carries that information, so setting
+     * them as well is reported as a conflict.
      * <p>
      * The nodes already in {@code existingGraph} are <b>not</b> re-inserted, and the score provider
      * must cover their ordinals as well as the new ones. With {@link #build()},
@@ -248,6 +250,7 @@ public class HnswIndexBuilder {
      *
      * @throws UnsupportedOperationException always, until a recipe's values are defined
      */
+    @Experimental
     public HnswIndexBuilder applyRecipe(HnswRecipe recipe) {
         throw new UnsupportedOperationException(
                 "HnswRecipe." + recipe + " has no defined values yet");
@@ -264,8 +267,8 @@ public class HnswIndexBuilder {
      * {@code getWriterBuilder}/{@code getParallelWriterBuilder} accessors without a cast. It is still a
      * {@link GraphIndex}, and assigning it to one is fine when persistence isn't needed.
      *
-     * @throws IllegalStateException if a mutually-exclusive pair was over-specified, or if a
-     * required value is missing; the message names every missing/conflicting value at once.
+     * @throws IllegalStateException if any value is missing, out of range, or in conflict with
+     * another setting; the message names every problem at once.
      */
     public PersistableGraphIndex build() {
         validate(true);
@@ -287,23 +290,25 @@ public class HnswIndexBuilder {
      * <p>
      * Requires either {@link #withVectorValues} + {@link #withSimilarityFunction}, or
      * {@link #withScoreProvider} plus a dimension (from {@link #withVectorValues} or
-     * {@link #withDimension}).
+     * {@link #withDimension}). Either way, as with {@link GraphIndexBuilder}, the score provider
+     * must be able to score each ordinal by the time it is added; see
+     * {@link MutableHnswIndex#addNode}.
      *
-     * @throws IllegalStateException if a mutually-exclusive pair was over-specified, or if a
-     * required value is missing; the message names every missing/conflicting value at once.
+     * @throws IllegalStateException if any value is missing, out of range, or in conflict with
+     * another setting; the message names every problem at once.
      */
     public MutableHnswIndex buildMutable() {
         validate(false);
         return newMutableIndex();
     }
 
+    /**
+     * Checks the whole configuration and reports every problem in one {@link IllegalStateException}:
+     * missing values, conflicting settings, and out-of-range values (the same ranges
+     * {@link GraphIndexBuilder}'s constructors enforce, so they never fail on a validated
+     * configuration).
+     */
     private void validate(boolean batch) {
-        if (scoreProvider != null && similarityFunction != null) {
-            throw new IllegalStateException(
-                    "Set either withScoreProvider() or withSimilarityFunction(), not both");
-        }
-
-        String builderDescription = batch ? "Cannot build GraphIndexBuilder" : "Cannot build MutableHnswIndex";
         new IndexBuilderValidation()
                 .requireCondition(batch ? "vectorValues" : "vectorValues (required with similarityFunction)",
                         vectorValues != null || (!batch && similarityFunction == null))
@@ -318,23 +323,43 @@ public class HnswIndexBuilder {
                 .require("beamWidth", beamWidth)
                 .require("neighborOverflow", neighborOverflow)
                 .require("alpha", alpha)
-                .throwIfAny(builderDescription);
 
-        if (vectorValues != null && dimension != null && dimension != vectorValues.dimension()) {
-            throw new IllegalStateException(String.format(
-                    "dimension(%d) does not match vectorValues.dimension()=%d; " +
-                    "omit withDimension(), it is derived automatically from vectorValues",
-                    dimension, vectorValues.dimension()));
-        }
+                // conflicting settings
+                .check(scoreProvider == null || similarityFunction == null,
+                        "Set either withScoreProvider() or withSimilarityFunction(), not both")
+                .check(existingGraph == null || maxDegrees == null,
+                        "withExistingGraph() takes its max degrees from the existing graph; "
+                                + "don't also set withMaxDegree()/withMaxDegrees()")
+                .check(existingGraph == null || addHierarchy == null,
+                        "withExistingGraph() takes its hierarchy from the existing graph; "
+                                + "don't also set withAddHierarchy()")
 
-        if (batch && existingGraph != null && vectorValues.size() < existingGraph.getIdUpperBound()) {
-            throw new IllegalStateException(String.format(
-                    "vectorValues.size()=%d is smaller than existingGraph.getIdUpperBound()=%d; " +
-                    "when using withExistingGraph(), vectorValues must be a superset containing an " +
-                    "entry for every node ordinal already in the existing graph, in addition to the " +
-                    "new vectors being appended",
-                    vectorValues.size(), existingGraph.getIdUpperBound()));
-        }
+                // out-of-range values (NaN fails the float checks too)
+                .check(beamWidth == null || beamWidth > 0,
+                        "beamWidth must be positive (was " + beamWidth + ")")
+                .check(neighborOverflow == null || neighborOverflow >= 1.0f,
+                        "neighborOverflow must be >= 1.0 (was " + neighborOverflow + ")")
+                .check(alpha == null || alpha > 0,
+                        "alpha must be positive (was " + alpha + ")")
+                .check(maxDegrees == null || (!maxDegrees.isEmpty() && maxDegrees.stream().allMatch(d -> d != null && d > 0)),
+                        "maxDegrees must be non-empty and positive (was " + maxDegrees + ")")
+                .check(maxDegrees == null || maxDegrees.size() <= 1 || !Boolean.FALSE.equals(addHierarchy),
+                        "multiple maxDegrees (one per layer) require withAddHierarchy(true)")
+                .check(dimension == null || dimension > 0,
+                        "dimension must be positive (was " + dimension + ")")
+                .check(vectorValues == null || dimension == null || dimension == vectorValues.dimension(),
+                        String.format("dimension(%s) does not match vectorValues.dimension()=%s; "
+                                        + "omit withDimension(), it is derived automatically from vectorValues",
+                                dimension, vectorValues == null ? null : vectorValues.dimension()))
+                .check(!batch || existingGraph == null || vectorValues == null
+                                || vectorValues.size() >= existingGraph.getIdUpperBound(),
+                        String.format("vectorValues.size()=%s is smaller than existingGraph.getIdUpperBound()=%s; "
+                                        + "when using withExistingGraph(), vectorValues must be a superset containing an "
+                                        + "entry for every node ordinal already in the existing graph, in addition to the "
+                                        + "new vectors being appended",
+                                vectorValues == null ? null : vectorValues.size(),
+                                existingGraph == null ? null : existingGraph.getIdUpperBound()))
+                .throwIfAny(batch ? "Cannot build GraphIndexBuilder" : "Cannot build MutableHnswIndex");
     }
 
     /** Constructs the {@link GraphIndexBuilder} for already-validated configuration. */

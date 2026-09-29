@@ -1,17 +1,17 @@
 # Index / IndexBuilder Hierarchy — Implementation Plan
 
-Status: **implemented** (this pass). Branch: `index_hierarchy`.
+Status: **implemented** on branch `index_hierarchy`, in two passes: the
+hierarchy itself (§1–§10) and a follow-up adding incremental construction and
+API cleanups (§11).
 Source of the approach: [`four_perspectives.md`](four_perspectives.md) (the aci
 "one configuration interface, four perspectives" demonstrator), kept alongside
-this plan for reference. Its relative links point into the aci project and don't
-resolve in this repository.
+this plan for reference. The aci files it names are in the aci project, not in
+this repository.
 
-Changes since round 2: `nProbes` is left out entirely for now (per your
-instruction — no IVF-specific parameter is guessed at until the IVF
-developers weigh in), and one design correction: `IvfIndex` cannot actually
-live in the new `jvector-api` module as round 2 proposed (see §4) — it
-stays in `jvector-base`, alongside `GraphIndex`, for a structural reason
-explained below. Everything else proceeded as agreed.
+Two decisions shape what follows. No IVF-specific parameter (such as
+`nProbes`) is defined until the IVF developers specify them. And `IvfIndex`
+lives in `jvector-base` alongside `GraphIndex`, not in the new `jvector-api`
+module as an earlier draft proposed, for the structural reason given in §4.
 
 ## 1. What maps from the source document, and what doesn't
 
@@ -39,7 +39,7 @@ rule engine, a `Catalog` of named live indexes, JSON descriptor
 round-tripping, and the verboten/suboptimal/prescriptive verdict tiers.
 Revisit only if a concrete embedder need shows up later.
 
-## 2. Prior state (before this pass)
+## 2. Prior state (before this work)
 
 - `Index` — marker interface (`Accountable`, `AutoCloseable`, `searcher()`),
   plus static factories `Index.hnswBuilder()` / `Index.ivfBuilder()`. A
@@ -58,11 +58,10 @@ Revisit only if a concrete embedder need shows up later.
 ## 3. Decisions from review
 
 1. **IVF construction parameters**: unknown beyond a vague sense that
-   `nProbes` (an `int`) is IVF-specific; real parameters have to come from
-   the IVF developers. Per your latest instruction, `nProbes` itself is
-   **left out entirely** for now — not added to `IvfIndexBuilder`,
-   `IvfSearcher`, or anywhere else — until you have that clarification.
-   Nothing IVF-specific was guessed at in this pass.
+   `nProbes` (an `int`) is IVF-specific; the real parameters have to come
+   from the IVF developers. Until then `nProbes` is **left out entirely** —
+   not added to `IvfIndexBuilder`, `IvfSearcher`, or anywhere else — and
+   nothing else IVF-specific is guessed at either.
 2. **IVF persistence**: needed eventually, format TBD, and the two-pass /
    inline-write strategy `PersistableGraphIndex` uses for graphs is
    explicitly *not* the plan for IVF. The seam is reserved conceptually
@@ -75,10 +74,10 @@ Revisit only if a concrete embedder need shows up later.
 
 ## 4. `jvector-api`: the public-contract module
 
-You asked whether a separate module holding just the interfaces — so a
-different implementation could be wired in later without touching callers
-— makes sense here. Short answer, unchanged from round 2: yes, and a small,
-real first cut of it is what got built.
+The question here was whether a separate module holding just the
+interfaces — so a different implementation could be wired in later without
+touching callers — makes sense for JVector. It does, and a small, real first
+cut of it is what was built.
 
 ### Why it's feasible
 
@@ -91,7 +90,7 @@ Two precedents already exist for exactly this shape:
   and swaps in Java 20 vectorized versions of low-level pieces, and
   `jvector-multirelease` assembles both into one multi-release jar.
 
-### Why it can't be *total* — and a correction from round 2
+### Why it can't be *total* — and where `IvfIndex` lives
 
 `Index` itself is tiny and clean — `Accountable`, `AutoCloseable`,
 `searcher(): IndexSearcher` — a genuine fit for a pure api module.
@@ -103,12 +102,11 @@ into `VectorUtil` — the exact thing `jvector-base`/`jvector-twenty` already
 swap per JDK release. So `GraphIndex` conflates the "public handle" a
 caller holds with an "internal traversal contract" only jvector's own
 search algorithm should touch; untangling that is real, separate work, out
-of scope here. Round 2 already got this right and kept `GraphIndex` in
-`jvector-base`.
+of scope here. For now, `GraphIndex` stays in `jvector-base`.
 
-**Round 2 got `IvfIndex` wrong, though**, by putting it in the `jvector-api`
-first cut. The reasoning for `GraphIndex` staying in `jvector-base` isn't
-only about the traversal-internals leak — it's also, more fundamentally,
+**An earlier draft put `IvfIndex` in `jvector-api`, which doesn't work.**
+The reasoning for `GraphIndex` staying in `jvector-base` isn't only about
+the traversal-internals leak — it's also, more fundamentally,
 that its covariant `searcher()` override returns `GraphSearcher`, a
 concrete algorithm class. For an interface to declare a method returning
 `GraphSearcher`, `GraphSearcher` must be visible at that interface's own
@@ -122,7 +120,7 @@ error otherwise) and fixed: both `GraphIndex`/`GraphSearcher` and
 other.
 
 The "don't leak internal traversal machinery onto the public interface"
-principle from round 2 is a *separate* concern from module placement, and
+principle is a *separate* concern from module placement, and
 still holds for `IvfIndex` even though it's in `jvector-base`: keep it to
 the handle surface a caller actually needs (`searcher()`, `Accountable`,
 `close()`, future read-only descriptors), not whatever an internal search
@@ -135,6 +133,8 @@ algorithm needs to walk centroids/posting lists.
 - `io.github.jbellis.jvector.index.HnswRecipe` / `IvfRecipe` (replacing the
   old flat `IndexRecipe`, §5.4)
 - `io.github.jbellis.jvector.util.Accountable`
+- `io.github.jbellis.jvector.annotations.Experimental` (moved from
+  `jvector-base` in the follow-up, §11.8)
 
 `GraphIndex` and `IvfIndex` (and their respective `Searcher` types) both
 stay in `jvector-base`, extending `jvector-api`'s `Index`/`IndexSearcher` —
@@ -285,7 +285,7 @@ IvfIndexBuilder.applyRecipe(IvfRecipe.HIGH_RECALL)
 
 Both currently throw `UnsupportedOperationException` unconditionally — the
 mechanism is wired end-to-end, but no recipe has real fixed-value formulas
-yet (not even HNSW's, per your answer in round 1). Filling those in later
+yet, not even HNSW's. Filling those in later
 is a small, isolated change to each `applyRecipe` body, not a redesign.
 
 One deliberate deviation from the source doc, unrelated to phasing: aci's
@@ -304,8 +304,8 @@ same fluent builder, and the other setters remain technically callable.
 - **`IvfSearcher`** (`jvector-base`, same package) is, for now, also just
   an interface extending `IndexSearcher` — no methods. Unlike
   `GraphSearcher` (a concrete algorithm class), there's no IVF search
-  algorithm yet to make it concrete, and per your instruction nothing about
-  `nProbes` or any other query-time option was added. A concrete
+  algorithm yet to make it concrete, and nothing about `nProbes` or any
+  other query-time option was added (§3.1). A concrete
   implementing class arrives alongside the real algorithm.
 - **`IvfIndexBuilder`** (`jvector-base`) got the construction inputs every
   backing needs, mirroring `HnswIndexBuilder` exactly: `withVectorValues`,
@@ -318,7 +318,7 @@ same fluent builder, and the other setters remain technically callable.
   `UnsupportedOperationException` explaining that IVF's own construction
   parameters and backing implementation don't exist yet. This is honest
   scaffolding rather than the previous silent `return null`.
-- **Persistence**: not touched this pass — no `PersistableIvfIndex` or
+- **Persistence**: not touched — no `PersistableIvfIndex` or
   similar was added. Per §3.2, there's nothing safe to name yet since even
   the interface shape depends on decisions (two-pass vs. something else)
   that haven't been made. Revisit once the on-disk format exists.
@@ -397,6 +397,10 @@ concrete backing-index type back, no cast needed, consistent with what
 
 ## 10. Remaining open items
 
+- **Remove `ImmutableGraphIndex`** in the release after this one (§11.7), and
+  switch the four `GraphIndexBuilder` methods back to returning `GraphIndex`.
+  A migration guide for the release should announce this.
+- **Recipe values and IVF** — still `@Experimental` stubs (§11.8).
 - **Consumer migration** (§11.6) — Cassandra and OpenSearch still call
   `GraphIndexBuilder` directly; moving them to `Indexes.hnswBuilder()` is
   work in those repositories.
@@ -419,7 +423,7 @@ unverified) was checked, found broken, and fixed — see §4.
 Writing a fuller `IndexApiExample` against real Cassandra and OpenSearch
 usage exposed a gap that blocked merging: `HnswIndexBuilder.build()` only
 did a one-shot batch build, while both consumers build graphs
-incrementally. This pass closes that gap and fixes the smaller API issues
+incrementally. This follow-up closes that gap and fixes the smaller API issues
 found at the same time.
 
 ### 11.1 `MutableHnswIndex` and `HnswIndexBuilder.buildMutable()`
@@ -478,6 +482,26 @@ reproduced with a caller-held lock in the example. Inserts therefore wait
 through `ForkJoinPool.managedBlock`, which lets the pool start a spare
 worker. Outside a pool it behaves like a plain `lock()`. A regression test
 fails with a plain lock and passes with this.
+
+Every attempt to take the read lock without blocking uses the timed
+`tryLock(0, NANOSECONDS)`, never the untimed `tryLock()`. The untimed form
+takes a free read lock even while a writer is queued, so under a steady
+stream of inserts `cleanup()` or `rescore()` waited until the stream ran dry
+(measured: a `cleanup()` requested after about 5,000 of 100,000 inserts
+waited while the other 95,000 ran). The timed form respects the queued
+writer. `cleanupIsNotStarvedByAContinuousStreamOfInserts` covers it.
+
+**Documented precondition on `addNode` (not new).** `GraphIndexBuilder.addGraphNode`
+has always required every node in the graph to be scoreable by ordinal
+through the build score provider: later inserts score the nodes they visit
+by ordinal, and so do pruning and `cleanup()`; the vector passed in is only
+used for the new node's own neighbor search. Verified on unchanged `main`:
+with a provider that only knows ordinals 0..49, inserting 50 succeeds but
+inserting 51 then fails with `IndexOutOfBoundsException` while scoring node
+50. `MutableHnswIndex` only wraps `addGraphNode`, so it neither adds nor
+removes the requirement; it now documents it, including that the failure
+surfaces on a later call. Cassandra already satisfies it (it adds or encodes
+each vector before inserting).
 
 ### 11.2 `withExistingGraph` takes `OnHeapGraphIndex`
 
@@ -547,8 +571,71 @@ nothing else changed.
 | OpenSearch `JVectorWriter.getGraph` | 7-arg constructor, parallel `addGraphNode`, `cleanup` | `withVectorValues(ravv).withScoreProvider(bsp)…build()` |
 | OpenSearch leading-segment merge | existing-graph constructor, `addGraphNode`, `markNodeDeleted`, `cleanup` | `withExistingGraph(loaded)…buildMutable()`, then `addNode`/`markDeleted`/`cleanup` |
 
+### 11.7 `ImmutableGraphIndex` renamed to `GraphIndex`, with a deprecated alias
+
+The first pass renamed `ImmutableGraphIndex` to `GraphIndex` (so that it can
+extend `Index`), which was not recorded here. Leaving no alias would break
+every caller at compile time (Cassandra: 3 files, 11 references) and at run
+time for anything compiled against 4.0.x.
+
+`ImmutableGraphIndex` is back as `@Deprecated(forRemoval = true) interface
+ImmutableGraphIndex extends GraphIndex`, to be removed in the release after
+this one:
+
+- Nested types and constants are inherited, so `ImmutableGraphIndex.View`,
+  `.ScoringView`, `.NodeAtLevel`, `.IntMarker`, `.NeighborProcessor` and
+  `.ENTRY_NODE_ABSENT` still resolve. Static methods are not inherited, so it
+  redeclares `prettyPrint(ImmutableGraphIndex)`.
+- `MutableGraphIndex` (and so `OnHeapGraphIndex`) and `OnDiskGraphIndex`
+  implement it again, as they did before.
+- The four `GraphIndexBuilder` methods that returned it before still do:
+  `build(RandomAccessVectorValues)`, `getGraph()`, and both
+  `buildAndMergeNewNodes` overloads. That keeps `ImmutableGraphIndex g =
+  builder.build(ravv)` compiling, and those four method signatures are
+  binary-compatible with 4.0.x again. When the alias is removed, they go back to
+  returning `GraphIndex`.
+- This is source compatibility: classes compiled against 4.0.x that use the
+  nested types still need recompiling, since those types are now members of
+  `GraphIndex`.
+
+`ImmutableGraphIndexCompatibilityTest` compiles the old spellings the way
+Cassandra and the tutorials use them, from outside JVector's packages. The
+tutorials now use `GraphIndex`.
+
+### 11.8 Experimental and closeable stubs
+
+- Public API that only throws until it is implemented is marked
+  `@Experimental`: `HnswRecipe`, `IvfRecipe`, `HnswIndexBuilder.applyRecipe`,
+  `Indexes.ivfBuilder()`, `IvfIndex`, `IvfSearcher`, and `IvfIndexBuilder`. The
+  annotation moved from `jvector-base` to `jvector-api` (same package and
+  name) so the recipe enums can use it, and is now `@Documented` so it shows
+  in the generated Javadoc.
+- `Index.close()` is declared to throw only `IOException`, matching
+  `IndexSearcher`, so generic try-with-resources over an `Index` doesn't have
+  to catch `Exception`.
+
+### 11.9 Example coverage
+
 `jvector-examples/.../IndexApiExample.java` section 9 shows `MutableHnswIndex`
 on its own (inserting while searching, deletes, and writing with each ordinal
 mapping), and section 11 runs each old construction path next to its new
 counterpart, including the memtable delete pattern (11g) and the compaction
 rescore pattern (11h).
+
+### 11.10 Validation reports every problem, not only missing values
+
+`IndexBuilderValidation` gained `check(valid, problem)` for values that are
+present but invalid, and for settings that conflict; `throwIfAny` reports them
+together with the missing values in one `IllegalStateException` (the message
+for missing values alone is unchanged). Before, only missing values were
+aggregated (design goal 4): a bad `beamWidth`, `neighborOverflow`, `alpha` or
+per-layer degree list reached `GraphIndexBuilder`'s constructor and failed
+there, one at a time, as `IllegalArgumentException`.
+
+`HnswIndexBuilder` now checks the same ranges `GraphIndexBuilder` enforces
+(plus a positive `withDimension`), and reports as conflicts both the scoring
+pair (`withScoreProvider` with `withSimilarityFunction`) and `withMaxDegree(s)`
+or `withAddHierarchy` set alongside `withExistingGraph`. Those last two used
+to be silently ignored. `IvfIndexBuilder` reports its scoring conflict the
+same way.
+

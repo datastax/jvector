@@ -20,6 +20,7 @@ import io.github.jbellis.jvector.TestUtil;
 import io.github.jbellis.jvector.graph.GraphIndex;
 import io.github.jbellis.jvector.graph.GraphSearcher;
 import io.github.jbellis.jvector.graph.ListRandomAccessVectorValues;
+import io.github.jbellis.jvector.graph.OnHeapGraphIndex;
 import io.github.jbellis.jvector.graph.PersistableGraphIndex;
 import io.github.jbellis.jvector.graph.disk.GraphIndexWriter;
 import io.github.jbellis.jvector.graph.disk.OnDiskGraphIndex;
@@ -155,6 +156,67 @@ public class IndexHierarchyTest {
             fail("expected IllegalStateException");
         } catch (IllegalStateException e) {
             assertTrue(e.getMessage().contains("not both"));
+        }
+    }
+
+    @Test
+    public void hnswBuilderReportsMissingInvalidAndConflictingValuesTogether() {
+        var vectors = randomVectors(4, 4);
+        try {
+            Indexes.hnswBuilder()
+                    // vectorValues missing
+                    .withSimilarityFunction(VectorSimilarityFunction.EUCLIDEAN)
+                    .withScoreProvider(io.github.jbellis.jvector.graph.similarity.BuildScoreProvider
+                            .randomAccessScoreProvider(vectors, VectorSimilarityFunction.EUCLIDEAN))
+                    .withMaxDegrees(List.of(8, 0))
+                    .withAddHierarchy(false)
+                    .withBeamWidth(0)
+                    .withNeighborOverflow(0.5f)
+                    .withAlpha(Float.NaN)
+                    .build();
+            fail("expected IllegalStateException");
+        } catch (IllegalStateException e) {
+            // one exception naming every problem, instead of GraphIndexBuilder failing on the first
+            String message = e.getMessage();
+            for (String expected : List.of("missing required value(s): vectorValues",
+                                           "not both",
+                                           "beamWidth must be positive (was 0)",
+                                           "neighborOverflow must be >= 1.0 (was 0.5)",
+                                           "alpha must be positive (was NaN)",
+                                           "maxDegrees must be non-empty and positive (was [8, 0])",
+                                           "require withAddHierarchy(true)")) {
+                assertTrue(message, message.contains(expected));
+            }
+        }
+    }
+
+    @Test
+    public void hnswBuilderRejectsShapeSettingsAlongsideAnExistingGraph() {
+        var vectors = randomVectors(64, 8);
+        var existing = (OnHeapGraphIndex) Indexes.hnswBuilder()
+                .withVectorValues(vectors)
+                .withSimilarityFunction(VectorSimilarityFunction.EUCLIDEAN)
+                .withMaxDegree(8)
+                .withBeamWidth(20)
+                .withNeighborOverflow(1.2f)
+                .withAlpha(1.2f)
+                .withAddHierarchy(false)
+                .build();
+        try {
+            Indexes.hnswBuilder()
+                    .withExistingGraph(existing)
+                    .withVectorValues(vectors)
+                    .withSimilarityFunction(VectorSimilarityFunction.EUCLIDEAN)
+                    .withMaxDegree(16)          // conflicts: the existing graph fixes this
+                    .withAddHierarchy(true)     // conflicts: the existing graph fixes this
+                    .withBeamWidth(20)
+                    .withNeighborOverflow(1.2f)
+                    .withAlpha(1.2f)
+                    .build();
+            fail("expected IllegalStateException");
+        } catch (IllegalStateException e) {
+            assertTrue(e.getMessage(), e.getMessage().contains("don't also set withMaxDegree()/withMaxDegrees()"));
+            assertTrue(e.getMessage(), e.getMessage().contains("don't also set withAddHierarchy()"));
         }
     }
 

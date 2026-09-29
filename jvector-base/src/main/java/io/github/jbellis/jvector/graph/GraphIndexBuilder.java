@@ -696,7 +696,10 @@ public class GraphIndexBuilder implements Closeable, Accountable {
         return newBuilder;
     }
 
-    public GraphIndex build(RandomAccessVectorValues ravv) {
+    // Returns the deprecated ImmutableGraphIndex (a GraphIndex) so that 4.0.x callers assigning the
+    // result to an ImmutableGraphIndex keep compiling; switch back to GraphIndex when it is removed.
+    @SuppressWarnings("removal")
+    public ImmutableGraphIndex build(RandomAccessVectorValues ravv) {
         var vv = ravv.threadLocalSupplier();
         int size = ravv.size();
 
@@ -800,7 +803,10 @@ public class GraphIndexBuilder implements Closeable, Accountable {
         }
     }
 
-    public GraphIndex getGraph() {
+    // Returns the deprecated ImmutableGraphIndex (a GraphIndex) so that 4.0.x callers assigning the
+    // result to an ImmutableGraphIndex keep compiling; switch back to GraphIndex when it is removed.
+    @SuppressWarnings("removal")
+    public ImmutableGraphIndex getGraph() {
         return graph;
     }
 
@@ -1270,13 +1276,14 @@ public class GraphIndexBuilder implements Closeable, Accountable {
      * @throws IOException if an I/O error occurs during the graph loading or conversion process.
      */
     @Experimental
-    public static GraphIndex buildAndMergeNewNodes(RandomAccessReader in,
-                                                   RemappedRandomAccessVectorValues newVectors,
-                                                   BuildScoreProvider buildScoreProvider,
-                                                   int startingNodeOffset,
-                                                   int beamWidth,
-                                                   float overflowRatio,
-                                                   float alpha) throws IOException {
+    @SuppressWarnings("removal")
+    public static ImmutableGraphIndex buildAndMergeNewNodes(RandomAccessReader in,
+                                                            RemappedRandomAccessVectorValues newVectors,
+                                                            BuildScoreProvider buildScoreProvider,
+                                                            int startingNodeOffset,
+                                                            int beamWidth,
+                                                            float overflowRatio,
+                                                            float alpha) throws IOException {
 
             return buildAndMergeNewNodes(in, newVectors, buildScoreProvider, startingNodeOffset, beamWidth, overflowRatio, alpha, PhysicalCoreExecutor.pool(), ForkJoinPool.commonPool());
     }
@@ -1299,15 +1306,16 @@ public class GraphIndexBuilder implements Closeable, Accountable {
      * @throws IOException if an I/O error occurs during the graph loading or conversion process.
      */
     @Experimental
-    public static GraphIndex buildAndMergeNewNodes(RandomAccessReader in,
-                                                   RemappedRandomAccessVectorValues newVectors,
-                                                   BuildScoreProvider buildScoreProvider,
-                                                   int startingNodeOffset,
-                                                   int beamWidth,
-                                                   float overflowRatio,
-                                                   float alpha,
-                                                   ForkJoinPool simdExecutor,
-                                                   ForkJoinPool parallelExecutor) throws IOException {
+    @SuppressWarnings("removal")
+    public static ImmutableGraphIndex buildAndMergeNewNodes(RandomAccessReader in,
+                                                            RemappedRandomAccessVectorValues newVectors,
+                                                            BuildScoreProvider buildScoreProvider,
+                                                            int startingNodeOffset,
+                                                            int beamWidth,
+                                                            float overflowRatio,
+                                                            float alpha,
+                                                            ForkJoinPool simdExecutor,
+                                                            ForkJoinPool parallelExecutor) throws IOException {
         // TODO is looks like the graph is not properly remapped based on the new ordinals but it just retains the old ones.
         //  However, the new inserted vectors do have the new ordinals, so recall:
         //  - recall will be severely affected

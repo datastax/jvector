@@ -18,6 +18,8 @@ package io.github.jbellis.jvector.index;
 
 import io.github.jbellis.jvector.util.Accountable;
 
+import java.io.IOException;
+
 /**
  * The backing-agnostic handle for a vector index. Every concrete index type (graph/HNSW, IVF, and
  * whatever follows) implements this; callers that don't need to know which backing they hold can
@@ -35,4 +37,12 @@ public interface Index extends Accountable, AutoCloseable {
      * and must close it, e.g. {@code try (IndexSearcher searcher = index.searcher()) { ... }}.
      */
     IndexSearcher searcher();
+
+    /**
+     * Releases any resources this index holds. Declared to throw only {@link IOException}, like
+     * {@link IndexSearcher#close()}, so code holding just an {@code Index} can use try-with-resources
+     * without catching {@code Exception}.
+     */
+    @Override
+    void close() throws IOException;
 }

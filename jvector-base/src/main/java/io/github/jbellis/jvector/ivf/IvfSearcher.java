@@ -16,6 +16,7 @@
 
 package io.github.jbellis.jvector.ivf;
 
+import io.github.jbellis.jvector.annotations.Experimental;
 import io.github.jbellis.jvector.index.IndexSearcher;
 
 /**
@@ -27,5 +28,6 @@ import io.github.jbellis.jvector.index.IndexSearcher;
  * {@code efSearch} on the graph side, but is not yet decided) and its backing algorithm are both
  * still pending the IVF design. A concrete implementing class arrives alongside that algorithm.
  */
+@Experimental
 public interface IvfSearcher extends IndexSearcher {
 }

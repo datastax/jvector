@@ -16,6 +16,7 @@
 
 package io.github.jbellis.jvector.ivf;
 
+import io.github.jbellis.jvector.annotations.Experimental;
 import io.github.jbellis.jvector.index.Index;
 
 /**
@@ -31,6 +32,7 @@ import io.github.jbellis.jvector.index.Index;
  * <p>
  * Still a seam only: there is no concrete implementation yet, pending the IVF design itself.
  */
+@Experimental
 public interface IvfIndex extends Index {
 
     @Override

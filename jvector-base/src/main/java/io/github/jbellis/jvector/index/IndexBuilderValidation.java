@@ -20,15 +20,18 @@ import java.util.ArrayList;
 import java.util.List;
 
 /**
- * Shared "collect every missing required value, then report them all at once" bookkeeping for
- * index builders' {@code build()} methods, instead of failing on the first missing value.
+ * Shared "collect every problem, then report them all at once" bookkeeping for index builders'
+ * {@code build()} methods, instead of failing on the first one: missing required values
+ * ({@link #require}, {@link #requireCondition}), and invalid values or conflicting settings
+ * ({@link #check}).
  * <p>
- * Each backing's builder still owns its own required/optional distinction and any coupled or
- * mutually-exclusive checks between fields &mdash; this only replaces the boilerplate of
- * accumulating names and formatting one exception.
+ * Each backing's builder still decides what is required, what ranges are valid, and which settings
+ * conflict &mdash; this only replaces the boilerplate of accumulating them and formatting one
+ * exception.
  */
 public final class IndexBuilderValidation {
     private final List<String> missing = new ArrayList<>();
+    private final List<String> invalid = new ArrayList<>();
 
     /**
      * Records {@code name} as missing if {@code value} is {@code null}.
@@ -53,14 +56,34 @@ public final class IndexBuilderValidation {
     }
 
     /**
-     * Throws an {@link IllegalStateException} naming every value recorded as missing so far, if
-     * any. {@code builderDescription} is prepended to the message, e.g.
-     * {@code "Cannot build GraphIndexBuilder"}.
+     * Records {@code problem} if {@code valid} is {@code false}. Use this for a value that is present
+     * but out of range, or for settings that conflict with each other. {@code problem} should say
+     * what is wrong in full, including the offending value, e.g. {@code "beamWidth must be positive
+     * (was 0)"}.
+     */
+    public IndexBuilderValidation check(boolean valid, String problem) {
+        if (!valid) {
+            invalid.add(problem);
+        }
+        return this;
+    }
+
+    /**
+     * Throws an {@link IllegalStateException} describing every problem recorded so far, if any: the
+     * missing values first, then each invalid or conflicting setting. {@code builderDescription} is
+     * prepended to the message, e.g. {@code "Cannot build GraphIndexBuilder"}.
      */
     public void throwIfAny(String builderDescription) {
-        if (!missing.isEmpty()) {
-            throw new IllegalStateException(
-                    builderDescription + ", missing required value(s): " + String.join(", ", missing));
+        if (missing.isEmpty() && invalid.isEmpty()) {
+            return;
         }
+        StringBuilder message = new StringBuilder(builderDescription);
+        if (!missing.isEmpty()) {
+            message.append(", missing required value(s): ").append(String.join(", ", missing));
+        }
+        if (!invalid.isEmpty()) {
+            message.append(missing.isEmpty() ? ": " : "; ").append(String.join("; ", invalid));
+        }
+        throw new IllegalStateException(message.toString());
     }
 }

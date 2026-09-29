@@ -16,6 +16,7 @@
 
 package io.github.jbellis.jvector.ivf;
 
+import io.github.jbellis.jvector.annotations.Experimental;
 import io.github.jbellis.jvector.graph.RandomAccessVectorValues;
 import io.github.jbellis.jvector.graph.similarity.BuildScoreProvider;
 import io.github.jbellis.jvector.index.IndexBuilderValidation;
@@ -33,6 +34,7 @@ import java.util.concurrent.ForkJoinPool;
  * construction parameters (e.g. {@code nlist}) are still being defined by the IVF design and are
  * deliberately not guessed at here; {@link #build()} refuses until they exist.
  */
+@Experimental
 public class IvfIndexBuilder {
     private BuildScoreProvider scoreProvider;
     private RandomAccessVectorValues vectorValues;
@@ -109,20 +111,17 @@ public class IvfIndexBuilder {
      * been defined yet, so there is nothing to actually build.
      *
      * @throws IllegalStateException if a mutually-exclusive pair was over-specified, or a
-     * required common value is missing
+     * required common value is missing; every such problem is reported at once
      * @throws UnsupportedOperationException always, until IVF's construction parameters and
      * backing implementation exist
      */
     public IvfIndex build() {
-        if (scoreProvider != null && similarityFunction != null) {
-            throw new IllegalStateException(
-                    "Set either withScoreProvider() or withSimilarityFunction(), not both");
-        }
-
         new IndexBuilderValidation()
                 .require("vectorValues", vectorValues)
                 .requireCondition("similarityFunction (or scoreProvider)",
                         scoreProvider != null || similarityFunction != null)
+                .check(scoreProvider == null || similarityFunction == null,
+                        "Set either withScoreProvider() or withSimilarityFunction(), not both")
                 .throwIfAny("Cannot build IvfIndex");
 
         throw new UnsupportedOperationException(

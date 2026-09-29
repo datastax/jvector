@@ -247,6 +247,46 @@ public class MutableHnswIndexTest extends RandomizedTest {
     }
 
     @Test
+    public void cleanupIsNotStarvedByAContinuousStreamOfInserts() throws Exception {
+        // The untimed ReadLock.tryLock() barges past a queued writer, so with inserts arriving
+        // continuously cleanup() used to wait until the whole stream had drained. It must instead get
+        // the write lock once the inserts already in flight finish.
+        int n = 100_000;
+        int threads = 8;
+        var ravv = new ListRandomAccessVectorValues(createRandomVectors(n, DIMENSION), DIMENSION);
+        var bsp = BuildScoreProvider.randomAccessScoreProvider(ravv, VSF);
+        ExecutorService pool = Executors.newFixedThreadPool(threads);
+        AtomicBoolean stop = new AtomicBoolean();
+        try (MutableHnswIndex index = configured().withScoreProvider(bsp).withDimension(DIMENSION).buildMutable()) {
+            AtomicInteger next = new AtomicInteger();
+            for (int t = 0; t < threads; t++) {
+                pool.submit(() -> {
+                    int ord;
+                    while (!stop.get() && (ord = next.getAndIncrement()) < n) {
+                        index.addNode(ord, ravv.getVector(ord));
+                    }
+                });
+            }
+            while (next.get() < 5_000) {
+                Thread.onSpinWait();
+            }
+
+            int claimedBefore = next.get();
+            index.cleanup();
+            int claimedDuring = next.get() - claimedBefore;
+            stop.set(true);
+
+            // Each inserter can finish the insert it had started and claim one more ordinal before
+            // blocking; far more than that means cleanup() waited for the stream instead.
+            assertTrue("cleanup() waited while " + claimedDuring + " more inserts ran", claimedDuring <= 4 * threads);
+        } finally {
+            stop.set(true);
+            pool.shutdown();
+            pool.awaitTermination(60, java.util.concurrent.TimeUnit.SECONDS);
+        }
+    }
+
+    @Test
     public void exclusiveOperationsDoNotDeadlockWhenInsertsRunOnTheBuildersOwnPool() throws Exception {
         // Inserts run on the same small ForkJoinPool the builder uses for cleanup/rescore work, and the
         // rescore supplier also runs parallel work on it. If inserting workers parked on the lock

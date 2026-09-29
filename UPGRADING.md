@@ -1,3 +1,124 @@
+# Upgrading from 4.0.1 to 4.0.2
+
+## Critical API changes
+
+If you only read one thing, read this!
+
+- `ImmutableGraphIndex` has been renamed to `GraphIndex`, which now extends the new generic `Index` interface.
+  `ImmutableGraphIndex` remains for this release only, as a deprecated interface extending `GraphIndex`
+  (`@Deprecated(forRemoval = true)`), so existing source code compiles with removal warnings. **It will be
+  removed in the release after 4.0.2**; replace the name now:
+
+  | Before | Now |
+  |---|---|
+  | `ImmutableGraphIndex` | `GraphIndex` |
+  | `ImmutableGraphIndex.View`, `.ScoringView`, `.NodeAtLevel`, `.IntMarker`, `.NeighborProcessor` | `GraphIndex.View`, `.ScoringView`, `.NodeAtLevel`, `.IntMarker`, `.NeighborProcessor` |
+  | `ImmutableGraphIndex.ENTRY_NODE_ABSENT` | `GraphIndex.ENTRY_NODE_ABSENT` |
+  | `ImmutableGraphIndex.prettyPrint(graph)` | `GraphIndex.prettyPrint(graph)` |
+
+  The old nested names are the same types as the new ones, so the two spellings can be mixed while you
+  migrate. `OnHeapGraphIndex` and `OnDiskGraphIndex` still implement `ImmutableGraphIndex`, and
+  `GraphIndexBuilder.build(RandomAccessVectorValues)`, `getGraph()` and `buildAndMergeNewNodes(...)` still return
+  it, so assignments such as `ImmutableGraphIndex graph = builder.build(ravv)` keep compiling. When
+  `ImmutableGraphIndex` is removed, those four methods will return `GraphIndex`; code that already assigns their
+  results to `GraphIndex` is unaffected.
+- **Recompile against 4.0.2.** This is a source-compatible change, not a binary-compatible one: the nested types
+  are now members of `GraphIndex`, and many signatures that took or returned `ImmutableGraphIndex` (for example
+  `new GraphSearcher(graph)`, `GraphSearcher.getView()`, `OnDiskGraphIndex.write`, and the graph writer builders)
+  now use `GraphIndex`. Classes compiled against 4.0.1 may fail to link.
+- A new module, `jvector-api`, holds the public contract, and `jvector-base` depends on it. It contains the new
+  `Index`, `IndexSearcher`, `HnswRecipe` and `IvfRecipe`, plus `Accountable` and the `@Experimental` annotation,
+  which moved there from `jvector-base` with their package and class names unchanged. If you depend on the
+  published `io.github.jbellis:jvector` artifact (as Cassandra and OpenSearch do), nothing changes: it bundles
+  `jvector-api`. If you build against the individual modules, add `jvector-api`.
+
+## New features
+
+- **A generic index API.** `Index` is a backing-agnostic handle (`searcher()`, `ramBytesUsed()`, `close()`), and
+  `IndexSearcher` is the matching searcher type. `GraphIndex` implements `Index`, and `GraphIndex.searcher()`
+  returns a `GraphSearcher` with no cast. Code that holds only an `Index` recovers the concrete type with
+  `instanceof GraphIndex`. `IndexSearcher` is `Closeable` and `Index.close()` throws only `IOException`, so both
+  work with try-with-resources:
+  ```java
+  try (IndexSearcher searcher = index.searcher()) { ... }
+  ```
+- **`Indexes.hnswBuilder()`**, a fluent builder for graph indexes (`HnswIndexBuilder`). It validates the whole
+  configuration at once and reports every missing value, out-of-range value and conflicting setting in a single
+  `IllegalStateException`. It finishes in one of two ways:
+  - `build()` inserts every vector from `withVectorValues(...)` in parallel, calls `cleanup()`, and returns a
+    `PersistableGraphIndex`.
+  - `buildMutable()` returns a `MutableHnswIndex` for incremental construction: `addNode` (safe to call from
+    many threads while the graph is searched), `markDeleted`, `removeDeletedNodes`, `cleanup`, and
+    `rescore(Supplier<BuildScoreProvider>)`. The handle serializes `cleanup`, `removeDeletedNodes` and `rescore`
+    against inserts itself, and waits cooperatively when inserts run on a `ForkJoinPool`, so callers no longer
+    need their own lock around these calls. `rescore` runs the supplier with inserts locked out, so it can safely
+    refine and re-encode PQ codes before returning the new score provider.
+  - `withExistingGraph(OnHeapGraphIndex)` continues building on a graph reloaded with `OnHeapGraphIndex.load`.
+- **`PersistableGraphIndex`**, implemented by `OnHeapGraphIndex` and `OnDiskGraphIndex`, adds accessors for the
+  three graph writers:
+
+  | Accessor | Writer | `GraphIndexWriterTypes` |
+  |---|---|---|
+  | `getWriterBuilder(Path)` | `OnDiskGraphIndexWriter` (random access, single-threaded) | `RANDOM_ACCESS` |
+  | `getParallelWriterBuilder(Path)` | `OnDiskParallelGraphIndexWriter` | `RANDOM_ACCESS_PARALLEL` |
+  | `getWriterBuilder(IndexWriter)` | `OnDiskSequentialGraphIndexWriter` | `ON_DISK_SEQUENTIAL` |
+
+  Constructing the writer builders directly and `GraphIndexWriter.getBuilderFor(...)` still work.
+- **Experimental:** `HnswRecipe` and `IvfRecipe` (with `HnswIndexBuilder.applyRecipe`), and the IVF types
+  (`Indexes.ivfBuilder()`, `IvfIndexBuilder`, `IvfIndex`, `IvfSearcher`) are marked `@Experimental`. They are
+  placeholders: every recipe, and `IvfIndexBuilder.build()`, currently throws `UnsupportedOperationException`.
+- `jvector-examples/.../IndexApiExample.java` shows every way to build, write, load and search an index with the
+  new API, including each compression type (PQ, fused PQ, NVQ) and each writer, and runs each older
+  `GraphIndexBuilder` pattern next to its equivalent.
+
+## Moving from GraphIndexBuilder to HnswIndexBuilder (optional)
+
+`GraphIndexBuilder` remains supported; moving is optional in this release.
+
+| `GraphIndexBuilder` | `HnswIndexBuilder` |
+|---|---|
+| `new GraphIndexBuilder(ravv, vsf, M, beamWidth, overflow, alpha, addHierarchy).build(ravv)` | `Indexes.hnswBuilder().withVectorValues(ravv).withSimilarityFunction(vsf).withMaxDegree(M).withBeamWidth(beamWidth).withNeighborOverflow(overflow).withAlpha(alpha).withAddHierarchy(addHierarchy).build()` |
+| constructors taking a `BuildScoreProvider` and dimension | `withScoreProvider(bsp)`; with `buildMutable()`, `withDimension(d)` instead of vector values |
+| `List<Integer>` max degrees | `withMaxDegrees(list)` |
+| `refineFinalGraph`, SIMD and parallel executor arguments | `withRefineFinalGraph`, `withSimdExecutor`, `withParallelExecutor` |
+| `addGraphNode`, `markNodeDeleted`, `removeDeletedNodes`, `cleanup` | `MutableHnswIndex.addNode`, `markDeleted`, `removeDeletedNodes`, `cleanup` |
+| `builder = GraphIndexBuilder.rescore(builder, newBsp)` under your own lock | `mutableIndex.rescore(() -> ...)` |
+| existing-graph constructor, or `buildAndMergeNewNodes` | `OnHeapGraphIndex.load(...)`, then `withExistingGraph(graph)` |
+| `builder.getGraph()` | `mutableIndex.graph()` (a `PersistableGraphIndex`) |
+
+Differences to be aware of:
+- `addHierarchy` and `refineFinalGraph` are always explicit (`refineFinalGraph` defaults to `true`). The
+  `GraphIndexBuilder.builder(...)` fluent builder from 4.0.x reads them from the JMX `GraphIndexBuilderConfig`
+  instead.
+- Invalid configuration fails with one `IllegalStateException` listing every problem, rather than
+  `GraphIndexBuilder`'s `IllegalArgumentException` for the first one.
+- With `withExistingGraph`, setting `withMaxDegree(s)` or `withAddHierarchy` is rejected as a conflict (the
+  existing graph fixes both). The existing graph keeps the diversity provider it was created with, which must be
+  able to score the ordinals you append.
+- As with `GraphIndexBuilder.addGraphNode`, every node must be scoreable by ordinal through the build score
+  provider before (or when) it is added: add the vector to your vector values, or encode its PQ code, first.
+  Otherwise a later insert or `cleanup()` fails with an `IndexOutOfBoundsException`.
+
+## Behavior changes
+
+- Adding nodes to an `OnHeapGraphIndex` after `cleanup()` now works correctly. Previously the graph stayed
+  "frozen" after cleanup, so a later insert could link a node to itself (tripping an assertion) and concurrent
+  searches could see half-inserted nodes. Adding a node now unfreezes the graph; call `cleanup()` again before
+  writing it, and don't reuse views or searchers obtained while it was frozen. This also affects continuing to
+  build on a graph that has already been cleaned up, including one returned by `GraphIndexBuilder.build`.
+
+## Other changes to public classes
+
+- `GraphSearcher` implements `IndexSearcher`.
+- `AbstractGraphIndexWriter.Builder` implements `PersistableGraphIndex.GraphIndexWriterBuilder`.
+- `@Experimental` has moved from `jvector-base` to `jvector-api` (same package and name) and is now `@Documented`,
+  so it appears in the generated Javadoc.
+- Writer documentation corrected, with no behavior change: `withParallelWorkerThreads` and
+  `withParallelDirectBuffers` apply only to the parallel writer. The single-threaded random-access and sequential
+  writer builders throw `UnsupportedOperationException` for them, and `RandomAccessOnDiskGraphIndexWriter.Builder`
+  (which picks a writer from the JMX configuration) ignores them when it picks the single-threaded one. A worker
+  count of 0 or less means "use all available processors".
+
 # Upgrading from 3.0.x to 4.0.x
 
 ## New features

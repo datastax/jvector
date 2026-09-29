@@ -16,6 +16,7 @@
 
 package io.github.jbellis.jvector.index;
 
+import io.github.jbellis.jvector.annotations.Experimental;
 import io.github.jbellis.jvector.graph.HnswIndexBuilder;
 import io.github.jbellis.jvector.ivf.IvfIndexBuilder;
 
@@ -36,6 +37,8 @@ public final class Indexes {
         return new HnswIndexBuilder();
     }
 
+    /** Experimental: IVF is not implemented yet, so the returned builder always refuses to build. */
+    @Experimental
     public static IvfIndexBuilder ivfBuilder() {
         return new IvfIndexBuilder();
     }

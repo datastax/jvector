@@ -16,6 +16,8 @@
 
 package io.github.jbellis.jvector.index;
 
+import io.github.jbellis.jvector.annotations.Experimental;
+
 /**
  * Named, recommended starting configurations for an IVF index, applied via an IVF index builder's
  * {@code applyRecipe(IvfRecipe)}.
@@ -25,6 +27,7 @@ package io.github.jbellis.jvector.index;
  * parameters themselves are still being worked out &mdash; so {@code applyRecipe} currently
  * refuses at runtime rather than guess.
  */
+@Experimental
 public enum IvfRecipe {
     HIGH_RECALL,
     HIGH_PERFORMANCE

@@ -32,7 +32,7 @@ boolean addHierarchy = true;
 BuildScoreProvider bsp = BuildScoreProvider.randomAccessScoreProvider(ravv, vsf);
 
 // nothing new here
-ImmutableGraphIndex heapGraph;
+GraphIndex heapGraph;
 try (GraphIndexBuilder builder = new GraphIndexBuilder(bsp, dim, M, ef, overflow, alpha, addHierarchy)) {
     heapGraph = builder.build(ravv);
 }

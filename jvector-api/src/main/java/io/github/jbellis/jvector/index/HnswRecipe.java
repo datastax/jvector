@@ -16,6 +16,8 @@
 
 package io.github.jbellis.jvector.index;
 
+import io.github.jbellis.jvector.annotations.Experimental;
+
 /**
  * Named, recommended starting configurations for a graph/HNSW index, applied via a graph index
  * builder's {@code applyRecipe(HnswRecipe)}.
@@ -24,6 +26,7 @@ package io.github.jbellis.jvector.index;
  * the actual fixed parameter values (what "high recall" means numerically for this backing) have
  * not been decided yet, so {@code applyRecipe} currently refuses at runtime rather than guess.
  */
+@Experimental
 public enum HnswRecipe {
     HIGH_RECALL,
     HIGH_PERFORMANCE

@@ -263,8 +263,9 @@ public class IndexApiExample {
         System.out.println("build() with nothing set reports every missing value in one exception:");
         expectFailure(() -> Indexes.hnswBuilder().build());
 
-        // The two ways of supplying scoring are mutually exclusive, checked before the missing-value
-        // scan.
+        // The two ways of supplying scoring are mutually exclusive. Conflicts and out-of-range values
+        // are reported in the same exception as the missing values, so this also lists the shape
+        // parameters that aren't set.
         System.out.println("Setting both a similarity function and a score provider is rejected:");
         expectFailure(() -> Indexes.hnswBuilder()
                 .withVectorValues(ds.ravv)

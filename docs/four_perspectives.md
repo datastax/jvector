@@ -1,5 +1,11 @@
 # One Configuration Interface, Four Perspectives
 
+> **About this document.** This guide comes from the aci project and is kept here as the
+> source of the approach in [`index_hierarchy_plan.md`](index_hierarchy_plan.md), which
+> records what JVector adopted from it and what it deliberately left out (§1). The SRDs and
+> test classes it names (SRD 02 and 03, `BuilderPerspectiveTest`, and so on) are part of the
+> aci project, not this repository.
+
 *How the aci demonstrator is used by the people who build the index system,
 the people who program against it, the people who embed it, and the people
 who only ever see it through something else.*
@@ -8,7 +14,7 @@ aci — the Algebraic Configuration Interface — is a demonstrator of one idea:
 that a specialized index system with several backing implementations can be
 configured through **one interface** that serves very different people
 equally well. This guide walks the system as built to
-[SRD 03, the minimum scenario](../SRD/03_minimum_scenario.md), through four
+SRD 03, the minimum scenario, through four
 perspectives. The code shown is the real API; where a perspective's outer
 surface is not part of this project (the database syntax in §4), that is
 said plainly.
@@ -56,7 +62,7 @@ share `dimensions`, `metric`, and `capacity`; `hnsw` alone has `m` and
 
 *Owns the index system. Writes the knowledge once; everyone downstream
 inherits it.* — living example:
-[`BuilderPerspectiveTest`](../../aci-index/src/test/java/io/nosqlbench/aci/index/guide/BuilderPerspectiveTest.java)
+`BuilderPerspectiveTest`
 
 ### Declaring the parameter space, once
 
@@ -138,7 +144,7 @@ they never write a configuration parser, a per-type validator, or a
 
 *Programs against the index system in Java. Wants the compiler on their side
 and never wants to guess.* — living example:
-[`ApiUserPerspectiveTest`](../../aci-index/src/test/java/io/nosqlbench/aci/index/guide/ApiUserPerspectiveTest.java)
+`ApiUserPerspectiveTest`
 
 ### Configuring: the type first, then only what fits
 
@@ -238,7 +244,7 @@ before they get there).
 *Embeds the index system into a larger host. Configuration arrives as data,
 indexes come and go, and operations people need to see what's what.* — living
 example:
-[`IntegratorPerspectiveTest`](../../aci-index/src/test/java/io/nosqlbench/aci/index/guide/IntegratorPerspectiveTest.java)
+`IntegratorPerspectiveTest`
 
 ### Configuration as data: the loader
 
@@ -317,9 +323,9 @@ relay verdicts.
 *Never sees Java, aci, or the subject. Talks to another system — say, a
 database that embeds the index system — in that system's own language.* —
 living example:
-[`OutsideUserPerspectiveTest`](../../aci-index/src/test/java/io/nosqlbench/aci/index/guide/OutsideUserPerspectiveTest.java)
+`OutsideUserPerspectiveTest`
 over the stand-in
-[`EmbeddingDatabase`](../../aci-index/src/test/java/io/nosqlbench/aci/index/guide/EmbeddingDatabase.java)
+`EmbeddingDatabase`
 
 This perspective is the reason the previous three are shaped the way they
 are. The database is a **system integrator** (§3); its end user is someone
@@ -395,8 +401,8 @@ embedders" means in practice, and the tests in `aci-index` (named by the
 requirement each verifies, `rM1_…` through `rM9_…`) are where each claim
 above is pinned.
 
-*Sources of truth: [SRD 02 Subject System](../SRD/02_subject_system.md),
-[SRD 03 The Minimum Scenario](../SRD/03_minimum_scenario.md). Every code
+*Sources of truth: SRD 02 Subject System,
+SRD 03 The Minimum Scenario. Every code
 block above is a compiled, tested example under
 `aci-index/src/test/java/io/nosqlbench/aci/index/guide/`; run them with
 `mvn -pl aci-index test -Dtest='*PerspectiveTest'`. This guide is also rendered
