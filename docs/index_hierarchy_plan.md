@@ -553,6 +553,14 @@ nothing else changed.
   visible. Graphs from `OnHeapGraphIndex.load` start unfrozen, which is why
   OpenSearch's leading-segment merge never hit this. Views obtained while
   the graph was frozen shouldn't be reused across new insertions.
+- **`rescore` dropped pending deletes.** This predates this branch.
+  `GraphIndexBuilder.rescore` copies every node into a new graph but did not
+  copy the set of nodes marked deleted, so a node deleted before a rescore
+  became live again and survived `cleanup()`. Cassandra's compaction never
+  deletes before rescoring, so it wasn't affected, but `MutableHnswIndex`
+  offers `markDeleted` and `rescore` together. `rescore` now carries the marks
+  over; covered by `GraphIndexBuilderTest.testRescoreKeepsPendingDeletes` and
+  `MutableHnswIndexTest.rescoreKeepsNodesMarkedDeleted`.
 - **Writer Javadoc corrected.** `PersistableGraphIndex.getWriterBuilder(Path)`
   was described as sequential but returns the random-access
   `OnDiskGraphIndexWriter`. The parallel options were described as "ignored

@@ -207,8 +207,19 @@ public final class MutableHnswIndex implements Index {
     }
 
     /**
-     * Releases per-thread construction scratch space. The graph returned by {@link #graph()} stays
-     * usable after this.
+     * Releases the per-thread scratch space (searchers and candidate arrays) that construction
+     * allocates for each inserting thread. Nothing else is closed:
+     * <ul>
+     *     <li>The graph returned by {@link #graph()} is unaffected and can still be searched and
+     *     written.</li>
+     *     <li>This index also remains usable. A later {@link #addNode}, {@link #markDeleted},
+     *     {@link #removeDeletedNodes}, {@link #cleanup} or {@link #rescore} recreates whatever scratch
+     *     space the calling thread needs, so calling {@code close()} again afterwards releases it
+     *     again. Calling {@code close()} more than once is harmless.</li>
+     * </ul>
+     * Unlike the other methods, this is not synchronized with inserts: call it only when no other
+     * thread is inside one of the methods above, since it may close a searcher an in-flight insert is
+     * using.
      */
     @Override
     public void close() throws IOException {
@@ -220,6 +231,14 @@ public final class MutableHnswIndex implements Index {
      * The batch path shared by {@link HnswIndexBuilder#build()}.
      */
     void addAllAndCleanup(RandomAccessVectorValues vectors, int from, ForkJoinPool executor) {
+        // Each insert goes through addNode() and so takes the read lock, although nothing else can reach
+        // this index during a batch build (build() creates it and closes it before returning), so every
+        // acquisition succeeds at once and only costs a couple of uncontended atomic operations.
+        // GraphIndexBuilder.build(ravv) doesn't lock at all: GraphIndexBuilder leaves coordinating inserts
+        // with cleanup()/rescore() to its callers, and its build() needs none because nothing else can
+        // call cleanup() mid-build. Going through addNode() keeps a single insert path for build() and
+        // buildMutable(). If regression testing shows batch builds are measurably slower than
+        // GraphIndexBuilder.build(ravv), call builder.addGraphNode() directly here instead.
         var vv = vectors.threadLocalSupplier();
         executor.submit(() -> IntStream.range(from, vectors.size()).parallel()
                 .forEach(node -> addNode(node, vv.get().getVector(node)))).join();

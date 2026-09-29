@@ -276,9 +276,14 @@ public class MutableHnswIndexTest extends RandomizedTest {
             int claimedDuring = next.get() - claimedBefore;
             stop.set(true);
 
-            // Each inserter can finish the insert it had started and claim one more ordinal before
-            // blocking; far more than that means cleanup() waited for the stream instead.
-            assertTrue("cleanup() waited while " + claimedDuring + " more inserts ran", claimedDuring <= 4 * threads);
+            // With the bug, cleanup() waited for the whole remaining stream (~95,000 inserts). Fixed, it
+            // only waits for the inserts in flight when it queues for the lock. The count also includes
+            // inserts that ran before cleanup() reached the lock, which depends on scheduling and has been
+            // seen in the dozens on a loaded machine, so the bound only needs to separate "a small
+            // fraction" from "everything that was left".
+            int remaining = n - claimedBefore;
+            assertTrue("cleanup() waited while " + claimedDuring + " of the remaining " + remaining + " inserts ran",
+                       claimedDuring < remaining / 20);
         } finally {
             stop.set(true);
             pool.shutdown();
@@ -331,6 +336,53 @@ public class MutableHnswIndexTest extends RandomizedTest {
             driver.shutdownNow();
             pool.shutdownNow();
         }
+    }
+
+    @Test
+    public void rescoreKeepsNodesMarkedDeleted() throws Exception {
+        int n = 1_000;
+        var ravv = new ListRandomAccessVectorValues(createRandomVectors(n, DIMENSION), DIMENSION);
+        var bsp = BuildScoreProvider.randomAccessScoreProvider(ravv, VSF);
+        try (MutableHnswIndex index = configured().withScoreProvider(bsp).withDimension(DIMENSION).buildMutable()) {
+            IntStream.range(0, n).parallel().forEach(i -> index.addNode(i, ravv.getVector(i)));
+            IntStream.range(0, n).filter(i -> i % 50 == 0).forEach(index::markDeleted);
+
+            index.rescore(BuildScoreProvider.randomAccessScoreProvider(ravv, VSF));
+
+            try (GraphSearcher s = index.searcher()) {
+                for (int i = 0; i < n; i += 50) {
+                    var result = s.search(DefaultSearchScoreProvider.exact(ravv.getVector(i), VSF, ravv), 5, Bits.ALL);
+                    for (var ns : result.getNodes()) {
+                        assertTrue("deleted node " + ns.node + " returned after rescore", ns.node % 50 != 0);
+                    }
+                }
+            }
+            index.cleanup();
+            assertEquals(n - n / 50, index.graph().size(0));
+            for (int i = 0; i < n; i += 50) {
+                assertFalse(index.graph().containsNode(i));
+            }
+        }
+    }
+
+    @Test
+    public void usableAfterClose() throws Exception {
+        // close() only releases per-thread scratch space; later calls recreate it on demand.
+        int n = 500;
+        var ravv = new ListRandomAccessVectorValues(createRandomVectors(n, DIMENSION), DIMENSION);
+        var bsp = BuildScoreProvider.randomAccessScoreProvider(ravv, VSF);
+        MutableHnswIndex index = configured().withScoreProvider(bsp).withDimension(DIMENSION).buildMutable();
+        for (int i = 0; i < n / 2; i++) {
+            index.addNode(i, ravv.getVector(i));
+        }
+        index.close();
+        for (int i = n / 2; i < n; i++) {
+            index.addNode(i, ravv.getVector(i));
+        }
+        index.cleanup();
+        assertEquals(n, index.graph().size(0));
+        assertTrue(selfRecall(index.graph(), ravv, range(0, n)) > 0.95);
+        index.close();
     }
 
     @Test

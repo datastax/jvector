@@ -71,7 +71,7 @@ public final class IndexBuilderValidation {
     /**
      * Throws an {@link IllegalStateException} describing every problem recorded so far, if any: the
      * missing values first, then each invalid or conflicting setting. {@code builderDescription} is
-     * prepended to the message, e.g. {@code "Cannot build GraphIndexBuilder"}.
+     * prepended to the message, e.g. {@code "Cannot build GraphIndex"}.
      */
     public void throwIfAny(String builderDescription) {
         if (missing.isEmpty() && invalid.isEmpty()) {

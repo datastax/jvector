@@ -558,6 +558,11 @@ public class OnHeapGraphIndex implements MutableGraphIndex {
         }
 
         out.writeInt(OnHeapGraphIndex.MAGIC); // the magic number
+        // TODO: replace the literal 4 here and in load() with a named constant. It is the version of this
+        //  save/load format (identified by MAGIC), not OnDiskGraphIndex's file-format version
+        //  (OnDiskGraphIndex.CURRENT_VERSION), and it has only ever had this one version. load() accepts
+        //  exactly 4, so changing the layout written below needs a new version and load() support for
+        //  both, or previously saved graphs can no longer be read.
         out.writeInt(4); // The version
 
         // Write graph-level properties.
@@ -605,6 +610,7 @@ public class OnHeapGraphIndex implements MutableGraphIndex {
         }
 
         int version = in.readInt(); // The version
+        // TODO: use the named constant for the save/load format version once it exists; see save().
         if (version != 4) {
             throw new IOException("Unsupported version: " + version);
         }

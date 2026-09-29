@@ -687,6 +687,12 @@ public class GraphIndexBuilder implements Closeable, Accountable {
                 // hide it from every subsequent concurrent view taken on newBuilder.graph. Mark it complete now,
                 // so any view afterward sees the whole copied graph again.
                 newBuilder.graph.markComplete(new NodeAtLevel(maxLayer, i));
+
+                // Carry over a pending delete: the node is copied like any other so its edges survive
+                // until cleanup() removes it, but it must stay hidden from searches and still be removed.
+                if (other.graph.getDeletedNodes().get(i)) {
+                    newBuilder.graph.markDeleted(i);
+                }
             });
         }).join();
 

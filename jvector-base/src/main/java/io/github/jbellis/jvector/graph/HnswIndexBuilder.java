@@ -359,7 +359,7 @@ public class HnswIndexBuilder {
                                         + "new vectors being appended",
                                 vectorValues == null ? null : vectorValues.size(),
                                 existingGraph == null ? null : existingGraph.getIdUpperBound()))
-                .throwIfAny(batch ? "Cannot build GraphIndexBuilder" : "Cannot build MutableHnswIndex");
+                .throwIfAny(batch ? "Cannot build GraphIndex" : "Cannot build MutableHnswIndex");
     }
 
     /** Constructs the {@link GraphIndexBuilder} for already-validated configuration. */

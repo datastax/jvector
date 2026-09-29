@@ -51,6 +51,11 @@ import java.util.Map;
  */
 public interface PersistableGraphIndex extends GraphIndex {
 
+    // TODO: the Path accessors below open the output file as soon as they are called (the writer
+    //  builders' constructors create a BufferedRandomAccessWriter), not when build() is called. A builder
+    //  that is abandoned without build() therefore leaks the file handle, since only the built
+    //  GraphIndexWriter closes it. Defer opening the file to build(), or make the builder closeable.
+
     /**
      * Returns a {@link GraphIndexWriterBuilder} that writes this graph to {@code path} with the parallel
      * random-access writer ({@code OnDiskParallelGraphIndexWriter}): node records are encoded on worker
@@ -79,7 +84,7 @@ public interface PersistableGraphIndex extends GraphIndex {
      * {@code out}'s current position: {@link GraphIndexWriterBuilder#withStartOffset} and the parallel
      * options throw {@link UnsupportedOperationException}.
      */
-    GraphIndexWriterBuilder getWriterBuilder(IndexWriter out) throws FileNotFoundException;
+    GraphIndexWriterBuilder getWriterBuilder(IndexWriter out);
 
     /**
      * Fluent builder for persisting a {@link PersistableGraphIndex} to disk.
@@ -131,9 +136,5 @@ public interface PersistableGraphIndex extends GraphIndex {
 
         /** Builds the graph index writer. */
         GraphIndexWriter build() throws IOException;
-    }
-
-    static String prettyPrint(PersistableGraphIndex graph) {
-        return GraphIndex.prettyPrint(graph);
     }
 }

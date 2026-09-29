@@ -106,6 +106,10 @@ Differences to be aware of:
   searches could see half-inserted nodes. Adding a node now unfreezes the graph; call `cleanup()` again before
   writing it, and don't reuse views or searchers obtained while it was frozen. This also affects continuing to
   build on a graph that has already been cleaned up, including one returned by `GraphIndexBuilder.build`.
+- `GraphIndexBuilder.rescore` now keeps nodes that were marked deleted (with `markNodeDeleted`) but not yet
+  removed. Previously the rescored graph dropped those marks, so the nodes became visible to searches again and
+  survived `cleanup()`. Callers that don't delete before rescoring, such as a compaction refining its PQ
+  codebook, see no change.
 
 ## Other changes to public classes
 
