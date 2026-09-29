@@ -165,6 +165,11 @@ public class OnHeapGraphIndex implements MutableGraphIndex {
     }
 
     public void addNode(int level, int node) {
+        // Adding a node is a mutation, so the graph is no longer complete. Clear the flag before the
+        // node becomes visible, so every View taken from now on is a ConcurrentGraphIndexView that hides
+        // incomplete nodes; a FrozenView would let an insert find its own half-added node as a neighbor.
+        // Views obtained while the graph was frozen should not be used across new insertions.
+        allMutationsCompleted = false;
         ensureLayersExist(level);
 
         // add the node to each layer

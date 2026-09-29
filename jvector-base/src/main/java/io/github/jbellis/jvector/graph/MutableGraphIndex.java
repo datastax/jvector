@@ -164,7 +164,8 @@ interface MutableGraphIndex extends PersistableGraphIndex {
 
     /**
      * Signals that all mutations have been completed and the graph will not be mutated any further.
-     * Should be called by the builder after all mutations are completed (during cleanup).
+     * Should be called by the builder after all mutations are completed (during cleanup). Adding a
+     * node afterwards clears the signal again, until the next call.
      */
     void setAllMutationsCompleted();
 
