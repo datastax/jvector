@@ -207,7 +207,7 @@ public class IndexApiExample {
         Path workDir = Files.createTempDirectory("jvector-index-api-example");
         try {
             section1ApiTour(ds);
-            GraphIndex fullPrecisionGraph = section2FullPrecisionBuild(ds);
+            PersistableGraphIndex fullPrecisionGraph = section2FullPrecisionBuild(ds);
             PqBuild pqBuild = section3PqScoredBuild(ds);
             section4WriterTypes(ds, fullPrecisionGraph, workDir);
             section5NonFusedPq(ds, pqBuild, workDir);
@@ -291,11 +291,12 @@ public class IndexApiExample {
      * memtable index ({@code CassandraOnHeapGraph}) does, and what OpenSearch does for segments below
      * its quantization threshold ({@code JVectorWriter.quantizeForFlush}).
      */
-    private static GraphIndex section2FullPrecisionBuild(Dataset ds) throws IOException {
+    private static PersistableGraphIndex section2FullPrecisionBuild(Dataset ds) throws IOException {
         header("2. Full-precision build (exact scoring during construction)");
 
         long start = System.nanoTime();
-        GraphIndex graph = Indexes.hnswBuilder()
+        // build() returns PersistableGraphIndex: a GraphIndex that can also be written to disk (section 4).
+        PersistableGraphIndex graph = Indexes.hnswBuilder()
                 .withVectorValues(ds.ravv)                  // always required: drives insertion
                 .withSimilarityFunction(SIMILARITY_FUNCTION) // derives an exact BuildScoreProvider
                 .withMaxDegree(MAX_DEGREE)
@@ -328,20 +329,16 @@ public class IndexApiExample {
     private static void describe(Index index) throws IOException {
         System.out.printf("Generic handle: %s, %,d bytes on heap%n",
                 index.getClass().getSimpleName(), index.ramBytesUsed());
-        IndexSearcher searcher = index.searcher();
-        try {
+        // IndexSearcher is Closeable, so code that only holds an Index can still release the searcher
+        // (a GraphSearcher over an on-disk graph holds a file reader) without knowing the backing.
+        try (IndexSearcher searcher = index.searcher()) {
             if (index instanceof GraphIndex) {
                 GraphIndex graph = (GraphIndex) index;
-                System.out.printf("  narrowed to GraphIndex: dimension=%d, maxDegree=%d, hierarchical=%s%n",
-                        graph.getDimension(), graph.maxDegree(), graph.isHierarchical());
+                System.out.printf("  narrowed to GraphIndex: dimension=%d, maxDegree=%d, hierarchical=%s; searcher is a %s%n",
+                        graph.getDimension(), graph.maxDegree(), graph.isHierarchical(),
+                        searcher.getClass().getSimpleName());
             } else if (index instanceof IvfIndex) {
                 System.out.println("  narrowed to IvfIndex (unreachable until IVF exists)");
-            }
-        } finally {
-            // IndexSearcher is only a marker and is not Closeable, while GraphSearcher holds a View
-            // that must be closed; generic code has to narrow to release it.
-            if (searcher instanceof GraphSearcher) {
-                ((GraphSearcher) searcher).close();
             }
         }
     }
@@ -352,11 +349,11 @@ public class IndexApiExample {
 
     /** A graph built with PQ scoring, plus the codebook and codes used to build it. */
     private static final class PqBuild {
-        final GraphIndex graph;
+        final PersistableGraphIndex graph;
         final ProductQuantization pq;
         final PQVectors pqVectors;
 
-        PqBuild(GraphIndex graph, ProductQuantization pq, PQVectors pqVectors) {
+        PqBuild(PersistableGraphIndex graph, ProductQuantization pq, PQVectors pqVectors) {
             this.graph = graph;
             this.pq = pq;
             this.pqVectors = pqVectors;
@@ -382,7 +379,7 @@ public class IndexApiExample {
                 PQ_SUBSPACES, PQ_CLUSTERS, pq.compressedVectorSize(), DIMENSION * Float.BYTES);
 
         long start = System.nanoTime();
-        GraphIndex graph = Indexes.hnswBuilder()
+        PersistableGraphIndex graph = Indexes.hnswBuilder()
                 // Required by build() even with a score provider: it drives insertion (node count and
                 // the vector for each node). Callers that stream vectors in and never hold them all in
                 // one RandomAccessVectorValues -- Cassandra's CompactionGraph -- use buildMutable() with
@@ -444,16 +441,12 @@ public class IndexApiExample {
      * ordinals to row ids; the default compacts away deleted nodes), and {@code withVersion} to write
      * an older format for mixed-version clusters.
      */
-    private static void section4WriterTypes(Dataset ds, GraphIndex graph, Path workDir) throws IOException {
+    private static void section4WriterTypes(Dataset ds, PersistableGraphIndex persistable, Path workDir) throws IOException {
         header("4. Writer types (persisting an in-memory graph)");
 
-        // Indexes.hnswBuilder().build() is declared to return GraphIndex, but the getXWriterBuilder
-        // accessors live on PersistableGraphIndex (implemented by OnHeapGraphIndex and
-        // OnDiskGraphIndex), so persisting starts with a narrowing check.
-        if (!(graph instanceof PersistableGraphIndex)) {
-            throw new IllegalStateException("expected a persistable graph, got " + graph.getClass());
-        }
-        PersistableGraphIndex persistable = (PersistableGraphIndex) graph;
+        // The getXWriterBuilder accessors live on PersistableGraphIndex, implemented by OnHeapGraphIndex
+        // and OnDiskGraphIndex. Indexes.hnswBuilder().build() and MutableHnswIndex.graph() both return
+        // that type, so the result of a build can be written without a cast.
         EnumMap<FeatureId, IntFunction<Feature.State>> inlineVectors = Feature.singleStateFactory(
                 FeatureId.INLINE_VECTORS, node -> new InlineVectors.State(ds.ravv.getVector(node)));
 
@@ -501,7 +494,7 @@ public class IndexApiExample {
         // GraphIndexWriter return type would need a cast.
         Path embeddedPath = workDir.resolve("embedded.graph");
         byte[] prefix = "SAI-HEADER-STANDIN".getBytes(StandardCharsets.US_ASCII);
-        try (OnDiskGraphIndexWriter writer = new OnDiskGraphIndexWriter.Builder(graph, embeddedPath)
+        try (OnDiskGraphIndexWriter writer = new OnDiskGraphIndexWriter.Builder(persistable, embeddedPath)
                 .withStartOffset(prefix.length)
                 .withVersion(OnDiskGraphIndex.CURRENT_VERSION)
                 .with(new InlineVectors(DIMENSION))
@@ -564,7 +557,7 @@ public class IndexApiExample {
 
         Path graphPath = workDir.resolve("pq.graph");
         Path pqPath = workDir.resolve("pq.codes");
-        try (GraphIndexWriter writer = persistable(pqBuild.graph).getWriterBuilder(graphPath)
+        try (GraphIndexWriter writer = pqBuild.graph.getWriterBuilder(graphPath)
                 .with(new InlineVectors(DIMENSION))
                 .build()) {
             writer.write(Feature.singleStateFactory(FeatureId.INLINE_VECTORS,
@@ -613,7 +606,7 @@ public class IndexApiExample {
         Path graphPath = workDir.resolve("fused.graph");
         Path codebookPath = workDir.resolve("fused.codebook");
         try (GraphIndex.View view = pqBuild.graph.getView();
-             GraphIndexWriter writer = persistable(pqBuild.graph).getWriterBuilder(graphPath)
+             GraphIndexWriter writer = pqBuild.graph.getWriterBuilder(graphPath)
                      .with(new InlineVectors(DIMENSION))
                      .with(new FusedPQ(pqBuild.graph.maxDegree(), pqBuild.pq))
                      .build()) {
@@ -667,7 +660,7 @@ public class IndexApiExample {
         // --- Cassandra layout: NVQ + fused PQ, parallel writer ---
         Path cassandraPath = workDir.resolve("nvq-fused.graph");
         try (GraphIndex.View view = pqBuild.graph.getView();
-             GraphIndexWriter writer = persistable(pqBuild.graph).getParallelWriterBuilder(cassandraPath)
+             GraphIndexWriter writer = pqBuild.graph.getParallelWriterBuilder(cassandraPath)
                      .with(new NVQ(nvq))
                      .with(new FusedPQ(pqBuild.graph.maxDegree(), pqBuild.pq))
                      .build()) {
@@ -696,7 +689,7 @@ public class IndexApiExample {
         Path openSearchPath = workDir.resolve("nvq-seq.graph");
         Path auxPqPath = workDir.resolve("nvq-seq.auxpq");
         try (SimpleWriter out = new SimpleWriter(openSearchPath)) {
-            try (GraphIndexWriter writer = persistable(pqBuild.graph).getWriterBuilder(out)
+            try (GraphIndexWriter writer = pqBuild.graph.getWriterBuilder(out)
                     .with(new NVQ(nvqVectors.getNVQuantization()))
                     .build()) {
                 writer.write(Feature.singleStateFactory(FeatureId.NVQ_VECTORS,
@@ -746,12 +739,12 @@ public class IndexApiExample {
      * </ol>
      */
     @SuppressWarnings("deprecation") // OnHeapGraphIndex.save/load are @Deprecated @Experimental
-    private static void section8DiskToMemory(Dataset ds, GraphIndex fullPrecisionGraph, Path workDir) throws IOException {
+    private static void section8DiskToMemory(Dataset ds, PersistableGraphIndex fullPrecisionGraph, Path workDir) throws IOException {
         header("8. Disk to memory, and memory to disk");
 
         // --- (a) memory -> disk -> memory for search: compare what each representation keeps on heap
         Path searchPath = workDir.resolve("search.graph");
-        try (GraphIndexWriter writer = persistable(fullPrecisionGraph).getWriterBuilder(searchPath)
+        try (GraphIndexWriter writer = fullPrecisionGraph.getWriterBuilder(searchPath)
                 .with(new InlineVectors(DIMENSION))
                 .build()) {
             writer.write(Feature.singleStateFactory(FeatureId.INLINE_VECTORS,
@@ -766,7 +759,7 @@ public class IndexApiExample {
         // --- (b) memory -> disk -> mutable memory, then append (OpenSearch leading-segment merge)
         int baseCount = ds.ravv.size() * 3 / 4;
         var baseRavv = new ListRandomAccessVectorValues(ds.vectors.subList(0, baseCount), DIMENSION);
-        GraphIndex baseGraph = Indexes.hnswBuilder()
+        PersistableGraphIndex baseGraph = Indexes.hnswBuilder()
                 .withVectorValues(baseRavv)
                 .withSimilarityFunction(SIMILARITY_FUNCTION)
                 .withMaxDegree(MAX_DEGREE)
@@ -788,7 +781,7 @@ public class IndexApiExample {
         // vectors after them. OpenSearch has to remap here (its heap graph accumulates ordinal holes
         // from deletes); in this example the ordinals already line up.
         BuildScoreProvider bsp = BuildScoreProvider.randomAccessScoreProvider(ds.ravv, SIMILARITY_FUNCTION);
-        GraphIndex extended;
+        PersistableGraphIndex extended;
         try (ReaderSupplier rs = ReaderSupplierFactory.open(savedPath);
              var reader = rs.get()) {
             // load() requires the DiversityProvider used when mutating the graph. OpenSearch passes a
@@ -824,7 +817,7 @@ public class IndexApiExample {
 
         // ...and the extended graph is persistable like any other in-memory graph.
         Path extendedPath = workDir.resolve("extended.graph");
-        try (GraphIndexWriter writer = persistable(extended).getWriterBuilder(extendedPath)
+        try (GraphIndexWriter writer = extended.getWriterBuilder(extendedPath)
                 .with(new InlineVectors(DIMENSION))
                 .build()) {
             writer.write(Feature.singleStateFactory(FeatureId.INLINE_VECTORS,
@@ -1171,10 +1164,6 @@ public class IndexApiExample {
      */
     private static GraphIndex.ScoringView scoringView(GraphSearcher searcher) {
         return (GraphIndex.ScoringView) searcher.getView();
-    }
-
-    private static PersistableGraphIndex persistable(GraphIndex graph) {
-        return (PersistableGraphIndex) graph;
     }
 
     private static void report(String label, double recall) {

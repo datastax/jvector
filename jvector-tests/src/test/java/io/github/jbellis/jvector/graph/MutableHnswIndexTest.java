@@ -300,11 +300,11 @@ public class MutableHnswIndexTest extends RandomizedTest {
         var ravv = new ListRandomAccessVectorValues(createRandomVectors(n, DIMENSION), DIMENSION);
         var bsp = BuildScoreProvider.randomAccessScoreProvider(ravv, VSF);
 
-        MutableGraphIndex existing;
+        OnHeapGraphIndex existing;
         try (MutableHnswIndex index = configured().withScoreProvider(bsp).withDimension(DIMENSION).buildMutable()) {
             IntStream.range(0, base).parallel().forEach(i -> index.addNode(i, ravv.getVector(i)));
             index.cleanup();
-            existing = (MutableGraphIndex) index.graph();
+            existing = (OnHeapGraphIndex) index.graph();
         }
 
         // OpenSearch leading-segment merge: continue on the existing graph, add new nodes, delete some old ones.
@@ -341,7 +341,7 @@ public class MutableHnswIndexTest extends RandomizedTest {
         assertTrue(((OnHeapGraphIndex) frozen).allMutationsCompleted());
 
         try (MutableHnswIndex index = Indexes.hnswBuilder()
-                .withExistingGraph((MutableGraphIndex) frozen)
+                .withExistingGraph((OnHeapGraphIndex) frozen)
                 .withScoreProvider(bsp)
                 .withDimension(DIMENSION)
                 .withBeamWidth(50)

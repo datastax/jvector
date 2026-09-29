@@ -60,9 +60,9 @@ import java.util.concurrent.ForkJoinPool;
  * <ul>
  *     <li>{@link #withMaxDegree}/{@link #withMaxDegrees} + {@link #withAddHierarchy}, to build a
  *     new graph from scratch, or</li>
- *     <li>{@link #withExistingGraph}, to continue building on top of an already-loaded
- *     {@link MutableGraphIndex} (see {@link GraphIndexBuilder}'s {@code @Experimental} constructor
- *     of the same shape). In this case {@link #withVectorValues} must be a superset containing an
+ *     <li>{@link #withExistingGraph}, to continue building on top of an existing
+ *     {@link OnHeapGraphIndex}, typically one reloaded with {@code OnHeapGraphIndex.load} (see
+ *     {@link GraphIndexBuilder}'s {@code @Experimental} constructor of the same shape). In this case {@link #withVectorValues} must be a superset containing an
  *     entry for every ordinal already present in the existing graph (at the same ordinals) plus the
  *     new vectors to append; new nodes are inserted starting at the existing graph's
  *     {@link GraphIndex#getIdUpperBound()}.</li>
@@ -215,7 +215,7 @@ public class HnswIndexBuilder {
     }
 
     /**
-     * Continue building on top of an already-loaded {@link MutableGraphIndex} instead of creating
+     * Continue building on top of an existing {@link OnHeapGraphIndex} instead of creating
      * a new one. Mutually exclusive with {@link #withMaxDegree}/{@link #withMaxDegrees} and
      * {@link #withAddHierarchy}, which are ignored (and not required) when this is set, since the
      * existing graph already carries that information.
@@ -234,7 +234,7 @@ public class HnswIndexBuilder {
      * with. Either way, that provider must be able to score the new ordinals too, not only this
      * builder's score provider.
      */
-    public HnswIndexBuilder withExistingGraph(MutableGraphIndex existingGraph) {
+    public HnswIndexBuilder withExistingGraph(OnHeapGraphIndex existingGraph) {
         this.existingGraph = existingGraph;
         return this;
     }
@@ -259,11 +259,15 @@ public class HnswIndexBuilder {
      * {@link #withVectorValues} is inserted in parallel (on the {@link #withSimdExecutor SIMD
      * executor}), then the graph is cleaned up. With {@link #withExistingGraph}, only ordinals from
      * the existing graph's {@link GraphIndex#getIdUpperBound()} onwards are inserted.
+     * <p>
+     * Returns a {@link PersistableGraphIndex}, so the result can be written to disk with its
+     * {@code getWriterBuilder}/{@code getParallelWriterBuilder} accessors without a cast. It is still a
+     * {@link GraphIndex}, and assigning it to one is fine when persistence isn't needed.
      *
      * @throws IllegalStateException if a mutually-exclusive pair was over-specified, or if a
      * required value is missing; the message names every missing/conflicting value at once.
      */
-    public GraphIndex build() {
+    public PersistableGraphIndex build() {
         validate(true);
         int from = existingGraph == null ? 0 : existingGraph.getIdUpperBound();
         try (MutableHnswIndex index = newMutableIndex()) {

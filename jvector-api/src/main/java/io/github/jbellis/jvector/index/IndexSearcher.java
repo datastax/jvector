@@ -16,12 +16,18 @@
 
 package io.github.jbellis.jvector.index;
 
+import java.io.Closeable;
+
 /**
- * Marker interface for a backing's search entry point, returned by {@link Index#searcher()}.
+ * A backing's search entry point, returned by {@link Index#searcher()}.
  * Each backing (e.g. {@code GraphSearcher} for graph/HNSW indexes, {@code IvfSearcher} for IVF)
  * implements this with its own type-specific search options; a caller holding only {@link Index}
  * narrows to the backing's own index interface (e.g. {@code GraphIndex}) to recover the concrete
- * searcher type instead of casting this marker.
+ * searcher type instead of casting.
+ * <p>
+ * A searcher may hold resources (e.g. a graph searcher's view of an on-disk index holds a file
+ * reader), so it must be closed when no longer needed; being {@link Closeable} lets code holding
+ * only {@link Index} do that with try-with-resources, without knowing the backing.
  */
-public interface IndexSearcher {
+public interface IndexSearcher extends Closeable {
 }

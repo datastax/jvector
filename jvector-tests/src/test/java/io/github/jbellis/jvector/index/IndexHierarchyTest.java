@@ -20,11 +20,21 @@ import io.github.jbellis.jvector.TestUtil;
 import io.github.jbellis.jvector.graph.GraphIndex;
 import io.github.jbellis.jvector.graph.GraphSearcher;
 import io.github.jbellis.jvector.graph.ListRandomAccessVectorValues;
+import io.github.jbellis.jvector.graph.PersistableGraphIndex;
+import io.github.jbellis.jvector.graph.disk.GraphIndexWriter;
+import io.github.jbellis.jvector.graph.disk.OnDiskGraphIndex;
+import io.github.jbellis.jvector.graph.disk.feature.Feature;
+import io.github.jbellis.jvector.graph.disk.feature.FeatureId;
+import io.github.jbellis.jvector.graph.disk.feature.InlineVectors;
+import io.github.jbellis.jvector.disk.ReaderSupplier;
+import io.github.jbellis.jvector.disk.ReaderSupplierFactory;
 import io.github.jbellis.jvector.ivf.IvfIndexBuilder;
 import io.github.jbellis.jvector.vector.VectorSimilarityFunction;
 import io.github.jbellis.jvector.vector.types.VectorFloat;
 import org.junit.Test;
 
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.List;
 import java.util.Random;
 import java.util.stream.Collectors;
@@ -72,6 +82,48 @@ public class IndexHierarchyTest {
             // and Index itself still works as the generic, backing-agnostic handle.
             Index generic = index;
             assertTrue(generic instanceof GraphIndex);
+        }
+    }
+
+    @Test
+    public void builtGraphIsPersistableAndGenericSearchersAreCloseable() throws Exception {
+        var vectors = randomVectors(64, 8);
+        // build() returns PersistableGraphIndex, so the writer accessors need no cast.
+        PersistableGraphIndex graph = Indexes.hnswBuilder()
+                .withVectorValues(vectors)
+                .withSimilarityFunction(VectorSimilarityFunction.EUCLIDEAN)
+                .withMaxDegree(8)
+                .withBeamWidth(20)
+                .withNeighborOverflow(1.2f)
+                .withAlpha(1.2f)
+                .withAddHierarchy(false)
+                .build();
+
+        Path path = Files.createTempFile("index-hierarchy-test", ".graph");
+        try {
+            try (GraphIndexWriter writer = graph.getWriterBuilder(path)
+                    .with(new InlineVectors(vectors.dimension()))
+                    .build()) {
+                writer.write(Feature.singleStateFactory(FeatureId.INLINE_VECTORS,
+                        node -> new InlineVectors.State(vectors.getVector(node))));
+            }
+
+            try (ReaderSupplier rs = ReaderSupplierFactory.open(path);
+                 OnDiskGraphIndex onDisk = OnDiskGraphIndex.load(rs)) {
+                assertEquals(64, onDisk.size(0));
+
+                // Code holding only Index can close the searcher (here holding an on-disk view)
+                // without narrowing to GraphSearcher.
+                Index generic = onDisk;
+                IndexSearcher searcher;
+                try (IndexSearcher s = generic.searcher()) {
+                    searcher = s;
+                    assertTrue(s instanceof GraphSearcher);
+                }
+                assertTrue(searcher instanceof java.io.Closeable);
+            }
+        } finally {
+            Files.deleteIfExists(path);
         }
     }
 

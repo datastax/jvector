@@ -31,7 +31,8 @@ import io.github.jbellis.jvector.util.Accountable;
 public interface Index extends Accountable, AutoCloseable {
 
     /**
-     * Returns a new {@link IndexSearcher} of the type appropriate for this Index.
+     * Returns a new {@link IndexSearcher} of the type appropriate for this Index. The caller owns it
+     * and must close it, e.g. {@code try (IndexSearcher searcher = index.searcher()) { ... }}.
      */
     IndexSearcher searcher();
 }
