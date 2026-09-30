@@ -101,4 +101,92 @@ public class TestNeighbors extends RandomizedTest {
     assertEquals(2, neighbors.size());
   }
 
+
+  @Test
+  public void testConcurrentDuplicateOffersWithDifferentScores() throws Exception {
+    var bsp=BuildScoreProvider.randomAccessScoreProvider(new TestVectorGraph.CircularFloatVectorValues(32),VectorSimilarityFunction.DOT_PRODUCT);
+    var map=new ConcurrentNeighborMap(new VamanaDiversityProvider(bsp,1.2f),64,80);
+    map.addNode(0);
+    var pool=new java.util.concurrent.ForkJoinPool(8);
+    try {
+      pool.submit(() -> IntStream.range(0,2000).parallel().forEach(i -> map.insertEdge(0,1+i%20,i,1.2f))).join();
+    } finally {
+      pool.shutdown();
+      org.junit.Assert.assertTrue(pool.awaitTermination(10,java.util.concurrent.TimeUnit.SECONDS));
+    }
+    assertEquals(20,map.get(0).size());
+    var ids=new java.util.HashSet<Integer>();
+    for(int i=0;i<map.get(0).size();i++) org.junit.Assert.assertTrue(ids.add(map.get(0).getNode(i)));
+    validateSortedByScore(map.get(0));
+  }
+
+  @Test
+  public void testInitialCandidateBatchIsUnique() {
+    var bsp=BuildScoreProvider.randomAccessScoreProvider(new TestVectorGraph.CircularFloatVectorValues(32),VectorSimilarityFunction.DOT_PRODUCT);
+    var map=new ConcurrentNeighborMap(new VamanaDiversityProvider(bsp,1.2f),64,80);
+    map.addNode(0);
+    var candidates=new NodeArray(4);
+    candidates.addInOrder(1,10f); candidates.addInOrder(2,9f);
+    candidates.addInOrder(1,8f); candidates.addInOrder(2,7f);
+    var result=map.insertDiverse(0,candidates);
+    assertEquals(2,result.size());
+    org.junit.Assert.assertNotEquals(result.getNode(0),result.getNode(1));
+  }
+
+  @Test
+  public void testDuplicateOffersDoNotTriggerPruning() {
+    for (int degree : new int[] {2, 3, 32, 64, 128}) {
+      int hardMax = degree + degree / 2;
+      var prunes = new java.util.concurrent.atomic.AtomicInteger();
+      io.github.jbellis.jvector.graph.diversity.DiversityProvider diversity =
+          (neighbors, maxDegree, diverseBefore, selected) -> {
+            prunes.incrementAndGet();
+            for (int i = 0; i < Math.min(maxDegree, neighbors.size()); i++) selected.set(i);
+            return 1.0;
+          };
+      var map = new ConcurrentNeighborMap(diversity, degree, hardMax);
+      map.addNode(0);
+      for (int count = 1; count <= hardMax; count++) {
+        map.insertEdge(0, count, -count, 1.5f);
+        var before = map.get(0);
+        assertEquals(count, before.size());
+        for (int id = 1; id <= count; id++) {
+          for (float score : new float[] {-id, 1000f, -1000f}) {
+            // Also reject without pruning when the requested limit is below current size.
+            for (float overflow : new float[] {1.0f, 1.5f}) {
+              map.insertEdge(0, id, score, overflow);
+              org.junit.Assert.assertSame(before, map.get(0));
+              assertEquals(0, prunes.get());
+            }
+          }
+        }
+        for (int i = 0; i < count; i++) {
+          assertEquals(i + 1, before.getNode(i));
+          assertEquals(-(i + 1), before.getScore(i), 0f);
+        }
+      }
+
+      // A distinct insertion beyond the limit must still prune normally.
+      map.insertEdge(0, hardMax + 1, -(hardMax + 1), 1.5f);
+      assertEquals(1, prunes.get());
+      assertEquals(degree, map.get(0).size());
+      validateSortedByScore(map.get(0));
+
+      // Refill to the boundary: rejected duplicates must not prevent explicit cleanup.
+      for (int id = degree + 1; id <= hardMax; id++) {
+        map.insertEdge(0, id, -id, 1.5f);
+      }
+      var before = map.get(0);
+      map.insertEdge(0, 1, 1000f, 1.5f);
+      org.junit.Assert.assertSame(before, map.get(0));
+      assertEquals(1, prunes.get());
+      map.enforceDegree(0);
+      assertEquals(2, prunes.get());
+      assertEquals(degree, map.get(0).size());
+      for (int i = 0; i < degree; i++) {
+        assertEquals(i + 1, map.get(0).getNode(i));
+        assertEquals(-(i + 1), map.get(0).getScore(i), 0f);
+      }
+    }
+  }
 }
