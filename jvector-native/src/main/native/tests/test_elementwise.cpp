@@ -191,3 +191,26 @@ INSTANTIATE_TEST_SUITE_P(
     [](const ::testing::TestParamInfo<KernelTestParam>& info) {
         return info.param.description;
     });
+
+// ---------------------------------------------------------------------------
+// ISA-tier sanity test: active ISA must be a recognised tier name
+// ---------------------------------------------------------------------------
+
+TEST(IsaDispatch, ActiveIsaIsKnownTier)
+{
+    const char* active = jvector_simd_get_active_isa();
+    ASSERT_NE(active, nullptr) << "jvector_simd_get_active_isa() returned null";
+
+#if defined(__aarch64__)
+    static const char* kOrder[] = {"neon", "sve", "sve2"};
+    constexpr int kOrderLen = 3;
+#else
+    static const char* kOrder[] = {"sse42", "avx2", "avx3", "avx3_dl", "avx3_spr"};
+    constexpr int kOrderLen = 5;
+#endif
+    bool found = false;
+    for (int i = 0; i < kOrderLen; ++i)
+        if (std::strcmp(kOrder[i], active) == 0) { found = true; break; }
+
+    EXPECT_TRUE(found) << "Active ISA '" << active << "' is not a recognised tier";
+}
