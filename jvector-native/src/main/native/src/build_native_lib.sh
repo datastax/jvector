@@ -30,7 +30,10 @@ NATIVE_DIR="${REPO_ROOT}/jvector-native/src/main/native"
 MODULE_ROOT="${REPO_ROOT}/jvector-native"
 
 HIGHWAY_DIR="${NATIVE_DIR}/third_party/highway"
-RESOURCES_DIR="${MODULE_ROOT}/src/main/resources"
+# Drop the .so files into target/meson-build/ so that mvn clean removes them
+# along with every other build artefact, and Maven's resource plugin picks them
+# up from there instead of from src/main/resources/.
+RESOURCES_DIR="${MODULE_ROOT}/target/meson-build"
 
 if [ "$1" == "--auto-install-deps" ] ; then AUTO_INSTALL_DEPS=true ; shift ; fi
 printf "AUTO_INSTALL_DEPS=%s\n" "${AUTO_INSTALL_DEPS}"
@@ -52,6 +55,8 @@ CROSSARCH="${2:-false}"
 printf "CROSSARCH=%s\n" "${CROSSARCH}"
 
 mkdir -p "${RESOURCES_DIR}"
+# target/meson-build/ is under target/, which IS cleaned by mvn clean.
+# src/main/resources/ is intentionally NOT written to any more.
 
 # Check that the Google Highway submodule has been initialised
 if [ ! -f "${HIGHWAY_DIR}/hwy/highway.h" ]; then

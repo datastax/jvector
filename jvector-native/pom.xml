@@ -18,6 +18,18 @@
         <native.crossarch>false</native.crossarch>
     </properties>
     <build>
+        <!-- Pick up the .so files from target/meson-build/ so that mvn clean
+             removes stale libraries along with every other build artefact.
+             The build script no longer writes into src/main/resources/. -->
+        <resources>
+            <resource>
+                <directory>${project.build.directory}/meson-build</directory>
+                <includes>
+                    <include>libjvector-x86_64.so</include>
+                    <include>libjvector-aarch64.so</include>
+                </includes>
+            </resource>
+        </resources>
         <plugins>
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
