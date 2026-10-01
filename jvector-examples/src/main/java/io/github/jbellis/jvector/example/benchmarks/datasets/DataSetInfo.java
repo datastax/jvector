@@ -24,4 +24,7 @@ public interface DataSetInfo extends DataSetProperties {
     ///
     /// @return the ready-to-use {@link InMemoryDataSet}
     public InMemoryDataSet getDataSet();
+
+    /// @return a {@link DataSet} whose index vectors are backed by memory-mapped files.
+    public DataSet getMappedDataSet();
 }
