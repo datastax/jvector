@@ -43,7 +43,7 @@ public class DataSetUtils {
     /**
      * Processes a dataset using the configured load behavior from the dataset metadata.
      */
-    public static DataSet processDataSet(String pathStr,
+    public static InMemoryDataSet processDataSet(String pathStr,
                                          DataSetProperties props,
                                          List<VectorFloat<?>> baseVectors,
                                          List<VectorFloat<?>> queryVectors,
@@ -76,7 +76,7 @@ public class DataSetUtils {
         return legacyScrubDataSet(pathStr, vsf, baseVectors, queryVectors, groundTruth);
     }
 
-    private static DataSet legacyScrubDataSet(String pathStr,
+    private static InMemoryDataSet legacyScrubDataSet(String pathStr,
                                               VectorSimilarityFunction vsf,
                                               List<VectorFloat<?>> baseVectors,
                                               List<VectorFloat<?>> queryVectors,
