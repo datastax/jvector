@@ -484,6 +484,21 @@ public class ProductQuantization implements VectorCompressor<ByteSequence<?>>, A
         return clusterCount;
     }
 
+    /** Width of subspace {@code m}'s subvectors. */
+    public int getSubvectorSize(int m) {
+        return subvectorSizesAndOffsets[m][0];
+    }
+
+    /** Subspace {@code m}'s codebook: {@code clusterCount} contiguous subvectors. Read-only use. */
+    public VectorFloat<?> getCodebookVector(int m) {
+        return codebooks[m];
+    }
+
+    /** The global centroid subtracted before encoding, or {@code null} when not center-adjusted. */
+    public VectorFloat<?> getGlobalCentroid() {
+        return globalCentroid;
+    }
+
     static VectorFloat<?>[] createCodebooks(List<VectorFloat<?>> vectors, int[][] subvectorSizeAndOffset, int clusters, float anisotropicThreshold, ForkJoinPool simdExecutor) {
         int M = subvectorSizeAndOffset.length;
         Callable<VectorFloat<?>[]> callable = () -> IntStream.range(0, M).parallel().mapToObj(m -> {

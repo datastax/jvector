@@ -35,6 +35,10 @@ public final class CompactionContext {
     /** Parallel to {@link #sources}; {@code null} when no non-fused sidecar input is supplied. */
     public final List<CompressedVectors> sourceCompressed;
     public final List<FixedBitSet> liveNodes;
+    /**
+     * Output ordinal of every source node; {@code null} in the context a strategy is built from,
+     * set in the one {@code onRemappersUpdated} delivers once the compactor has assigned them.
+     */
     public final List<OrdinalMapper> remappers;
     public final int dimension;
     public final int maxOrdinal;
@@ -53,7 +57,7 @@ public final class CompactionContext {
         this.sources = Collections.unmodifiableList(sources);
         this.sourceCompressed = sourceCompressed == null ? null : Collections.unmodifiableList(sourceCompressed);
         this.liveNodes = Collections.unmodifiableList(liveNodes);
-        this.remappers = Collections.unmodifiableList(remappers);
+        this.remappers = remappers == null ? null : Collections.unmodifiableList(remappers);
         this.dimension = dimension;
         this.maxOrdinal = maxOrdinal;
         this.executor = executor;
