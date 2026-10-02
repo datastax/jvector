@@ -260,9 +260,10 @@ public class CompactorBenchmark {
     private Path tempDir;
     private List<Path> storagePaths;
     private List<Integer> vectorsPerSourceCount;
-    // compacted ordinal -> base-vector row, for the recall computation (the compactor assigns the
-    // output ordinals; the ground truth is in dataset rows); null when the searched index was built
-    private int[] compactedRow;
+    // the ground truth in the compacted graph's ordinals, for the recall computation (the
+    // compactor assigns the output ordinals, the dataset's ground truth names rows); null when
+    // the searched index was built from scratch, whose ordinals are already the dataset's rows
+    private List<? extends List<Integer>> compactedGroundTruth;
     private String resolvedVectorizationProvider;
 
     // Paths used during execution
@@ -704,8 +705,9 @@ public class CompactorBenchmark {
 
         long startNanos = System.nanoTime();
         compactor.compact(compactOutputPath);
-        compactedRow = baseRows(compactor.ordinalMappers(), graphs);
         long compactionTimeMs = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - startNanos);
+        compactedGroundTruth = groundTruth == null ? null
+                : groundTruthOrdinals(groundTruth, compactor.ordinalMappers(), graphs);
         log.info("Compacted {} partitions into {} in {} ms", numPartitions, compactOutputPath.toAbsolutePath(), compactionTimeMs);
         return compactionTimeMs;
     }
@@ -880,28 +882,35 @@ public class CompactorBenchmark {
     }
 
     /**
-     * Base-vector row of every compacted ordinal, for scoring against the dataset's ground truth:
-     * the compactor assigns the output ordinals, and partition {@code s} holds the rows that follow
-     * the rows of partitions {@code 0..s-1}.
+     * The ground truth, expressed in the compacted graph's ordinals. The compactor assigns the
+     * output ordinals, so the dataset rows named by the ground truth have to be translated before
+     * they can be compared with what a search returns; partition {@code s} holds the rows that
+     * follow the rows of partitions {@code 0..s-1}.
      */
-    static int[] baseRows(List<OrdinalMapper> mappers, List<OnDiskGraphIndex> partitions) {
-        int outputSize = 0;
-        for (var mapper : mappers) {
-            outputSize = Math.max(outputSize, mapper.maxOrdinal() + 1);
-        }
-        int[] rows = new int[outputSize];
-        int offset = 0;
+    static List<List<Integer>> groundTruthOrdinals(List<? extends List<Integer>> groundTruth,
+                                                   List<OrdinalMapper> mappers,
+                                                   List<OnDiskGraphIndex> partitions) {
+        int[] firstRow = new int[partitions.size() + 1];
         for (int s = 0; s < partitions.size(); s++) {
-            int size = partitions.get(s).size(0);
-            for (int old = 0; old < size; old++) {
-                int ordinal = mappers.get(s).oldToNew(old);
-                if (ordinal != OrdinalMapper.OMITTED) {
-                    rows[ordinal] = offset + old;
-                }
-            }
-            offset += size;
+            firstRow[s + 1] = firstRow[s] + partitions.get(s).size(0);
         }
-        return rows;
+        List<List<Integer>> translated = new ArrayList<>(groundTruth.size());
+        for (List<Integer> rows : groundTruth) {
+            List<Integer> ordinals = new ArrayList<>(rows.size());
+            for (int row : rows) {
+                if (row < 0 || row >= firstRow[partitions.size()]) {
+                    ordinals.add(OrdinalMapper.OMITTED);   // outside the partitioned rows
+                    continue;
+                }
+                int s = partitions.size() - 1;
+                while (s > 0 && row < firstRow[s]) {
+                    s--;
+                }
+                ordinals.add(mappers.get(s).oldToNew(row - firstRow[s]));
+            }
+            translated.add(ordinals);
+        }
+        return translated;
     }
 
     private SearchStats runRecall(Path indexPath) throws Exception {
@@ -935,8 +944,8 @@ public class CompactorBenchmark {
                 retrieved.add(result);
             }
 
-            double recall = AccuracyMetrics.recallFromSearchResults(groundTruth, retrieved, 10, 10,
-                    compactedRow == null ? i -> i : i -> compactedRow[i]);
+            double recall = AccuracyMetrics.recallFromSearchResults(
+                    compactedGroundTruth == null ? groundTruth : compactedGroundTruth, retrieved, 10, 10);
             SearchStats stats = SearchStats.from(recall, searchLatenciesNs);
             log.info("Recall [dataset={}, workloadMode={}, numPartitions={}, graphDegree={}, beamWidth={}, splitDistribution={}, indexPrecision={}, parallelWriteThreads={}, vectorizationProvider={}, datasetPortion={}]: {}, avgSearchLatencyMs={}, p99SearchLatencyMs={}",
                     datasetNames, workloadMode, numPartitions, graphDegree, beamWidth, splitDistribution, indexPrecision, parallelWriteThreads, resolvedVectorizationProvider, datasetPortion, recall, stats.avgSearchLatencyMs, stats.p99SearchLatencyMs);

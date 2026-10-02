@@ -170,7 +170,8 @@ public final class CompactionBench {
             long t0 = System.currentTimeMillis();
             compactor.compact(compactPath);
             long compactionMs = System.currentTimeMillis() - t0;
-            int[] compactedRow = baseRows(compactor.ordinalMappers(), graphs);
+            List<List<Integer>> compactedGt = ds.getGroundTruth() == null ? null
+                    : groundTruthOrdinals(ds.getGroundTruth(), compactor.ordinalMappers(), graphs);
             logger.info("Compaction [{} {}] finished in {} ms", datasetName, cfg.dirName(), compactionMs);
 
             for (var g : graphs) g.close();
@@ -179,7 +180,7 @@ public final class CompactionBench {
             rss.clear();
 
             // Search the compacted graph: measure recall and search latency in one pass.
-            SearchStats search = searchCompacted(compactPath, ds, compactedRow, vsf);
+            SearchStats search = searchCompacted(compactPath, ds, compactedGt, vsf);
             logger.info(String.format(
                     "%n" +
                     "  ┌─ Compaction result: %s [%s]%n" +
@@ -234,38 +235,46 @@ public final class CompactionBench {
     }
 
     /**
-     * Base-vector row of every compacted ordinal, for scoring against the dataset's ground truth:
-     * the compactor assigns the output ordinals, and partition {@code s} holds the rows that follow
-     * the rows of partitions {@code 0..s-1}.
+     * The ground truth, expressed in the compacted graph's ordinals. The compactor assigns the
+     * output ordinals, so the dataset rows named by the ground truth have to be translated before
+     * they can be compared with what a search returns; partition {@code s} holds the rows that
+     * follow the rows of partitions {@code 0..s-1}.
      */
-    static int[] baseRows(List<OrdinalMapper> mappers, List<OnDiskGraphIndex> partitions) {
-        int outputSize = 0;
-        for (var mapper : mappers) {
-            outputSize = Math.max(outputSize, mapper.maxOrdinal() + 1);
-        }
-        int[] rows = new int[outputSize];
-        int offset = 0;
+    static List<List<Integer>> groundTruthOrdinals(List<? extends List<Integer>> groundTruth,
+                                                   List<OrdinalMapper> mappers,
+                                                   List<OnDiskGraphIndex> partitions) {
+        int[] firstRow = new int[partitions.size() + 1];
         for (int s = 0; s < partitions.size(); s++) {
-            int size = partitions.get(s).size(0);
-            for (int old = 0; old < size; old++) {
-                int ordinal = mappers.get(s).oldToNew(old);
-                if (ordinal != OrdinalMapper.OMITTED) {
-                    rows[ordinal] = offset + old;
-                }
-            }
-            offset += size;
+            firstRow[s + 1] = firstRow[s] + partitions.get(s).size(0);
         }
-        return rows;
+        List<List<Integer>> translated = new ArrayList<>(groundTruth.size());
+        for (List<Integer> rows : groundTruth) {
+            List<Integer> ordinals = new ArrayList<>(rows.size());
+            for (int row : rows) {
+                if (row < 0 || row >= firstRow[partitions.size()]) {
+                    ordinals.add(OrdinalMapper.OMITTED);   // outside the partitioned rows
+                    continue;
+                }
+                int s = partitions.size() - 1;
+                while (s > 0 && row < firstRow[s]) {
+                    s--;
+                }
+                ordinals.add(mappers.get(s).oldToNew(row - firstRow[s]));
+            }
+            translated.add(ordinals);
+        }
+        return translated;
     }
 
     /**
      * Searches every query against the compacted graph, timing each search, and returns recall plus
      * mean and p99 per-query latency (ms) and throughput (queries/sec, single-threaded sequential).
      */
-    private static SearchStats searchCompacted(Path indexPath, DataSet ds, int[] compactedRow,
+    private static SearchStats searchCompacted(Path indexPath, DataSet ds,
+                                               List<? extends List<Integer>> compactedGt,
                                                VectorSimilarityFunction vsf) throws Exception {
         var queryVectors = ds.getQueryVectors();
-        var groundTruth = ds.getGroundTruth();
+        var groundTruth = compactedGt != null ? compactedGt : ds.getGroundTruth();
 
         try (var rs = ReaderSupplierFactory.open(indexPath)) {
             var graph = OnDiskGraphIndex.load(rs);
@@ -286,7 +295,7 @@ public final class CompactionBench {
                     totalNanos += elapsed;
                     results.add(result);
                 }
-                double recall = AccuracyMetrics.recallFromSearchResults(groundTruth, results, TOP_K, TOP_K, r -> compactedRow[r]);
+                double recall = AccuracyMetrics.recallFromSearchResults(groundTruth, results, TOP_K, TOP_K);
                 double meanLatencyMs = (totalNanos / (double) n) / 1_000_000.0;
                 double qps = totalNanos > 0 ? n / (totalNanos / 1_000_000_000.0) : 0.0;
 
