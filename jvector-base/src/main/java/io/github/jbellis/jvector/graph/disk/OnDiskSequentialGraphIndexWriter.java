@@ -17,8 +17,9 @@
 package io.github.jbellis.jvector.graph.disk;
 
 import io.github.jbellis.jvector.disk.IndexWriter;
-import io.github.jbellis.jvector.graph.ImmutableGraphIndex;
-import io.github.jbellis.jvector.graph.disk.feature.*;
+import io.github.jbellis.jvector.graph.GraphIndex;
+import io.github.jbellis.jvector.graph.disk.feature.Feature;
+import io.github.jbellis.jvector.graph.disk.feature.FeatureId;
 
 import java.io.IOException;
 import java.util.EnumMap;
@@ -56,7 +57,7 @@ public class OnDiskSequentialGraphIndexWriter extends AbstractGraphIndexWriter<I
 
     OnDiskSequentialGraphIndexWriter(IndexWriter out,
                                              int version,
-                                             ImmutableGraphIndex graph,
+                                             GraphIndex graph,
                                              OrdinalMapper oldToNewOrdinals,
                                              int dimension,
                                              EnumMap<FeatureId, Feature> features)
@@ -89,7 +90,7 @@ public class OnDiskSequentialGraphIndexWriter extends AbstractGraphIndexWriter<I
      * Builder for {@link OnDiskSequentialGraphIndexWriter}, with optional features.
      */
     public static class Builder extends AbstractGraphIndexWriter.Builder<OnDiskSequentialGraphIndexWriter, IndexWriter> {
-        public Builder(ImmutableGraphIndex graphIndex, IndexWriter out) {
+        public Builder(GraphIndex graphIndex, IndexWriter out) {
             super(graphIndex, out);
         }
 
@@ -97,6 +98,21 @@ public class OnDiskSequentialGraphIndexWriter extends AbstractGraphIndexWriter<I
         protected OnDiskSequentialGraphIndexWriter reallyBuild(int dimension) {
             return new OnDiskSequentialGraphIndexWriter(out, version, graphIndex, ordinalMapper, dimension, features);
 
+        }
+
+        @Override
+        public Builder withStartOffset(long offset) {
+            throw new UnsupportedOperationException("Sequential writing does not support setting the start offset");
+        }
+
+        @Override
+        public Builder withParallelWorkerThreads(int n) {
+            throw new UnsupportedOperationException("Sequential writing does not support parallel writing");
+        }
+
+        @Override
+        public Builder withParallelDirectBuffers(boolean useDirectBuffers) {
+            throw new UnsupportedOperationException("Sequential writing does not support parallel writing");
         }
     }
 }

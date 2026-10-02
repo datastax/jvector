@@ -24,9 +24,8 @@
 
 package io.github.jbellis.jvector.graph;
 
-import io.github.jbellis.jvector.graph.disk.OrdinalMapper;
+import io.github.jbellis.jvector.index.Index;
 import io.github.jbellis.jvector.graph.similarity.ScoreFunction;
-import io.github.jbellis.jvector.util.Accountable;
 import io.github.jbellis.jvector.util.Bits;
 import io.github.jbellis.jvector.vector.VectorSimilarityFunction;
 import io.github.jbellis.jvector.vector.types.VectorFloat;
@@ -47,7 +46,7 @@ import java.io.IOException;
  * All methods are threadsafe.  Operations that require persistent state are wrapped
  * in a View that should be created per accessing thread.
  */
-public interface ImmutableGraphIndex extends AutoCloseable, Accountable {
+public interface GraphIndex extends Index {
     /** Marks entry node as absent (fe, empty graph) */
     int ENTRY_NODE_ABSENT = -1;
 
@@ -76,6 +75,17 @@ public interface ImmutableGraphIndex extends AutoCloseable, Accountable {
      * View per search.
      */
     View getView();
+
+    /**
+     * Returns a new {@link GraphSearcher} over a fresh
+     * {@link #getView()} of this graph.
+     * <p>
+     * For in-memory graphs it is generally better to call this once per search rather than reusing
+     * an instance across concurrent searches, since {@link GraphSearcher} implementations are not thread-safe.
+     */
+    default GraphSearcher searcher() {
+        return new GraphSearcher(this);
+    }
 
     /**
      * @return the maximum number of edges per node across any layer
@@ -220,7 +230,7 @@ public interface ImmutableGraphIndex extends AutoCloseable, Accountable {
         ScoreFunction.ApproximateScoreFunction approximateScoreFunctionFor(VectorFloat<?> queryVector, VectorSimilarityFunction vsf);
     }
 
-    static String prettyPrint(ImmutableGraphIndex graph) {
+    static String prettyPrint(GraphIndex graph) {
         StringBuilder sb = new StringBuilder();
         sb.append(graph);
         sb.append("\n");

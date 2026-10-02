@@ -24,7 +24,7 @@ package io.github.jbellis.jvector.graph.disk;
  */
 public enum GraphIndexWriterTypes {
     /**
-     * Sequential on-disk writer optimized for write-once scenarios.
+     * Sequential on-disk writer ({@link OnDiskSequentialGraphIndexWriter}) optimized for write-once scenarios.
      * Writes all data sequentially without seeking back, making it suitable
      * for cloud storage or systems that optimize for sequential I/O.
      * Writes header as footer. Does not support incremental updates.
@@ -33,18 +33,19 @@ public enum GraphIndexWriterTypes {
     ON_DISK_SEQUENTIAL,
 
     /**
-     * Sequential on-disk writer that uses asynchronous I/O for improved throughput.
-     * Writes all data sequentially and is the current default implementation.
-     * Writes header as footer. Does not support incremental updates.
-     * Accepts any RandomAccessWriter.
+     * Single-threaded random-access writer ({@link OnDiskGraphIndexWriter}); the default for
+     * writing to a file. Writes a placeholder header, then the node records in ordinal order,
+     * then seeks back to fill in the header. Supports writing at a start offset within an existing
+     * file and writing individual nodes' inline features incrementally
+     * ({@code writeFeaturesInline}). Accepts any RandomAccessWriter.
      */
     RANDOM_ACCESS,
 
     /**
-     * Parallel on-disk writer that uses asynchronous I/O for improved throughput.
-     * Builds records in parallel across multiple threads and writes them
-     * asynchronously using AsynchronousFileChannel.
-     * Requires a Path to be provided for async file channel access.
+     * Parallel random-access writer ({@link OnDiskParallelGraphIndexWriter}). Builds node records
+     * in parallel across multiple threads and writes them asynchronously using
+     * AsynchronousFileChannel, which is worthwhile when feature encoding (e.g. NVQ) dominates write
+     * time. Requires a Path to be provided for async file channel access.
      */
     RANDOM_ACCESS_PARALLEL
 }

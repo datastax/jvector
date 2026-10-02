@@ -17,7 +17,8 @@
 package io.github.jbellis.jvector.graph.disk;
 
 import io.github.jbellis.jvector.disk.IndexWriter;
-import io.github.jbellis.jvector.graph.ImmutableGraphIndex;
+import io.github.jbellis.jvector.graph.GraphIndex;
+import io.github.jbellis.jvector.graph.PersistableGraphIndex;
 import io.github.jbellis.jvector.graph.disk.feature.Feature;
 import io.github.jbellis.jvector.graph.disk.feature.FeatureId;
 import io.github.jbellis.jvector.graph.disk.feature.InlineVectors;
@@ -50,7 +51,7 @@ public abstract class AbstractGraphIndexWriter<T extends IndexWriter> implements
     /** The total size of the footer. */
     public static final int FOOTER_SIZE = FOOTER_MAGIC_SIZE + FOOTER_OFFSET_SIZE;
     final int version;
-    final ImmutableGraphIndex graph;
+    final GraphIndex graph;
     final OrdinalMapper ordinalMapper;
     final int dimension;
     final Map<FeatureId, Feature> featureMap;
@@ -63,7 +64,7 @@ public abstract class AbstractGraphIndexWriter<T extends IndexWriter> implements
 
     AbstractGraphIndexWriter(T out,
                              int version,
-                             ImmutableGraphIndex graph,
+                             GraphIndex graph,
                              OrdinalMapper oldToNewOrdinals,
                              int dimension,
                              EnumMap<FeatureId, Feature> features)
@@ -127,7 +128,7 @@ public abstract class AbstractGraphIndexWriter<T extends IndexWriter> implements
      * if i &lt; j in `graph` then map[i] &lt; map[j] in the returned map.  "Holes" left by
      * deleted nodes are filled in by shifting down the new ordinals.
      */
-    public static Map<Integer, Integer> sequentialRenumbering(ImmutableGraphIndex graph) {
+    public static Map<Integer, Integer> sequentialRenumbering(GraphIndex graph) {
         try (var view = graph.getView()) {
             Int2IntHashMap oldToNewMap = new Int2IntHashMap(-1);
             int nextOrdinal = 0;
@@ -155,7 +156,7 @@ public abstract class AbstractGraphIndexWriter<T extends IndexWriter> implements
      * @param headerOffset the offset of the header in the slice
      * @throws IOException IOException
      */
-    void writeFooter(ImmutableGraphIndex.View view, long headerOffset, long startOffset) throws IOException {
+    void writeFooter(GraphIndex.View view, long headerOffset, long startOffset) throws IOException {
         graphIndexFormat.writeFooter(createContext(startOffset), headerOffset, out);
     }
 
@@ -166,11 +167,11 @@ public abstract class AbstractGraphIndexWriter<T extends IndexWriter> implements
      * @param startOffset the start offset
      * @throws IOException if an I/O error occurs
      */
-    protected synchronized void writeHeader(ImmutableGraphIndex.View view, long startOffset) throws IOException {
+    protected synchronized void writeHeader(GraphIndex.View view, long startOffset) throws IOException {
         graphIndexFormat.writeHeader(createContext(startOffset), out);
     }
 
-    void writeSparseLevels(ImmutableGraphIndex.View view, Map<FeatureId, IntFunction<Feature.State>> featureStateSuppliers, long startOffset) throws IOException {
+    void writeSparseLevels(GraphIndex.View view, Map<FeatureId, IntFunction<Feature.State>> featureStateSuppliers, long startOffset) throws IOException {
         graphIndexFormat.writeSparseLevels(createContext(startOffset), out, featureStateSuppliers);
     }
 
@@ -188,21 +189,52 @@ public abstract class AbstractGraphIndexWriter<T extends IndexWriter> implements
      * @param <K> the type of the writer to build
      * @param <T> the type of the output stream
      */
-    public abstract static class Builder<K extends AbstractGraphIndexWriter<T>, T extends IndexWriter> {
-        final ImmutableGraphIndex graphIndex;
+    public abstract static class Builder<K extends AbstractGraphIndexWriter<T>, T extends IndexWriter> implements PersistableGraphIndex.GraphIndexWriterBuilder {
+        final GraphIndex graphIndex;
         final EnumMap<FeatureId, Feature> features;
-        final T out;
+        /**
+         * The output the writer writes to. Set by the constructor when the caller supplies the output;
+         * otherwise opened by {@link #build()} with {@link #opener}, and null until then.
+         */
+        T out;
+        private final OutputOpener<T> opener;
         OrdinalMapper ordinalMapper;
         int version;
 
         /**
-         * Constructs a Builder.
+         * Opens the output for a builder that owns it, e.g. a file the builder was given by path.
+         *
+         * @param <T> the type of the output
+         */
+        @FunctionalInterface
+        protected interface OutputOpener<T> {
+            T open() throws IOException;
+        }
+
+        /**
+         * Constructs a Builder that writes to an output the caller supplies and owns.
          * @param graphIndex the graph index
          * @param out the output writer
          */
-        public Builder(ImmutableGraphIndex graphIndex, T out) {
+        public Builder(GraphIndex graphIndex, T out) {
+            this(graphIndex, out, null);
+        }
+
+        /**
+         * Constructs a Builder that opens its own output when {@link #build()} is called, so that a
+         * builder that is never built, or whose {@code build()} fails, leaves nothing open. The writer
+         * that {@code build()} returns owns the output and closes it.
+         * @param graphIndex the graph index
+         * @param opener opens the output
+         */
+        protected Builder(GraphIndex graphIndex, OutputOpener<T> opener) {
+            this(graphIndex, null, opener);
+        }
+
+        private Builder(GraphIndex graphIndex, T out, OutputOpener<T> opener) {
             this.graphIndex = graphIndex;
             this.out = out;
+            this.opener = opener;
             this.features = new EnumMap<>(FeatureId.class);
             this.version = OnDiskGraphIndex.CURRENT_VERSION;
         }
@@ -212,6 +244,7 @@ public abstract class AbstractGraphIndexWriter<T extends IndexWriter> implements
          * @param version the version
          * @return this builder
          */
+        @Override
         public Builder<K, T> withVersion(int version) {
             if (version > OnDiskGraphIndex.CURRENT_VERSION) {
                 throw new IllegalArgumentException("Unsupported version: " + version);
@@ -226,6 +259,7 @@ public abstract class AbstractGraphIndexWriter<T extends IndexWriter> implements
          * @param feature the feature
          * @return this builder
          */
+        @Override
         public Builder<K, T> with(Feature feature) {
             features.put(feature.id(), feature);
             return this;
@@ -236,6 +270,7 @@ public abstract class AbstractGraphIndexWriter<T extends IndexWriter> implements
          * @param ordinalMapper the ordinal mapper
          * @return this builder
          */
+        @Override
         public Builder<K, T> withMapper(OrdinalMapper ordinalMapper) {
             this.ordinalMapper = ordinalMapper;
             return this;
@@ -246,6 +281,7 @@ public abstract class AbstractGraphIndexWriter<T extends IndexWriter> implements
          * @return the writer
          * @throws IOException if an I/O error occurs
          */
+        @Override
         public K build() throws IOException {
             var format = GraphIndexFormatFactory.forVersion(version);
             for (var featureId : features.keySet()) {
@@ -272,7 +308,23 @@ public abstract class AbstractGraphIndexWriter<T extends IndexWriter> implements
             if (ordinalMapper == null) {
                 ordinalMapper = new OrdinalMapper.MapMapper(sequentialRenumbering(graphIndex));
             }
-            return reallyBuild(dimension);
+            if (opener == null) {
+                return reallyBuild(dimension);
+            }
+
+            // Open the output only now that the configuration is known to be valid, and close it again
+            // if the writer can't be created, since nothing else would.
+            out = opener.open();
+            try {
+                return reallyBuild(dimension);
+            } catch (IOException | RuntimeException | Error e) {
+                try {
+                    out.close();
+                } catch (IOException closeFailure) {
+                    e.addSuppressed(closeFailure);
+                }
+                throw e;
+            }
         }
 
         /**
@@ -288,6 +340,7 @@ public abstract class AbstractGraphIndexWriter<T extends IndexWriter> implements
          * @param oldToNewOrdinals the old to new ordinals map
          * @return this builder
          */
+        @Override
         public Builder<K, T> withMap(Map<Integer, Integer> oldToNewOrdinals) {
             return withMapper(new OrdinalMapper.MapMapper(oldToNewOrdinals));
         }

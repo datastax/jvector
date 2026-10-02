@@ -25,8 +25,12 @@
 package io.github.jbellis.jvector.graph;
 
 import io.github.jbellis.jvector.annotations.Experimental;
+import io.github.jbellis.jvector.disk.IndexWriter;
 import io.github.jbellis.jvector.disk.RandomAccessReader;
 import io.github.jbellis.jvector.graph.ConcurrentNeighborMap.Neighbors;
+import io.github.jbellis.jvector.graph.disk.OnDiskGraphIndexWriter;
+import io.github.jbellis.jvector.graph.disk.OnDiskParallelGraphIndexWriter;
+import io.github.jbellis.jvector.graph.disk.OnDiskSequentialGraphIndexWriter;
 import io.github.jbellis.jvector.graph.diversity.DiversityProvider;
 import io.github.jbellis.jvector.graph.similarity.ScoreFunction;
 import io.github.jbellis.jvector.util.Accountable;
@@ -39,7 +43,9 @@ import io.github.jbellis.jvector.util.ThreadSafeGrowableBitSet;
 import org.agrona.collections.IntArrayList;
 
 import java.io.DataOutput;
+import java.io.FileNotFoundException;
 import java.io.IOException;
+import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
@@ -52,7 +58,7 @@ import java.util.concurrent.locks.StampedLock;
 import java.util.stream.IntStream;
 
 /**
- * An {@link ImmutableGraphIndex} that offers concurrent access; for typical graphs you will get significant
+ * A {@link GraphIndex} that offers concurrent access; for typical graphs you will get significant
  * speedups in construction and searching as you add threads.
  *
  * <p>The base layer (layer 0) contains all nodes, while higher layers are stored in sparse maps.
@@ -159,6 +165,14 @@ public class OnHeapGraphIndex implements MutableGraphIndex {
     }
 
     public void addNode(int level, int node) {
+        // Adding a node is a mutation, so the graph is no longer complete. Clear the flag before the
+        // node becomes visible, so every View taken from now on is a ConcurrentGraphIndexView that hides
+        // incomplete nodes; a FrozenView would let an insert find its own half-added node as a neighbor.
+        // Views obtained while the graph was frozen should not be used across new insertions.
+        // Read first, so concurrent inserts don't all write the same volatile field.
+        if (allMutationsCompleted) {
+            allMutationsCompleted = false;
+        }
         ensureLayersExist(level);
 
         // add the node to each layer
@@ -395,6 +409,21 @@ public class OnHeapGraphIndex implements MutableGraphIndex {
         return allMutationsCompleted;
     }
 
+    @Override
+    public PersistableGraphIndex.GraphIndexWriterBuilder getParallelWriterBuilder(Path path) throws FileNotFoundException {
+        return new OnDiskParallelGraphIndexWriter.Builder(this, path);
+    }
+
+    @Override
+    public PersistableGraphIndex.GraphIndexWriterBuilder getWriterBuilder(Path path) throws FileNotFoundException {
+        return new OnDiskGraphIndexWriter.Builder(this, path);
+    }
+
+    @Override
+    public PersistableGraphIndex.GraphIndexWriterBuilder getWriterBuilder(IndexWriter out) {
+        return new OnDiskSequentialGraphIndexWriter.Builder(this, out);
+    }
+
     /**
      * A concurrent View of the graph that is safe to search concurrently with updates and with other
      * searches. The View provides a limited kind of snapshot isolation: only nodes completely added
@@ -532,6 +561,11 @@ public class OnHeapGraphIndex implements MutableGraphIndex {
         }
 
         out.writeInt(OnHeapGraphIndex.MAGIC); // the magic number
+        // TODO: replace the literal 4 here and in load() with a named constant. It is the version of this
+        //  save/load format (identified by MAGIC), not OnDiskGraphIndex's file-format version
+        //  (OnDiskGraphIndex.CURRENT_VERSION), and it has only ever had this one version. load() accepts
+        //  exactly 4, so changing the layout written below needs a new version and load() support for
+        //  both, or previously saved graphs can no longer be read.
         out.writeInt(4); // The version
 
         // Write graph-level properties.
@@ -579,6 +613,7 @@ public class OnHeapGraphIndex implements MutableGraphIndex {
         }
 
         int version = in.readInt(); // The version
+        // TODO: use the named constant for the save/load format version once it exists; see save().
         if (version != 4) {
             throw new IOException("Unsupported version: " + version);
         }
