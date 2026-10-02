@@ -128,6 +128,18 @@ public class RemappedPQVectors extends PQVectors {
     }
 
     @Override
+    public ScoreFunction.ApproximateScoreFunction precomputedScoreFunctionFor(VectorFloat<?> q, VectorSimilarityFunction similarityFunction) {
+        var sourceScoreFunction = source.precomputedScoreFunctionFor(q, similarityFunction);
+        return (newOrdinal) -> {
+            int oldOrdinal = mapper.newToOld(newOrdinal);
+            if (oldOrdinal >= 0 && oldOrdinal < source.count()) {
+                return sourceScoreFunction.similarityTo(oldOrdinal);
+            }
+            return 0.0f;
+        };
+    }
+
+    @Override
     public ScoreFunction.ApproximateScoreFunction scoreFunctionFor(VectorFloat<?> q, VectorSimilarityFunction similarityFunction) {
         var sourceScoreFunction = source.scoreFunctionFor(q, similarityFunction);
         return (newOrdinal) -> {
