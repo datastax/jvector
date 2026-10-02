@@ -94,7 +94,15 @@ final class ArrayVectorProvider implements VectorTypeSupport
     @Override
     public void writeByteSequence(IndexWriter out, ByteSequence<?> sequence) throws IOException
     {
-        ArrayByteSequence v = (ArrayByteSequence) sequence;
-        out.write(v.get());
+        if (sequence instanceof ArrayByteSequence) {
+            out.write(((ArrayByteSequence) sequence).get());
+        } else if (sequence instanceof ArraySliceByteSequence) {
+            ArraySliceByteSequence slice = (ArraySliceByteSequence) sequence;
+            out.write(slice.get(), slice.offset(), slice.length());
+        } else {
+            for (int i = 0; i < sequence.length(); i++) {
+                out.writeByte(sequence.get(i));
+            }
+        }
     }
 }

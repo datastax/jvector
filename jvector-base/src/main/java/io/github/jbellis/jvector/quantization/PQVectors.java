@@ -49,6 +49,11 @@ public abstract class PQVectors implements CompressedVectors {
         this.pq = pq;
     }
 
+    @Override
+    public RemappedPQVectors remap(int outputCount, io.github.jbellis.jvector.graph.disk.OrdinalMapper mapper) {
+        return new RemappedPQVectors(this, outputCount, mapper);
+    }
+
     public static ImmutablePQVectors load(RandomAccessReader in) throws IOException {
         // pq codebooks
         var pq = ProductQuantization.load(in);

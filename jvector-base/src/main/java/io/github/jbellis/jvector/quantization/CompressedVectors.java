@@ -66,4 +66,15 @@ public interface CompressedVectors extends Accountable {
 
     /** the number of vectors */
     int count();
+
+    /**
+     * Returns a view of these compressed vectors remapped to a new ordinal domain.
+     *
+     * @param outputCount the number of vectors in the remapped view
+     * @param mapper the OrdinalMapper defining new-to-old ordinal mappings
+     * @return a remapped CompressedVectors view
+     */
+    default CompressedVectors remap(int outputCount, io.github.jbellis.jvector.graph.disk.OrdinalMapper mapper) {
+        throw new UnsupportedOperationException("remap is not implemented for " + getClass().getName());
+    }
 }
