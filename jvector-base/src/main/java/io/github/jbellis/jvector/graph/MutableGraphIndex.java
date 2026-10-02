@@ -32,14 +32,13 @@ import java.util.stream.IntStream;
 
 
 /**
- * An {@link GraphIndex} that offers concurrent access; for typical graphs you will get significant
+ * A {@link GraphIndex} that offers concurrent access; for typical graphs you will get significant
  * speedups in construction and searching as you add threads.
  *
  * <p>The base layer (layer 0) contains all nodes, while higher layers are stored in sparse maps.
  * For searching, use a view obtained from {@link #getView()} which supports level–aware operations.
  */
-@SuppressWarnings("removal") // ImmutableGraphIndex is kept for source compatibility until its removal
-interface MutableGraphIndex extends PersistableGraphIndex, ImmutableGraphIndex {
+interface MutableGraphIndex extends PersistableGraphIndex {
     /**
      * Add the given node ordinal with an empty set of neighbors.
      *

@@ -19,7 +19,6 @@ package io.github.jbellis.jvector.graph.disk;
 import io.github.jbellis.jvector.disk.BufferedRandomAccessWriter;
 import io.github.jbellis.jvector.disk.RandomAccessWriter;
 import io.github.jbellis.jvector.graph.GraphIndex;
-import io.github.jbellis.jvector.graph.OnHeapGraphIndex;
 import io.github.jbellis.jvector.graph.disk.feature.Feature;
 import io.github.jbellis.jvector.graph.disk.feature.FeatureId;
 import io.github.jbellis.jvector.management.GraphIndexBuilderConfig;
@@ -152,8 +151,12 @@ public abstract class RandomAccessOnDiskGraphIndexWriter extends AbstractGraphIn
         private boolean parallelUseDirectBuffers = false;
         private ExecutorService parallelExecutor = null;
 
+        /**
+         * Writes to the file at {@code outPath}, which is opened (and created if needed) by
+         * {@link #build()}, not here; the writer that {@code build()} returns closes it.
+         */
         public Builder(GraphIndex graphIndex, Path outPath) throws FileNotFoundException {
-            super(graphIndex, new BufferedRandomAccessWriter(outPath));
+            super(graphIndex, () -> new BufferedRandomAccessWriter(outPath));
             this.filePath = outPath;
         }
 

@@ -21,7 +21,6 @@ import io.github.jbellis.jvector.disk.IndexWriter;
 import io.github.jbellis.jvector.disk.RandomAccessReader;
 import io.github.jbellis.jvector.disk.ReaderSupplier;
 import io.github.jbellis.jvector.graph.GraphIndex;
-import io.github.jbellis.jvector.graph.ImmutableGraphIndex;
 import io.github.jbellis.jvector.graph.NodesIterator;
 import io.github.jbellis.jvector.graph.PersistableGraphIndex;
 import io.github.jbellis.jvector.graph.RandomAccessVectorValues;
@@ -34,7 +33,6 @@ import io.github.jbellis.jvector.graph.disk.feature.InlineVectors;
 import io.github.jbellis.jvector.graph.disk.feature.NVQ;
 import io.github.jbellis.jvector.graph.disk.feature.SeparatedFeature;
 import io.github.jbellis.jvector.graph.similarity.ScoreFunction;
-import io.github.jbellis.jvector.util.Accountable;
 import org.agrona.collections.Int2ObjectHashMap;
 
 import java.io.FileNotFoundException;
@@ -70,8 +68,7 @@ import static io.github.jbellis.jvector.graph.disk.AbstractGraphIndexWriter.FOOT
  * This graph may be extended with additional features, which are stored inline in the graph and in headers.
  * At runtime, this class may choose the best way to use these features.
  */
-@SuppressWarnings("removal") // ImmutableGraphIndex is kept for source compatibility until its removal
-public class OnDiskGraphIndex implements PersistableGraphIndex, ImmutableGraphIndex, AutoCloseable, Accountable
+public class OnDiskGraphIndex implements PersistableGraphIndex
 {
     private static final Logger logger = LoggerFactory.getLogger(OnDiskGraphIndex.class);
     public static final int CURRENT_VERSION = 6;

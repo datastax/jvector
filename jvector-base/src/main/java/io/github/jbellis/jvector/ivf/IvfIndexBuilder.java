@@ -19,18 +19,21 @@ package io.github.jbellis.jvector.ivf;
 import io.github.jbellis.jvector.annotations.Experimental;
 import io.github.jbellis.jvector.graph.RandomAccessVectorValues;
 import io.github.jbellis.jvector.graph.similarity.BuildScoreProvider;
-import io.github.jbellis.jvector.index.IndexBuilderValidation;
 import io.github.jbellis.jvector.index.IvfRecipe;
 import io.github.jbellis.jvector.util.PhysicalCoreExecutor;
 import io.github.jbellis.jvector.vector.VectorSimilarityFunction;
 
+import java.util.ArrayList;
+import java.util.List;
 import java.util.concurrent.ForkJoinPool;
 
 /**
- * Fluent builder for an {@link IvfIndex}, mirroring {@code HnswIndexBuilder}'s shape.
+ * Fluent builder for an {@link IvfIndex}.
  * <p>
  * Only the construction inputs every backing needs are wired up so far &mdash; the vectors to
- * build from and how to score them, matching {@code HnswIndexBuilder} exactly. IVF's own
+ * build from and how to score them. Unlike {@code HnswIndexBuilder}, which takes these as
+ * arguments to {@code Indexes.hnswBuilder(...)}, they are still set here with {@code withXxx}
+ * methods and checked by {@link #build()}. IVF's own
  * construction parameters (e.g. {@code nlist}) are still being defined by the IVF design and are
  * deliberately not guessed at here; {@link #build()} refuses until they exist.
  */
@@ -100,6 +103,7 @@ public class IvfIndexBuilder {
      *
      * @throws UnsupportedOperationException always, until a recipe's values are defined
      */
+    @Experimental
     public IvfIndexBuilder applyRecipe(IvfRecipe recipe) {
         throw new UnsupportedOperationException(
                 "IvfRecipe." + recipe + " has no defined values yet");
@@ -116,13 +120,25 @@ public class IvfIndexBuilder {
      * backing implementation exist
      */
     public IvfIndex build() {
-        new IndexBuilderValidation()
-                .require("vectorValues", vectorValues)
-                .requireCondition("similarityFunction (or scoreProvider)",
-                        scoreProvider != null || similarityFunction != null)
-                .check(scoreProvider == null || similarityFunction == null,
-                        "Set either withScoreProvider() or withSimilarityFunction(), not both")
-                .throwIfAny("Cannot build IvfIndex");
+        List<String> missing = new ArrayList<>();
+        if (vectorValues == null) {
+            missing.add("vectorValues");
+        }
+        if (scoreProvider == null && similarityFunction == null) {
+            missing.add("similarityFunction (or scoreProvider)");
+        }
+        boolean conflicting = scoreProvider != null && similarityFunction != null;
+        if (!missing.isEmpty() || conflicting) {
+            StringBuilder message = new StringBuilder("Cannot build IvfIndex");
+            if (!missing.isEmpty()) {
+                message.append(", missing required value(s): ").append(String.join(", ", missing));
+            }
+            if (conflicting) {
+                message.append(missing.isEmpty() ? ": " : "; ")
+                        .append("Set either withScoreProvider() or withSimilarityFunction(), not both");
+            }
+            throw new IllegalStateException(message.toString());
+        }
 
         throw new UnsupportedOperationException(
                 "IVF construction is not yet implemented: its construction parameters and backing "

@@ -58,7 +58,7 @@ import java.util.concurrent.locks.StampedLock;
 import java.util.stream.IntStream;
 
 /**
- * An {@link GraphIndex} that offers concurrent access; for typical graphs you will get significant
+ * A {@link GraphIndex} that offers concurrent access; for typical graphs you will get significant
  * speedups in construction and searching as you add threads.
  *
  * <p>The base layer (layer 0) contains all nodes, while higher layers are stored in sparse maps.
@@ -169,7 +169,10 @@ public class OnHeapGraphIndex implements MutableGraphIndex {
         // node becomes visible, so every View taken from now on is a ConcurrentGraphIndexView that hides
         // incomplete nodes; a FrozenView would let an insert find its own half-added node as a neighbor.
         // Views obtained while the graph was frozen should not be used across new insertions.
-        allMutationsCompleted = false;
+        // Read first, so concurrent inserts don't all write the same volatile field.
+        if (allMutationsCompleted) {
+            allMutationsCompleted = false;
+        }
         ensureLayersExist(level);
 
         // add the node to each layer

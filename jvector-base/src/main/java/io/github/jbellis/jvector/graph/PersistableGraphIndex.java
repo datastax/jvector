@@ -46,15 +46,14 @@ import java.util.Map;
  *     or cloud object storage.</li>
  * </ul>
  * <p>
- * {@link MutableGraphIndex} extends this interface, so an on-heap graph is persistable at any
- * point during construction.
+ * The graph a {@link GraphIndexBuilder} or {@link HnswIndexBuilder} builds implements this interface,
+ * so it is persistable at any point during construction.
+ * <p>
+ * The {@code Path} accessors don't open the file: the writer builder's {@code build()} opens it, and
+ * the {@link GraphIndexWriter} it returns closes it. A writer builder that is never built, or whose
+ * {@code build()} fails, leaves no file open.
  */
 public interface PersistableGraphIndex extends GraphIndex {
-
-    // TODO: the Path accessors below open the output file as soon as they are called (the writer
-    //  builders' constructors create a BufferedRandomAccessWriter), not when build() is called. A builder
-    //  that is abandoned without build() therefore leaks the file handle, since only the built
-    //  GraphIndexWriter closes it. Defer opening the file to build(), or make the builder closeable.
 
     /**
      * Returns a {@link GraphIndexWriterBuilder} that writes this graph to {@code path} with the parallel

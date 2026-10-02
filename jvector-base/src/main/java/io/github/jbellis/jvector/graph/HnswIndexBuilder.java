@@ -17,139 +17,111 @@
 package io.github.jbellis.jvector.graph;
 
 import io.github.jbellis.jvector.annotations.Experimental;
+import io.github.jbellis.jvector.disk.RandomAccessReader;
 import io.github.jbellis.jvector.graph.similarity.BuildScoreProvider;
+import io.github.jbellis.jvector.graph.similarity.SearchScoreProvider;
 import io.github.jbellis.jvector.index.HnswRecipe;
-import io.github.jbellis.jvector.index.IndexBuilderValidation;
+import io.github.jbellis.jvector.management.CompressionType;
 import io.github.jbellis.jvector.util.PhysicalCoreExecutor;
-import io.github.jbellis.jvector.vector.VectorSimilarityFunction;
+import io.github.jbellis.jvector.vector.types.VectorFloat;
 
+import java.io.Closeable;
 import java.io.IOException;
-import java.io.UncheckedIOException;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.ForkJoinPool;
+import java.util.stream.IntStream;
 
 /**
- * Fluent, validating builder for graph/HNSW indexes, with two ways to finish:
+ * Fluent builder for graph/HNSW indexes. Obtain one from {@code Indexes.hnswBuilder(...)}, which picks
+ * the concrete subclass from how scoring is supplied:
  * <ul>
- *     <li>{@link #build()} inserts every vector in {@link #withVectorValues} in one parallel batch
- *     and returns the finished {@link GraphIndex}.</li>
- *     <li>{@link #buildMutable()} returns an empty (or {@link #withExistingGraph existing}) graph
- *     wrapped in a {@link MutableHnswIndex}, which the caller adds nodes to one at a time,
- *     concurrently, while searching it &mdash; and can mark nodes deleted and rescore mid-build.</li>
+ *     <li>{@code Indexes.hnswBuilder(RandomAccessVectorValues, VectorSimilarityFunction)} returns a
+ *     {@link RavvHnswBuilder}, which derives the build score provider from the vectors, optionally
+ *     compressing them first (see {@link #withCompressionType}).</li>
+ *     <li>{@code Indexes.hnswBuilder(BuildScoreProvider, int)} returns a {@link ScoreProviderHnswBuilder},
+ *     which uses the given score provider as is.</li>
  * </ul>
- * {@link GraphIndexBuilder} itself keeps its telescoping constructors and {@code final} fields
- * unchanged; this class only collects configuration via chainable {@code withXxx} methods,
- * applies the same default values that {@link GraphIndexBuilder}'s convenience constructors do,
- * and validates that everything required is present before delegating to the appropriate
- * {@link GraphIndexBuilder} constructor.
+ * Every parameter starts at the same default {@link GraphIndexBuilder}'s convenience constructors use
+ * (and that {@link HnswRecipe#DEFAULT} restates), so only the ones that differ need to be set.
  * <p>
- * Scoring is supplied in one of two mutually exclusive ways, mirroring {@link GraphIndexBuilder}'s
- * own constructor overloads:
- * <ul>
- *     <li>{@link #withVectorValues} + {@link #withSimilarityFunction}, in which case a score
- *     provider performing exact comparisons is derived automatically (dimension is also derived
- *     automatically), or</li>
- *     <li>{@link #withScoreProvider}, to score with something other than exact comparison against
- *     the raw vectors (e.g. a PQ/BQ-compressed provider). Dimension is derived from
- *     {@link #withVectorValues} if set, otherwise it must be given with {@link #withDimension}.</li>
- * </ul>
- * {@link #build()} always requires {@link #withVectorValues}, because it is what drives the batch
- * insert loop (both the number of nodes and the vector for each one). {@link #buildMutable()} only
- * needs it for {@link #withSimilarityFunction}; with {@link #withScoreProvider} the caller supplies
- * each vector to {@link MutableHnswIndex#addNode} instead.
- * Similarly, two mutually exclusive ways to supply the graph shape are accepted:
- * <ul>
- *     <li>{@link #withMaxDegree}/{@link #withMaxDegrees} + {@link #withAddHierarchy}, to build a
- *     new graph from scratch, or</li>
- *     <li>{@link #withExistingGraph}, to continue building on top of an existing
- *     {@link OnHeapGraphIndex}, typically one reloaded with {@code OnHeapGraphIndex.load} (see
- *     {@link GraphIndexBuilder}'s {@code @Experimental} constructor of the same shape). In this case {@link #withVectorValues} must be a superset containing an
- *     entry for every ordinal already present in the existing graph (at the same ordinals) plus the
- *     new vectors to append; new nodes are inserted starting at the existing graph's
- *     {@link GraphIndex#getIdUpperBound()}.</li>
- * </ul>
+ * The simplest use builds and populates a complete graph in one call; every setting has a default:
+ * <pre>{@code
+ * PersistableGraphIndex graph = Indexes.hnswBuilder(ravv, VectorSimilarityFunction.COSINE)
+ *         .withCompressionType(CompressionType.PQ)   // optional: build with PQ-compressed scores
+ *         .buildAndPopulate();
+ * }</pre>
+ * For more control, {@link #build()} creates the underlying {@link GraphIndexBuilder} on its first
+ * call and returns its graph, which is still empty (or, with {@link #withExistingGraph}, holds only the
+ * existing nodes); later calls return the same graph. Populate it either all at once with
+ * {@link #populateGraph}, or incrementally with {@link #addGraphNode}, which is thread-safe and may run
+ * concurrently with searches; call {@link #cleanup()} once incremental inserts and deletes are
+ * finished. The {@code withXxx} settings must be made before the underlying builder is created;
+ * changing them afterwards has no effect on it.
+ * <p>
+ * The methods that delegate to the underlying {@link GraphIndexBuilder} ({@link #populateGraph},
+ * {@link #addGraphNode}, {@link #markNodeDeleted}, {@link #cleanup}, {@link #removeDeletedNodes} and
+ * {@link #load}) call {@link #build()} first if it has not been called yet. The two queries,
+ * {@link #insertsInProgress} and {@link #ramBytesUsed}, don't: before the graph is built they return 0.
+ * <p>
+ * Subclasses supply the underlying builder by implementing {@link #createGraphBuilder()}.
+ * <p>
+ * Close the builder when finished with it, to release the per-thread scratch space the underlying
+ * builder caches for each thread that inserts; see {@link #close()}.
  */
-public class HnswIndexBuilder {
-    private BuildScoreProvider scoreProvider;
-    private RandomAccessVectorValues vectorValues;
-    private VectorSimilarityFunction similarityFunction;
-    private Integer dimension;
-    private List<Integer> maxDegrees;
-    private Integer beamWidth;
-    private Float neighborOverflow;
-    private Float alpha;
-    private Boolean addHierarchy;
-    private MutableGraphIndex existingGraph;
+public abstract class HnswIndexBuilder implements Closeable {
+    // Graph shape and tuning settings shared by every subclass. How vectors are scored (and the
+    // dimension) is the subclasses' business. Package-private, not private, for the subclasses,
+    // rescore() and the tests in this package.
+    List<Integer> maxDegrees = List.of(32);
+    int beamWidth = 100;
+    float neighborOverflow = 1.2f;
+    float alpha = 1.2f;
+    boolean addHierarchy = true;
+    boolean refineFinalGraph = true;
+    ForkJoinPool simdExecutor = PhysicalCoreExecutor.pool();
+    ForkJoinPool parallelExecutor = ForkJoinPool.commonPool();
+    MutableGraphIndex existingGraph;
+    // Whether withMaxDegree(s)/withAddHierarchy were called, as opposed to holding their defaults or a
+    // recipe's values; setting them explicitly conflicts with withExistingGraph.
+    private boolean maxDegreesSet;
+    private boolean addHierarchySet;
+    /** Created once, by the first {@link #build()} (or delegating method) call; see {@code graphBuilder()}. */
+    volatile GraphIndexBuilder graphBuilder;
 
-    // Defaults matching GraphIndexBuilder's convenience constructors.
-    private boolean refineFinalGraph = true;
-    private ForkJoinPool simdExecutor = PhysicalCoreExecutor.pool();
-    private ForkJoinPool parallelExecutor = ForkJoinPool.commonPool();
-
-    public HnswIndexBuilder() {
+    /**
+     * Package-private so that {@link RavvHnswBuilder} and {@link ScoreProviderHnswBuilder} are the only
+     * subclasses. Obtain a builder from {@code Indexes.hnswBuilder(...)}.
+     */
+    HnswIndexBuilder() {
     }
 
     /**
-     * Supplies the score provider directly, for scoring that is not a plain exact comparison of
-     * the raw vectors (e.g. a PQ/BQ-compressed provider). Mutually exclusive with
-     * {@link #withSimilarityFunction}. {@link #build()} still requires {@link #withVectorValues}
-     * alongside this, since it is what is iterated to drive node insertion, independent of how those
-     * nodes are scored. {@link #buildMutable()} does not: the caller passes each vector to
-     * {@link MutableHnswIndex#addNode}, and {@link #withDimension} supplies the dimension.
+     * The compression to apply to the vectors before building, so the graph is built with
+     * compressed (approximate) scores. Defaults to {@link CompressionType#NONE}. Only
+     * {@link RavvHnswBuilder} supports it; {@link ScoreProviderHnswBuilder} logs a warning and
+     * ignores it, since its score provider is fixed.
      */
-    public HnswIndexBuilder withScoreProvider(BuildScoreProvider scoreProvider) {
-        this.scoreProvider = scoreProvider;
-        return this;
-    }
+    public abstract HnswIndexBuilder withCompressionType(CompressionType compressionType);
 
-    /**
-     * Supplies the vectors to build the graph from. Required by {@link #build()}, which iterates it to
-     * drive node insertion (both the node count and the vector for each node), regardless of which
-     * scoring option is used. Required by {@link #buildMutable()} only together with
-     * {@link #withSimilarityFunction}. Dimension is derived from this automatically.
-     * <p>
-     * Pair with {@link #withSimilarityFunction} for a score provider performing exact comparisons
-     * against these vectors, or with {@link #withScoreProvider} to score some other way (in which
-     * case these vectors are only used to drive insertion, not to compute scores).
-     */
-    public HnswIndexBuilder withVectorValues(RandomAccessVectorValues vectorValues) {
-        this.vectorValues = vectorValues;
-        return this;
-    }
-
-    /**
-     * The similarity metric to use during construction, used to derive a score provider that
-     * performs exact comparisons against {@link #withVectorValues}. Mutually exclusive with
-     * {@link #withScoreProvider}.
-     */
-    public HnswIndexBuilder withSimilarityFunction(VectorSimilarityFunction similarityFunction) {
-        this.similarityFunction = similarityFunction;
-        return this;
-    }
-
-    /**
-     * The vector dimension. Required only by {@link #buildMutable()} with {@link #withScoreProvider}
-     * and no {@link #withVectorValues}; otherwise it is derived from {@link #withVectorValues}, and
-     * setting it is only a cross-check &mdash; building throws if it disagrees with
-     * {@code withVectorValues().dimension()}.
-     */
-    public HnswIndexBuilder withDimension(int dimension) {
-        this.dimension = dimension;
-        return this;
+    /** The compression this builder will apply; {@link CompressionType#NONE} unless the subclass supports it. */
+    CompressionType compressionType() {
+        return CompressionType.NONE;
     }
 
     /** Sets a single max degree for all layers. Equivalent to {@code withMaxDegrees(List.of(maxDegree))}. */
     public HnswIndexBuilder withMaxDegree(int maxDegree) {
-        this.maxDegrees = List.of(maxDegree);
-        return this;
+        return withMaxDegrees(List.of(maxDegree));
     }
 
     /**
      * The maximum number of connections a node can have in each layer; if fewer entries are
      * specified than the number of layers, the last entry is used for all remaining layers.
+     * Defaults to {@code [32]}. Must not be set together with {@link #withExistingGraph}.
      */
     public HnswIndexBuilder withMaxDegrees(List<Integer> maxDegrees) {
         this.maxDegrees = maxDegrees;
+        this.maxDegreesSet = true;
         return this;
     }
 
@@ -179,12 +151,12 @@ public class HnswIndexBuilder {
     }
 
     /**
-     * Whether to add an HNSW-style hierarchy on top of the Vamana index. Required when building a
-     * new graph; must not be set together with {@link #withExistingGraph}, whose hierarchy is
-     * already fixed.
+     * Whether to add an HNSW-style hierarchy on top of the Vamana index. Defaults to {@code true}.
+     * Must not be set together with {@link #withExistingGraph}, whose hierarchy is already fixed.
      */
     public HnswIndexBuilder withAddHierarchy(boolean addHierarchy) {
         this.addHierarchy = addHierarchy;
+        this.addHierarchySet = true;
         return this;
     }
 
@@ -217,24 +189,13 @@ public class HnswIndexBuilder {
     }
 
     /**
-     * Continue building on top of an existing {@link OnHeapGraphIndex} instead of creating
-     * a new one. Mutually exclusive with {@link #withMaxDegree}/{@link #withMaxDegrees} and
-     * {@link #withAddHierarchy}: the existing graph already carries that information, so setting
-     * them as well is reported as a conflict.
-     * <p>
-     * The nodes already in {@code existingGraph} are <b>not</b> re-inserted, and the score provider
-     * must cover their ordinals as well as the new ones. With {@link #build()},
-     * {@link #withVectorValues} must be a superset RAVV: ordinals {@code [0, existingGraph.getIdUpperBound())}
-     * must line up with the vectors already in the graph, and the remaining ordinals
-     * {@code [existingGraph.getIdUpperBound(), vectorValues.size())} are the new vectors that get
-     * appended. With {@link #buildMutable()}, the caller adds the new nodes itself, typically starting
-     * at {@code existingGraph.getIdUpperBound()}.
-     * <p>
-     * The existing graph keeps the {@code DiversityProvider} it was created with, which prunes each new
-     * node's neighbors: for a graph loaded with {@code OnHeapGraphIndex.load}, the one passed to
-     * {@code load}; for a graph built in this process, one derived from the score provider it was built
-     * with. Either way, that provider must be able to score the new ordinals too, not only this
-     * builder's score provider.
+     * Continue building on top of an existing graph, typically one reloaded with
+     * {@code OnHeapGraphIndex.load}, instead of starting from an empty one. The existing graph is
+     * mutated in place. Its max degrees and hierarchy are kept, so {@link #withMaxDegree},
+     * {@link #withMaxDegrees} and {@link #withAddHierarchy} must not also be called: if they are,
+     * building throws {@link IllegalStateException}. (Values set by {@link #applyRecipe} do not
+     * conflict; the existing graph's take precedence.) New nodes should be added at ordinals from
+     * {@link GraphIndex#getIdUpperBound()} onward.
      */
     public HnswIndexBuilder withExistingGraph(OnHeapGraphIndex existingGraph) {
         this.existingGraph = existingGraph;
@@ -242,157 +203,296 @@ public class HnswIndexBuilder {
     }
 
     /**
-     * Pre-sets this builder's fixed fields to the given recipe's recommended values, leaving the
-     * recipe's free parameters (e.g. {@code dimensions}) for the caller to still supply.
+     * Pre-sets this builder's fields to the given recipe's recommended values, looking each one up
+     * by its {@link HnswRecipe.Param} name. Parameters the recipe doesn't set are left unchanged, and
+     * any {@code withXxx} call made after this overrides the recipe's value.
      * <p>
-     * Scaffolding only: the recipes' actual fixed-value formulas haven't been decided yet, so
-     * every {@link HnswRecipe} currently refuses here rather than guess at numbers.
+     * Only {@link HnswRecipe#DEFAULT} is defined so far; it restates the defaults this builder
+     * already starts with.
      *
-     * @throws UnsupportedOperationException always, until a recipe's values are defined
+     * @throws UnsupportedOperationException if the recipe has no defined values yet
      */
     @Experimental
     public HnswIndexBuilder applyRecipe(HnswRecipe recipe) {
-        throw new UnsupportedOperationException(
-                "HnswRecipe." + recipe + " has no defined values yet");
-    }
-
-    /**
-     * Validates that all required configuration has been supplied, builds the corresponding
-     * {@link GraphIndexBuilder}, and drives it to completion: every vector in
-     * {@link #withVectorValues} is inserted in parallel (on the {@link #withSimdExecutor SIMD
-     * executor}), then the graph is cleaned up. With {@link #withExistingGraph}, only ordinals from
-     * the existing graph's {@link GraphIndex#getIdUpperBound()} onwards are inserted.
-     * <p>
-     * Returns a {@link PersistableGraphIndex}, so the result can be written to disk with its
-     * {@code getWriterBuilder}/{@code getParallelWriterBuilder} accessors without a cast. It is still a
-     * {@link GraphIndex}, and assigning it to one is fine when persistence isn't needed.
-     *
-     * @throws IllegalStateException if any value is missing, out of range, or in conflict with
-     * another setting; the message names every problem at once.
-     */
-    public PersistableGraphIndex build() {
-        validate(true);
-        int from = existingGraph == null ? 0 : existingGraph.getIdUpperBound();
-        try (MutableHnswIndex index = newMutableIndex()) {
-            index.addAllAndCleanup(vectorValues, from, simdExecutor);
-            return index.graph();
-        } catch (IOException e) {
-            throw new UncheckedIOException(e);
+        if (!recipe.isDefined()) {
+            throw new UnsupportedOperationException(
+                    "HnswRecipe." + recipe + " has no defined values yet");
         }
+        if (recipe.has(HnswRecipe.Param.COMPRESSION_TYPE)) {
+            CompressionType type = CompressionType.valueOf(recipe.get(HnswRecipe.Param.COMPRESSION_TYPE));
+            // only go through the subclass when it changes something, so e.g. ScoreProviderHnswBuilder
+            // doesn't warn about a recipe that just restates NONE
+            if (type != compressionType()) {
+                withCompressionType(type);
+            }
+        }
+        if (recipe.has(HnswRecipe.Param.MAX_DEGREES)) {
+            maxDegrees = recipe.get(HnswRecipe.Param.MAX_DEGREES);
+        }
+        if (recipe.has(HnswRecipe.Param.BEAM_WIDTH)) {
+            beamWidth = recipe.get(HnswRecipe.Param.BEAM_WIDTH);
+        }
+        if (recipe.has(HnswRecipe.Param.NEIGHBOR_OVERFLOW)) {
+            neighborOverflow = recipe.get(HnswRecipe.Param.NEIGHBOR_OVERFLOW);
+        }
+        if (recipe.has(HnswRecipe.Param.ALPHA)) {
+            alpha = recipe.get(HnswRecipe.Param.ALPHA);
+        }
+        if (recipe.has(HnswRecipe.Param.ADD_HIERARCHY)) {
+            addHierarchy = recipe.get(HnswRecipe.Param.ADD_HIERARCHY);
+        }
+        if (recipe.has(HnswRecipe.Param.REFINE_FINAL_GRAPH)) {
+            refineFinalGraph = recipe.get(HnswRecipe.Param.REFINE_FINAL_GRAPH);
+        }
+        return this;
     }
 
     /**
-     * Validates that all required configuration has been supplied and returns a
-     * {@link MutableHnswIndex} for building the graph incrementally: the graph starts empty (or as
-     * {@link #withExistingGraph the existing graph}), and the caller inserts nodes with
-     * {@link MutableHnswIndex#addNode}, then calls {@link MutableHnswIndex#cleanup()} before writing it.
-     * Nothing from {@link #withVectorValues} is inserted automatically.
-     * <p>
-     * Requires either {@link #withVectorValues} + {@link #withSimilarityFunction}, or
-     * {@link #withScoreProvider} plus a dimension (from {@link #withVectorValues} or
-     * {@link #withDimension}). Either way, as with {@link GraphIndexBuilder}, the score provider
-     * must be able to score each ordinal by the time it is added; see
-     * {@link MutableHnswIndex#addNode}.
-     *
-     * @throws IllegalStateException if any value is missing, out of range, or in conflict with
-     * another setting; the message names every problem at once.
+     * Creates the underlying {@link GraphIndexBuilder} from this builder's current settings. Called
+     * at most once per builder, by {@link #graphBuilder()}, while holding this builder's lock.
      */
-    public MutableHnswIndex buildMutable() {
-        validate(false);
-        return newMutableIndex();
-    }
+    protected abstract GraphIndexBuilder createGraphBuilder();
 
     /**
-     * Checks the whole configuration and reports every problem in one {@link IllegalStateException}:
-     * missing values, conflicting settings, and out-of-range values (the same ranges
-     * {@link GraphIndexBuilder}'s constructors enforce, so they never fail on a validated
-     * configuration).
+     * Creates a {@link GraphIndexBuilder} from this builder's settings that scores with
+     * {@code buildScoreProvider}: one continuing {@link #withExistingGraph the existing graph} if set,
+     * otherwise one for a new graph. For subclasses' {@link #createGraphBuilder()}.
      */
-    private void validate(boolean batch) {
-        new IndexBuilderValidation()
-                .requireCondition(batch ? "vectorValues" : "vectorValues (required with similarityFunction)",
-                        vectorValues != null || (!batch && similarityFunction == null))
-                .requireCondition("similarityFunction (or scoreProvider)",
-                        scoreProvider != null || similarityFunction != null)
-                .requireCondition("dimension (or vectorValues)",
-                        batch || vectorValues != null || dimension != null || scoreProvider == null)
-                .requireCondition("maxDegree/maxDegrees (or existingGraph)",
-                        existingGraph != null || maxDegrees != null)
-                .requireCondition("addHierarchy (or existingGraph)",
-                        existingGraph != null || addHierarchy != null)
-                .require("beamWidth", beamWidth)
-                .require("neighborOverflow", neighborOverflow)
-                .require("alpha", alpha)
-
-                // conflicting settings
-                .check(scoreProvider == null || similarityFunction == null,
-                        "Set either withScoreProvider() or withSimilarityFunction(), not both")
-                .check(existingGraph == null || maxDegrees == null,
-                        "withExistingGraph() takes its max degrees from the existing graph; "
-                                + "don't also set withMaxDegree()/withMaxDegrees()")
-                .check(existingGraph == null || addHierarchy == null,
-                        "withExistingGraph() takes its hierarchy from the existing graph; "
-                                + "don't also set withAddHierarchy()")
-
-                // out-of-range values (NaN fails the float checks too)
-                .check(beamWidth == null || beamWidth > 0,
-                        "beamWidth must be positive (was " + beamWidth + ")")
-                .check(neighborOverflow == null || neighborOverflow >= 1.0f,
-                        "neighborOverflow must be >= 1.0 (was " + neighborOverflow + ")")
-                .check(alpha == null || alpha > 0,
-                        "alpha must be positive (was " + alpha + ")")
-                .check(maxDegrees == null || (!maxDegrees.isEmpty() && maxDegrees.stream().allMatch(d -> d != null && d > 0)),
-                        "maxDegrees must be non-empty and positive (was " + maxDegrees + ")")
-                .check(maxDegrees == null || maxDegrees.size() <= 1 || !Boolean.FALSE.equals(addHierarchy),
-                        "multiple maxDegrees (one per layer) require withAddHierarchy(true)")
-                .check(dimension == null || dimension > 0,
-                        "dimension must be positive (was " + dimension + ")")
-                .check(vectorValues == null || dimension == null || dimension == vectorValues.dimension(),
-                        String.format("dimension(%s) does not match vectorValues.dimension()=%s; "
-                                        + "omit withDimension(), it is derived automatically from vectorValues",
-                                dimension, vectorValues == null ? null : vectorValues.dimension()))
-                .check(!batch || existingGraph == null || vectorValues == null
-                                || vectorValues.size() >= existingGraph.getIdUpperBound(),
-                        String.format("vectorValues.size()=%s is smaller than existingGraph.getIdUpperBound()=%s; "
-                                        + "when using withExistingGraph(), vectorValues must be a superset containing an "
-                                        + "entry for every node ordinal already in the existing graph, in addition to the "
-                                        + "new vectors being appended",
-                                vectorValues == null ? null : vectorValues.size(),
-                                existingGraph == null ? null : existingGraph.getIdUpperBound()))
-                .throwIfAny(batch ? "Cannot build GraphIndex" : "Cannot build MutableHnswIndex");
-    }
-
-    /** Constructs the {@link GraphIndexBuilder} for already-validated configuration. */
-    @SuppressWarnings("deprecation") // the constructors taking addHierarchy/refineFinalGraph explicitly
-    private MutableHnswIndex newMutableIndex() {
-        int resolvedDimension = vectorValues != null ? vectorValues.dimension() : dimension;
-        BuildScoreProvider resolvedScoreProvider = scoreProvider != null
-                ? scoreProvider
-                : BuildScoreProvider.randomAccessScoreProvider(vectorValues, similarityFunction);
-
-        GraphIndexBuilder builder;
+    GraphIndexBuilder newGraphBuilder(BuildScoreProvider buildScoreProvider, int dimension) {
         if (existingGraph != null) {
-            builder = new GraphIndexBuilder(resolvedScoreProvider,
-                    resolvedDimension,
-                    existingGraph,
-                    beamWidth,
-                    neighborOverflow,
-                    alpha,
-                    refineFinalGraph,
-                    simdExecutor,
-                    parallelExecutor);
-        } else {
-            builder = new GraphIndexBuilder(resolvedScoreProvider,
-                    resolvedDimension,
-                    maxDegrees,
-                    beamWidth,
-                    neighborOverflow,
-                    alpha,
-                    addHierarchy,
-                    refineFinalGraph,
-                    simdExecutor,
-                    parallelExecutor);
+            return new GraphIndexBuilder(buildScoreProvider, dimension, existingGraph, beamWidth,
+                    neighborOverflow, alpha, refineFinalGraph, simdExecutor, parallelExecutor, null);
         }
-        return new MutableHnswIndex(builder);
+        return new GraphIndexBuilder(buildScoreProvider, dimension, maxDegrees, beamWidth,
+                neighborOverflow, alpha, addHierarchy, refineFinalGraph, simdExecutor, parallelExecutor, null);
     }
+
+    /**
+     * Returns the graph this builder builds, creating the underlying {@link GraphIndexBuilder} from
+     * this builder's settings on the first call. The graph is empty unless {@link #withExistingGraph}
+     * was set; add nodes to it with {@link #populateGraph} or {@link #addGraphNode}.
+     * <p>
+     * Idempotent and thread-safe: every call, from any thread, returns the same graph. Settings
+     * changed with {@code withXxx} after the first call have no effect on it.
+     *
+     * @throws IllegalStateException if {@link #withExistingGraph} was combined with
+     *         {@link #withMaxDegrees} or {@link #withAddHierarchy}
+     */
+    public final PersistableGraphIndex build() {
+        return graphBuilder().getGraph();
+    }
+
+    /** Returns the graph being built. Equivalent to {@link #build()}. */
+    public PersistableGraphIndex getGraph() {
+        return build();
+    }
+
+    /**
+     * Returns a builder holding a copy of {@code other}'s graph, with every edge re-scored by
+     * {@code newProvider}, e.g. after the PQ codebook has been refined. The copy keeps
+     * {@code other}'s nodes marked deleted and entry node. See {@link GraphIndexBuilder#rescore}.
+     * <p>
+     * The returned builder is a {@link ScoreProviderHnswBuilder} scoring with {@code newProvider}, and
+     * is already built: {@link #build()} and {@link #getGraph()} return the copy, and nodes added to it
+     * are scored with {@code newProvider}. Its settings are {@code other}'s, except that the max
+     * degrees and hierarchy are read from {@code other}'s graph, so they are correct even when
+     * {@code other} was built {@link #withExistingGraph on an existing graph}.
+     * <p>
+     * Builds {@code other} first if it has not been built yet. Must not run concurrently with
+     * modifications to {@code other}'s graph.
+     */
+    public static HnswIndexBuilder rescore(HnswIndexBuilder other, BuildScoreProvider newProvider) {
+        GraphIndexBuilder source = other.graphBuilder();
+        MutableGraphIndex sourceGraph = source.graph;
+        HnswIndexBuilder rescored = new ScoreProviderHnswBuilder(newProvider, sourceGraph.getDimension());
+        rescored.maxDegrees = sourceGraph.maxDegrees();
+        rescored.addHierarchy = sourceGraph.isHierarchical();
+        rescored.beamWidth = other.beamWidth;
+        rescored.neighborOverflow = other.neighborOverflow;
+        rescored.alpha = other.alpha;
+        rescored.refineFinalGraph = other.refineFinalGraph;
+        rescored.simdExecutor = other.simdExecutor;
+        rescored.parallelExecutor = other.parallelExecutor;
+        rescored.graphBuilder = GraphIndexBuilder.rescore(source, newProvider);
+        return rescored;
+    }
+
+    /**
+     * Builds the graph and populates it from the vectors this builder was created with, in one call:
+     * equivalent to {@code populateGraph(vectorValues)}. This is the simplest way to build a complete
+     * index:
+     * <pre>{@code
+     * PersistableGraphIndex graph = Indexes.hnswBuilder(ravv, similarityFunction).buildAndPopulate();
+     * }</pre>
+     * Only a builder created from vectors ({@code Indexes.hnswBuilder(RandomAccessVectorValues,
+     * VectorSimilarityFunction)}) has vectors to populate from; one created from a
+     * {@link BuildScoreProvider} throws, and is populated with {@link #populateGraph} or
+     * {@link #addGraphNode} instead.
+     *
+     * @return the populated graph
+     * @throws UnsupportedOperationException if this builder was not created from vectors
+     */
+    public PersistableGraphIndex buildAndPopulate() {
+        throw new UnsupportedOperationException(
+                "This builder was created from a BuildScoreProvider and has no vectors of its own; "
+                        + "use populateGraph(RandomAccessVectorValues) or addGraphNode instead");
+    }
+
+    /**
+     * Adds the vectors in {@code ravv} to the graph in parallel, then calls {@link #cleanup()}.
+     * Vector {@code i} is added at ordinal {@code i}, for every ordinal from the graph's
+     * {@link GraphIndex#getIdUpperBound() id upper bound} up to {@code ravv.size() - 1}: for a new,
+     * empty graph that is all of them, and when continuing a graph (see {@link #withExistingGraph}),
+     * {@code ravv} is a superset whose leading entries are the nodes already in the graph, and only
+     * the new ones are added. Builds the graph first if it has not been built yet.
+     *
+     * @return the populated graph
+     */
+    public PersistableGraphIndex populateGraph(RandomAccessVectorValues ravv) {
+        GraphIndexBuilder gib = graphBuilder();
+        int from = gib.graph.getIdUpperBound();
+        if (from == 0) {
+            return gib.build(ravv);
+        }
+        var vectors = ravv.threadLocalSupplier();
+        simdExecutor.submit(() -> IntStream.range(from, ravv.size()).parallel()
+                .forEach(node -> gib.addGraphNode(node, vectors.get().getVector(node)))).join();
+        gib.cleanup();
+        return gib.graph;
+    }
+
+    /**
+     * Completes removal of deleted nodes, trims neighbor lists to the configured degree, refines
+     * the graph if {@link #withRefineFinalGraph} is set, and marks it complete. Must be called
+     * before writing the graph to disk, and not during concurrent modifications. See
+     * {@link GraphIndexBuilder#cleanup()}.
+     */
+    public void cleanup() {
+        graphBuilder().cleanup();
+    }
+
+    /**
+     * The number of {@link #addGraphNode} calls in progress, or 0 if the graph hasn't been built yet.
+     * See {@link GraphIndexBuilder#insertsInProgress()}.
+     */
+    public int insertsInProgress() {
+        GraphIndexBuilder gib = this.graphBuilder;
+        return gib == null ? 0 : gib.insertsInProgress();
+    }
+
+    /**
+     * Rejects shape settings that conflict with {@link #withExistingGraph}, naming every conflict in
+     * one exception.
+     */
+    private void validateShapeSettings() {
+        if (existingGraph == null || (!maxDegreesSet && !addHierarchySet)) {
+            return;
+        }
+        List<String> problems = new ArrayList<>();
+        if (maxDegreesSet) {
+            problems.add("withExistingGraph() takes its max degrees from the existing graph; "
+                    + "don't also set withMaxDegree()/withMaxDegrees()");
+        }
+        if (addHierarchySet) {
+            problems.add("withExistingGraph() takes its hierarchy from the existing graph; "
+                    + "don't also set withAddHierarchy()");
+        }
+        throw new IllegalStateException("Cannot build HNSW index: " + String.join("; ", problems));
+    }
+
+    /**
+     * Returns the underlying {@link GraphIndexBuilder}, creating it with {@link #createGraphBuilder()}
+     * on the first call. Double-checked locking on the {@code volatile} {@link #graphBuilder} field,
+     * so creation happens exactly once even when several threads call in concurrently.
+     */
+    private GraphIndexBuilder graphBuilder() {
+        GraphIndexBuilder gib = this.graphBuilder;
+        if (gib != null) {
+            return gib;
+        }
+        synchronized (this) {
+            if (this.graphBuilder == null) {
+                validateShapeSettings();
+                this.graphBuilder = createGraphBuilder();
+            }
+            return this.graphBuilder;
+        }
+    }
+
+    /**
+     * Inserts {@code node} with the given vector. Thread-safe: may be called concurrently with other
+     * inserts and with searches. See {@link GraphIndexBuilder#addGraphNode(int, VectorFloat)}.
+     *
+     * @return an estimate of the number of extra bytes the graph uses after adding the node
+     */
+    public long addGraphNode(int node, VectorFloat<?> vector) {
+        return graphBuilder().addGraphNode(node, vector);
+    }
+
+    /**
+     * Inserts {@code node}, scoring it with {@code searchScoreProvider}, which must be compatible with
+     * this builder's build score provider. See
+     * {@link GraphIndexBuilder#addGraphNode(int, SearchScoreProvider)}.
+     *
+     * @return an estimate of the number of extra bytes the graph uses after adding the node
+     */
+    public long addGraphNode(int node, SearchScoreProvider searchScoreProvider) {
+        return graphBuilder().addGraphNode(node, searchScoreProvider);
+    }
+
+    /**
+     * Marks {@code node} deleted. It is hidden from searches immediately, but stays in the graph, so
+     * its edges keep the graph connected, until {@link #removeDeletedNodes()} or {@link #cleanup()}
+     * removes it. Thread-safe. See {@link GraphIndexBuilder#markNodeDeleted(int)}.
+     */
+    public void markNodeDeleted(int node) {
+        graphBuilder().markNodeDeleted(node);
+    }
+
+    /**
+     * Removes the nodes marked deleted (with {@link #markNodeDeleted}) from the graph and
+     * repairs their neighbors' connections. Not thread-safe with respect to other modifications. See
+     * {@link GraphIndexBuilder#removeDeletedNodes()}.
+     *
+     * @return an estimate of the memory no longer used
+     */
+    public long removeDeletedNodes() {
+        return graphBuilder().removeDeletedNodes();
+    }
+
+    /**
+     * The memory used by the underlying {@link GraphIndexBuilder}, including its graph, or 0 if the
+     * graph hasn't been built yet.
+     */
+    public long ramBytesUsed() {
+        GraphIndexBuilder gib = this.graphBuilder;
+        return gib == null ? 0 : gib.ramBytesUsed();
+    }
+
+    /**
+     * Loads a graph saved with {@code OnHeapGraphIndex.save} into this builder's graph, which must be
+     * empty. Delegates to the deprecated {@link GraphIndexBuilder#load}; prefer
+     * {@code OnHeapGraphIndex.load} with {@link #withExistingGraph}.
+     */
+    public void load(RandomAccessReader in) throws IOException {
+        graphBuilder().load(in);
+    }
+
+    /**
+     * Releases the per-thread scratch space (including a searcher per thread) that the underlying
+     * {@link GraphIndexBuilder} caches for each thread that has inserted. Does nothing if the builder
+     * was never built. The graph is unaffected and stays usable; if more nodes are added afterwards,
+     * the scratch space is recreated on demand, and the builder should be closed again when done.
+     * <p>
+     * Not thread-safe: must not be called while inserts or other operations on this builder are in
+     * progress.
+     */
+    @Override
+    public void close() throws IOException {
+        GraphIndexBuilder gib = this.graphBuilder;
+        if (gib != null) {
+            gib.close();
+        }
+    }
+
 }

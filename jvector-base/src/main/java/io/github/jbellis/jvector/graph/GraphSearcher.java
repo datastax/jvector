@@ -38,7 +38,6 @@ import io.github.jbellis.jvector.vector.types.VectorFloat;
 import org.agrona.collections.Int2ObjectHashMap;
 import org.agrona.collections.IntHashSet;
 
-import java.io.Closeable;
 import java.io.IOException;
 
 
@@ -46,7 +45,7 @@ import java.io.IOException;
  * Searches a graph to find nearest neighbors to a query vector. For more background on the
  * search algorithm, see {@link GraphIndex}.
  */
-public class GraphSearcher implements Closeable, IndexSearcher {
+public class GraphSearcher implements IndexSearcher {
     private GraphIndex.View view;
 
     // Scratch data structures that are used in each {@link #searchInternal} call. These can be expensive

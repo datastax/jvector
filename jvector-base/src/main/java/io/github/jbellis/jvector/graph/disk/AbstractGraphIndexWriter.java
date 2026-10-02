@@ -192,18 +192,49 @@ public abstract class AbstractGraphIndexWriter<T extends IndexWriter> implements
     public abstract static class Builder<K extends AbstractGraphIndexWriter<T>, T extends IndexWriter> implements PersistableGraphIndex.GraphIndexWriterBuilder {
         final GraphIndex graphIndex;
         final EnumMap<FeatureId, Feature> features;
-        final T out;
+        /**
+         * The output the writer writes to. Set by the constructor when the caller supplies the output;
+         * otherwise opened by {@link #build()} with {@link #opener}, and null until then.
+         */
+        T out;
+        private final OutputOpener<T> opener;
         OrdinalMapper ordinalMapper;
         int version;
 
         /**
-         * Constructs a Builder.
+         * Opens the output for a builder that owns it, e.g. a file the builder was given by path.
+         *
+         * @param <T> the type of the output
+         */
+        @FunctionalInterface
+        protected interface OutputOpener<T> {
+            T open() throws IOException;
+        }
+
+        /**
+         * Constructs a Builder that writes to an output the caller supplies and owns.
          * @param graphIndex the graph index
          * @param out the output writer
          */
         public Builder(GraphIndex graphIndex, T out) {
+            this(graphIndex, out, null);
+        }
+
+        /**
+         * Constructs a Builder that opens its own output when {@link #build()} is called, so that a
+         * builder that is never built, or whose {@code build()} fails, leaves nothing open. The writer
+         * that {@code build()} returns owns the output and closes it.
+         * @param graphIndex the graph index
+         * @param opener opens the output
+         */
+        protected Builder(GraphIndex graphIndex, OutputOpener<T> opener) {
+            this(graphIndex, null, opener);
+        }
+
+        private Builder(GraphIndex graphIndex, T out, OutputOpener<T> opener) {
             this.graphIndex = graphIndex;
             this.out = out;
+            this.opener = opener;
             this.features = new EnumMap<>(FeatureId.class);
             this.version = OnDiskGraphIndex.CURRENT_VERSION;
         }
@@ -277,7 +308,23 @@ public abstract class AbstractGraphIndexWriter<T extends IndexWriter> implements
             if (ordinalMapper == null) {
                 ordinalMapper = new OrdinalMapper.MapMapper(sequentialRenumbering(graphIndex));
             }
-            return reallyBuild(dimension);
+            if (opener == null) {
+                return reallyBuild(dimension);
+            }
+
+            // Open the output only now that the configuration is known to be valid, and close it again
+            // if the writer can't be created, since nothing else would.
+            out = opener.open();
+            try {
+                return reallyBuild(dimension);
+            } catch (IOException | RuntimeException | Error e) {
+                try {
+                    out.close();
+                } catch (IOException closeFailure) {
+                    e.addSuppressed(closeFailure);
+                }
+                throw e;
+            }
         }
 
         /**

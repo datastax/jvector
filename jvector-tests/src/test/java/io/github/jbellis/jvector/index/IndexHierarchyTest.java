@@ -20,13 +20,13 @@ import io.github.jbellis.jvector.TestUtil;
 import io.github.jbellis.jvector.graph.GraphIndex;
 import io.github.jbellis.jvector.graph.GraphSearcher;
 import io.github.jbellis.jvector.graph.ListRandomAccessVectorValues;
-import io.github.jbellis.jvector.graph.OnHeapGraphIndex;
 import io.github.jbellis.jvector.graph.PersistableGraphIndex;
 import io.github.jbellis.jvector.graph.disk.GraphIndexWriter;
 import io.github.jbellis.jvector.graph.disk.OnDiskGraphIndex;
 import io.github.jbellis.jvector.graph.disk.feature.Feature;
 import io.github.jbellis.jvector.graph.disk.feature.FeatureId;
 import io.github.jbellis.jvector.graph.disk.feature.InlineVectors;
+import io.github.jbellis.jvector.graph.similarity.BuildScoreProvider;
 import io.github.jbellis.jvector.disk.ReaderSupplier;
 import io.github.jbellis.jvector.disk.ReaderSupplierFactory;
 import io.github.jbellis.jvector.ivf.IvfIndexBuilder;
@@ -42,15 +42,16 @@ import java.util.stream.Collectors;
 import java.util.stream.IntStream;
 
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertTrue;
 import static org.junit.Assert.fail;
 
 /**
- * Exercises the module split and the {@code Indexes}/{@code IndexBuilderValidation} plumbing
- * introduced for the generic Index/IndexBuilder hierarchy (see
- * docs/index_hierarchy_plan.md): the type-first builders still produce a working index, aggregate
- * validation still reports every missing field at once, and the IVF seam refuses cleanly rather
- * than silently returning null.
+ * Exercises the module split and the {@code Indexes} entry point introduced for the generic
+ * Index/IndexBuilder hierarchy (see docs/index_hierarchy_plan.md): the type-first builders still
+ * produce a working index that is usable through the generic {@link Index} and
+ * {@link IndexSearcher} handles, and the IVF seam validates its inputs and then refuses cleanly
+ * rather than silently returning null.
  */
 public class IndexHierarchyTest {
 
@@ -65,15 +66,13 @@ public class IndexHierarchyTest {
     @Test
     public void hnswBuilderProducesAWorkingGraphIndex() throws Exception {
         var vectors = randomVectors(64, 8);
-        try (GraphIndex index = Indexes.hnswBuilder()
-                .withVectorValues(vectors)
-                .withSimilarityFunction(VectorSimilarityFunction.EUCLIDEAN)
+        try (GraphIndex index = Indexes.hnswBuilder(vectors, VectorSimilarityFunction.EUCLIDEAN)
                 .withMaxDegree(8)
                 .withBeamWidth(20)
                 .withNeighborOverflow(1.2f)
                 .withAlpha(1.2f)
                 .withAddHierarchy(false)
-                .build()) {
+                .populateGraph(vectors)) {
             assertEquals(64, index.size());
 
             // GraphIndex.searcher() is covariantly typed to GraphSearcher (§5.3) -- no cast needed.
@@ -89,16 +88,14 @@ public class IndexHierarchyTest {
     @Test
     public void builtGraphIsPersistableAndGenericSearchersAreCloseable() throws Exception {
         var vectors = randomVectors(64, 8);
-        // build() returns PersistableGraphIndex, so the writer accessors need no cast.
-        PersistableGraphIndex graph = Indexes.hnswBuilder()
-                .withVectorValues(vectors)
-                .withSimilarityFunction(VectorSimilarityFunction.EUCLIDEAN)
+        // populateGraph() returns a PersistableGraphIndex, so the writer accessors need no cast.
+        PersistableGraphIndex graph = Indexes.hnswBuilder(vectors, VectorSimilarityFunction.EUCLIDEAN)
                 .withMaxDegree(8)
                 .withBeamWidth(20)
                 .withNeighborOverflow(1.2f)
                 .withAlpha(1.2f)
                 .withAddHierarchy(false)
-                .build();
+                .populateGraph(vectors);
 
         Path path = Files.createTempFile("index-hierarchy-test", ".graph");
         try {
@@ -129,94 +126,73 @@ public class IndexHierarchyTest {
     }
 
     @Test
-    public void hnswBuilderAggregatesEveryMissingField() {
+    public void pathWriterBuildersOpenTheFileOnlyWhenBuilt() throws Exception {
+        var vectors = randomVectors(64, 8);
+        PersistableGraphIndex graph = Indexes.hnswBuilder(vectors, VectorSimilarityFunction.EUCLIDEAN)
+                .withMaxDegree(8)
+                .populateGraph(vectors);
+
+        Path dir = Files.createTempDirectory("index-hierarchy-test");
+        Path path = dir.resolve("deferred.graph");
         try {
-            Indexes.hnswBuilder().build();
-            fail("expected IllegalStateException");
-        } catch (IllegalStateException e) {
-            // every required field should be named in one message, not just the first one found
-            assertTrue(e.getMessage().contains("vectorValues"));
-            assertTrue(e.getMessage().contains("similarityFunction"));
-            assertTrue(e.getMessage().contains("beamWidth"));
-            assertTrue(e.getMessage().contains("neighborOverflow"));
-            assertTrue(e.getMessage().contains("alpha"));
+            // Getting a builder, or a build() that fails validation, opens nothing.
+            for (var builder : List.of(graph.getWriterBuilder(path), graph.getParallelWriterBuilder(path))) {
+                assertFalse(Files.exists(path));
+                try {
+                    builder.build(); // no vector feature
+                    fail("expected IllegalArgumentException");
+                } catch (IllegalArgumentException e) {
+                    assertFalse(Files.exists(path));
+                }
+            }
+
+            // build() opens (and creates) the file; the writer closes it.
+            try (GraphIndexWriter writer = graph.getParallelWriterBuilder(path)
+                    .with(new InlineVectors(vectors.dimension()))
+                    .build()) {
+                assertTrue(Files.exists(path));
+                writer.write(Feature.singleStateFactory(FeatureId.INLINE_VECTORS,
+                        node -> new InlineVectors.State(vectors.getVector(node))));
+            }
+            try (ReaderSupplier rs = ReaderSupplierFactory.open(path);
+                 OnDiskGraphIndex onDisk = OnDiskGraphIndex.load(rs)) {
+                assertEquals(64, onDisk.size(0));
+            }
+        } finally {
+            Files.deleteIfExists(path);
+            Files.deleteIfExists(dir);
         }
     }
 
     @Test
-    public void hnswBuilderRejectsConflictingScoringOptions() {
+    public void ivfBuilderRejectsConflictingScoringOptions() {
         var vectors = randomVectors(4, 4);
         try {
-            Indexes.hnswBuilder()
+            Indexes.ivfBuilder()
                     .withVectorValues(vectors)
                     .withSimilarityFunction(VectorSimilarityFunction.EUCLIDEAN)
-                    .withScoreProvider(io.github.jbellis.jvector.graph.similarity.BuildScoreProvider
-                            .randomAccessScoreProvider(vectors, VectorSimilarityFunction.EUCLIDEAN))
+                    .withScoreProvider(BuildScoreProvider.randomAccessScoreProvider(vectors, VectorSimilarityFunction.EUCLIDEAN))
                     .build();
             fail("expected IllegalStateException");
         } catch (IllegalStateException e) {
-            assertTrue(e.getMessage().contains("not both"));
+            assertTrue(e.getMessage(), e.getMessage().startsWith("Cannot build IvfIndex: "));
+            assertTrue(e.getMessage(), e.getMessage().contains("not both"));
         }
     }
 
     @Test
-    public void hnswBuilderReportsMissingInvalidAndConflictingValuesTogether() {
+    public void ivfBuilderReportsMissingAndConflictingValuesTogether() {
         var vectors = randomVectors(4, 4);
         try {
-            Indexes.hnswBuilder()
+            Indexes.ivfBuilder()
                     // vectorValues missing
                     .withSimilarityFunction(VectorSimilarityFunction.EUCLIDEAN)
-                    .withScoreProvider(io.github.jbellis.jvector.graph.similarity.BuildScoreProvider
-                            .randomAccessScoreProvider(vectors, VectorSimilarityFunction.EUCLIDEAN))
-                    .withMaxDegrees(List.of(8, 0))
-                    .withAddHierarchy(false)
-                    .withBeamWidth(0)
-                    .withNeighborOverflow(0.5f)
-                    .withAlpha(Float.NaN)
+                    .withScoreProvider(BuildScoreProvider.randomAccessScoreProvider(vectors, VectorSimilarityFunction.EUCLIDEAN))
                     .build();
             fail("expected IllegalStateException");
         } catch (IllegalStateException e) {
-            // one exception naming every problem, instead of GraphIndexBuilder failing on the first
-            String message = e.getMessage();
-            for (String expected : List.of("missing required value(s): vectorValues",
-                                           "not both",
-                                           "beamWidth must be positive (was 0)",
-                                           "neighborOverflow must be >= 1.0 (was 0.5)",
-                                           "alpha must be positive (was NaN)",
-                                           "maxDegrees must be non-empty and positive (was [8, 0])",
-                                           "require withAddHierarchy(true)")) {
-                assertTrue(message, message.contains(expected));
-            }
-        }
-    }
-
-    @Test
-    public void hnswBuilderRejectsShapeSettingsAlongsideAnExistingGraph() {
-        var vectors = randomVectors(64, 8);
-        var existing = (OnHeapGraphIndex) Indexes.hnswBuilder()
-                .withVectorValues(vectors)
-                .withSimilarityFunction(VectorSimilarityFunction.EUCLIDEAN)
-                .withMaxDegree(8)
-                .withBeamWidth(20)
-                .withNeighborOverflow(1.2f)
-                .withAlpha(1.2f)
-                .withAddHierarchy(false)
-                .build();
-        try {
-            Indexes.hnswBuilder()
-                    .withExistingGraph(existing)
-                    .withVectorValues(vectors)
-                    .withSimilarityFunction(VectorSimilarityFunction.EUCLIDEAN)
-                    .withMaxDegree(16)          // conflicts: the existing graph fixes this
-                    .withAddHierarchy(true)     // conflicts: the existing graph fixes this
-                    .withBeamWidth(20)
-                    .withNeighborOverflow(1.2f)
-                    .withAlpha(1.2f)
-                    .build();
-            fail("expected IllegalStateException");
-        } catch (IllegalStateException e) {
-            assertTrue(e.getMessage(), e.getMessage().contains("don't also set withMaxDegree()/withMaxDegrees()"));
-            assertTrue(e.getMessage(), e.getMessage().contains("don't also set withAddHierarchy()"));
+            assertEquals("Cannot build IvfIndex, missing required value(s): vectorValues; "
+                         + "Set either withScoreProvider() or withSimilarityFunction(), not both", e.getMessage());
         }
     }
 
@@ -247,12 +223,17 @@ public class IndexHierarchyTest {
     }
 
     @Test
-    public void recipesAreScaffoldedButNotYetDefined() {
+    public void onlyTheDefaultRecipeIsDefinedSoFar() {
+        for (HnswRecipe recipe : HnswRecipe.values()) {
+            assertEquals(recipe == HnswRecipe.DEFAULT, recipe.isDefined());
+        }
+
         try {
-            Indexes.hnswBuilder().applyRecipe(HnswRecipe.HIGH_RECALL);
+            Indexes.hnswBuilder(randomVectors(4, 4), VectorSimilarityFunction.EUCLIDEAN)
+                    .applyRecipe(HnswRecipe.HIGH_RECALL);
             fail("expected UnsupportedOperationException");
         } catch (UnsupportedOperationException e) {
-            // expected: no recipe has real fixed-value formulas yet
+            // expected: HIGH_RECALL has no values defined yet
         }
 
         try {

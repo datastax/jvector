@@ -21,7 +21,6 @@ import io.github.jbellis.jvector.annotations.VisibleForTesting;
 import io.github.jbellis.jvector.disk.RandomAccessReader;
 import io.github.jbellis.jvector.graph.GraphIndex.NodeAtLevel;
 import io.github.jbellis.jvector.graph.SearchResult.NodeScore;
-import io.github.jbellis.jvector.graph.disk.OnDiskGraphIndex;
 import io.github.jbellis.jvector.graph.diversity.VamanaDiversityProvider;
 import io.github.jbellis.jvector.graph.similarity.BuildScoreProvider;
 import io.github.jbellis.jvector.graph.similarity.ScoreFunction;
@@ -94,7 +93,24 @@ public class GraphIndexBuilder implements Closeable, Accountable {
     private final Random rng;
 
     private static BuildScoreProvider getBuildScoreProvider(RandomAccessVectorValues vectorValues, VectorSimilarityFunction similarityFunction) {
-        CompressionType type = resolveJmxBuildCompressionType();
+        return buildScoreProvider(vectorValues, similarityFunction, resolveJmxBuildCompressionType(),
+                                  PhysicalCoreExecutor.pool(), ForkJoinPool.commonPool());
+    }
+
+    /**
+     * Returns a build score provider for {@code vectorValues} that scores with the given compression:
+     * exact comparisons for {@link CompressionType#NONE}, or comparisons of the vectors after they are
+     * compressed with product quantization ({@link CompressionType#PQ}, sized from
+     * {@link GraphIndexBuilderConfig}) or binary quantization ({@link CompressionType#BQ}). PQ and BQ
+     * train on and encode every vector up front, using the given executors.
+     *
+     * @throws IllegalArgumentException if {@code type} is not supported
+     */
+    static BuildScoreProvider buildScoreProvider(RandomAccessVectorValues vectorValues,
+                                                 VectorSimilarityFunction similarityFunction,
+                                                 CompressionType type,
+                                                 ForkJoinPool simdExecutor,
+                                                 ForkJoinPool parallelExecutor) {
         switch(type) {
             case NONE:
                 return BuildScoreProvider.randomAccessScoreProvider(vectorValues, similarityFunction);
@@ -102,12 +118,14 @@ public class GraphIndexBuilder implements Closeable, Accountable {
                 var config = GraphIndexBuilderConfig.getInstance();
                 int m = vectorValues.dimension() / config.getPqMFactor();
                 var compressor = ProductQuantization.compute(vectorValues, m, config.getPqK(),
-                                                            config.isPqCenterData(), config.getPqAnisotropicThreshold());
-                PQVectors pqVectors = compressor.encodeAll(vectorValues, ForkJoinPool.commonPool());
+                                                            config.isPqCenterData(), config.getPqAnisotropicThreshold(),
+                                                            simdExecutor, parallelExecutor);
+                PQVectors pqVectors = compressor.encodeAll(vectorValues, simdExecutor);
                 return BuildScoreProvider.pqBuildScoreProvider(similarityFunction, pqVectors);
             }
             case BQ: {
-                BQVectors bqVectors = (BQVectors) BinaryQuantization.compute(vectorValues).encodeAll(vectorValues, ForkJoinPool.commonPool());
+                BQVectors bqVectors = (BQVectors) BinaryQuantization.compute(vectorValues, parallelExecutor)
+                                                                    .encodeAll(vectorValues, simdExecutor);
                 return BuildScoreProvider.bqBuildScoreProvider(bqVectors);
             }
             default:
@@ -497,8 +515,9 @@ public class GraphIndexBuilder implements Closeable, Accountable {
         }
     }
 
-    // Private workhorse — all public constructors funnel here.
-    private GraphIndexBuilder(BuildScoreProvider scoreProvider,
+    // Workhorse — all public constructors funnel here. Package-private rather than private because
+    // HnswIndexBuilder calls it directly.
+    GraphIndexBuilder(BuildScoreProvider scoreProvider,
                               int dimension,
                               List<Integer> maxDegrees,
                               int beamWidth,
@@ -584,7 +603,7 @@ public class GraphIndexBuilder implements Closeable, Accountable {
     }
 
     /**
-     * Create this builder from an existing {@link OnDiskGraphIndex}, this is useful when we just loaded a graph from disk
+     * Create this builder from an existing {@link io.github.jbellis.jvector.graph.disk.OnDiskGraphIndex}, this is useful when we just loaded a graph from disk
      * copy it into {@link OnHeapGraphIndex} and then start mutating it with minimal overhead of recreating the mutable {@link OnHeapGraphIndex} used in the new GraphIndexBuilder object
      *
      * @param buildScoreProvider the provider responsible for calculating build scores.
@@ -606,8 +625,9 @@ public class GraphIndexBuilder implements Closeable, Accountable {
              null);
     }
 
-    // Private mutableGraphIndex workhorse — addHierarchy is always derived from the existing graph.
-    private GraphIndexBuilder(BuildScoreProvider buildScoreProvider, int dimension, MutableGraphIndex mutableGraphIndex, int beamWidth, float neighborOverflow, float alpha, boolean refineFinalGraph, ForkJoinPool simdExecutor, ForkJoinPool parallelExecutor, @SuppressWarnings("unused") Void disambiguator) {
+    // mutableGraphIndex workhorse — addHierarchy is always derived from the existing graph. Package-private
+    // rather than private because HnswIndexBuilder calls it directly.
+    GraphIndexBuilder(BuildScoreProvider buildScoreProvider, int dimension, MutableGraphIndex mutableGraphIndex, int beamWidth, float neighborOverflow, float alpha, boolean refineFinalGraph, ForkJoinPool simdExecutor, ForkJoinPool parallelExecutor, @SuppressWarnings("unused") Void disambiguator) {
         if (beamWidth <= 0) {
             throw new IllegalArgumentException("beamWidth must be positive");
         }
@@ -655,7 +675,8 @@ public class GraphIndexBuilder implements Closeable, Accountable {
                 other.addHierarchy,
                 other.refineFinalGraph,
                 other.simdExecutor,
-                other.parallelExecutor);
+                other.parallelExecutor,
+                null);
 
         var otherView = other.graph.getView();
 
@@ -702,10 +723,13 @@ public class GraphIndexBuilder implements Closeable, Accountable {
         return newBuilder;
     }
 
-    // Returns the deprecated ImmutableGraphIndex (a GraphIndex) so that 4.0.x callers assigning the
-    // result to an ImmutableGraphIndex keep compiling; switch back to GraphIndex when it is removed.
-    @SuppressWarnings("removal")
-    public ImmutableGraphIndex build(RandomAccessVectorValues ravv) {
+    /**
+     * Adds every vector in {@code ravv} to the graph in parallel, at ordinals {@code 0} through
+     * {@code ravv.size() - 1}, then calls {@link #cleanup()}.
+     *
+     * @return the graph built by this builder
+     */
+    public PersistableGraphIndex build(RandomAccessVectorValues ravv) {
         var vv = ravv.threadLocalSupplier();
         int size = ravv.size();
 
@@ -809,10 +833,8 @@ public class GraphIndexBuilder implements Closeable, Accountable {
         }
     }
 
-    // Returns the deprecated ImmutableGraphIndex (a GraphIndex) so that 4.0.x callers assigning the
-    // result to an ImmutableGraphIndex keep compiling; switch back to GraphIndex when it is removed.
-    @SuppressWarnings("removal")
-    public ImmutableGraphIndex getGraph() {
+    /** Returns the graph this builder is building. It may still be under construction. */
+    public PersistableGraphIndex getGraph() {
         return graph;
     }
 
@@ -1282,14 +1304,13 @@ public class GraphIndexBuilder implements Closeable, Accountable {
      * @throws IOException if an I/O error occurs during the graph loading or conversion process.
      */
     @Experimental
-    @SuppressWarnings("removal")
-    public static ImmutableGraphIndex buildAndMergeNewNodes(RandomAccessReader in,
-                                                            RemappedRandomAccessVectorValues newVectors,
-                                                            BuildScoreProvider buildScoreProvider,
-                                                            int startingNodeOffset,
-                                                            int beamWidth,
-                                                            float overflowRatio,
-                                                            float alpha) throws IOException {
+    public static GraphIndex buildAndMergeNewNodes(RandomAccessReader in,
+                                                    RemappedRandomAccessVectorValues newVectors,
+                                                    BuildScoreProvider buildScoreProvider,
+                                                    int startingNodeOffset,
+                                                    int beamWidth,
+                                                    float overflowRatio,
+                                                    float alpha) throws IOException {
 
             return buildAndMergeNewNodes(in, newVectors, buildScoreProvider, startingNodeOffset, beamWidth, overflowRatio, alpha, PhysicalCoreExecutor.pool(), ForkJoinPool.commonPool());
     }
@@ -1312,16 +1333,15 @@ public class GraphIndexBuilder implements Closeable, Accountable {
      * @throws IOException if an I/O error occurs during the graph loading or conversion process.
      */
     @Experimental
-    @SuppressWarnings("removal")
-    public static ImmutableGraphIndex buildAndMergeNewNodes(RandomAccessReader in,
-                                                            RemappedRandomAccessVectorValues newVectors,
-                                                            BuildScoreProvider buildScoreProvider,
-                                                            int startingNodeOffset,
-                                                            int beamWidth,
-                                                            float overflowRatio,
-                                                            float alpha,
-                                                            ForkJoinPool simdExecutor,
-                                                            ForkJoinPool parallelExecutor) throws IOException {
+    public static GraphIndex buildAndMergeNewNodes(RandomAccessReader in,
+                                                    RemappedRandomAccessVectorValues newVectors,
+                                                    BuildScoreProvider buildScoreProvider,
+                                                    int startingNodeOffset,
+                                                    int beamWidth,
+                                                    float overflowRatio,
+                                                    float alpha,
+                                                    ForkJoinPool simdExecutor,
+                                                    ForkJoinPool parallelExecutor) throws IOException {
         // TODO is looks like the graph is not properly remapped based on the new ordinals but it just retains the old ones.
         //  However, the new inserted vectors do have the new ordinals, so recall:
         //  - recall will be severely affected

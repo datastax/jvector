@@ -1,8 +1,11 @@
 # Index / IndexBuilder Hierarchy — Implementation Plan
 
-Status: **implemented** on branch `index_hierarchy`, in two passes: the
-hierarchy itself (§1–§10) and a follow-up adding incremental construction and
-API cleanups (§11).
+Status: **implemented** on branch `index_hierarchy`, in three passes: the
+hierarchy itself (§1–§10), a follow-up adding incremental construction and
+API cleanups (§11), and a simplification pass that replaced the validating
+builder and `MutableHnswIndex` with a smaller builder centered on ease of use
+(§12). Where §12 supersedes an earlier section, that section says so; the
+earlier text is kept as the record of what was tried and why.
 Source of the approach: [`four_perspectives.md`](four_perspectives.md) (the aci
 "one configuration interface, four perspectives" demonstrator), kept alongside
 this plan for reference. The aci files it names are in the aci project, not in
@@ -151,13 +154,15 @@ them. Moved to a new facade in `jvector-base`:
 ```java
 // io.github.jbellis.jvector.index.Indexes  (jvector-base, impl module)
 public final class Indexes {
-    public static HnswIndexBuilder hnswBuilder() { return new HnswIndexBuilder(); }
+    public static HnswIndexBuilder hnswBuilder(RandomAccessVectorValues ravv, VectorSimilarityFunction vsf) { ... }
+    public static HnswIndexBuilder hnswBuilder(BuildScoreProvider bsp, int dimension) { ... }
     public static IvfIndexBuilder ivfBuilder() { return new IvfIndexBuilder(); }
 }
 ```
 
-Callers now write `Indexes.hnswBuilder()...build()` instead of
-`Index.hnswBuilder()...build()`. Confirmed before the rename that nothing
+Callers now write `Indexes.hnswBuilder(...)...` instead of
+`Index.hnswBuilder()...`. (The HNSW factories took no arguments until §12,
+which moved the scoring inputs into them.) Confirmed before the rename that nothing
 outside the stub code itself called `Index.hnswBuilder()`/`ivfBuilder()`
 yet, so this was a safe, consequence-free rename.
 
@@ -201,7 +206,9 @@ yet, so this was a safe, consequence-free rename.
    concrete class.
 4. Every builder validates the same way: collect every problem, report them
    together. Adding a new builder shouldn't mean re-inventing that
-   bookkeeping.
+   bookkeeping. (Relaxed in §12.1: with defaults for every HNSW setting there
+   is little left to aggregate, so HNSW now relies on `GraphIndexBuilder`'s
+   own checks.)
 5. Adding a third backing type later touches a small, enumerable set of
    places (§7), and nothing upstream of that (existing HNSW/IVF code, the
    `Index` contract) needs to change to accommodate it.
@@ -222,6 +229,10 @@ discriminator that isn't naturally a Java type.
 Static factories live on `Indexes` in `jvector-base` (§4).
 
 ## 5.2 `IndexBuilderValidation` (new, `jvector-base`)
+
+> **Superseded by §12.1:** `IndexBuilderValidation` was removed.
+> `HnswIndexBuilder` no longer has required values to collect, and
+> `IvfIndexBuilder` checks its two inputs inline with the same message format.
 
 `HnswIndexBuilder.build()` hand-rolled the "collect missing required values
 into a list, throw one `IllegalStateException` naming all of them" pattern.
@@ -285,7 +296,8 @@ IvfIndexBuilder.applyRecipe(IvfRecipe.HIGH_RECALL)
 
 Both currently throw `UnsupportedOperationException` unconditionally — the
 mechanism is wired end-to-end, but no recipe has real fixed-value formulas
-yet, not even HNSW's. Filling those in later
+yet, not even HNSW's. (Since then, `HnswRecipe.DEFAULT` has been added and is
+defined: it restates the builder's defaults. See §12.4.) Filling those in later
 is a small, isolated change to each `applyRecipe` body, not a redesign.
 
 One deliberate deviation from the source doc, unrelated to phasing: aci's
@@ -308,7 +320,9 @@ same fluent builder, and the other setters remain technically callable.
   other query-time option was added (§3.1). A concrete
   implementing class arrives alongside the real algorithm.
 - **`IvfIndexBuilder`** (`jvector-base`) got the construction inputs every
-  backing needs, mirroring `HnswIndexBuilder` exactly: `withVectorValues`,
+  backing needs, mirroring `HnswIndexBuilder` exactly at the time (§12 later
+  moved HNSW's scoring inputs into `Indexes.hnswBuilder(...)`; IVF's are still
+  `withXxx` setters): `withVectorValues`,
   `withScoreProvider`/`withSimilarityFunction` (mutually exclusive, same
   message), `withSimdExecutor`/`withParallelExecutor`. Nothing
   IVF-specific (`nlist` included — never actually confirmed as a real
@@ -331,6 +345,11 @@ is ready for those parameters to be added to once they're known.
 
 ## 6. Validation approach, right-sized
 
+> **Superseded by §12.1:** HNSW settings are now validated by
+> `GraphIndexBuilder` when the graph is built (first error wins), plus the
+> existing-graph conflict check in `HnswIndexBuilder`. Only `IvfIndexBuilder`
+> still aggregates.
+
 - Per-builder aggregate validation (§5.2) — every builder collects and
   reports all problems at once.
 - Coupled constraints specific to one type stay in that type's own
@@ -346,8 +365,9 @@ is ready for those parameters to be added to once they're known.
    covariant `searcher()` override, which none realistically won't).
 2. New `XxxSearcher implements IndexSearcher` (`jvector-base`), returned
    covariantly from `XxxIndex.searcher()`.
-3. New `XxxIndexBuilder` (`jvector-base`) using `IndexBuilderValidation`
-   (§5.2).
+3. New `XxxIndexBuilder` (`jvector-base`), taking the inputs it can't do
+   without as arguments to its `Indexes` factory and everything else as
+   `withXxx` settings with defaults (§12).
 4. New static factory `Indexes.xxxBuilder()`.
 5. (Optional) `XxxRecipe` enum (in `jvector-api` — pure value type, no
    algorithm dependency) + `applyRecipe(...)` on the new builder.
@@ -374,7 +394,8 @@ backing types, add a small architecture test that lists the known concrete
    `IvfRecipe` there directly (replacing `IndexRecipe`); added the
    `jvector-base` → `jvector-api` dependency; added `Indexes` to
    `jvector-base` with the two static factories.
-2. Added `IndexBuilderValidation`; refactored `HnswIndexBuilder` to use it.
+2. Added `IndexBuilderValidation`; refactored `HnswIndexBuilder` to use it
+   (both later removed, §12.1).
 3. Fixed `GraphIndex.searcher()`'s return type to `GraphSearcher`.
 4. Defined `IvfIndex`/`IvfSearcher` in `jvector-base` (corrected from the
    round-2 plan of putting `IvfIndex` in `jvector-api` — see §4) — seam
@@ -397,18 +418,24 @@ concrete backing-index type back, no cast needed, consistent with what
 
 ## 10. Remaining open items
 
-- **Remove `ImmutableGraphIndex`** in the release after this one (§11.7), and
-  switch the four `GraphIndexBuilder` methods back to returning `GraphIndex`.
-  A migration guide for the release should announce this.
-- **Recipe values and IVF** — still `@Experimental` stubs (§11.8).
-- **Consumer migration** (§11.6) — Cassandra and OpenSearch still call
-  `GraphIndexBuilder` directly; moving them to `Indexes.hnswBuilder()` is
-  work in those repositories.
+- **Recipe values and IVF** — still `@Experimental`. Only
+  `HnswRecipe.DEFAULT` is defined (§12.4).
+- **Consumer migration** — Cassandra and OpenSearch still call
+  `GraphIndexBuilder` directly; moving them to `Indexes.hnswBuilder(...)` is
+  work in those repositories. §12.6 maps each call site.
 - **Legacy entry points still take the package-private `MutableGraphIndex`**
   — `GraphIndexBuilder`'s existing-graph constructor and
   `GraphIndexBuilder.builder(bsp, dimension, MutableGraphIndex)`. Callers
   can pass an `OnHeapGraphIndex`, but can't name the parameter type.
-  `HnswIndexBuilder.withExistingGraph` no longer has this problem (§11.2).
+  `HnswIndexBuilder.withExistingGraph` doesn't have this problem (§11.2).
+- **PQ codes from a compressed build aren't exposed.** A builder using
+  `withCompressionType(PQ)` trains a codebook internally, but on-disk layouts
+  that store PQ codes (fused PQ, separate PQ vectors) need the caller's own
+  `ProductQuantization`. An accessor on the builder would let those layouts
+  reuse it.
+- **Saving a graph to continue later needs a cast**:
+  `((OnHeapGraphIndex) graph).save(out)`, since `save` is only on
+  `OnHeapGraphIndex`.
 - **IVF construction parameters** — needed from the IVF developers before
   `IvfIndexBuilder` can do anything beyond validate common inputs and
   refuse (§3.1, §5.5).
@@ -425,6 +452,13 @@ usage exposed a gap that blocked merging: `HnswIndexBuilder.build()` only
 did a one-shot batch build, while both consumers build graphs
 incrementally. This follow-up closes that gap and fixes the smaller API issues
 found at the same time.
+
+> **Partly superseded by §12.** `MutableHnswIndex` and `buildMutable()`
+> (§11.1) were removed in favor of building incrementally on the builder
+> itself; the consumer table (§11.6), the deprecated alias (§11.7), the
+> example description (§11.9) and the aggregated validation (§11.10) are
+> out of date. §11.2–§11.5 and §11.8 still hold, apart from their
+> references to `MutableHnswIndex`.
 
 ### 11.1 `MutableHnswIndex` and `HnswIndexBuilder.buildMutable()`
 
@@ -647,3 +681,111 @@ or `withAddHierarchy` set alongside `withExistingGraph`. Those last two used
 to be silently ignored. `IvfIndexBuilder` reports its scoring conflict the
 same way.
 
+## 12. Simplification pass: an easier builder
+
+Using the §11 API in a rewritten example showed it was hard to use. Every
+build had to set seven or more values that already have well-known
+defaults, the two scoring modes were mutually exclusive setters checked only
+at runtime, compression meant computing PQ or BQ vectors by hand, and
+`MutableHnswIndex` was a second type to learn for the incremental case. This
+pass reshaped the builder around the common case.
+
+### 12.1 Scoring chosen up front; defaults for everything else
+
+`Indexes.hnswBuilder()` became two factories:
+
+- `Indexes.hnswBuilder(RandomAccessVectorValues, VectorSimilarityFunction)`
+  returns a `RavvHnswBuilder`, which scores with the vectors.
+- `Indexes.hnswBuilder(BuildScoreProvider, int dimension)` returns a
+  `ScoreProviderHnswBuilder`, which uses the caller's provider.
+
+`HnswIndexBuilder` is now an abstract class with a package-private
+constructor, so these are its only subclasses. Each subclass holds its own
+scoring inputs as `private final` fields; the base class holds only the
+graph shape and tuning settings, as primitives with `GraphIndexBuilder`'s
+defaults (max degree 32, beam width 100, overflow 1.2, alpha 1.2, hierarchy
+and refinement on). With nothing left that is required, the
+collect-every-missing-value validation, `withScoreProvider`,
+`withVectorValues`, `withSimilarityFunction`, `withDimension` and
+`IndexBuilderValidation` were all removed. Out-of-range values are rejected
+by `GraphIndexBuilder` when the graph is built.
+
+The one cross-setting rule kept is the existing-graph conflict:
+`withMaxDegree(s)` or `withAddHierarchy` together with `withExistingGraph`
+throws `IllegalStateException`, naming every conflict. The builder tracks
+whether those were set explicitly, so values applied by a recipe don't count.
+
+### 12.2 Compression is a setting
+
+`withCompressionType(CompressionType)` (NONE, PQ or BQ) on the vector builder
+makes the builder train the quantizer, encode the vectors on its own
+executors, and build with the compressed scores. The PQ/BQ code is shared
+with `GraphIndexBuilder`'s JMX path through a package-private
+`GraphIndexBuilder.buildScoreProvider(...)`. The score-provider builder logs a
+warning and ignores the setting, since its provider is fixed.
+
+### 12.3 One builder for batch and incremental construction
+
+`MutableHnswIndex` and `buildMutable()` were removed. The builder itself now
+covers both cases:
+
+- `buildAndPopulate()` builds and inserts the builder's own vectors in one
+  call (the vector builder only; the score-provider builder throws).
+- `build()` returns the graph, initially empty, for incremental use with
+  `addGraphNode`, `markNodeDeleted`, `removeDeletedNodes`, `cleanup()` and
+  `insertsInProgress()`, which delegate to the underlying
+  `GraphIndexBuilder`. `build()` is idempotent and thread-safe: the
+  underlying builder is created once, and later calls return the same
+  graph.
+- `populateGraph(ravv)` inserts a whole `RandomAccessVectorValues` and calls
+  `cleanup()`. It adds only ordinals from the graph's current id upper
+  bound onward, so on an existing graph it appends rather than re-inserting
+  the existing nodes.
+- `HnswIndexBuilder.rescore(HnswIndexBuilder, BuildScoreProvider)` returns a
+  new builder holding a re-scored copy of the graph, carrying over the
+  source's settings (max degrees and hierarchy taken from its graph).
+- `HnswIndexBuilder` is `Closeable`, closing the underlying builder's
+  per-thread scratch space.
+
+This drops §11.1's locking and `ForkJoinPool`-cooperative waiting. Callers
+coordinate `cleanup()`, `removeDeletedNodes()` and `rescore` with inserts
+themselves, exactly as with `GraphIndexBuilder`; reworking the library's
+concurrency was out of scope for an API change.
+
+`build()`, `getGraph()` and `populateGraph()` return `PersistableGraphIndex`,
+and so do `GraphIndexBuilder.build(ravv)` and `getGraph()`.
+`MutableGraphIndex` went back to being package-private, as on `main`.
+
+### 12.4 Recipes
+
+`HnswRecipe` gained `DEFAULT`, which restates the builder's defaults, and a
+small key/value representation: each recipe carries values keyed by the
+constants in `HnswRecipe.Param`, which `applyRecipe` reads. `HIGH_RECALL` and
+`HIGH_PERFORMANCE` have no values yet and are still refused. Recipe types
+and both `applyRecipe` methods are `@Experimental`; the representation is a
+prototype (values are loosely typed, and an unknown key is ignored).
+
+### 12.5 `ImmutableGraphIndex` removed
+
+The deprecated alias from §11.7 was removed, along with
+`ImmutableGraphIndexCompatibilityTest`. This is a breaking change for 4.0.x
+callers that name `ImmutableGraphIndex`; `UPGRADING.md` lists the renames.
+
+### 12.6 Migrating the consumers
+
+| Consumer call site | Today | With this API |
+|---|---|---|
+| Cassandra `CassandraOnHeapGraph` | `new GraphIndexBuilder(ravv, vsf, …)`, `addGraphNode`, `markNodeDeleted`, `cleanup` | `Indexes.hnswBuilder(ravv, vsf)…build()`, then `addGraphNode`/`markNodeDeleted`/`cleanup` |
+| Cassandra `CompactionGraph` | 10-arg constructor with a PQ score provider, `addGraphNode` under `trainingLock`, `GraphIndexBuilder.rescore` | `Indexes.hnswBuilder(bsp, dimension)…build()`, `addGraphNode`, `HnswIndexBuilder.rescore(builder, refined)`; `trainingLock` stays |
+| OpenSearch `JVectorWriter.getGraph` | 7-arg constructor, parallel `addGraphNode`, `cleanup` | `Indexes.hnswBuilder(bsp, dimension)…populateGraph(ravv)`, or `Indexes.hnswBuilder(ravv, vsf).withCompressionType(PQ).buildAndPopulate()` if the builder can own the quantization |
+| OpenSearch leading-segment merge | existing-graph constructor, `addGraphNode`, `markNodeDeleted`, `cleanup` | `…withExistingGraph(loaded)`, then `populateGraph(superset)` or `addGraphNode`, `markNodeDeleted`, `cleanup` |
+
+### 12.7 Example
+
+`IndexApiExample` was rewritten around ease of use: a one-call quickstart,
+tuning and compression by setting, writing the populated graph with the
+sequential and parallel writers (inline and NVQ vectors), incremental
+construction with deletes, a score-provider build with a rescore, continuing
+a saved graph, search options, and the remaining validation. The
+legacy-comparison section was dropped, as were the fused-PQ and
+separate-PQ layouts, which need a caller-computed codebook (§10).

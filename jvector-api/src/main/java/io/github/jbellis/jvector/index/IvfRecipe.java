@@ -29,6 +29,8 @@ import io.github.jbellis.jvector.annotations.Experimental;
  */
 @Experimental
 public enum IvfRecipe {
+    /** Favors recall over build and search speed. Not defined yet. */
     HIGH_RECALL,
+    /** Favors build and search speed over recall. Not defined yet. */
     HIGH_PERFORMANCE
 }

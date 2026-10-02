@@ -157,8 +157,12 @@ public class OnDiskGraphIndexWriter extends RandomAccessOnDiskGraphIndexWriter {
     public static class Builder extends AbstractGraphIndexWriter.Builder<OnDiskGraphIndexWriter, RandomAccessWriter> {
         private long startOffset = 0L;
 
+        /**
+         * Writes to the file at {@code outPath}, which is opened (and created if needed) by
+         * {@link #build()}, not here; the writer that {@code build()} returns closes it.
+         */
         public Builder(GraphIndex graphIndex, Path outPath) throws FileNotFoundException {
-            this(graphIndex, new BufferedRandomAccessWriter(outPath));
+            super(graphIndex, () -> new BufferedRandomAccessWriter(outPath));
         }
 
         public Builder(GraphIndex graphIndex, RandomAccessWriter out) {
