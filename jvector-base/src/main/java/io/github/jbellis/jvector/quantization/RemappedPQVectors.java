@@ -30,7 +30,7 @@ import java.util.Objects;
 
 /**
  * A remapped view over an existing {@link PQVectors} instance.
- * Ordinals are mapped from new ordinals (0 <= newOrdinal < outputCount) to old ordinals
+ * Ordinals are mapped from new ordinals (0 &lt;= newOrdinal &lt; outputCount) to old ordinals
  * in the source {@link PQVectors} instance using the provided {@link OrdinalMapper}.
  * Omitted ordinals or ordinals mapped out of bounds return zero-filled byte sequences.
  */
@@ -101,10 +101,12 @@ public class RemappedPQVectors extends PQVectors {
                 int destOffset = i * M;
 
                 if (oldOrdinal >= 0 && oldOrdinal < source.count()) {
-                    ByteSequence<?> srcChunk = source.getChunk(oldOrdinal);
-                    int srcOffset = source.getOffsetInChunk(oldOrdinal);
+                    // Use get() rather than getChunk/getOffsetInChunk so that nested
+                    // RemappedPQVectors sources (which have uninitialized vectorsPerChunk)
+                    // are handled correctly via their overridden get().
+                    ByteSequence<?> srcSeq = source.get(oldOrdinal);
                     for (int m = 0; m < M; m++) {
-                        chunkBuffer.set(destOffset + m, srcChunk.get(srcOffset + m));
+                        chunkBuffer.set(destOffset + m, srcSeq.get(m));
                     }
                 } else {
                     for (int m = 0; m < M; m++) {

@@ -92,11 +92,12 @@ public class TestRemappedPQVectors extends RandomizedTest {
         File tempFile = Files.createTempFile("remapped_pq", ".tmp").toFile();
         tempFile.deleteOnExit();
 
-        try (var writer = new SimpleWriter(tempFile.getAbsolutePath())) {
+        try (var writer = new SimpleWriter(tempFile.toPath())) {
             remapped.write(writer, 4);
         }
 
-        try (var reader = new SimpleMappedReader(tempFile.getAbsolutePath())) {
+        try (var supplier = new SimpleMappedReader.Supplier(tempFile.toPath());
+             var reader = supplier.get()) {
             PQVectors loaded = PQVectors.load(reader);
             assertEquals(outputCount, loaded.count());
             assertByteSequenceEquals(mutablePQ.get(10), loaded.get(0));
