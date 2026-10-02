@@ -461,9 +461,12 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
         } finally {
             activeSidecarStrategy = QuantizationCompactionStrategy.NONE;
             vectorStore = QuantizationCompactionStrategy.NONE;
+            // Release every mapping before resizing: both strategies can hold mappings on scratch
+            // sections of this same file, and a truncate under a live mapping fails on Windows.
             strategy.onAfterClose(outputPath);
             scratch.onAfterClose(outputPath);
             scratch.releaseTransientState();
+            truncateScratchSections(outputPath, strategy, scratch);
         }
     }
 
@@ -507,9 +510,10 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
             inlineStrategy.onAfterClose(graphPath);
             scratch.onAfterClose(graphPath);
             scratch.releaseTransientState();
-            // No-op after a successful writeSidecar; releases the cache mapping and truncates
-            // the scratch region if a failure interrupted the normal flow.
             sidecarStrategy.releaseTransientState();
+            // Every mapping on the graph file is released by now, including the sidecar strategy's,
+            // which held one until writeSidecar copied out of it. Resize once, here.
+            truncateScratchSections(graphPath, inlineStrategy, scratch, sidecarStrategy);
         }
     }
 
@@ -526,6 +530,45 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
             }
         }
         return QuantizationCompactionStrategy.NONE;
+    }
+
+    /**
+     * Cuts the output file back to the start of the first reserved scratch section, once every
+     * strategy has released its mappings. Truncating under a live mapping succeeds on Linux but
+     * fails on Windows, so unmapping and resizing are two separate phases and this runs last.
+     * <p>
+     * The graph itself is already complete and valid at this point; an un-truncated tail only wastes
+     * disk, so a failure here is logged rather than thrown.
+     */
+    private void truncateScratchSections(Path outputPath, QuantizationCompactionStrategy... strategies) {
+        long cutAt = 0;
+        for (QuantizationCompactionStrategy st : strategies) {
+            if (st == null) {
+                continue;
+            }
+            long offset = st.pendingTruncateOffset();
+            if (offset > 0 && (cutAt == 0 || offset < cutAt)) {
+                cutAt = offset;
+            }
+        }
+        if (cutAt == 0) {
+            return;
+        }
+        try (FileChannel fc = FileChannel.open(outputPath, StandardOpenOption.WRITE)) {
+            if (fc.size() > cutAt) {
+                fc.truncate(cutAt);
+            }
+        } catch (IOException e) {
+            // Most likely cause on Windows: a mapping on this file could not be released, so the
+            // OS still holds it open. The graph is complete and valid either way.
+            log.warn("Could not truncate the scratch section from {}; the graph is complete and "
+                     + "valid, the unused tail past byte {} simply remains on disk", outputPath, cutAt, e);
+        }
+        for (QuantizationCompactionStrategy st : strategies) {
+            if (st != null) {
+                st.clearPendingTruncate();
+            }
+        }
     }
 
     /**

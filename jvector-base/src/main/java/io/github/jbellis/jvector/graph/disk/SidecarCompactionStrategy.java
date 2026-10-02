@@ -179,7 +179,9 @@ public final class SidecarCompactionStrategy extends QuantizationCompactionStrat
         } catch (InterruptedException | ExecutionException e) {
             throw new IOException("Failed to write compressed sidecar to " + compressedPath, e);
         } finally {
-            releaseCacheAndTruncate();
+            // The copy is done with the mapping; the compactor truncates the file once every
+            // strategy has released its mappings.
+            releaseMappings();
         }
         log.info("Wrote compacted compressed sidecar to {}", compressedPath);
     }
@@ -202,7 +204,7 @@ public final class SidecarCompactionStrategy extends QuantizationCompactionStrat
 
     @Override
     public void releaseTransientState() {
-        releaseCacheAndTruncate();
+        releaseMappings();
     }
 
     private void closeCache() {
@@ -213,19 +215,19 @@ public final class SidecarCompactionStrategy extends QuantizationCompactionStrat
         closeSecondaryCache();
     }
 
-    private void releaseCacheAndTruncate() {
+    @Override
+    public void releaseMappings() {
         closeCache();
-        if (cacheTruncateAt > 0 && graphPath != null) {
-            try (java.nio.channels.FileChannel fc = java.nio.channels.FileChannel.open(
-                    graphPath, java.nio.file.StandardOpenOption.WRITE)) {
-                if (fc.size() > cacheTruncateAt) {
-                    fc.truncate(cacheTruncateAt);
-                }
-            } catch (IOException e) {
-                throw new RuntimeException("Failed to truncate code-cache section from " + graphPath, e);
-            }
-            cacheTruncateAt = 0;
-        }
+    }
+
+    @Override
+    public long pendingTruncateOffset() {
+        return cacheTruncateAt;
+    }
+
+    @Override
+    public void clearPendingTruncate() {
+        cacheTruncateAt = 0;
     }
 
 

@@ -241,8 +241,13 @@ public final class PreEncodedCodeCache implements AutoCloseable {
                 UNSAFE.invokeCleaner(chunks[i]);
             } catch (IllegalArgumentException ignored) {
                 // duplicated/indirect buffer; not cleanable
+            } catch (RuntimeException | LinkageError e) {
+                // A JDK that refuses Unsafe memory access (JEP 498 and later) throws here. The
+                // graph is already written at this point, so degrade instead of failing the merge.
+                log.warn("Could not unmap a code-cache chunk; the scratch section will stay on disk", e);
             }
             chunks[i] = null;
         }
     }
+
 }

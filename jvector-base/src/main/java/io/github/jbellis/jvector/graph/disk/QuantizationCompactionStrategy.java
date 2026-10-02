@@ -185,6 +185,33 @@ public abstract class QuantizationCompactionStrategy {
     }
 
     /**
+     * Releases every mapping this strategy holds on the output file, without resizing it.
+     * <p>
+     * Separate from truncation on purpose: several strategies can map scratch sections of the same
+     * output file, and Windows keeps a file open for the lifetime of any mapping on it, so a
+     * truncate issued while another strategy still holds a mapping fails there (it succeeds on
+     * Linux, which is why this was invisible locally). The compactor therefore releases every
+     * strategy's mappings first and truncates once, afterwards.
+     */
+    public void releaseMappings() {
+        // no-op
+    }
+
+    /**
+     * The size the output file should be cut back to once every mapping is released, or 0 when this
+     * strategy reserved no scratch section. The compactor truncates to the smallest non-zero offset
+     * across all strategies, which is the start of the first reserved section.
+     */
+    public long pendingTruncateOffset() {
+        return 0;
+    }
+
+    /** Forgets the pending truncation, after the compactor has performed it. */
+    public void clearPendingTruncate() {
+        // no-op
+    }
+
+    /**
      * Writes the merged compressed-vectors sidecar file. Called by the compactor's
      * {@code compact(graphPath, compressedPath)} entry point after the graph is fully written.
      * Throws {@link UnsupportedOperationException} by default; sidecar strategies override.

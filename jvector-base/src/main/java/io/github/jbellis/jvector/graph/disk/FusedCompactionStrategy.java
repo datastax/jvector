@@ -149,20 +149,25 @@ public final class FusedCompactionStrategy extends QuantizationCompactionStrateg
 
     @Override
     public void onAfterClose(Path graphPath) {
-        if (cacheTruncateAt > 0) {
-            if (codeCache != null) {
-                codeCache.close();
-            }
+        releaseMappings();
+    }
+
+    @Override
+    public void releaseMappings() {
+        if (codeCache != null) {
+            codeCache.close();
             codeCache = null;
-            closeSecondaryCache();
-            try (FileChannel fc = FileChannel.open(graphPath, StandardOpenOption.WRITE)) {
-                if (fc.size() > cacheTruncateAt) {
-                    fc.truncate(cacheTruncateAt);
-                }
-            } catch (IOException e) {
-                throw new RuntimeException("Failed to truncate code-cache section from output file " + graphPath, e);
-            }
-            cacheTruncateAt = 0;
         }
+        closeSecondaryCache();
+    }
+
+    @Override
+    public long pendingTruncateOffset() {
+        return cacheTruncateAt;
+    }
+
+    @Override
+    public void clearPendingTruncate() {
+        cacheTruncateAt = 0;
     }
 }
