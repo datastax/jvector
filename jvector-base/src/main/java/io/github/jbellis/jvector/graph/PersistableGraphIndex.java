@@ -92,7 +92,7 @@ public interface PersistableGraphIndex extends GraphIndex {
     /**
      * Writes this graph to {@code path} with {@code vectors} stored inline, the simplest on-disk index:
      * load it with {@code OnDiskGraphIndex.load} and search it with
-     * {@link GraphSearcher#search(VectorFloat, int, VectorSimilarityFunction)}. {@code vectors} must hold
+     * {@link GraphSearcher#search(VectorFloat, int, int, VectorSimilarityFunction, io.github.jbellis.jvector.util.Bits)}. {@code vectors} must hold
      * the vector of every node, by graph ordinal. Nodes are renumbered {@code 0..size-1} on disk, closing
      * any gaps left by deleted nodes. Uses the random-access writer; for other writers, features (such as
      * fused PQ or NVQ) or ordinal mappings, use the writer builders above.

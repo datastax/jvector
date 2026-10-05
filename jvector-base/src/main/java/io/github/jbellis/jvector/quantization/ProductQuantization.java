@@ -117,7 +117,9 @@ public class ProductQuantization implements VectorCompressor<ByteSequence<?>>, A
         checkClusterCount(clusterCount);
 
         if (ravv.size() < clusterCount) {
-            throw new IllegalArgumentException("Cannot train PQ with %d clusters on %d points, supply more training vectors or lower cluster count.");
+            throw new IllegalArgumentException(String.format(
+                    "Cannot train PQ with %d clusters on %d points, supply more training vectors or lower cluster count.",
+                    clusterCount, ravv.size()));
         }
         var subvectorSizesAndOffsets = getSubvectorSizesAndOffsets(ravv.dimension(), M);
         var vectors = extractTrainingVectors(ravv, parallelExecutor);

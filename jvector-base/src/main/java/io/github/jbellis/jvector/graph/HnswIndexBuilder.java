@@ -18,6 +18,8 @@ package io.github.jbellis.jvector.graph;
 
 import io.github.jbellis.jvector.annotations.Experimental;
 import io.github.jbellis.jvector.disk.RandomAccessReader;
+import io.github.jbellis.jvector.graph.diversity.DiversityProvider;
+import io.github.jbellis.jvector.graph.diversity.VamanaDiversityProvider;
 import io.github.jbellis.jvector.graph.similarity.BuildScoreProvider;
 import io.github.jbellis.jvector.graph.similarity.SearchScoreProvider;
 import io.github.jbellis.jvector.index.HnswRecipe;
@@ -86,7 +88,7 @@ public abstract class HnswIndexBuilder implements Closeable {
     boolean refineFinalGraph = true;
     ForkJoinPool simdExecutor = PhysicalCoreExecutor.pool();
     ForkJoinPool parallelExecutor = ForkJoinPool.commonPool();
-    MutableGraphIndex existingGraph;
+    OnHeapGraphIndex existingGraph;
     // Whether withMaxDegree(s)/withAddHierarchy were called, as opposed to holding their defaults or a
     // recipe's values; setting them explicitly conflicts with withExistingGraph.
     private boolean maxDegreesSet;
@@ -115,14 +117,38 @@ public abstract class HnswIndexBuilder implements Closeable {
      * The number of subspaces for product quantization, when {@link #withCompressionType} is
      * {@link CompressionType#PQ}: each vector is split into this many sub-vectors, each encoded in one
      * byte, so it is also the size of a PQ code in bytes. More subspaces give more accurate compressed
-     * scores and larger codes. Defaults to one subspace per 4 dimensions, which is what Cassandra and
-     * OpenSearch use. Has no effect with other compression types. Only {@link RavvHnswBuilder} supports
-     * it; {@link ScoreProviderHnswBuilder} logs a warning and ignores it.
+     * scores and larger codes. The default depends on the dimension, using the rule Cassandra (and
+     * OpenSearch) use: the dimension itself up to 32 dimensions, 32 up to 64, half the dimension up to
+     * 200, 100 up to 400, a quarter of the dimension up to 768, 192 up to 1536, and an eighth of the
+     * dimension above that. Has no effect with other compression types. Only {@link RavvHnswBuilder}
+     * supports it; {@link ScoreProviderHnswBuilder} logs a warning and ignores it.
      *
      * @throws IllegalArgumentException if {@code pqSubspaces} is less than 1 or greater than the vector
      *         dimension
      */
     public abstract HnswIndexBuilder withPqSubspaces(int pqSubspaces);
+
+    /**
+     * Whether product quantization subtracts the vectors' global centroid before training and encoding,
+     * when {@link #withCompressionType} is {@link CompressionType#PQ}. Defaults to {@code false} for every
+     * similarity function, as Cassandra does. (OpenSearch centers for
+     * {@code VectorSimilarityFunction.EUCLIDEAN} only.) Has no effect with other compression types. Only
+     * {@link RavvHnswBuilder} supports it; {@link ScoreProviderHnswBuilder} logs a warning and ignores it.
+     */
+    public abstract HnswIndexBuilder withPqGlobalCentering(boolean pqGlobalCentering);
+
+    /**
+     * The anisotropic threshold for training product quantization, when {@link #withCompressionType} is
+     * {@link CompressionType#PQ}: the threshold of relevance for weighting quantization error parallel to
+     * each vector more than error orthogonal to it. {@code -1.0}
+     * ({@code KMeansPlusPlusClusterer.UNWEIGHTED}) disables the weighting; that is the default for every
+     * similarity function, as Cassandra and OpenSearch use. Anisotropic weighting assumes unit-length
+     * vectors. Has no effect with other compression types. Only {@link RavvHnswBuilder} supports it;
+     * {@link ScoreProviderHnswBuilder} logs a warning and ignores it.
+     *
+     * @throws IllegalArgumentException if the threshold is NaN, below -1.0, or not below 1.0
+     */
+    public abstract HnswIndexBuilder withPqAnisotropicThreshold(float pqAnisotropicThreshold);
 
     /**
      * The compressed vectors the graph was built with, when this builder compressed them itself (see
@@ -273,7 +299,13 @@ public abstract class HnswIndexBuilder implements Closeable {
      * mutated in place. Its max degrees and hierarchy are kept, so {@link #withMaxDegree},
      * {@link #withMaxDegrees} and {@link #withAddHierarchy} must not also be called: if they are,
      * building throws {@link IllegalStateException}. (Values set by {@link #applyRecipe} do not
-     * conflict; the existing graph's take precedence.) Its dimension must match this builder's.
+     * conflict; the existing graph's take precedence.) Its dimension must match this builder's, and so
+     * must the kind of scoring: a graph built with exact scores can't be continued with compressed ones,
+     * or the reverse, and {@link #withCompressionType} can't be combined with it, since that would train
+     * a new quantizer the graph wasn't built with. To continue a graph built with compressed vectors, use
+     * {@code Indexes.hnswBuilder(scoreProvider, dimension)} with the same score provider the graph was
+     * built with (and loaded with). Graphs loaded with a diversity provider other than
+     * {@code VamanaDiversityProvider} can't be checked; their scoring is the caller's responsibility.
      * <p>
      * Add the new nodes with {@link #addGraphNode}, at ordinals from
      * {@link GraphIndex#getIdUpperBound()} onward, then call {@link #cleanup()}. {@link #populateGraph}
@@ -332,8 +364,19 @@ public abstract class HnswIndexBuilder implements Closeable {
         if (recipe.has(HnswRecipe.Param.REFINE_FINAL_GRAPH)) {
             refineFinalGraph = recipe.get(HnswRecipe.Param.REFINE_FINAL_GRAPH);
         }
+        applyPqRecipe(recipe);
         return this;
     }
+
+    /**
+     * Applies a recipe's PQ training settings. Nothing to do by default: only {@link RavvHnswBuilder}
+     * trains PQ.
+     */
+    void applyPqRecipe(HnswRecipe recipe) {
+    }
+
+    /** Whether this builder scores with exact comparisons, as opposed to compressed vectors. */
+    abstract boolean scoresExactly();
 
     /**
      * Creates the underlying {@link GraphIndexBuilder} from this builder's current settings. Called
@@ -436,22 +479,33 @@ public abstract class HnswIndexBuilder implements Closeable {
      * This is a one-shot operation on an empty graph. It throws if the graph already has nodes, whether
      * from an earlier {@code populateGraph}, from {@link #addGraphNode}, or from
      * {@link #withExistingGraph}; to add nodes to a graph that has some, use {@link #addGraphNode} and
-     * then {@link #cleanup()}.
+     * then {@link #cleanup()}. Concurrent calls are safe: one populates the graph and the others throw.
+     * Calling {@link #addGraphNode} while it runs is not supported.
      *
      * @return the populated graph
+     * @throws IllegalArgumentException if {@code ravv}'s dimension differs from this builder's
      * @throws IllegalStateException if the graph already has nodes
      */
     public PersistableGraphIndex populateGraph(RandomAccessVectorValues ravv) {
         Objects.requireNonNull(ravv, "ravv");
-        GraphIndexBuilder gib = graphBuilder();
-        int existing = gib.graph.getIdUpperBound();
-        if (existing > 0) {
-            throw new IllegalStateException(String.format(
-                    "populateGraph() populates an empty graph, but this graph already has nodes (ordinals up to %d). "
-                            + "To add nodes to a graph that has some, use addGraphNode() and then cleanup().",
-                    existing - 1));
+        if (ravv.dimension() != dimension()) {
+            throw new IllegalArgumentException(String.format(
+                    "populateGraph() was given vectors of dimension %d, but this builder indexes dimension %d",
+                    ravv.dimension(), dimension()));
         }
-        return gib.build(ravv);
+        GraphIndexBuilder gib = graphBuilder();
+        // Under the build lock, so the check and the population are one step: a concurrent populateGraph
+        // waits, then finds the graph populated and throws.
+        synchronized (buildLock) {
+            int existing = gib.graph.getIdUpperBound();
+            if (existing > 0) {
+                throw new IllegalStateException(String.format(
+                        "populateGraph() populates an empty graph, but this graph already has nodes (ordinals up to %d). "
+                                + "To add nodes to a graph that has some, use addGraphNode() and then cleanup().",
+                        existing - 1));
+            }
+            return gib.build(ravv);
+        }
     }
 
     /**
@@ -474,8 +528,9 @@ public abstract class HnswIndexBuilder implements Closeable {
     }
 
     /**
-     * Rejects settings that conflict with {@link #withExistingGraph} (shape settings, or a different
-     * dimension), naming every conflict in one exception.
+     * Rejects settings that conflict with {@link #withExistingGraph} (shape settings, a different
+     * dimension, or scoring of a different kind than the graph was built with), naming every conflict in
+     * one exception.
      */
     private void validateExistingGraphSettings() {
         if (existingGraph == null) {
@@ -485,6 +540,23 @@ public abstract class HnswIndexBuilder implements Closeable {
         if (existingGraph.getDimension() != dimension()) {
             problems.add(String.format("the existing graph has dimension %d, but this builder's vectors have dimension %d",
                     existingGraph.getDimension(), dimension()));
+        }
+        // A graph is built with one kind of scoring. The existing graph's diversity provider scores the way
+        // the graph was built; new inserts must score the same way.
+        if (compressionType() != CompressionType.NONE) {
+            problems.add("withCompressionType(" + compressionType() + ") trains a new quantizer, which the existing "
+                    + "graph wasn't built with; to continue a graph built with compressed vectors, use "
+                    + "Indexes.hnswBuilder(scoreProvider, dimension) with the score provider the graph was built with");
+        } else {
+            DiversityProvider diversity = existingGraph.diversityProvider();
+            if (diversity instanceof VamanaDiversityProvider) {
+                boolean graphExact = ((VamanaDiversityProvider) diversity).scoreProvider.isExact();
+                if (graphExact != scoresExactly()) {
+                    problems.add(String.format("the existing graph scores with %s vectors, but this builder scores with "
+                            + "%s vectors; a graph must be built with one kind of scoring",
+                            graphExact ? "exact" : "compressed", scoresExactly() ? "exact" : "compressed"));
+                }
+            }
         }
         if (maxDegreesSet) {
             problems.add("withExistingGraph() takes its max degrees from the existing graph; "

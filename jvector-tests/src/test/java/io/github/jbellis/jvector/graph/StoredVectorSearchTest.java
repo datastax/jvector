@@ -74,7 +74,7 @@ public class StoredVectorSearchTest extends RandomizedTest {
                 // each vector finds itself, scored exactly with the inline vectors
                 int found = 0;
                 for (int i = 0; i < n; i += 10) {
-                    SearchResult result = searcher.search(ravv.getVector(i), 1, VSF);
+                    SearchResult result = searcher.search(ravv.getVector(i), 1, 1, VSF, Bits.ALL);
                     if (result.getNodes()[0].node == i) {
                         found++;
                     }
@@ -180,13 +180,22 @@ public class StoredVectorSearchTest extends RandomizedTest {
                     }
                 }
 
+                // Each copy has the same structure as the source, and searching it gives the same results.
+                int[][] expected = new int[10][];
+                try (var searcher = source.searcher()) {
+                    for (int i = 0; i < expected.length; i++) {
+                        expected[i] = nodes(searcher.search(ravv.getVector(i * 31), 10, 30, VSF, Bits.ALL));
+                    }
+                }
                 for (Path rewritten : java.util.List.of(randomAccess, parallel, sequential)) {
                     try (var rs2 = ReaderSupplierFactory.open(rewritten);
                          var copy = OnDiskGraphIndex.load(rs2);
                          var searcher = copy.searcher()) {
                         io.github.jbellis.jvector.TestUtil.assertGraphEquals(source, copy);
-                        var result = searcher.search(ravv.getVector(7), 1, VSF);
-                        assertEquals(rewritten.toString(), 7, result.getNodes()[0].node);
+                        for (int i = 0; i < expected.length; i++) {
+                            assertArrayEquals(rewritten.toString(), expected[i],
+                                    nodes(searcher.search(ravv.getVector(i * 31), 10, 30, VSF, Bits.ALL)));
+                        }
                     }
                 }
             }
@@ -203,7 +212,7 @@ public class StoredVectorSearchTest extends RandomizedTest {
         var ravv = new ListRandomAccessVectorValues(createRandomVectors(100, DIMENSION), DIMENSION);
         PersistableGraphIndex inMemory = Indexes.hnswBuilder(ravv, VSF).buildAndPopulate();
         try (var searcher = inMemory.searcher()) {
-            searcher.search(ravv.getVector(0), 5, VSF);
+            searcher.search(ravv.getVector(0), 5, 5, VSF, Bits.ALL);
             fail("expected IllegalStateException");
         } catch (IllegalStateException e) {
             assertTrue(e.getMessage(), e.getMessage().contains("doesn't store its vectors"));

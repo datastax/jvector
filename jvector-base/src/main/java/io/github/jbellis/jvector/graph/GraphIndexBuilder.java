@@ -94,8 +94,10 @@ public class GraphIndexBuilder implements Closeable, Accountable {
     private final Random rng;
 
     private static BuildScoreProvider getBuildScoreProvider(RandomAccessVectorValues vectorValues, VectorSimilarityFunction similarityFunction) {
-        int pqSubspaces = vectorValues.dimension() / GraphIndexBuilderConfig.getInstance().getPqMFactor();
+        var config = GraphIndexBuilderConfig.getInstance();
+        int pqSubspaces = vectorValues.dimension() / config.getPqMFactor();
         CompressedVectors compressed = compress(vectorValues, resolveJmxBuildCompressionType(), pqSubspaces,
+                                                config.isPqCenterData(), config.getPqAnisotropicThreshold(),
                                                 PhysicalCoreExecutor.pool(), ForkJoinPool.commonPool());
         return buildScoreProvider(vectorValues, similarityFunction, compressed);
     }
@@ -103,8 +105,8 @@ public class GraphIndexBuilder implements Closeable, Accountable {
     /**
      * Compresses {@code vectorValues} for building with compressed scores: trains the quantizer and
      * encodes every vector, using the given executors. Product quantization ({@link CompressionType#PQ})
-     * uses {@code pqSubspaces} subspaces, and takes its cluster count, centering and anisotropic threshold
-     * from {@link GraphIndexBuilderConfig}.
+     * uses {@code pqSubspaces} subspaces, {@code pqGlobalCentering} and {@code pqAnisotropicThreshold},
+     * and takes its cluster count from {@link GraphIndexBuilderConfig}.
      *
      * @return the {@link PQVectors} or {@link BQVectors}, or null for {@link CompressionType#NONE}
      * @throws IllegalArgumentException if {@code type} is not supported
@@ -112,6 +114,8 @@ public class GraphIndexBuilder implements Closeable, Accountable {
     static CompressedVectors compress(RandomAccessVectorValues vectorValues,
                                       CompressionType type,
                                       int pqSubspaces,
+                                      boolean pqGlobalCentering,
+                                      float pqAnisotropicThreshold,
                                       ForkJoinPool simdExecutor,
                                       ForkJoinPool parallelExecutor) {
         switch(type) {
@@ -120,7 +124,7 @@ public class GraphIndexBuilder implements Closeable, Accountable {
             case PQ: {
                 var config = GraphIndexBuilderConfig.getInstance();
                 var compressor = ProductQuantization.compute(vectorValues, pqSubspaces, config.getPqK(),
-                                                            config.isPqCenterData(), config.getPqAnisotropicThreshold(),
+                                                            pqGlobalCentering, pqAnisotropicThreshold,
                                                             simdExecutor, parallelExecutor);
                 return compressor.encodeAll(vectorValues, simdExecutor);
             }

@@ -439,6 +439,101 @@ public class HnswIndexBuilderTest extends RandomizedTest {
     }
 
     @Test
+    public void concurrentPopulatesPopulateOnce() throws Exception {
+        int n = 2_000;
+        var ravv = randomRavv(n, DIMENSION);
+        for (int attempt = 0; attempt < 5; attempt++) {
+            HnswIndexBuilder builder = configured(ravv);
+            ExecutorService pool = Executors.newFixedThreadPool(2);
+            try {
+                var start = new java.util.concurrent.CountDownLatch(1);
+                List<Future<Boolean>> results = IntStream.range(0, 2).mapToObj(t -> pool.submit(() -> {
+                    start.await();
+                    try {
+                        builder.populateGraph(ravv);
+                        return true;
+                    } catch (IllegalStateException e) {
+                        assertTrue(e.getMessage(), e.getMessage().contains("already has nodes"));
+                        return false;
+                    }
+                })).collect(Collectors.toList());
+                start.countDown();
+                int succeeded = 0;
+                for (Future<Boolean> f : results) {
+                    succeeded += f.get() ? 1 : 0;
+                }
+                assertEquals(1, succeeded);
+                assertEquals(n, builder.getGraph().size(0));
+                assertEquals(n, builder.getGraph().getIdUpperBound());
+            } finally {
+                pool.shutdownNow();
+            }
+        }
+    }
+
+    @Test
+    public void populateGraphChecksTheDimension() {
+        var ravv = randomRavv(100, DIMENSION);
+        var bsp = BuildScoreProvider.randomAccessScoreProvider(ravv, VSF);
+        var wrong = randomRavv(100, DIMENSION * 2);
+        expectIllegalArgument(() -> Indexes.hnswBuilder(bsp, DIMENSION).populateGraph(wrong), "dimension");
+        expectIllegalArgument(() -> Indexes.hnswBuilder(ravv, VSF).populateGraph(wrong), "dimension");
+    }
+
+    @Test
+    public void existingGraphMustBeContinuedWithTheSameKindOfScoring() {
+        int n = 1_000;
+        var ravv = randomRavv(n, DIMENSION);
+        var exactBsp = BuildScoreProvider.randomAccessScoreProvider(ravv, VSF);
+        var exactGraph = (OnHeapGraphIndex) configured(exactBsp).populateGraph(ravv);
+
+        HnswIndexBuilder pqBuilder = Indexes.hnswBuilder(ravv, VSF).withCompressionType(CompressionType.PQ);
+        pqBuilder.build();
+        var pqBsp = BuildScoreProvider.pqBuildScoreProvider(VSF, (PQVectors) pqBuilder.getCompressedVectors());
+        var pqGraph = (OnHeapGraphIndex) configured(pqBsp).populateGraph(ravv);
+
+        // withCompressionType would train a new quantizer the existing graph wasn't built with
+        expectIllegalState(() -> Indexes.hnswBuilder(ravv, VSF).withExistingGraph(exactGraph)
+                .withCompressionType(CompressionType.PQ).build(), List.of("trains a new quantizer"));
+        expectIllegalState(() -> Indexes.hnswBuilder(ravv, VSF).withExistingGraph(pqGraph)
+                .withCompressionType(CompressionType.PQ).build(), List.of("trains a new quantizer"));
+        // exact inserts into a PQ graph, and PQ inserts into an exact graph
+        expectIllegalState(() -> Indexes.hnswBuilder(ravv, VSF).withExistingGraph(pqGraph).build(),
+                List.of("scores with compressed vectors", "this builder scores with exact vectors"));
+        expectIllegalState(() -> Indexes.hnswBuilder(exactBsp, DIMENSION).withExistingGraph(pqGraph).build(),
+                List.of("scores with compressed vectors"));
+        expectIllegalState(() -> Indexes.hnswBuilder(pqBsp, DIMENSION).withExistingGraph(exactGraph).build(),
+                List.of("scores with exact vectors", "this builder scores with compressed vectors"));
+
+        // the supported ways: the same kind of scoring as the graph was built with
+        assertSame(pqGraph, Indexes.hnswBuilder(pqBsp, DIMENSION).withExistingGraph(pqGraph).build());
+        assertSame(exactGraph, Indexes.hnswBuilder(ravv, VSF).withExistingGraph(exactGraph).build());
+    }
+
+    @Test
+    public void defaultRecipeResetsThePqSettings() {
+        var ravv = randomRavv(10, 128);
+        var builder = (RavvHnswBuilder) Indexes.hnswBuilder(ravv, VSF)
+                .withPqSubspaces(16)
+                .withPqGlobalCentering(true)
+                .withPqAnisotropicThreshold(0.2f);
+        builder.applyRecipe(HnswRecipe.DEFAULT);
+        assertEquals(RavvHnswBuilder.defaultPqSubspaces(128), builder.pqSubspaces());
+        assertFalse(builder.pqGlobalCentering());
+        assertEquals(-1.0f, builder.pqAnisotropicThreshold(), 0.0f);
+    }
+
+    @Test
+    public void vectorBuilderMustBePopulatedWithItsOwnVectors() {
+        var ravv = randomRavv(100, DIMENSION);
+        var other = randomRavv(50, DIMENSION);
+        expectIllegalArgument(() -> Indexes.hnswBuilder(ravv, VSF).populateGraph(other), "same vectors");
+        expectNullPointer(() -> Indexes.hnswBuilder(ravv, VSF).withCompressionType(null), "compressionType");
+        // its own vectors, or a copy of them, are accepted
+        assertEquals(100, Indexes.hnswBuilder(ravv, VSF).populateGraph(ravv.copy()).size(0));
+    }
+
+    @Test
     public void getGraphBuildsOnceAndThenReturnsTheSameGraph() {
         var ravv = randomRavv(10, DIMENSION);
         HnswIndexBuilder builder = Indexes.hnswBuilder(ravv, VSF);
@@ -858,34 +953,53 @@ public class HnswIndexBuilderTest extends RandomizedTest {
     }
 
     @Test
-    public void pqSubspacesDefaultToOnePerFourDimensionsAndCanBeSet() {
+    public void pqSubspacesDefaultToCassandrasRule() {
+        // Cassandra's VectorSourceModel.defaultPQBytesFor, at and around each boundary
+        int[][] expected = {
+                {1, 1}, {3, 3}, {32, 32},
+                {33, 32}, {64, 32},
+                {65, 32}, {128, 64}, {200, 100},
+                {201, 100}, {400, 100},
+                {401, 100}, {768, 192},
+                {769, 192}, {1536, 192},
+                {1537, 192}, {3072, 384},
+        };
+        for (int[] e : expected) {
+            assertEquals("dimension " + e[0], e[1], RavvHnswBuilder.defaultPqSubspaces(e[0]));
+        }
+        assertEquals(64, ((RavvHnswBuilder) Indexes.hnswBuilder(randomRavv(10, 128), VSF)).pqSubspaces());
+    }
+
+    @Test
+    public void pqSubspacesCanBeSet() {
         int n = 1_000;
         int dimension = 32;
         var ravv = randomRavv(n, dimension);
 
         HnswIndexBuilder byDefault = Indexes.hnswBuilder(ravv, VSF).withCompressionType(CompressionType.PQ);
-        assertEquals(dimension / 4, ((RavvHnswBuilder) byDefault).pqSubspaces());
         byDefault.build();
         ProductQuantization defaultPq = ((PQVectors) byDefault.getCompressedVectors()).getCompressor();
-        assertEquals(dimension / 4, defaultPq.getSubspaceCount());
-        assertEquals(dimension / 4, defaultPq.compressedVectorSize());
+        assertEquals(RavvHnswBuilder.defaultPqSubspaces(dimension), defaultPq.getSubspaceCount());
+        assertEquals(RavvHnswBuilder.defaultPqSubspaces(dimension), defaultPq.compressedVectorSize());
 
         HnswIndexBuilder custom = Indexes.hnswBuilder(ravv, VSF)
-                .withPqSubspaces(dimension / 2)
+                .withPqSubspaces(dimension / 4)
                 .withCompressionType(CompressionType.PQ);
         custom.build();
-        assertEquals(dimension / 2, ((PQVectors) custom.getCompressedVectors()).getCompressor().getSubspaceCount());
-
-        // fewer than 4 dimensions still gets one subspace
-        assertEquals(1, ((RavvHnswBuilder) Indexes.hnswBuilder(randomRavv(10, 3), VSF)).pqSubspaces());
+        assertEquals(dimension / 4, ((PQVectors) custom.getCompressedVectors()).getCompressor().getSubspaceCount());
 
         expectIllegalArgument(() -> Indexes.hnswBuilder(ravv, VSF).withPqSubspaces(0), "between 1 and the vector dimension");
         expectIllegalArgument(() -> Indexes.hnswBuilder(ravv, VSF).withPqSubspaces(dimension + 1), "between 1 and the vector dimension");
+        expectIllegalArgument(() -> Indexes.hnswBuilder(ravv, VSF).withPqAnisotropicThreshold(1.0f), "pqAnisotropicThreshold");
+        expectIllegalArgument(() -> Indexes.hnswBuilder(ravv, VSF).withPqAnisotropicThreshold(-1.5f), "pqAnisotropicThreshold");
+        expectIllegalArgument(() -> Indexes.hnswBuilder(ravv, VSF).withPqAnisotropicThreshold(Float.NaN), "pqAnisotropicThreshold");
 
         // ignored, with a warning, by a score-provider builder
         var bsp = BuildScoreProvider.randomAccessScoreProvider(ravv, VSF);
         HnswIndexBuilder scoreProviderBuilder = Indexes.hnswBuilder(bsp, dimension);
         assertSame(scoreProviderBuilder, scoreProviderBuilder.withPqSubspaces(4));
+        assertSame(scoreProviderBuilder, scoreProviderBuilder.withPqGlobalCentering(true));
+        assertSame(scoreProviderBuilder, scoreProviderBuilder.withPqAnisotropicThreshold(0.2f));
     }
 
     @Test

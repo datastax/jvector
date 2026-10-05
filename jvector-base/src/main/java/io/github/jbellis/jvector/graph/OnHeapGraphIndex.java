@@ -160,6 +160,11 @@ public class OnHeapGraphIndex implements MutableGraphIndex {
         return layers.get(level).size();
     }
 
+    /** The diversity provider that prunes this graph's neighbor lists, which scores the way the graph was built. */
+    DiversityProvider diversityProvider() {
+        return layers.get(0).diversityProvider;
+    }
+
     public void addNode(NodeAtLevel nodeLevel) {
         addNode(nodeLevel.level, nodeLevel.node);
     }

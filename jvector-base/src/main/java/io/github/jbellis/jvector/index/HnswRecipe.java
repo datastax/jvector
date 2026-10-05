@@ -37,14 +37,17 @@ import java.util.Set;
 @Experimental
 public enum HnswRecipe {
     /** JVector's default value for every builder parameter that has one. */
-    DEFAULT(Map.of(
-            Param.COMPRESSION_TYPE, "NONE",
-            Param.MAX_DEGREES, List.of(32),
-            Param.BEAM_WIDTH, 100,
-            Param.NEIGHBOR_OVERFLOW, 1.2f,
-            Param.ALPHA, 1.2f,
-            Param.ADD_HIERARCHY, true,
-            Param.REFINE_FINAL_GRAPH, true)),
+    DEFAULT(Map.ofEntries(
+            Map.entry(Param.COMPRESSION_TYPE, "NONE"),
+            Map.entry(Param.MAX_DEGREES, List.of(32)),
+            Map.entry(Param.BEAM_WIDTH, 100),
+            Map.entry(Param.NEIGHBOR_OVERFLOW, 1.2f),
+            Map.entry(Param.ALPHA, 1.2f),
+            Map.entry(Param.ADD_HIERARCHY, true),
+            Map.entry(Param.REFINE_FINAL_GRAPH, true),
+            Map.entry(Param.PQ_SUBSPACES, 0),
+            Map.entry(Param.PQ_GLOBAL_CENTERING, false),
+            Map.entry(Param.PQ_ANISOTROPIC_THRESHOLD, -1.0f))),
     /** Favors recall over build and search speed. Not defined yet. */
     HIGH_RECALL(Map.of()),
     /** Favors build and search speed over recall. Not defined yet. */
@@ -71,6 +74,12 @@ public enum HnswRecipe {
         public static final String ADD_HIERARCHY = "addHierarchy";
         /** {@code Boolean}. */
         public static final String REFINE_FINAL_GRAPH = "refineFinalGraph";
+        /** {@code Integer}: PQ subspaces; {@code 0} means the builder's default for the vector dimension. */
+        public static final String PQ_SUBSPACES = "pqSubspaces";
+        /** {@code Boolean}. */
+        public static final String PQ_GLOBAL_CENTERING = "pqGlobalCentering";
+        /** {@code Float}: {@code -1.0} is unweighted. */
+        public static final String PQ_ANISOTROPIC_THRESHOLD = "pqAnisotropicThreshold";
 
         private Param() {
         }

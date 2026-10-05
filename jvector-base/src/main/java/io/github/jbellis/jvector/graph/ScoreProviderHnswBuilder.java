@@ -74,6 +74,25 @@ public class ScoreProviderHnswBuilder extends HnswIndexBuilder {
         return this;
     }
 
+    /** Not supported: logs a warning and leaves the builder unchanged; see {@link #withPqSubspaces}. */
+    @Override
+    public HnswIndexBuilder withPqGlobalCentering(boolean pqGlobalCentering) {
+        logger.warn("PQ centering is not supported when using a BuildScoreProvider. Ignoring the provided value: {}", pqGlobalCentering);
+        return this;
+    }
+
+    /** Not supported: logs a warning and leaves the builder unchanged; see {@link #withPqSubspaces}. */
+    @Override
+    public HnswIndexBuilder withPqAnisotropicThreshold(float pqAnisotropicThreshold) {
+        logger.warn("PQ anisotropic threshold is not supported when using a BuildScoreProvider. Ignoring the provided value: {}", pqAnisotropicThreshold);
+        return this;
+    }
+
+    @Override
+    boolean scoresExactly() {
+        return scoreProvider.isExact();
+    }
+
     @Override
     int dimension() {
         return dimension;

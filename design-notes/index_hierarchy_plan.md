@@ -363,23 +363,23 @@ is ready for those parameters to be added to once they're known.
 ## 7. Checklist: adding a fourth backing type later
 
 1. New package, new `XxxIndex extends Index` interface + concrete impl(s),
-   both in `jvector-base` (not `jvector-api` — see §4's correction; only
-   move a backing's index interface to `jvector-api` if it *doesn't* need a
-   covariant `searcher()` override, which none realistically won't).
+   in `jvector-base`, outside the `io.github.jbellis.jvector.api` package
+   (which holds only the backing-agnostic contract, §12.13).
 2. New `XxxSearcher implements IndexSearcher` (`jvector-base`), returned
    covariantly from `XxxIndex.searcher()`.
 3. New `XxxIndexBuilder` (`jvector-base`), taking the inputs it can't do
    without as arguments to its `Indexes` factory and everything else as
    `withXxx` settings with defaults (§12).
 4. New static factory `Indexes.xxxBuilder()`.
-5. (Optional) `XxxRecipe` enum (in `jvector-api` — pure value type, no
-   algorithm dependency) + `applyRecipe(...)` on the new builder.
+5. (Optional) `XxxRecipe` enum in `jvector-base`, package
+   `io.github.jbellis.jvector.index`, alongside `HnswRecipe` (§12.12), +
+   `applyRecipe(...)` on the new builder.
 6. Any place that pattern-matches over backing types (there should be very
    few) gets a new `instanceof` branch; see §8 for how to catch a missed
    one.
 
-Nothing in `jvector-api`'s `Index`/`IndexSearcher`, or the other backings'
-code, needs to change.
+Nothing in the `api` package's `Index`/`IndexSearcher`, or the other
+backings' code, needs to change.
 
 ## 8. Java 11 constraint: no sealed hierarchy, so what replaces exhaustiveness checking?
 
@@ -439,6 +439,14 @@ concrete backing-index type back, no cast needed, consistent with what
   refuse (§3.1, §5.5).
 - **IVF persistence** — no interface added yet; revisit once the on-disk
   format is decided (§3.2, §5.5).
+- **Two rerankers per query in the stored-vector search** — on a fused-PQ
+  graph, `GraphSearcher.search(query, topK, rerankK, similarityFunction,
+  acceptOrds)` creates a reranker for the final reranking, and
+  `approximateScoreFunctionFor` creates another inside the fused PQ decoder.
+  For NVQ each one precomputes per-query state. Callers building the score
+  provider by hand do the same today, so this is not a regression, and it
+  measured as no slower than `main`; sharing one reranker would need a
+  `ScoringView` API change. A possible later optimization.
 - **Generic search on `IndexSearcher`** — it is a closeable marker with no
   `search` method, so code holding only an `Index` must narrow the type to
   search. The obstacle is not the index type: a searcher is already bound to
@@ -844,6 +852,11 @@ the score provider from them.
 
 ### 12.10 PQ subspaces per builder
 
+> **Superseded by §12.14:** the claim below that one subspace per 4 dimensions
+> is what Cassandra and OpenSearch use came from a comment in the old example,
+> not their code. The default is now their actual dimension-dependent rule, and
+> centering and the anisotropic threshold are builder options.
+
 `withPqSubspaces(int)` sets the number of PQ subspaces (the code size in
 bytes) for `withCompressionType(PQ)`. It defaults to one subspace per 4
 dimensions, what Cassandra and OpenSearch use, rather than the JMX
@@ -862,8 +875,8 @@ Two conveniences over existing code, with nothing changed underneath:
 - `PersistableGraphIndex.writeTo(path, vectors)`, a default method that
   delegates to `OnDiskGraphIndex.write(graph, vectors, path)`: inline vectors,
   random-access writer, ordinals renumbered to close gaps.
-- `GraphSearcher.search(query, topK, similarityFunction)` and
-  `search(query, topK, rerankK, similarityFunction, acceptOrds)`, which score
+- `GraphSearcher.search(query, topK, rerankK, similarityFunction, acceptOrds)`,
+  which scores
   with the vectors the graph stores. They build the same
   `DefaultSearchScoreProvider` callers built by hand from the
   `ScoringView`: fused PQ for traversal plus the stored vectors for reranking
@@ -914,3 +927,50 @@ The package is kept free of references to concrete backings (which is why
 the factories stay on `Indexes` rather than `Index`), so if backing-neutral
 types arrive with a generic search API, moving the package into its own
 module again needs no changes for callers.
+
+### 12.14 PQ training defaults from Cassandra, and one search overload
+
+`withCompressionType(PQ)` took its training settings from the JMX path, which
+nobody uses. They now come from Cassandra's own PQ training, checked against
+its source (`CassandraOnHeapGraph.computeOrRefineFrom` and
+`VectorSourceModel.defaultPQBytesFor`), and each is a builder option:
+
+| Setting | Builder option | Default (Cassandra) | OpenSearch |
+|---|---|---|---|
+| Subspaces | `withPqSubspaces` | stepped by dimension: D up to 32, 32 up to 64, D/2 up to 200, 100 up to 400, D/4 up to 768, 192 up to 1536, D/8 above | same rule |
+| Centering | `withPqGlobalCentering` | `false`, for every similarity | `true` for EUCLIDEAN only |
+| Anisotropic threshold | `withPqAnisotropicThreshold` | `-1.0` (unweighted) | unweighted |
+| Clusters | (from `GraphIndexBuilderConfig`) | 256 | `min(256, vector count)` |
+
+Cassandra doesn't vary these by similarity function, so neither do the
+defaults. The earlier subspace default of one per 4 dimensions (§12.10) was
+based on a comment in the old example, not on the consumers' code; for 128
+dimensions Cassandra uses 64 subspaces, not 32.
+
+The three-argument `search(query, topK, similarityFunction)` was removed. It
+implied `rerankK = topK`, which on a fused-PQ graph is rerankless search and
+gives much lower recall than the reranked search callers normally use. The
+remaining overload makes the caller choose `rerankK`; for the same `rerankK`
+it returns the same results as the score provider built by hand.
+
+### 12.15 One kind of scoring per graph, and safer population
+
+- **Existing graphs keep their kind of scoring.** A graph is pruned by its
+  diversity provider, which scores the way the graph was built. New inserts
+  scored differently would leave a graph built with mixed scoring, so the
+  builder rejects: `withCompressionType` with `withExistingGraph` (it would
+  train a new quantizer), and any builder whose scoring is exact when the
+  graph's is compressed, or the reverse (checked through
+  `BuildScoreProvider.isExact()` on the graph's `VamanaDiversityProvider`).
+  Continuing a compressed graph means passing the same score provider to
+  `Indexes.hnswBuilder(scoreProvider, dimension)`. Two different compressed
+  providers (e.g. two PQ codebooks) can't be told apart, and graphs loaded
+  with another kind of diversity provider can't be checked; those remain the
+  caller's responsibility.
+- **`populateGraph` is atomic.** Its emptiness check and the population run
+  under the builder's lock, so concurrent populates populate once and the
+  rest throw. It also rejects vectors whose dimension differs from the
+  builder's.
+- **`HnswRecipe.DEFAULT` covers the PQ settings** (`PQ_SUBSPACES`, `0`
+  meaning the default for the dimension; `PQ_GLOBAL_CENTERING`;
+  `PQ_ANISOTROPIC_THRESHOLD`), so applying it resets them too.

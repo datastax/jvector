@@ -45,9 +45,11 @@ If you only read one thing, read this!
     and build with the compressed scores, with no codebook or encoding step for you to run. Once the graph is
     built, `getCompressedVectors()` returns what it trained (`PQVectors`, whose `getCompressor()` is the
     `ProductQuantization`, or `BQVectors`), to search with or to write to disk, e.g. as a `FusedPQ` feature.
-    `withPqSubspaces(n)` sets the PQ code size in bytes (one subspace per byte); it defaults to one subspace per 4
-    dimensions, as Cassandra and OpenSearch use. The cluster count, centering and anisotropic threshold still come
-    from `GraphIndexBuilderConfig`.
+    The PQ training defaults match Cassandra's, and each can be overridden: `withPqSubspaces(n)` sets the code size
+    in bytes (one subspace per byte; by default a dimension-dependent rule, e.g. 64 for 128 dimensions and 192 for
+    1536), `withPqGlobalCentering(boolean)` whether to center the vectors first (default `false`), and
+    `withPqAnisotropicThreshold(float)` the anisotropic weighting (default `-1.0`, unweighted). The cluster count
+    (256) still comes from `GraphIndexBuilderConfig`.
   - `Indexes.hnswBuilder(BuildScoreProvider, dimension)` scores with your own provider, for callers that stream
     vectors in or already have a provider. It has no vectors of its own, so populate it with
     `populateGraph(ravv)` or `addGraphNode`.
@@ -84,18 +86,18 @@ If you only read one thing, read this!
   ```
   Constructing the writer builders directly and `GraphIndexWriter.getBuilderFor(...)` still work.
 - **Shortcuts for the simplest on-disk index.** `PersistableGraphIndex.writeTo(path, vectors)` writes a graph with
-  its vectors stored inline. `GraphSearcher.search(query, topK, similarityFunction)` and
-  `search(query, topK, rerankK, similarityFunction, acceptOrds)` search a graph that stores its vectors (an
-  `OnDiskGraphIndex` with inline or NVQ vectors) without building a score provider: with fused PQ they traverse
-  with the PQ codes and rerank the best `rerankK` with the stored vectors, otherwise they score with the stored
-  vectors. On an in-memory graph they throw `IllegalStateException`. `GraphIndex.ScoringView.hasApproximateScores()`
+  its vectors stored inline. `GraphSearcher.search(query, topK, rerankK, similarityFunction, acceptOrds)` searches a
+  graph that stores its vectors (an `OnDiskGraphIndex` with inline or NVQ vectors) without building a score
+  provider: with fused PQ it traverses with the PQ codes and reranks the best `rerankK` with the stored vectors,
+  otherwise it scores with the stored vectors. For the same `rerankK` it returns the same results as building that
+  score provider by hand. On an in-memory graph it throws `IllegalStateException`. `GraphIndex.ScoringView.hasApproximateScores()`
   (default `false`) reports whether a view supports `approximateScoreFunctionFor`.
   ```java
   graph.writeTo(path, ravv);
   try (var rs = ReaderSupplierFactory.open(path);
        var onDisk = OnDiskGraphIndex.load(rs);
        var searcher = onDisk.searcher()) {
-      SearchResult result = searcher.search(query, 10, VectorSimilarityFunction.COSINE);
+      SearchResult result = searcher.search(query, 10, 30, VectorSimilarityFunction.COSINE, Bits.ALL);
   }
   ```
 - **Experimental:** recipes and IVF are marked `@Experimental`. `HnswRecipe.DEFAULT` is defined (it restates the
@@ -128,14 +130,18 @@ If you only read one thing, read this!
 Differences to be aware of:
 - `addHierarchy`, `refineFinalGraph` and the build compression are always explicit (defaulting to `true`, `true`
   and `CompressionType.NONE`). The `GraphIndexBuilder.builder(...)` fluent builder from 4.0.x reads them from the
-  JMX `GraphIndexBuilderConfig` instead. So does the PQ subspace count (`withPqSubspaces`, default one per 4
-  dimensions, where the JMX path defaults to one per 8); the other PQ parameters still come from
-  `GraphIndexBuilderConfig`.
+  JMX `GraphIndexBuilderConfig` instead. So are the PQ subspace count, centering and anisotropic threshold
+  (`withPqSubspaces`, `withPqGlobalCentering`, `withPqAnisotropicThreshold`); only the PQ cluster count still comes
+  from `GraphIndexBuilderConfig`.
 - Settings are validated when the graph is built, by `GraphIndexBuilder`, which throws an
   `IllegalArgumentException` for the first invalid value. Null inputs and a non-positive dimension are rejected
   immediately. Settings changed after the graph is built are ignored, with a logged warning.
 - With `withExistingGraph`, calling `withMaxDegree(s)` or `withAddHierarchy` as well is rejected with an
-  `IllegalStateException`, because the existing graph fixes both. The existing graph keeps the diversity provider
+  `IllegalStateException`, because the existing graph fixes both. So is scoring of a different kind than the graph
+  was built with: a graph built with exact scores can't be continued with compressed ones, or the reverse, and
+  `withCompressionType` can't be combined with an existing graph, since it would train a new quantizer. To continue
+  a graph built with compressed vectors, use `Indexes.hnswBuilder(scoreProvider, dimension)` with the score provider
+  the graph was built with. The existing graph keeps the diversity provider
   it was created with, which must be able to score the ordinals you append.
 - Concurrency is unchanged from `GraphIndexBuilder`: `addGraphNode` and `markNodeDeleted` are thread-safe, but
   `cleanup()`, `removeDeletedNodes()`, `rescore` and `close()` must not run while inserts are in progress.

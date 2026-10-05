@@ -105,7 +105,7 @@ import java.util.stream.Stream;
  * PQVectors pq = (PQVectors) builder.getCompressedVectors();
  * }</pre>
  * Persisting and searching have shortcuts too: {@code graph.writeTo(path, vectors)} writes the graph with
- * its vectors stored inline, and {@code searcher.search(query, topK, similarityFunction)} searches an
+ * its vectors stored inline, and {@code searcher.search(query, topK, rerankK, similarityFunction, filter)} searches an
  * on-disk graph with the vectors it stores, using fused PQ codes when it has them.
  * <p>
  * Sections, in the order {@link #main} runs them:
@@ -290,8 +290,10 @@ public class IndexApiExample {
     private static PqBuild section3CompressedBuild(Dataset ds) throws IOException {
         header("3. Building with compressed scores");
 
-        // PQ: product quantization. By default each vector is split into one subspace per 4 dimensions,
-        // each encoded in one byte, as Cassandra and OpenSearch do; withPqSubspaces changes that.
+        // PQ: product quantization. Each vector is split into subspaces, each encoded in one byte. The
+        // training settings default to Cassandra's: a code size that depends on the dimension (32 bytes for
+        // these 64-dimension vectors), no centering, and unweighted training. withPqSubspaces,
+        // withPqGlobalCentering and withPqAnisotropicThreshold override them.
         long start = System.nanoTime();
         PersistableGraphIndex pqGraph;
         PQVectors pqVectors;
@@ -319,7 +321,7 @@ public class IndexApiExample {
                     q -> new DefaultSearchScoreProvider(pqVectors.precomputedScoreFunctionFor(q, SIMILARITY_FUNCTION))));
         }
 
-        // Fewer subspaces give smaller codes and coarser scores: here half the default, 8 bytes per vector.
+        // Fewer subspaces give smaller codes and coarser scores: here a quarter of the default.
         try (HnswIndexBuilder builder = Indexes.hnswBuilder(ds.ravv, SIMILARITY_FUNCTION)
                 .withCompressionType(CompressionType.PQ)
                 .withPqSubspaces(DIMENSION / 8)) {
@@ -621,18 +623,20 @@ public class IndexApiExample {
                         }
                     }));
                 }
-                // One thread searching the graph while it grows. A new searcher per search sees the nodes
-                // added since the last one.
+                // One thread searching the graph while it grows. It reuses one searcher, since creating one
+                // allocates scratch space, and gives it a fresh view before each search so the search sees
+                // the nodes added since the last one.
                 Future<?> searcher = pool.submit(() -> {
                     Random random = new Random(0);
-                    while (inserting.get()) {
-                        try (GraphSearcher s = graph.searcher()) {
+                    try (GraphSearcher s = graph.searcher()) {
+                        while (inserting.get()) {
+                            s.setView(graph.getView());
                             VectorFloat<?> q = ds.queries.get(random.nextInt(ds.queries.size()));
                             s.search(DefaultSearchScoreProvider.exact(q, SIMILARITY_FUNCTION, ds.ravv), TOP_K, Bits.ALL);
                             searches.incrementAndGet();
-                        } catch (IOException e) {
-                            throw new RuntimeException(e);
                         }
+                    } catch (IOException e) {
+                        throw new RuntimeException(e);
                     }
                 });
                 awaitAll(inserters);
@@ -693,10 +697,10 @@ public class IndexApiExample {
         int n = ds.ravv.size();
         int half = n / 2;
 
-        // An initial codebook from the first rows: one subspace per 4 dimensions, as both consumers
-        // default to, and 256 clusters, as fused PQ requires.
+        // An initial codebook from the first rows, trained the way Cassandra trains it: 32 subspaces (its
+        // default for 64 dimensions), 256 clusters, as fused PQ requires, and no centering.
         var sample = new ListRandomAccessVectorValues(ds.vectors.subList(0, n / 10), DIMENSION);
-        ProductQuantization initialPq = ProductQuantization.compute(sample, DIMENSION / 4, 256, false);
+        ProductQuantization initialPq = ProductQuantization.compute(sample, 32, 256, false);
         MutablePQVectors codes = new MutablePQVectors(initialPq);
 
         try (HnswIndexBuilder builder = Indexes.hnswBuilder(

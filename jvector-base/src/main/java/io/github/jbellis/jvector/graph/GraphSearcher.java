@@ -140,15 +140,6 @@ public class GraphSearcher implements IndexSearcher {
 
     /**
      * Searches for the {@code topK} nodes nearest {@code queryVector}, scoring with the vectors the graph
-     * itself stores. Equivalent to {@code search(queryVector, topK, topK, similarityFunction, Bits.ALL)};
-     * see {@link #search(VectorFloat, int, int, VectorSimilarityFunction, Bits)}.
-     */
-    public SearchResult search(VectorFloat<?> queryVector, int topK, VectorSimilarityFunction similarityFunction) {
-        return search(queryVector, topK, topK, similarityFunction, Bits.ALL);
-    }
-
-    /**
-     * Searches for the {@code topK} nodes nearest {@code queryVector}, scoring with the vectors the graph
      * itself stores, so no score provider has to be built. For a graph with fused PQ codes, the search
      * traverses with those and reranks the best {@code rerankK} candidates with the stored vectors (inline
      * or NVQ); otherwise every candidate is scored with the stored vectors, and {@code rerankK} only widens
@@ -163,6 +154,9 @@ public class GraphSearcher implements IndexSearcher {
      *                {@code topK}
      * @param acceptOrds which nodes are acceptable results; {@link Bits#ALL} for all
      * @throws IllegalStateException if the graph doesn't store its vectors
+     * @throws UnsupportedOperationException if the graph stores its vectors only as separated features
+     *         ({@code SEPARATED_VECTORS} or {@code SEPARATED_NVQ}), which its view can't rerank with; search
+     *         those with a {@link SearchScoreProvider}
      */
     public SearchResult search(VectorFloat<?> queryVector,
                                int topK,
@@ -174,6 +168,9 @@ public class GraphSearcher implements IndexSearcher {
                     + "search with a SearchScoreProvider, or with search(query, topK, vectors, similarityFunction, graph, acceptOrds)");
         }
         var scoringView = (GraphIndex.ScoringView) view;
+        // With fused PQ, approximateScoreFunctionFor creates its own reranker internally, so each query creates
+        // two (for NVQ, each precomputes per-query state). Callers building the score provider by hand do the
+        // same today; sharing one would need a ScoringView API change. A possible later optimization.
         var reranker = scoringView.rerankerFor(queryVector, similarityFunction);
         SearchScoreProvider ssp = scoringView.hasApproximateScores()
                 ? new DefaultSearchScoreProvider(scoringView.approximateScoreFunctionFor(queryVector, similarityFunction), reranker)

@@ -78,11 +78,14 @@ public interface GraphIndex extends Index, Accountable {
     View getView();
 
     /**
-     * Returns a new {@link GraphSearcher} over a fresh
-     * {@link #getView()} of this graph.
+     * Returns a new {@link GraphSearcher} over a fresh {@link #getView()} of this graph. Equivalent to
+     * {@code new GraphSearcher(graph)}.
      * <p>
-     * For in-memory graphs it is generally better to call this once per search rather than reusing
-     * an instance across concurrent searches, since {@link GraphSearcher} implementations are not thread-safe.
+     * Creating a searcher allocates its scratch space (and, for an on-disk graph, a reader), so reuse it
+     * for many searches rather than creating one per search. A searcher is not thread-safe: keep one per
+     * thread. For an in-memory graph that is still being built, a searcher sees the graph as of its view;
+     * call {@link GraphSearcher#setView setView(graph.getView())} before a search to include the nodes
+     * added since.
      */
     default GraphSearcher searcher() {
         return new GraphSearcher(this);
