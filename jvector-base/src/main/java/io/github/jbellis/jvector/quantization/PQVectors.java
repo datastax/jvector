@@ -20,6 +20,7 @@ import io.github.jbellis.jvector.disk.IndexWriter;
 import io.github.jbellis.jvector.disk.RandomAccessReader;
 import io.github.jbellis.jvector.graph.RandomAccessVectorValues;
 import io.github.jbellis.jvector.graph.disk.CompactionContext;
+import io.github.jbellis.jvector.graph.disk.OrdinalMapper;
 import io.github.jbellis.jvector.graph.disk.QuantizationCompactionStrategy;
 import io.github.jbellis.jvector.graph.similarity.ScoreFunction;
 import io.github.jbellis.jvector.util.RamUsageEstimator;
@@ -78,6 +79,18 @@ public abstract class PQVectors implements CompressedVectors {
         in.seek(offset);
         return load(in);
     }
+
+    /**
+     * Returns a lazy remapped view of this instance where ordinals are translated
+     * through {@code mapper}.  No vectors are copied.
+     *
+     * @param mapper maps new (view) ordinals to old (source) ordinals
+     * @return a {@link RemappedPQVectors} wrapping this instance
+     */
+    public RemappedPQVectors remap(OrdinalMapper mapper) {
+        return new RemappedPQVectors(this, mapper);
+    }
+
 
     /**
      * Build a PQVectors instance from the given RandomAccessVectorValues. The vectors are encoded in parallel
@@ -172,14 +185,14 @@ public abstract class PQVectors implements CompressedVectors {
 
     /**
      * We consider two PQVectors equal when their PQs are equal and their compressed data is equal. We ignore the
-     * chunking strategy in the comparison since this is an implementation detail.
+     * chunking strategy and concrete subclass in the comparison since these are implementation details.
      * @param o the object to check for equality
      * @return true if the objects are equal, false otherwise
      */
     @Override
     public boolean equals(Object o) {
         if (this == o) return true;
-        if (o == null || getClass() != o.getClass()) return false;
+        if (!(o instanceof PQVectors)) return false;
 
         PQVectors that = (PQVectors) o;
         if (!Objects.equals(pq, that.pq)) return false;
