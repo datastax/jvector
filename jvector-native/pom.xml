@@ -117,6 +117,13 @@
         </profile>
 
         <profile>
+            <id>release</id>
+            <properties>
+                <native.crossarch>true</native.crossarch>
+            </properties>
+        </profile>
+
+        <profile>
             <id>unix-amd64-profile</id>
             <activation>
                 <os>
