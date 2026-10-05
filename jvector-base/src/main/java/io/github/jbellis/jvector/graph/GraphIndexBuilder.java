@@ -29,6 +29,7 @@ import io.github.jbellis.jvector.management.CompressionType;
 import io.github.jbellis.jvector.management.GraphIndexBuilderConfig;
 import io.github.jbellis.jvector.quantization.BinaryQuantization;
 import io.github.jbellis.jvector.quantization.BQVectors;
+import io.github.jbellis.jvector.quantization.CompressedVectors;
 import io.github.jbellis.jvector.quantization.PQVectors;
 import io.github.jbellis.jvector.quantization.ProductQuantization;
 import io.github.jbellis.jvector.util.*;
@@ -93,44 +94,60 @@ public class GraphIndexBuilder implements Closeable, Accountable {
     private final Random rng;
 
     private static BuildScoreProvider getBuildScoreProvider(RandomAccessVectorValues vectorValues, VectorSimilarityFunction similarityFunction) {
-        return buildScoreProvider(vectorValues, similarityFunction, resolveJmxBuildCompressionType(),
-                                  PhysicalCoreExecutor.pool(), ForkJoinPool.commonPool());
+        int pqSubspaces = vectorValues.dimension() / GraphIndexBuilderConfig.getInstance().getPqMFactor();
+        CompressedVectors compressed = compress(vectorValues, resolveJmxBuildCompressionType(), pqSubspaces,
+                                                PhysicalCoreExecutor.pool(), ForkJoinPool.commonPool());
+        return buildScoreProvider(vectorValues, similarityFunction, compressed);
     }
 
     /**
-     * Returns a build score provider for {@code vectorValues} that scores with the given compression:
-     * exact comparisons for {@link CompressionType#NONE}, or comparisons of the vectors after they are
-     * compressed with product quantization ({@link CompressionType#PQ}, sized from
-     * {@link GraphIndexBuilderConfig}) or binary quantization ({@link CompressionType#BQ}). PQ and BQ
-     * train on and encode every vector up front, using the given executors.
+     * Compresses {@code vectorValues} for building with compressed scores: trains the quantizer and
+     * encodes every vector, using the given executors. Product quantization ({@link CompressionType#PQ})
+     * uses {@code pqSubspaces} subspaces, and takes its cluster count, centering and anisotropic threshold
+     * from {@link GraphIndexBuilderConfig}.
      *
+     * @return the {@link PQVectors} or {@link BQVectors}, or null for {@link CompressionType#NONE}
      * @throws IllegalArgumentException if {@code type} is not supported
      */
-    static BuildScoreProvider buildScoreProvider(RandomAccessVectorValues vectorValues,
-                                                 VectorSimilarityFunction similarityFunction,
-                                                 CompressionType type,
-                                                 ForkJoinPool simdExecutor,
-                                                 ForkJoinPool parallelExecutor) {
+    static CompressedVectors compress(RandomAccessVectorValues vectorValues,
+                                      CompressionType type,
+                                      int pqSubspaces,
+                                      ForkJoinPool simdExecutor,
+                                      ForkJoinPool parallelExecutor) {
         switch(type) {
             case NONE:
-                return BuildScoreProvider.randomAccessScoreProvider(vectorValues, similarityFunction);
+                return null;
             case PQ: {
                 var config = GraphIndexBuilderConfig.getInstance();
-                int m = vectorValues.dimension() / config.getPqMFactor();
-                var compressor = ProductQuantization.compute(vectorValues, m, config.getPqK(),
+                var compressor = ProductQuantization.compute(vectorValues, pqSubspaces, config.getPqK(),
                                                             config.isPqCenterData(), config.getPqAnisotropicThreshold(),
                                                             simdExecutor, parallelExecutor);
-                PQVectors pqVectors = compressor.encodeAll(vectorValues, simdExecutor);
-                return BuildScoreProvider.pqBuildScoreProvider(similarityFunction, pqVectors);
+                return compressor.encodeAll(vectorValues, simdExecutor);
             }
-            case BQ: {
-                BQVectors bqVectors = (BQVectors) BinaryQuantization.compute(vectorValues, parallelExecutor)
-                                                                    .encodeAll(vectorValues, simdExecutor);
-                return BuildScoreProvider.bqBuildScoreProvider(bqVectors);
-            }
+            case BQ:
+                return BinaryQuantization.compute(vectorValues, parallelExecutor).encodeAll(vectorValues, simdExecutor);
             default:
                 throw new IllegalArgumentException("Unsupported build compression type: " + type);
         }
+    }
+
+    /**
+     * Returns a build score provider for {@code vectorValues}: exact comparisons when {@code compressed}
+     * is null, otherwise comparisons of the compressed vectors from {@link #compress}.
+     */
+    static BuildScoreProvider buildScoreProvider(RandomAccessVectorValues vectorValues,
+                                                 VectorSimilarityFunction similarityFunction,
+                                                 CompressedVectors compressed) {
+        if (compressed == null) {
+            return BuildScoreProvider.randomAccessScoreProvider(vectorValues, similarityFunction);
+        }
+        if (compressed instanceof PQVectors) {
+            return BuildScoreProvider.pqBuildScoreProvider(similarityFunction, (PQVectors) compressed);
+        }
+        if (compressed instanceof BQVectors) {
+            return BuildScoreProvider.bqBuildScoreProvider((BQVectors) compressed);
+        }
+        throw new IllegalArgumentException("Unsupported compressed vectors: " + compressed.getClass().getName());
     }
 
     /**

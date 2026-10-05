@@ -17,7 +17,7 @@
 package io.github.jbellis.jvector.ivf;
 
 import io.github.jbellis.jvector.annotations.Experimental;
-import io.github.jbellis.jvector.index.IndexSearcher;
+import io.github.jbellis.jvector.api.IndexSearcher;
 
 /**
  * The IVF search entry point, mirroring the role {@code GraphSearcher} plays for graph/HNSW

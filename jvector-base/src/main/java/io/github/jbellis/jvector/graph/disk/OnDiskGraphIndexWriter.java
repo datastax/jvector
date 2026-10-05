@@ -173,20 +173,36 @@ public class OnDiskGraphIndexWriter extends RandomAccessOnDiskGraphIndexWriter {
          * Set the starting offset for the graph index in the output file.  This is useful if you want to
          * append the index to an existing file.
          */
-        @Override
         public Builder withStartOffset(long startOffset) {
             this.startOffset = startOffset;
             return this;
         }
 
+        // Overridden only to return this builder's own type, so the options specific to this writer
+        // stay reachable after a common option in a chain.
+
         @Override
-        public Builder withParallelWorkerThreads(int n) {
-            throw new UnsupportedOperationException("Parallel writing is not supported for OnDiskGraphIndexWriter");
+        public Builder with(Feature feature) {
+            super.with(feature);
+            return this;
         }
 
         @Override
-        public Builder withParallelDirectBuffers(boolean useDirectBuffers) {
-            throw new UnsupportedOperationException("Parallel writing is not supported for OnDiskGraphIndexWriter");
+        public Builder withMapper(OrdinalMapper ordinalMapper) {
+            super.withMapper(ordinalMapper);
+            return this;
+        }
+
+        @Override
+        public Builder withMap(Map<Integer, Integer> oldToNewOrdinals) {
+            super.withMap(oldToNewOrdinals);
+            return this;
+        }
+
+        @Override
+        public Builder withVersion(int version) {
+            super.withVersion(version);
+            return this;
         }
 
         @Override

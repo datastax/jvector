@@ -21,13 +21,18 @@ import com.carrotsearch.randomizedtesting.annotations.ThreadLeakScope;
 import io.github.jbellis.jvector.graph.similarity.BuildScoreProvider;
 import io.github.jbellis.jvector.graph.similarity.DefaultSearchScoreProvider;
 import io.github.jbellis.jvector.index.HnswRecipe;
-import io.github.jbellis.jvector.index.Index;
+import io.github.jbellis.jvector.api.Index;
 import io.github.jbellis.jvector.index.Indexes;
 import io.github.jbellis.jvector.management.CompressionType;
+import io.github.jbellis.jvector.quantization.BQVectors;
+import io.github.jbellis.jvector.quantization.CompressedVectors;
+import io.github.jbellis.jvector.quantization.PQVectors;
+import io.github.jbellis.jvector.quantization.ProductQuantization;
 import io.github.jbellis.jvector.util.Bits;
 import io.github.jbellis.jvector.vector.VectorSimilarityFunction;
 import org.junit.Test;
 
+import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -41,6 +46,7 @@ import static io.github.jbellis.jvector.TestUtil.createRandomVectors;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotSame;
+import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertSame;
 import static org.junit.Assert.assertTrue;
 import static org.junit.Assert.fail;
@@ -342,21 +348,94 @@ public class HnswIndexBuilderTest extends RandomizedTest {
     }
 
     @Test
-    public void populateGraphOnAnExistingGraphAppendsOnlyTheNewVectors() {
-        int n = 2_000;
-        int base = 1_500;
-        var ravv = randomRavv(n, DIMENSION);
-        var baseRavv = new ListRandomAccessVectorValues(
-                IntStream.range(0, base).mapToObj(ravv::getVector).collect(Collectors.toList()), DIMENSION);
+    public void populateGraphOnlyPopulatesAnEmptyGraph() {
+        var ravv = randomRavv(200, DIMENSION);
         var bsp = BuildScoreProvider.randomAccessScoreProvider(ravv, VSF);
-        var existing = (OnHeapGraphIndex) configured(bsp).populateGraph(baseRavv);
 
-        HnswIndexBuilder builder = Indexes.hnswBuilder(bsp, DIMENSION).withExistingGraph(existing);
-        PersistableGraphIndex graph = builder.populateGraph(ravv);
-        assertSame(existing, graph);
-        assertEquals(n, graph.size(0));
-        assertEquals(n, graph.getIdUpperBound());
-        assertTrue(selfRecall(graph, ravv, range(0, n)) > 0.95);
+        // a second populate
+        HnswIndexBuilder populated = configured(bsp);
+        populated.populateGraph(ravv);
+        expectIllegalState(() -> populated.populateGraph(ravv), List.of("already has nodes", "addGraphNode()"));
+
+        // after incremental inserts
+        HnswIndexBuilder incremental = configured(bsp);
+        incremental.addGraphNode(0, ravv.getVector(0));
+        expectIllegalState(() -> incremental.populateGraph(ravv), List.of("already has nodes"));
+
+        // on an existing graph, with either populate method
+        var existing = (OnHeapGraphIndex) populated.getGraph();
+        expectIllegalState(() -> Indexes.hnswBuilder(bsp, DIMENSION).withExistingGraph(existing).populateGraph(ravv),
+                List.of("already has nodes"));
+        expectIllegalState(() -> Indexes.hnswBuilder(ravv, VSF).withExistingGraph(existing).buildAndPopulate(),
+                List.of("already has nodes"));
+        assertEquals(200, existing.size(0));
+    }
+
+    @Test
+    public void settingsChangedAfterBuildAreIgnored() {
+        var ravv = randomRavv(10, DIMENSION);
+        HnswIndexBuilder builder = Indexes.hnswBuilder(ravv, VSF).withBeamWidth(40);
+        builder.build();
+
+        // each logs a warning and leaves the builder as it was
+        builder.withBeamWidth(60)
+                .withMaxDegree(8)
+                .withNeighborOverflow(1.5f)
+                .withAlpha(1.4f)
+                .withAddHierarchy(false)
+                .withRefineFinalGraph(false)
+                .withCompressionType(CompressionType.PQ)
+                .applyRecipe(HnswRecipe.DEFAULT);
+        assertEquals(40, builder.beamWidth);
+        assertEquals(List.of(32), builder.maxDegrees);
+        assertEquals(1.2f, builder.neighborOverflow, 0.0f);
+        assertEquals(1.2f, builder.alpha, 0.0f);
+        assertTrue(builder.addHierarchy);
+        assertTrue(builder.refineFinalGraph);
+        assertEquals(CompressionType.NONE, builder.compressionType());
+    }
+
+    @Test
+    public void inputsAreCheckedWhenGiven() {
+        var ravv = randomRavv(10, DIMENSION);
+        var bsp = BuildScoreProvider.randomAccessScoreProvider(ravv, VSF);
+        expectNullPointer(() -> Indexes.hnswBuilder(null, VSF), "vectorValues");
+        expectNullPointer(() -> Indexes.hnswBuilder(ravv, null), "similarityFunction");
+        expectNullPointer(() -> Indexes.hnswBuilder(null, DIMENSION), "scoreProvider");
+        expectNullPointer(() -> Indexes.hnswBuilder(ravv, VSF).withMaxDegrees(null), "maxDegrees");
+        expectIllegalArgument(() -> Indexes.hnswBuilder(bsp, 0), "dimension must be positive");
+        expectIllegalArgument(() -> Indexes.hnswBuilder(bsp, -3), "dimension must be positive");
+    }
+
+    private static void expectNullPointer(Runnable r, String expected) {
+        try {
+            r.run();
+            fail("expected NullPointerException mentioning " + expected);
+        } catch (NullPointerException e) {
+            assertEquals(expected, e.getMessage());
+        }
+    }
+
+    @Test
+    public void withMaxDegreesCopiesTheList() {
+        var ravv = randomRavv(10, DIMENSION);
+        var degrees = new ArrayList<>(List.of(24, 12));
+        HnswIndexBuilder builder = Indexes.hnswBuilder(ravv, VSF).withMaxDegrees(degrees);
+        degrees.set(0, 4);
+        assertEquals(List.of(24, 12), builder.build().maxDegrees());
+    }
+
+    @Test
+    public void existingGraphMustMatchTheBuildersDimension() {
+        var ravv = randomRavv(100, DIMENSION);
+        var existing = (OnHeapGraphIndex) Indexes.hnswBuilder(ravv, VSF).buildAndPopulate();
+
+        var other = randomRavv(100, DIMENSION * 2);
+        expectIllegalState(() -> Indexes.hnswBuilder(other, VSF).withExistingGraph(existing).build(),
+                List.of("dimension " + DIMENSION, "dimension " + (DIMENSION * 2)));
+        // reported together with a shape conflict
+        expectIllegalState(() -> Indexes.hnswBuilder(other, VSF).withExistingGraph(existing).withMaxDegree(8).build(),
+                List.of("dimension", "withMaxDegree()/withMaxDegrees()"));
     }
 
     @Test
@@ -494,6 +573,61 @@ public class HnswIndexBuilderTest extends RandomizedTest {
         assertEquals(n - n / 10, graph.size(0));
         for (int i = 0; i < n; i += 10) {
             assertFalse(graph.containsNode(i));
+        }
+        assertTrue(selfRecall(graph, ravv, () -> IntStream.range(0, n).filter(i -> i % 10 != 0).iterator()) > 0.95);
+    }
+
+    @Test
+    public void concurrentInsertsAndDeletes() throws Exception {
+        int n = 4_000;
+        var ravv = randomRavv(n, DIMENSION);
+        HnswIndexBuilder builder = configured(ravv);
+        PersistableGraphIndex graph = builder.build();
+        ExecutorService pool = Executors.newFixedThreadPool(4);
+        try {
+            // Each inserter deletes every 10th node right after inserting it, so deletes run concurrently
+            // with other threads' inserts.
+            AtomicInteger next = new AtomicInteger();
+            List<Future<?>> workers = IntStream.range(0, 4).mapToObj(t -> pool.submit(() -> {
+                int i;
+                while ((i = next.getAndIncrement()) < n) {
+                    builder.addGraphNode(i, ravv.getVector(i));
+                    if (i % 10 == 0) {
+                        builder.markNodeDeleted(i);
+                    }
+                }
+            })).collect(Collectors.toList());
+            for (Future<?> f : workers) {
+                f.get();
+            }
+        } finally {
+            pool.shutdownNow();
+        }
+
+        // Before cleanup, deleted nodes are hidden from searches.
+        try (GraphSearcher s = graph.searcher()) {
+            for (int i = 0; i < n; i += 10) {
+                var result = s.search(DefaultSearchScoreProvider.exact(ravv.getVector(i), VSF, ravv), 5, Bits.ALL);
+                for (var ns : result.getNodes()) {
+                    assertTrue("deleted node " + ns.node + " returned", ns.node % 10 != 0);
+                }
+            }
+        }
+
+        // cleanup() removes them, and no remaining node keeps an edge to one.
+        builder.cleanup();
+        assertEquals(n - n / 10, graph.size(0));
+        try (var view = graph.getView()) {
+            for (int level = 0; level <= graph.getMaxLevel(); level++) {
+                for (var it = graph.getNodes(level); it.hasNext(); ) {
+                    int node = it.nextInt();
+                    assertTrue(node % 10 != 0);
+                    for (var neighbors = view.getNeighborsIterator(level, node); neighbors.hasNext(); ) {
+                        int neighbor = neighbors.nextInt();
+                        assertTrue("edge " + node + " -> deleted " + neighbor, neighbor % 10 != 0);
+                    }
+                }
+            }
         }
         assertTrue(selfRecall(graph, ravv, () -> IntStream.range(0, n).filter(i -> i % 10 != 0).iterator()) > 0.95);
     }
@@ -684,6 +818,74 @@ public class HnswIndexBuilderTest extends RandomizedTest {
         assertEquals(CompressionType.NONE, builder.compressionType());
         assertSame(builder, builder.withCompressionType(CompressionType.BQ));
         assertEquals(CompressionType.BQ, builder.compressionType());
+    }
+
+    @Test
+    public void getCompressedVectorsReturnsWhatTheBuilderTrained() {
+        int n = 2_000;
+        int dimension = 32;
+        var ravv = randomRavv(n, dimension);
+
+        HnswIndexBuilder pqBuilder = Indexes.hnswBuilder(ravv, VSF).withCompressionType(CompressionType.PQ);
+        try {
+            pqBuilder.getCompressedVectors();
+            fail("expected IllegalStateException before the build");
+        } catch (IllegalStateException e) {
+            assertTrue(e.getMessage(), e.getMessage().contains("build"));
+        }
+        pqBuilder.buildAndPopulate();
+        CompressedVectors pq = pqBuilder.getCompressedVectors();
+        assertTrue(pq instanceof PQVectors);
+        assertEquals(n, pq.count());
+        assertTrue(((PQVectors) pq).getCompressor() instanceof ProductQuantization);
+        assertSame(pq, pqBuilder.getCompressedVectors());
+
+        HnswIndexBuilder bqBuilder = Indexes.hnswBuilder(ravv, VSF).withCompressionType(CompressionType.BQ);
+        bqBuilder.build();
+        assertTrue(bqBuilder.getCompressedVectors() instanceof BQVectors);
+
+        // no compression: null, before and after the build
+        HnswIndexBuilder plain = Indexes.hnswBuilder(ravv, VSF);
+        assertNull(plain.getCompressedVectors());
+        plain.build();
+        assertNull(plain.getCompressedVectors());
+
+        // a score-provider builder's compression belongs to the caller
+        var bsp = BuildScoreProvider.pqBuildScoreProvider(VSF, (PQVectors) pq);
+        HnswIndexBuilder scoreProviderBuilder = Indexes.hnswBuilder(bsp, dimension);
+        scoreProviderBuilder.build();
+        assertNull(scoreProviderBuilder.getCompressedVectors());
+    }
+
+    @Test
+    public void pqSubspacesDefaultToOnePerFourDimensionsAndCanBeSet() {
+        int n = 1_000;
+        int dimension = 32;
+        var ravv = randomRavv(n, dimension);
+
+        HnswIndexBuilder byDefault = Indexes.hnswBuilder(ravv, VSF).withCompressionType(CompressionType.PQ);
+        assertEquals(dimension / 4, ((RavvHnswBuilder) byDefault).pqSubspaces());
+        byDefault.build();
+        ProductQuantization defaultPq = ((PQVectors) byDefault.getCompressedVectors()).getCompressor();
+        assertEquals(dimension / 4, defaultPq.getSubspaceCount());
+        assertEquals(dimension / 4, defaultPq.compressedVectorSize());
+
+        HnswIndexBuilder custom = Indexes.hnswBuilder(ravv, VSF)
+                .withPqSubspaces(dimension / 2)
+                .withCompressionType(CompressionType.PQ);
+        custom.build();
+        assertEquals(dimension / 2, ((PQVectors) custom.getCompressedVectors()).getCompressor().getSubspaceCount());
+
+        // fewer than 4 dimensions still gets one subspace
+        assertEquals(1, ((RavvHnswBuilder) Indexes.hnswBuilder(randomRavv(10, 3), VSF)).pqSubspaces());
+
+        expectIllegalArgument(() -> Indexes.hnswBuilder(ravv, VSF).withPqSubspaces(0), "between 1 and the vector dimension");
+        expectIllegalArgument(() -> Indexes.hnswBuilder(ravv, VSF).withPqSubspaces(dimension + 1), "between 1 and the vector dimension");
+
+        // ignored, with a warning, by a score-provider builder
+        var bsp = BuildScoreProvider.randomAccessScoreProvider(ravv, VSF);
+        HnswIndexBuilder scoreProviderBuilder = Indexes.hnswBuilder(bsp, dimension);
+        assertSame(scoreProviderBuilder, scoreProviderBuilder.withPqSubspaces(4));
     }
 
     @Test

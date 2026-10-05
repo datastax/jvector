@@ -17,12 +17,17 @@
 package io.github.jbellis.jvector.index;
 
 import io.github.jbellis.jvector.TestUtil;
+import io.github.jbellis.jvector.api.Index;
+import io.github.jbellis.jvector.api.IndexSearcher;
 import io.github.jbellis.jvector.graph.GraphIndex;
 import io.github.jbellis.jvector.graph.GraphSearcher;
 import io.github.jbellis.jvector.graph.ListRandomAccessVectorValues;
 import io.github.jbellis.jvector.graph.PersistableGraphIndex;
 import io.github.jbellis.jvector.graph.disk.GraphIndexWriter;
 import io.github.jbellis.jvector.graph.disk.OnDiskGraphIndex;
+import io.github.jbellis.jvector.graph.disk.OnDiskGraphIndexWriter;
+import io.github.jbellis.jvector.graph.disk.OnDiskParallelGraphIndexWriter;
+import io.github.jbellis.jvector.graph.disk.OnDiskSequentialGraphIndexWriter;
 import io.github.jbellis.jvector.graph.disk.feature.Feature;
 import io.github.jbellis.jvector.graph.disk.feature.FeatureId;
 import io.github.jbellis.jvector.graph.disk.feature.InlineVectors;
@@ -47,8 +52,8 @@ import static org.junit.Assert.assertTrue;
 import static org.junit.Assert.fail;
 
 /**
- * Exercises the module split and the {@code Indexes} entry point introduced for the generic
- * Index/IndexBuilder hierarchy (see docs/index_hierarchy_plan.md): the type-first builders still
+ * Exercises the {@code Index} contract and the {@code Indexes} entry point introduced for the generic
+ * Index/IndexBuilder hierarchy (see design-notes/index_hierarchy_plan.md): the type-first builders still
  * produce a working index that is usable through the generic {@link Index} and
  * {@link IndexSearcher} handles, and the IVF seam validates its inputs and then refuses cleanly
  * rather than silently returning null.
@@ -160,6 +165,65 @@ public class IndexHierarchyTest {
             }
         } finally {
             Files.deleteIfExists(path);
+            Files.deleteIfExists(dir);
+        }
+    }
+
+    @Test
+    public void writerAccessorsReturnTheConcreteBuilders() throws Exception {
+        var vectors = randomVectors(64, 8);
+        PersistableGraphIndex graph = Indexes.hnswBuilder(vectors, VectorSimilarityFunction.EUCLIDEAN)
+                .withMaxDegree(8)
+                .populateGraph(vectors);
+        var inlineVectors = Feature.singleStateFactory(FeatureId.INLINE_VECTORS,
+                node -> new InlineVectors.State(vectors.getVector(node)));
+
+        Path dir = Files.createTempDirectory("index-hierarchy-test");
+        try {
+            // Writer-specific options stay reachable after the common ones, and the built writer is the
+            // concrete type, with its own methods (getOutput, checksum).
+            Path randomAccess = dir.resolve("random-access.graph");
+            try (OnDiskGraphIndexWriter writer = graph.getWriterBuilder(randomAccess)
+                    .with(new InlineVectors(vectors.dimension()))
+                    .withStartOffset(0)
+                    .build()) {
+                writer.write(inlineVectors);
+                assertTrue(writer.getOutput().position() > 0);
+                writer.checksum();
+            }
+
+            Path parallel = dir.resolve("parallel.graph");
+            var executor = java.util.concurrent.Executors.newFixedThreadPool(2);
+            try (OnDiskParallelGraphIndexWriter writer = graph.getParallelWriterBuilder(parallel)
+                    .with(new InlineVectors(vectors.dimension()))
+                    .withParallelWorkerThreads(2)
+                    .withExecutor(executor)
+                    .build()) {
+                writer.write(inlineVectors);
+            } finally {
+                executor.shutdownNow();
+            }
+
+            Path sequential = dir.resolve("sequential.graph");
+            try (var out = new io.github.jbellis.jvector.disk.SimpleWriter(sequential);
+                 OnDiskSequentialGraphIndexWriter writer = graph.getWriterBuilder(out)
+                         .with(new InlineVectors(vectors.dimension()))
+                         .build()) {
+                writer.write(inlineVectors);
+            }
+
+            for (Path path : List.of(randomAccess, parallel, sequential)) {
+                try (ReaderSupplier rs = ReaderSupplierFactory.open(path);
+                     OnDiskGraphIndex onDisk = OnDiskGraphIndex.load(rs)) {
+                    assertEquals(path.toString(), 64, onDisk.size(0));
+                }
+            }
+        } finally {
+            try (var files = Files.list(dir)) {
+                for (Path p : (Iterable<Path>) files::iterator) {
+                    Files.deleteIfExists(p);
+                }
+            }
             Files.deleteIfExists(dir);
         }
     }

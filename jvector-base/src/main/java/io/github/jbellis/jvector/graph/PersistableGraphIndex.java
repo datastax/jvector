@@ -18,8 +18,14 @@ package io.github.jbellis.jvector.graph;
 
 import io.github.jbellis.jvector.disk.IndexWriter;
 import io.github.jbellis.jvector.graph.disk.GraphIndexWriter;
+import io.github.jbellis.jvector.graph.disk.OnDiskGraphIndex;
+import io.github.jbellis.jvector.graph.disk.OnDiskGraphIndexWriter;
+import io.github.jbellis.jvector.graph.disk.OnDiskParallelGraphIndexWriter;
+import io.github.jbellis.jvector.graph.disk.OnDiskSequentialGraphIndexWriter;
 import io.github.jbellis.jvector.graph.disk.OrdinalMapper;
 import io.github.jbellis.jvector.graph.disk.feature.Feature;
+import io.github.jbellis.jvector.vector.VectorSimilarityFunction;
+import io.github.jbellis.jvector.vector.types.VectorFloat;
 
 import java.io.FileNotFoundException;
 import java.io.IOException;
@@ -56,43 +62,49 @@ import java.util.Map;
 public interface PersistableGraphIndex extends GraphIndex {
 
     /**
-     * Returns a {@link GraphIndexWriterBuilder} that writes this graph to {@code path} with the parallel
-     * random-access writer ({@code OnDiskParallelGraphIndexWriter}): node records are encoded on worker
-     * threads and written asynchronously. Supports {@link GraphIndexWriterBuilder#withStartOffset},
-     * {@link GraphIndexWriterBuilder#withParallelWorkerThreads} and
-     * {@link GraphIndexWriterBuilder#withParallelDirectBuffers}.
+     * Returns a builder that writes this graph to {@code path} with the parallel random-access writer
+     * ({@link OnDiskParallelGraphIndexWriter}): node records are encoded on worker threads and written
+     * asynchronously. Besides the common options, it offers {@code withStartOffset},
+     * {@code withParallelWorkerThreads}, {@code withParallelDirectBuffers} and {@code withExecutor}.
      */
-    GraphIndexWriterBuilder getParallelWriterBuilder(Path path) throws FileNotFoundException;
+    OnDiskParallelGraphIndexWriter.Builder getParallelWriterBuilder(Path path) throws FileNotFoundException;
 
     /**
-     * Returns a {@link GraphIndexWriterBuilder} that writes this graph to {@code path} with the
-     * single-threaded random-access writer ({@code OnDiskGraphIndexWriter}): node records are written in
-     * order, then the writer seeks back to fill in the header. Supports
-     * {@link GraphIndexWriterBuilder#withStartOffset}; the parallel options throw
-     * {@link UnsupportedOperationException}. For a writer that never seeks, use
-     * {@link #getWriterBuilder(IndexWriter)}.
+     * Returns a builder that writes this graph to {@code path} with the single-threaded random-access
+     * writer ({@link OnDiskGraphIndexWriter}): node records are written in order, then the writer seeks
+     * back to fill in the header. Besides the common options, it offers {@code withStartOffset}, and the
+     * writer it builds offers {@code getOutput()} and {@code checksum()}. For a writer that never seeks,
+     * use {@link #getWriterBuilder(IndexWriter)}.
      */
-    GraphIndexWriterBuilder getWriterBuilder(Path path) throws FileNotFoundException;
+    OnDiskGraphIndexWriter.Builder getWriterBuilder(Path path) throws FileNotFoundException;
 
     /**
-     * Returns a {@link GraphIndexWriterBuilder} that writes this graph sequentially to {@code out}.
+     * Returns a builder that writes this graph sequentially to {@code out}
+     * ({@link OnDiskSequentialGraphIndexWriter}).
      * <p>
      * Sequential writing is suitable for cloud object storage and frameworks such as Lucene
      * that require or prefer sequential I/O. The header is written as a footer; the
      * caller owns {@code out} and is responsible for flushing and closing it. Writing starts at
-     * {@code out}'s current position: {@link GraphIndexWriterBuilder#withStartOffset} and the parallel
-     * options throw {@link UnsupportedOperationException}.
+     * {@code out}'s current position, so there is no start offset to set.
      */
-    GraphIndexWriterBuilder getWriterBuilder(IndexWriter out);
+    OnDiskSequentialGraphIndexWriter.Builder getWriterBuilder(IndexWriter out);
 
     /**
-     * Fluent builder for persisting a {@link PersistableGraphIndex} to disk.
-     * <p>
-     * Obtain an instance via {@link PersistableGraphIndex#getWriterBuilder(Path)},
-     * {@link PersistableGraphIndex#getParallelWriterBuilder(Path)} or
-     * {@link PersistableGraphIndex#getWriterBuilder(IndexWriter)}. Not every option applies to every
-     * writer; unsupported options throw {@link UnsupportedOperationException} rather than being
-     * silently ignored.
+     * Writes this graph to {@code path} with {@code vectors} stored inline, the simplest on-disk index:
+     * load it with {@code OnDiskGraphIndex.load} and search it with
+     * {@link GraphSearcher#search(VectorFloat, int, VectorSimilarityFunction)}. {@code vectors} must hold
+     * the vector of every node, by graph ordinal. Nodes are renumbered {@code 0..size-1} on disk, closing
+     * any gaps left by deleted nodes. Uses the random-access writer; for other writers, features (such as
+     * fused PQ or NVQ) or ordinal mappings, use the writer builders above.
+     */
+    default void writeTo(Path path, RandomAccessVectorValues vectors) throws IOException {
+        OnDiskGraphIndex.write(this, vectors, path);
+    }
+
+    /**
+     * The options every graph writer builder supports. The accessors on {@link PersistableGraphIndex}
+     * return the concrete builder types, which add the options specific to each writer; this interface
+     * is for code that configures a writer without depending on which one it is.
      */
     interface GraphIndexWriterBuilder {
         /** Adds a feature to be written with this graph. */
@@ -106,32 +118,6 @@ public interface PersistableGraphIndex extends GraphIndex {
 
         /** Sets the on-disk format version (defaults to the current version). */
         GraphIndexWriterBuilder withVersion(int version);
-
-        /**
-         * Sets the byte offset at which writing begins in the output file.
-         * Useful when appending a graph to an existing file.
-         *
-         * @throws UnsupportedOperationException for the sequential writer, which always starts at the
-         *         output's current position
-         */
-        GraphIndexWriterBuilder withStartOffset(long offset);
-
-        /**
-         * Sets the number of worker threads for parallel writes. Only supported by the parallel writer
-         * ({@link PersistableGraphIndex#getParallelWriterBuilder(Path)}).
-         *
-         * @param n number of threads; 0 (the default) or negative means use all available processors
-         * @throws UnsupportedOperationException for the random-access and sequential writers
-         */
-        GraphIndexWriterBuilder withParallelWorkerThreads(int n);
-
-        /**
-         * Whether to use direct (off-heap) ByteBuffers for parallel writes. Only supported by the
-         * parallel writer ({@link PersistableGraphIndex#getParallelWriterBuilder(Path)}).
-         *
-         * @throws UnsupportedOperationException for the random-access and sequential writers
-         */
-        GraphIndexWriterBuilder withParallelDirectBuffers(boolean useDirectBuffers);
 
         /** Builds the graph index writer. */
         GraphIndexWriter build() throws IOException;

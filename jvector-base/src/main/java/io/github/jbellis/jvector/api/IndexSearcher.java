@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-package io.github.jbellis.jvector.index;
+package io.github.jbellis.jvector.api;
 
 import java.io.Closeable;
 

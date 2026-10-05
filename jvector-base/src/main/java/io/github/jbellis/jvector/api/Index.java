@@ -14,9 +14,7 @@
  * limitations under the License.
  */
 
-package io.github.jbellis.jvector.index;
-
-import io.github.jbellis.jvector.util.Accountable;
+package io.github.jbellis.jvector.api;
 
 import java.io.IOException;
 
@@ -30,7 +28,12 @@ import java.io.IOException;
  * {@link #searcher()} to return their own, more specific {@link IndexSearcher} subtype with no
  * cast required.
  */
-public interface Index extends Accountable, AutoCloseable {
+public interface Index extends AutoCloseable {
+
+    /**
+     * Returns an estimate of the memory, in bytes, this index uses on the heap.
+     */
+    long ramBytesUsed();
 
     /**
      * Returns a new {@link IndexSearcher} of the type appropriate for this Index. The caller owns it

@@ -17,7 +17,7 @@
 package io.github.jbellis.jvector.ivf;
 
 import io.github.jbellis.jvector.annotations.Experimental;
-import io.github.jbellis.jvector.index.Index;
+import io.github.jbellis.jvector.api.Index;
 
 /**
  * An IVF-backed vector index. Mirrors the role {@code GraphIndex} plays for graph/HNSW indexes:

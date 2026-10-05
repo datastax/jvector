@@ -410,17 +410,17 @@ public class OnHeapGraphIndex implements MutableGraphIndex {
     }
 
     @Override
-    public PersistableGraphIndex.GraphIndexWriterBuilder getParallelWriterBuilder(Path path) throws FileNotFoundException {
+    public OnDiskParallelGraphIndexWriter.Builder getParallelWriterBuilder(Path path) throws FileNotFoundException {
         return new OnDiskParallelGraphIndexWriter.Builder(this, path);
     }
 
     @Override
-    public PersistableGraphIndex.GraphIndexWriterBuilder getWriterBuilder(Path path) throws FileNotFoundException {
+    public OnDiskGraphIndexWriter.Builder getWriterBuilder(Path path) throws FileNotFoundException {
         return new OnDiskGraphIndexWriter.Builder(this, path);
     }
 
     @Override
-    public PersistableGraphIndex.GraphIndexWriterBuilder getWriterBuilder(IndexWriter out) {
+    public OnDiskSequentialGraphIndexWriter.Builder getWriterBuilder(IndexWriter out) {
         return new OnDiskSequentialGraphIndexWriter.Builder(this, out);
     }
 

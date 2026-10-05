@@ -22,15 +22,18 @@ import io.github.jbellis.jvector.graph.similarity.BuildScoreProvider;
 import io.github.jbellis.jvector.graph.similarity.SearchScoreProvider;
 import io.github.jbellis.jvector.index.HnswRecipe;
 import io.github.jbellis.jvector.management.CompressionType;
+import io.github.jbellis.jvector.quantization.CompressedVectors;
 import io.github.jbellis.jvector.util.PhysicalCoreExecutor;
 import io.github.jbellis.jvector.vector.types.VectorFloat;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.io.Closeable;
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Objects;
 import java.util.concurrent.ForkJoinPool;
-import java.util.stream.IntStream;
 
 /**
  * Fluent builder for graph/HNSW indexes. Obtain one from {@code Indexes.hnswBuilder(...)}, which picks
@@ -56,8 +59,8 @@ import java.util.stream.IntStream;
  * existing nodes); later calls return the same graph. Populate it either all at once with
  * {@link #populateGraph}, or incrementally with {@link #addGraphNode}, which is thread-safe and may run
  * concurrently with searches; call {@link #cleanup()} once incremental inserts and deletes are
- * finished. The {@code withXxx} settings must be made before the underlying builder is created;
- * changing them afterwards has no effect on it.
+ * finished. The {@code withXxx} settings (and {@link #applyRecipe}) must be made before the
+ * underlying builder is created: called afterwards, they log a warning and leave the builder unchanged.
  * <p>
  * The methods that delegate to the underlying {@link GraphIndexBuilder} ({@link #populateGraph},
  * {@link #addGraphNode}, {@link #markNodeDeleted}, {@link #cleanup}, {@link #removeDeletedNodes} and
@@ -70,6 +73,8 @@ import java.util.stream.IntStream;
  * builder caches for each thread that inserts; see {@link #close()}.
  */
 public abstract class HnswIndexBuilder implements Closeable {
+    private static final Logger logger = LoggerFactory.getLogger(HnswIndexBuilder.class);
+
     // Graph shape and tuning settings shared by every subclass. How vectors are scored (and the
     // dimension) is the subclasses' business. Package-private, not private, for the subclasses,
     // rescore() and the tests in this package.
@@ -88,6 +93,8 @@ public abstract class HnswIndexBuilder implements Closeable {
     private boolean addHierarchySet;
     /** Created once, by the first {@link #build()} (or delegating method) call; see {@code graphBuilder()}. */
     volatile GraphIndexBuilder graphBuilder;
+    /** Guards creating {@link #graphBuilder}. Private, so callers locking the builder can't interfere. */
+    private final Object buildLock = new Object();
 
     /**
      * Package-private so that {@link RavvHnswBuilder} and {@link ScoreProviderHnswBuilder} are the only
@@ -103,6 +110,53 @@ public abstract class HnswIndexBuilder implements Closeable {
      * ignores it, since its score provider is fixed.
      */
     public abstract HnswIndexBuilder withCompressionType(CompressionType compressionType);
+
+    /**
+     * The number of subspaces for product quantization, when {@link #withCompressionType} is
+     * {@link CompressionType#PQ}: each vector is split into this many sub-vectors, each encoded in one
+     * byte, so it is also the size of a PQ code in bytes. More subspaces give more accurate compressed
+     * scores and larger codes. Defaults to one subspace per 4 dimensions, which is what Cassandra and
+     * OpenSearch use. Has no effect with other compression types. Only {@link RavvHnswBuilder} supports
+     * it; {@link ScoreProviderHnswBuilder} logs a warning and ignores it.
+     *
+     * @throws IllegalArgumentException if {@code pqSubspaces} is less than 1 or greater than the vector
+     *         dimension
+     */
+    public abstract HnswIndexBuilder withPqSubspaces(int pqSubspaces);
+
+    /**
+     * The compressed vectors the graph was built with, when this builder compressed them itself (see
+     * {@link #withCompressionType}). Reuse them to search with compressed scores, or to write them to
+     * disk, e.g. as a {@code FusedPQ} feature, without training a second quantizer:
+     * <pre>{@code
+     * var builder = Indexes.hnswBuilder(ravv, vsf).withCompressionType(CompressionType.PQ);
+     * PersistableGraphIndex graph = builder.buildAndPopulate();
+     * PQVectors pq = (PQVectors) builder.getCompressedVectors();
+     * }</pre>
+     *
+     * @return the compressed vectors, or null if this builder doesn't compress
+     *         ({@link CompressionType#NONE}, or a builder created from a {@link BuildScoreProvider}, whose
+     *         compression, if any, belongs to the caller)
+     */
+    public CompressedVectors getCompressedVectors() {
+        return null;
+    }
+
+    /** The dimension of the vectors this builder indexes. */
+    abstract int dimension();
+
+    /**
+     * If the graph has already been built, logs a warning that {@code setting} was called with
+     * {@code value} and is ignored, and returns true; settings only take effect before the build.
+     */
+    boolean ignoredAfterBuild(String setting, Object value) {
+        if (graphBuilder == null) {
+            return false;
+        }
+        logger.warn("{}({}) was called after the graph was built and is ignored: settings only take effect "
+                + "before the first build(), buildAndPopulate(), populateGraph() or addGraphNode()", setting, value);
+        return true;
+    }
 
     /** The compression this builder will apply; {@link CompressionType#NONE} unless the subclass supports it. */
     CompressionType compressionType() {
@@ -120,13 +174,20 @@ public abstract class HnswIndexBuilder implements Closeable {
      * Defaults to {@code [32]}. Must not be set together with {@link #withExistingGraph}.
      */
     public HnswIndexBuilder withMaxDegrees(List<Integer> maxDegrees) {
-        this.maxDegrees = maxDegrees;
+        Objects.requireNonNull(maxDegrees, "maxDegrees");
+        if (ignoredAfterBuild("withMaxDegrees", maxDegrees)) {
+            return this;
+        }
+        this.maxDegrees = List.copyOf(maxDegrees);
         this.maxDegreesSet = true;
         return this;
     }
 
     /** The size of the beam search to use when finding nearest neighbors. */
     public HnswIndexBuilder withBeamWidth(int beamWidth) {
+        if (ignoredAfterBuild("withBeamWidth", beamWidth)) {
+            return this;
+        }
         this.beamWidth = beamWidth;
         return this;
     }
@@ -136,6 +197,9 @@ public abstract class HnswIndexBuilder implements Closeable {
      * will build more efficiently, but use more memory.
      */
     public HnswIndexBuilder withNeighborOverflow(float neighborOverflow) {
+        if (ignoredAfterBuild("withNeighborOverflow", neighborOverflow)) {
+            return this;
+        }
         this.neighborOverflow = neighborOverflow;
         return this;
     }
@@ -146,6 +210,9 @@ public abstract class HnswIndexBuilder implements Closeable {
      * created, which is usually not what you want.
      */
     public HnswIndexBuilder withAlpha(float alpha) {
+        if (ignoredAfterBuild("withAlpha", alpha)) {
+            return this;
+        }
         this.alpha = alpha;
         return this;
     }
@@ -155,6 +222,9 @@ public abstract class HnswIndexBuilder implements Closeable {
      * Must not be set together with {@link #withExistingGraph}, whose hierarchy is already fixed.
      */
     public HnswIndexBuilder withAddHierarchy(boolean addHierarchy) {
+        if (ignoredAfterBuild("withAddHierarchy", addHierarchy)) {
+            return this;
+        }
         this.addHierarchy = addHierarchy;
         this.addHierarchySet = true;
         return this;
@@ -165,6 +235,9 @@ public abstract class HnswIndexBuilder implements Closeable {
      * Defaults to {@code true}, matching {@link GraphIndexBuilder}'s convenience constructors.
      */
     public HnswIndexBuilder withRefineFinalGraph(boolean refineFinalGraph) {
+        if (ignoredAfterBuild("withRefineFinalGraph", refineFinalGraph)) {
+            return this;
+        }
         this.refineFinalGraph = refineFinalGraph;
         return this;
     }
@@ -174,6 +247,9 @@ public abstract class HnswIndexBuilder implements Closeable {
      * matching {@link GraphIndexBuilder}'s convenience constructors.
      */
     public HnswIndexBuilder withSimdExecutor(ForkJoinPool simdExecutor) {
+        if (ignoredAfterBuild("withSimdExecutor", simdExecutor)) {
+            return this;
+        }
         this.simdExecutor = simdExecutor;
         return this;
     }
@@ -184,6 +260,9 @@ public abstract class HnswIndexBuilder implements Closeable {
      * constructors.
      */
     public HnswIndexBuilder withParallelExecutor(ForkJoinPool parallelExecutor) {
+        if (ignoredAfterBuild("withParallelExecutor", parallelExecutor)) {
+            return this;
+        }
         this.parallelExecutor = parallelExecutor;
         return this;
     }
@@ -194,10 +273,16 @@ public abstract class HnswIndexBuilder implements Closeable {
      * mutated in place. Its max degrees and hierarchy are kept, so {@link #withMaxDegree},
      * {@link #withMaxDegrees} and {@link #withAddHierarchy} must not also be called: if they are,
      * building throws {@link IllegalStateException}. (Values set by {@link #applyRecipe} do not
-     * conflict; the existing graph's take precedence.) New nodes should be added at ordinals from
-     * {@link GraphIndex#getIdUpperBound()} onward.
+     * conflict; the existing graph's take precedence.) Its dimension must match this builder's.
+     * <p>
+     * Add the new nodes with {@link #addGraphNode}, at ordinals from
+     * {@link GraphIndex#getIdUpperBound()} onward, then call {@link #cleanup()}. {@link #populateGraph}
+     * and {@link #buildAndPopulate()} are for populating an empty graph and throw on this one.
      */
     public HnswIndexBuilder withExistingGraph(OnHeapGraphIndex existingGraph) {
+        if (ignoredAfterBuild("withExistingGraph", existingGraph)) {
+            return this;
+        }
         this.existingGraph = existingGraph;
         return this;
     }
@@ -217,6 +302,9 @@ public abstract class HnswIndexBuilder implements Closeable {
         if (!recipe.isDefined()) {
             throw new UnsupportedOperationException(
                     "HnswRecipe." + recipe + " has no defined values yet");
+        }
+        if (ignoredAfterBuild("applyRecipe", recipe)) {
+            return this;
         }
         if (recipe.has(HnswRecipe.Param.COMPRESSION_TYPE)) {
             CompressionType type = CompressionType.valueOf(recipe.get(HnswRecipe.Param.COMPRESSION_TYPE));
@@ -249,7 +337,7 @@ public abstract class HnswIndexBuilder implements Closeable {
 
     /**
      * Creates the underlying {@link GraphIndexBuilder} from this builder's current settings. Called
-     * at most once per builder, by {@link #graphBuilder()}, while holding this builder's lock.
+     * at most once per builder, while holding the builder's internal lock.
      */
     protected abstract GraphIndexBuilder createGraphBuilder();
 
@@ -273,10 +361,11 @@ public abstract class HnswIndexBuilder implements Closeable {
      * was set; add nodes to it with {@link #populateGraph} or {@link #addGraphNode}.
      * <p>
      * Idempotent and thread-safe: every call, from any thread, returns the same graph. Settings
-     * changed with {@code withXxx} after the first call have no effect on it.
+     * changed with {@code withXxx} after the first call are ignored, with a warning.
      *
      * @throws IllegalStateException if {@link #withExistingGraph} was combined with
-     *         {@link #withMaxDegrees} or {@link #withAddHierarchy}
+     *         {@link #withMaxDegrees} or {@link #withAddHierarchy}, or the existing graph's dimension
+     *         doesn't match this builder's
      */
     public final PersistableGraphIndex build() {
         return graphBuilder().getGraph();
@@ -331,6 +420,7 @@ public abstract class HnswIndexBuilder implements Closeable {
      *
      * @return the populated graph
      * @throws UnsupportedOperationException if this builder was not created from vectors
+     * @throws IllegalStateException if the graph already has nodes; see {@link #populateGraph}
      */
     public PersistableGraphIndex buildAndPopulate() {
         throw new UnsupportedOperationException(
@@ -339,26 +429,29 @@ public abstract class HnswIndexBuilder implements Closeable {
     }
 
     /**
-     * Adds the vectors in {@code ravv} to the graph in parallel, then calls {@link #cleanup()}.
-     * Vector {@code i} is added at ordinal {@code i}, for every ordinal from the graph's
-     * {@link GraphIndex#getIdUpperBound() id upper bound} up to {@code ravv.size() - 1}: for a new,
-     * empty graph that is all of them, and when continuing a graph (see {@link #withExistingGraph}),
-     * {@code ravv} is a superset whose leading entries are the nodes already in the graph, and only
-     * the new ones are added. Builds the graph first if it has not been built yet.
+     * Populates an empty graph from {@code ravv}: adds vector {@code i} at ordinal {@code i}, for every
+     * vector, in parallel, then calls {@link #cleanup()}. Builds the graph first if it has not been
+     * built yet.
+     * <p>
+     * This is a one-shot operation on an empty graph. It throws if the graph already has nodes, whether
+     * from an earlier {@code populateGraph}, from {@link #addGraphNode}, or from
+     * {@link #withExistingGraph}; to add nodes to a graph that has some, use {@link #addGraphNode} and
+     * then {@link #cleanup()}.
      *
      * @return the populated graph
+     * @throws IllegalStateException if the graph already has nodes
      */
     public PersistableGraphIndex populateGraph(RandomAccessVectorValues ravv) {
+        Objects.requireNonNull(ravv, "ravv");
         GraphIndexBuilder gib = graphBuilder();
-        int from = gib.graph.getIdUpperBound();
-        if (from == 0) {
-            return gib.build(ravv);
+        int existing = gib.graph.getIdUpperBound();
+        if (existing > 0) {
+            throw new IllegalStateException(String.format(
+                    "populateGraph() populates an empty graph, but this graph already has nodes (ordinals up to %d). "
+                            + "To add nodes to a graph that has some, use addGraphNode() and then cleanup().",
+                    existing - 1));
         }
-        var vectors = ravv.threadLocalSupplier();
-        simdExecutor.submit(() -> IntStream.range(from, ravv.size()).parallel()
-                .forEach(node -> gib.addGraphNode(node, vectors.get().getVector(node)))).join();
-        gib.cleanup();
-        return gib.graph;
+        return gib.build(ravv);
     }
 
     /**
@@ -381,14 +474,18 @@ public abstract class HnswIndexBuilder implements Closeable {
     }
 
     /**
-     * Rejects shape settings that conflict with {@link #withExistingGraph}, naming every conflict in
-     * one exception.
+     * Rejects settings that conflict with {@link #withExistingGraph} (shape settings, or a different
+     * dimension), naming every conflict in one exception.
      */
-    private void validateShapeSettings() {
-        if (existingGraph == null || (!maxDegreesSet && !addHierarchySet)) {
+    private void validateExistingGraphSettings() {
+        if (existingGraph == null) {
             return;
         }
         List<String> problems = new ArrayList<>();
+        if (existingGraph.getDimension() != dimension()) {
+            problems.add(String.format("the existing graph has dimension %d, but this builder's vectors have dimension %d",
+                    existingGraph.getDimension(), dimension()));
+        }
         if (maxDegreesSet) {
             problems.add("withExistingGraph() takes its max degrees from the existing graph; "
                     + "don't also set withMaxDegree()/withMaxDegrees()");
@@ -397,7 +494,9 @@ public abstract class HnswIndexBuilder implements Closeable {
             problems.add("withExistingGraph() takes its hierarchy from the existing graph; "
                     + "don't also set withAddHierarchy()");
         }
-        throw new IllegalStateException("Cannot build HNSW index: " + String.join("; ", problems));
+        if (!problems.isEmpty()) {
+            throw new IllegalStateException("Cannot build HNSW index: " + String.join("; ", problems));
+        }
     }
 
     /**
@@ -410,9 +509,9 @@ public abstract class HnswIndexBuilder implements Closeable {
         if (gib != null) {
             return gib;
         }
-        synchronized (this) {
+        synchronized (buildLock) {
             if (this.graphBuilder == null) {
-                validateShapeSettings();
+                validateExistingGraphSettings();
                 this.graphBuilder = createGraphBuilder();
             }
             return this.graphBuilder;

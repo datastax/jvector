@@ -100,19 +100,31 @@ public class OnDiskSequentialGraphIndexWriter extends AbstractGraphIndexWriter<I
 
         }
 
+        // Overridden only to return this builder's own type, so the options specific to this writer
+        // stay reachable after a common option in a chain.
+
         @Override
-        public Builder withStartOffset(long offset) {
-            throw new UnsupportedOperationException("Sequential writing does not support setting the start offset");
+        public Builder with(Feature feature) {
+            super.with(feature);
+            return this;
         }
 
         @Override
-        public Builder withParallelWorkerThreads(int n) {
-            throw new UnsupportedOperationException("Sequential writing does not support parallel writing");
+        public Builder withMapper(OrdinalMapper ordinalMapper) {
+            super.withMapper(ordinalMapper);
+            return this;
         }
 
         @Override
-        public Builder withParallelDirectBuffers(boolean useDirectBuffers) {
-            throw new UnsupportedOperationException("Sequential writing does not support parallel writing");
+        public Builder withMap(Map<Integer, Integer> oldToNewOrdinals) {
+            super.withMap(oldToNewOrdinals);
+            return this;
+        }
+
+        @Override
+        public Builder withVersion(int version) {
+            super.withVersion(version);
+            return this;
         }
     }
 }

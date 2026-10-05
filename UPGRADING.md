@@ -22,15 +22,10 @@ If you only read one thing, read this!
   signatures that took or returned `ImmutableGraphIndex` (for example `new GraphSearcher(graph)`,
   `GraphSearcher.getView()`, `OnDiskGraphIndex.write`, and the graph writer builders) now use `GraphIndex`.
   Classes compiled against 4.0.1 will fail to link.
-- A new module, `jvector-api`, holds the public contract, and `jvector-base` depends on it. It contains the new
-  `Index`, `IndexSearcher`, `HnswRecipe` and `IvfRecipe`, plus `Accountable` and the `@Experimental` annotation,
-  which moved there from `jvector-base` with their package and class names unchanged. If you depend on the
-  published `io.github.jbellis:jvector` artifact (as Cassandra and OpenSearch do), nothing changes: it bundles
-  `jvector-api`. If you build against the individual modules, add `jvector-api`.
 
 ## New features
 
-- **A generic index API.** `Index` is a backing-agnostic handle (`searcher()`, `ramBytesUsed()`, `close()`), and
+- **A generic index API.** `io.github.jbellis.jvector.api.Index` is a backing-agnostic handle (`searcher()`, `ramBytesUsed()`, `close()`), and
   `IndexSearcher` is the matching searcher type. `GraphIndex` implements `Index`, and `GraphIndex.searcher()`
   returns a `GraphSearcher` with no cast. Code that holds only an `Index` recovers the concrete type with
   `instanceof GraphIndex`. `IndexSearcher` is `Closeable` and `Index.close()` throws only `IOException`, so both
@@ -47,23 +42,33 @@ If you only read one thing, read this!
   ```
   - `Indexes.hnswBuilder(RandomAccessVectorValues, VectorSimilarityFunction)` scores with the vectors themselves.
     `withCompressionType(CompressionType.PQ)` or `BQ` makes the builder train the quantizer, encode the vectors
-    and build with the compressed scores, with no codebook or encoding step for you to run.
+    and build with the compressed scores, with no codebook or encoding step for you to run. Once the graph is
+    built, `getCompressedVectors()` returns what it trained (`PQVectors`, whose `getCompressor()` is the
+    `ProductQuantization`, or `BQVectors`), to search with or to write to disk, e.g. as a `FusedPQ` feature.
+    `withPqSubspaces(n)` sets the PQ code size in bytes (one subspace per byte); it defaults to one subspace per 4
+    dimensions, as Cassandra and OpenSearch use. The cluster count, centering and anisotropic threshold still come
+    from `GraphIndexBuilderConfig`.
   - `Indexes.hnswBuilder(BuildScoreProvider, dimension)` scores with your own provider, for callers that stream
     vectors in or already have a provider. It has no vectors of its own, so populate it with
     `populateGraph(ravv)` or `addGraphNode`.
   - `buildAndPopulate()` builds and inserts the builder's own vectors in one call. `build()` returns the graph
     empty, for incremental construction with `addGraphNode` (thread-safe, and the graph can be searched while it
-    grows), `markNodeDeleted`, `removeDeletedNodes` and `cleanup()`. `populateGraph(ravv)` inserts a whole
-    `RandomAccessVectorValues` and calls `cleanup()`. `build()` is idempotent: every call returns the same graph.
+    grows), `markNodeDeleted`, `removeDeletedNodes` and `cleanup()`. `populateGraph(ravv)` populates an empty
+    graph from a whole `RandomAccessVectorValues` and calls `cleanup()`; it throws if the graph already has nodes.
+    `build()` is idempotent: every call returns the same graph. Settings changed after the graph is built are
+    ignored, with a logged warning.
   - `withExistingGraph(OnHeapGraphIndex)` continues building on a graph reloaded with `OnHeapGraphIndex.load`.
-    `populateGraph(ravv)` and `buildAndPopulate()` then append only the vectors past the end of the existing
-    graph, so pass a superset of the vectors the graph was built from.
+    Add the new nodes with `addGraphNode`, from the graph's `getIdUpperBound()` up, then call `cleanup()`.
+    The graph's dimension must match the builder's.
   - `HnswIndexBuilder.rescore(builder, newProvider)` copies the graph with every edge re-scored by a new
     provider, for example after refining a PQ codebook, and returns a builder that continues with the copy.
   - `HnswIndexBuilder` is `Closeable`: closing it releases the per-thread scratch space used while inserting. The
     graph it built stays usable.
 - **`PersistableGraphIndex`**, implemented by `OnHeapGraphIndex` and `OnDiskGraphIndex`, adds accessors for the
-  three graph writers, so a built graph can be written without naming the writer classes:
+  three graph writers, so a built graph can be written without naming the writer classes. Each accessor returns
+  that writer's own builder type, so its specific options (such as `withStartOffset`, `withParallelWorkerThreads`
+  or `withExecutor`) are available, and building gives the concrete writer (with `getOutput()` and `checksum()`
+  on the random-access writers):
 
   | Accessor | Writer | `GraphIndexWriterTypes` |
   |---|---|---|
@@ -72,20 +77,37 @@ If you only read one thing, read this!
   | `getWriterBuilder(IndexWriter)` | `OnDiskSequentialGraphIndexWriter` | `ON_DISK_SEQUENTIAL` |
 
   ```java
-  try (GraphIndexWriter writer = graph.getParallelWriterBuilder(path).with(new InlineVectors(dim)).build()) {
+  try (var writer = graph.getParallelWriterBuilder(path).with(new InlineVectors(dim)).build()) {
       writer.write(Feature.singleStateFactory(FeatureId.INLINE_VECTORS,
               node -> new InlineVectors.State(ravv.getVector(node))));
   }
   ```
   Constructing the writer builders directly and `GraphIndexWriter.getBuilderFor(...)` still work.
+- **Shortcuts for the simplest on-disk index.** `PersistableGraphIndex.writeTo(path, vectors)` writes a graph with
+  its vectors stored inline. `GraphSearcher.search(query, topK, similarityFunction)` and
+  `search(query, topK, rerankK, similarityFunction, acceptOrds)` search a graph that stores its vectors (an
+  `OnDiskGraphIndex` with inline or NVQ vectors) without building a score provider: with fused PQ they traverse
+  with the PQ codes and rerank the best `rerankK` with the stored vectors, otherwise they score with the stored
+  vectors. On an in-memory graph they throw `IllegalStateException`. `GraphIndex.ScoringView.hasApproximateScores()`
+  (default `false`) reports whether a view supports `approximateScoreFunctionFor`.
+  ```java
+  graph.writeTo(path, ravv);
+  try (var rs = ReaderSupplierFactory.open(path);
+       var onDisk = OnDiskGraphIndex.load(rs);
+       var searcher = onDisk.searcher()) {
+      SearchResult result = searcher.search(query, 10, VectorSimilarityFunction.COSINE);
+  }
+  ```
 - **Experimental:** recipes and IVF are marked `@Experimental`. `HnswRecipe.DEFAULT` is defined (it restates the
   builder's defaults) and can be applied with `HnswIndexBuilder.applyRecipe`; the other recipes, and
   `IvfIndexBuilder.build()`, throw `UnsupportedOperationException` until their values and implementation exist.
   The IVF types are `Indexes.ivfBuilder()`, `IvfIndexBuilder`, `IvfIndex` and `IvfSearcher`.
-- `jvector-examples/.../IndexApiExample.java` walks through the new API end to end: the one-call build, tuning and
-  compression, writing with the sequential and parallel writers (with inline and NVQ vectors), incremental
-  construction with deletes, building from a score provider with a rescore, continuing a saved graph, and search
-  options.
+- `jvector-examples/.../IndexApiExample.java` walks through the new API end to end, organized around Cassandra's and
+  OpenSearch's usage: the one-call build and tuning; building with PQ or BQ via `withCompressionType` and searching
+  with the trained codes; every writer type, including a graph embedded at an offset; fused PQ, NVQ with fused PQ,
+  and separately stored PQ codes on disk, all from the builder's own PQ; incremental construction with deletes;
+  streaming with caller-maintained PQ codes and a mid-build rescore; continuing a saved graph; and search options.
+  Run it from the project root with `mvn compile exec:exec@index-api-example`.
 
 ## Moving from GraphIndexBuilder to HnswIndexBuilder (optional)
 
@@ -106,11 +128,12 @@ If you only read one thing, read this!
 Differences to be aware of:
 - `addHierarchy`, `refineFinalGraph` and the build compression are always explicit (defaulting to `true`, `true`
   and `CompressionType.NONE`). The `GraphIndexBuilder.builder(...)` fluent builder from 4.0.x reads them from the
-  JMX `GraphIndexBuilderConfig` instead. PQ sizing (subspaces and clusters) still comes from
+  JMX `GraphIndexBuilderConfig` instead. So does the PQ subspace count (`withPqSubspaces`, default one per 4
+  dimensions, where the JMX path defaults to one per 8); the other PQ parameters still come from
   `GraphIndexBuilderConfig`.
 - Settings are validated when the graph is built, by `GraphIndexBuilder`, which throws an
-  `IllegalArgumentException` for the first invalid value. Settings changed after the graph is built have no
-  effect.
+  `IllegalArgumentException` for the first invalid value. Null inputs and a non-positive dimension are rejected
+  immediately. Settings changed after the graph is built are ignored, with a logged warning.
 - With `withExistingGraph`, calling `withMaxDegree(s)` or `withAddHierarchy` as well is rejected with an
   `IllegalStateException`, because the existing graph fixes both. The existing graph keeps the diversity provider
   it was created with, which must be able to score the ordinals you append.
@@ -141,12 +164,14 @@ Differences to be aware of:
 ## Other changes to public classes
 
 - `GraphSearcher` implements `IndexSearcher`.
-- `AbstractGraphIndexWriter.Builder` implements `PersistableGraphIndex.GraphIndexWriterBuilder`.
-- `@Experimental` has moved from `jvector-base` to `jvector-api` (same package and name) and is now `@Documented`,
-  so it appears in the generated Javadoc.
+- `AbstractGraphIndexWriter.Builder` implements `PersistableGraphIndex.GraphIndexWriterBuilder`, the options
+  every writer supports (`with`, `withMapper`, `withMap`, `withVersion`, `build`). `OnDiskGraphIndexWriter.Builder`,
+  `OnDiskParallelGraphIndexWriter.Builder` and `OnDiskSequentialGraphIndexWriter.Builder` override those to return
+  their own type, so writer-specific options can follow them in a chain.
+- `@Experimental` is now `@Documented`, so it appears in the generated Javadoc.
+- `GraphIndex` extends `Accountable`, as `ImmutableGraphIndex` did.
 - Writer documentation corrected, with no behavior change: `withParallelWorkerThreads` and
-  `withParallelDirectBuffers` apply only to the parallel writer. The single-threaded random-access and sequential
-  writer builders throw `UnsupportedOperationException` for them, and `RandomAccessOnDiskGraphIndexWriter.Builder`
+  `withParallelDirectBuffers` apply only to the parallel writer, and `RandomAccessOnDiskGraphIndexWriter.Builder`
   (which picks a writer from the JMX configuration) ignores them when it picks the single-threaded one. A worker
   count of 0 or less means "use all available processors".
 

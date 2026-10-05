@@ -24,8 +24,9 @@
 
 package io.github.jbellis.jvector.graph;
 
-import io.github.jbellis.jvector.index.Index;
+import io.github.jbellis.jvector.api.Index;
 import io.github.jbellis.jvector.graph.similarity.ScoreFunction;
+import io.github.jbellis.jvector.util.Accountable;
 import io.github.jbellis.jvector.util.Bits;
 import io.github.jbellis.jvector.vector.VectorSimilarityFunction;
 import io.github.jbellis.jvector.vector.types.VectorFloat;
@@ -46,7 +47,7 @@ import java.io.IOException;
  * All methods are threadsafe.  Operations that require persistent state are wrapped
  * in a View that should be created per accessing thread.
  */
-public interface GraphIndex extends Index {
+public interface GraphIndex extends Index, Accountable {
     /** Marks entry node as absent (fe, empty graph) */
     int ENTRY_NODE_ABSENT = -1;
 
@@ -228,6 +229,14 @@ public interface GraphIndex extends Index {
     interface ScoringView extends View {
         ScoreFunction.ExactScoreFunction rerankerFor(VectorFloat<?> queryVector, VectorSimilarityFunction vsf);
         ScoreFunction.ApproximateScoreFunction approximateScoreFunctionFor(VectorFloat<?> queryVector, VectorSimilarityFunction vsf);
+
+        /**
+         * Whether {@link #approximateScoreFunctionFor} is supported, e.g. because the graph stores fused PQ
+         * codes. When it isn't, that method throws {@link UnsupportedOperationException}.
+         */
+        default boolean hasApproximateScores() {
+            return false;
+        }
     }
 
     static String prettyPrint(GraphIndex graph) {

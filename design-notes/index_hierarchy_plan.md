@@ -77,6 +77,10 @@ Revisit only if a concrete embedder need shows up later.
 
 ## 4. `jvector-api`: the public-contract module
 
+> **Superseded by §12.13:** the module was removed. Its two remaining
+> interfaces live in `jvector-base`, in the `io.github.jbellis.jvector.api`
+> package, so a contract module can be re-extracted later without renames.
+
 The question here was whether a separate module holding just the
 interfaces — so a different implementation could be wired in later without
 touching callers — makes sense for JVector. It does, and a small, real first
@@ -131,13 +135,12 @@ algorithm needs to walk centroids/posting lists.
 
 ### What actually landed in `jvector-api`
 
-- `io.github.jbellis.jvector.index.Index`
-- `io.github.jbellis.jvector.index.IndexSearcher`
-- `io.github.jbellis.jvector.index.HnswRecipe` / `IvfRecipe` (replacing the
-  old flat `IndexRecipe`, §5.4)
-- `io.github.jbellis.jvector.util.Accountable`
-- `io.github.jbellis.jvector.annotations.Experimental` (moved from
-  `jvector-base` in the follow-up, §11.8)
+- `io.github.jbellis.jvector.api.Index`
+- `io.github.jbellis.jvector.api.IndexSearcher`
+
+(Superseded by §12.12. Earlier passes also put the recipes, `Accountable`
+and `@Experimental` here, in packages shared with `jvector-base`; §12.12
+moved them back to remove the split packages.)
 
 `GraphIndex` and `IvfIndex` (and their respective `Searcher` types) both
 stay in `jvector-base`, extending `jvector-api`'s `Index`/`IndexSearcher` —
@@ -428,11 +431,6 @@ concrete backing-index type back, no cast needed, consistent with what
   `GraphIndexBuilder.builder(bsp, dimension, MutableGraphIndex)`. Callers
   can pass an `OnHeapGraphIndex`, but can't name the parameter type.
   `HnswIndexBuilder.withExistingGraph` doesn't have this problem (§11.2).
-- **PQ codes from a compressed build aren't exposed.** A builder using
-  `withCompressionType(PQ)` trains a codebook internally, but on-disk layouts
-  that store PQ codes (fused PQ, separate PQ vectors) need the caller's own
-  `ProductQuantization`. An accessor on the builder would let those layouts
-  reuse it.
 - **Saving a graph to continue later needs a cast**:
   `((OnHeapGraphIndex) graph).save(out)`, since `save` is only on
   `OnHeapGraphIndex`.
@@ -441,6 +439,22 @@ concrete backing-index type back, no cast needed, consistent with what
   refuse (§3.1, §5.5).
 - **IVF persistence** — no interface added yet; revisit once the on-disk
   format is decided (§3.2, §5.5).
+- **Generic search on `IndexSearcher`** — it is a closeable marker with no
+  `search` method, so code holding only an `Index` must narrow the type to
+  search. The obstacle is not the index type: a searcher is already bound to
+  its index when `Index.searcher()` creates it. It is the scoring. Every
+  search needs a `SearchScoreProvider`, which combines the similarity
+  function, the source of vectors to score against (a
+  `RandomAccessVectorValues`, in-memory PQ codes, or an on-disk view's
+  inline, NVQ or fused data), and the reranking choice; none of that lives
+  on `Index`, and callers assemble it per query today. A generic
+  `search(query, topK)` therefore needs a backing-neutral scoring
+  configuration, bound when the searcher is created or passed to `search`.
+  It also needs a backing-neutral result type in `jvector-api` (`SearchResult`
+  is in the graph package), and a common shape, or per-backing option
+  objects, for search options that differ by backing (`rerankK` and
+  threshold for graphs, likely `nprobe` for IVF). This is a substantive API
+  change; design it alongside IVF, once IVF's search-time needs are known.
 
 `jvector-multirelease` assembly wiring (previously listed here as
 unverified) was checked, found broken, and fixed — see §4.
@@ -651,7 +665,8 @@ tutorials now use `GraphIndex`.
   `Indexes.ivfBuilder()`, `IvfIndex`, `IvfSearcher`, and `IvfIndexBuilder`. The
   annotation moved from `jvector-base` to `jvector-api` (same package and
   name) so the recipe enums can use it, and is now `@Documented` so it shows
-  in the generated Javadoc.
+  in the generated Javadoc. (§12.12 moved it back to `jvector-base`, along
+  with the recipes.)
 - `Index.close()` is declared to throw only `IOException`, matching
   `IndexSearcher`, so generic try-with-resources over an `Index` doesn't have
   to catch `Exception`.
@@ -737,10 +752,16 @@ covers both cases:
   `GraphIndexBuilder`. `build()` is idempotent and thread-safe: the
   underlying builder is created once, and later calls return the same
   graph.
-- `populateGraph(ravv)` inserts a whole `RandomAccessVectorValues` and calls
-  `cleanup()`. It adds only ordinals from the graph's current id upper
-  bound onward, so on an existing graph it appends rather than re-inserting
-  the existing nodes.
+- `populateGraph(ravv)` populates an empty graph from a whole
+  `RandomAccessVectorValues` and calls `cleanup()`. It throws if the graph
+  already has nodes (from an earlier populate, `addGraphNode`, or
+  `withExistingGraph`): adding to a populated graph is `addGraphNode` plus
+  `cleanup()`.
+- Settings changed after the graph is built are ignored with a WARN log
+  rather than an exception. Factory and `withMaxDegrees` inputs are
+  null-checked, `withMaxDegrees` copies its list, the score-provider
+  builder's dimension must be positive, and an existing graph's dimension
+  must match the builder's.
 - `HnswIndexBuilder.rescore(HnswIndexBuilder, BuildScoreProvider)` returns a
   new builder holding a re-scored copy of the graph, carrying over the
   source's settings (max degrees and hierarchy taken from its graph).
@@ -778,14 +799,118 @@ callers that name `ImmutableGraphIndex`; `UPGRADING.md` lists the renames.
 | Cassandra `CassandraOnHeapGraph` | `new GraphIndexBuilder(ravv, vsf, …)`, `addGraphNode`, `markNodeDeleted`, `cleanup` | `Indexes.hnswBuilder(ravv, vsf)…build()`, then `addGraphNode`/`markNodeDeleted`/`cleanup` |
 | Cassandra `CompactionGraph` | 10-arg constructor with a PQ score provider, `addGraphNode` under `trainingLock`, `GraphIndexBuilder.rescore` | `Indexes.hnswBuilder(bsp, dimension)…build()`, `addGraphNode`, `HnswIndexBuilder.rescore(builder, refined)`; `trainingLock` stays |
 | OpenSearch `JVectorWriter.getGraph` | 7-arg constructor, parallel `addGraphNode`, `cleanup` | `Indexes.hnswBuilder(bsp, dimension)…populateGraph(ravv)`, or `Indexes.hnswBuilder(ravv, vsf).withCompressionType(PQ).buildAndPopulate()` if the builder can own the quantization |
-| OpenSearch leading-segment merge | existing-graph constructor, `addGraphNode`, `markNodeDeleted`, `cleanup` | `…withExistingGraph(loaded)`, then `populateGraph(superset)` or `addGraphNode`, `markNodeDeleted`, `cleanup` |
+| OpenSearch leading-segment merge | existing-graph constructor, `addGraphNode`, `markNodeDeleted`, `cleanup` | `…withExistingGraph(loaded)…build()`, then `addGraphNode`, `markNodeDeleted`, `cleanup` |
 
 ### 12.7 Example
 
-`IndexApiExample` was rewritten around ease of use: a one-call quickstart,
-tuning and compression by setting, writing the populated graph with the
-sequential and parallel writers (inline and NVQ vectors), incremental
-construction with deletes, a score-provider build with a rescore, continuing
-a saved graph, search options, and the remaining validation. The
-legacy-comparison section was dropped, as were the fused-PQ and
-separate-PQ layouts, which need a caller-computed codebook (§10).
+`IndexApiExample` was rewritten around ease of use and the consumers' real
+patterns: a one-call quickstart and tuning; building with
+`withCompressionType(PQ)`/`BQ` and searching with the trained codes
+(`getCompressedVectors()`); every writer type, including embedding at an
+offset; fused PQ, NVQ with fused PQ (parallel writer), and separately stored
+PQ codes with inline or NVQ vectors (sequential writer), all from the
+builder's own PQ; incremental construction with deletes; streaming with
+caller-maintained PQ codes and a mid-build rescore; continuing a saved graph;
+search options; and the remaining validation. The legacy-comparison section
+was dropped.
+
+### 12.8 Writer accessors return the concrete builders
+
+`getWriterBuilder(Path)`, `getParallelWriterBuilder(Path)` and
+`getWriterBuilder(IndexWriter)` return `OnDiskGraphIndexWriter.Builder`,
+`OnDiskParallelGraphIndexWriter.Builder` and
+`OnDiskSequentialGraphIndexWriter.Builder`. `GraphIndexWriterBuilder` was
+narrowed to the options every writer supports, so an option a writer doesn't
+have (a start offset on the sequential writer, parallel options on the
+single-threaded one) is a compile error instead of an
+`UnsupportedOperationException`, and the options only one writer has
+(`withExecutor`, and `getOutput()`/`checksum()` on the built random-access
+writers) are reachable without a cast. The three builders override the common
+options to return their own type, so a chain like
+`.with(feature).withExecutor(e)` compiles.
+
+### 12.9 The builder's compressed vectors
+
+`HnswIndexBuilder.getCompressedVectors()` returns the `PQVectors` or
+`BQVectors` a builder trained with `withCompressionType`, so the graph can be
+searched with them and written with features that need them (`FusedPQ` takes
+the codebook and the codes) without training a second quantizer. It returns
+null when the builder doesn't compress, including a score-provider builder,
+whose quantization belongs to the caller, and throws if called on a
+compressing builder before the graph is built. To support it, the PQ/BQ code
+shared with `GraphIndexBuilder`'s JMX path was split into `compress(...)`,
+returning the compressed vectors, and `buildScoreProvider(...)`, which builds
+the score provider from them.
+
+### 12.10 PQ subspaces per builder
+
+`withPqSubspaces(int)` sets the number of PQ subspaces (the code size in
+bytes) for `withCompressionType(PQ)`. It defaults to one subspace per 4
+dimensions, what Cassandra and OpenSearch use, rather than the JMX
+`GraphIndexBuilderConfig` default of one per 8: the example showed the coarser
+codes costing a lot of recall when searching with them (0.588 against 0.888 at
+rerankK = 30). The global default is unchanged, since the JMX-driven
+`GraphIndexBuilder` paths read it. The cluster count, centering and
+anisotropic threshold still come from `GraphIndexBuilderConfig`. The
+score-provider builder warns and ignores the setting, as it does
+`withCompressionType`.
+
+### 12.11 Shortcuts for writing and searching on disk
+
+Two conveniences over existing code, with nothing changed underneath:
+
+- `PersistableGraphIndex.writeTo(path, vectors)`, a default method that
+  delegates to `OnDiskGraphIndex.write(graph, vectors, path)`: inline vectors,
+  random-access writer, ordinals renumbered to close gaps.
+- `GraphSearcher.search(query, topK, similarityFunction)` and
+  `search(query, topK, rerankK, similarityFunction, acceptOrds)`, which score
+  with the vectors the graph stores. They build the same
+  `DefaultSearchScoreProvider` callers built by hand from the
+  `ScoringView`: fused PQ for traversal plus the stored vectors for reranking
+  when the graph has fused PQ, otherwise the stored vectors alone. Choosing
+  between the two uses a new `ScoringView.hasApproximateScores()` (default
+  `false`, overridden by `OnDiskGraphIndex.View`), so the searcher doesn't
+  catch an exception per query. An in-memory graph's view isn't a
+  `ScoringView`, so these throw `IllegalStateException` there.
+
+Explicit score providers remain the way to choose other scoring, such as
+rerankless search or separately stored PQ codes.
+
+### 12.12 No split packages
+
+Earlier passes left three packages split between `jvector-api` and
+`jvector-base`: `index` (`Index`, `IndexSearcher` and the recipes in the api
+module, `Indexes` in base), `util` (`Accountable`) and `annotations`
+(`@Experimental`). The merged `jvector` jar was unaffected, but split packages
+are an error on the Java module path and would block a `module-info`. Fixed
+without moving anything callers of `main` use:
+
+- `Accountable` and `@Experimental` moved back to `jvector-base`, where they
+  are on `main`. `Index` declares `ramBytesUsed()` itself instead of
+  extending `Accountable`, and `GraphIndex` extends `Accountable` directly, as
+  `ImmutableGraphIndex` did.
+- `HnswRecipe` and `IvfRecipe` moved to `jvector-base`, in
+  `io.github.jbellis.jvector.index` with `Indexes`. That also opens the
+  simpler fix for the recipes' string-typed values (§12.4): they can now
+  refer to `CompressionType` directly, to be done when recipes are finished.
+- `Index` and `IndexSearcher` moved to their own package,
+  `io.github.jbellis.jvector.api`, which is now all `jvector-api` contains.
+
+Everything renamed was new on this branch.
+
+### 12.13 `jvector-api` removed
+
+After §12.12 the module held only `Index` and `IndexSearcher`. It earned
+little: without a generic search method (§10) code holding only an `Index`
+still narrows to `GraphIndex` to do anything useful; the published `jvector`
+artifact bundles it into the same jar as `jvector-base`, and the individual
+modules aren't installed, so nothing consumed it separately; and it cost a
+module, a dependency, and entries in both multirelease assemblies, two of
+which this branch had to fix. The two interfaces moved into `jvector-base`,
+keeping the package `io.github.jbellis.jvector.api`, and the module, its POM
+and its assembly entries were removed; the build files are now as on `main`.
+
+The package is kept free of references to concrete backings (which is why
+the factories stay on `Indexes` rather than `Index`), so if backing-neutral
+types arrive with a generic search API, moving the package into its own
+module again needs no changes for callers.

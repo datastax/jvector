@@ -25,7 +25,7 @@
 package io.github.jbellis.jvector.graph;
 
 import io.github.jbellis.jvector.annotations.Experimental;
-import io.github.jbellis.jvector.index.IndexSearcher;
+import io.github.jbellis.jvector.api.IndexSearcher;
 import io.github.jbellis.jvector.graph.GraphIndex.NodeAtLevel;
 import io.github.jbellis.jvector.graph.similarity.DefaultSearchScoreProvider;
 import io.github.jbellis.jvector.graph.similarity.ScoreFunction;
@@ -136,6 +136,49 @@ public class GraphSearcher implements IndexSearcher {
     @Deprecated
     public void usePruning(boolean usage) {
         pruneSearch = false;
+    }
+
+    /**
+     * Searches for the {@code topK} nodes nearest {@code queryVector}, scoring with the vectors the graph
+     * itself stores. Equivalent to {@code search(queryVector, topK, topK, similarityFunction, Bits.ALL)};
+     * see {@link #search(VectorFloat, int, int, VectorSimilarityFunction, Bits)}.
+     */
+    public SearchResult search(VectorFloat<?> queryVector, int topK, VectorSimilarityFunction similarityFunction) {
+        return search(queryVector, topK, topK, similarityFunction, Bits.ALL);
+    }
+
+    /**
+     * Searches for the {@code topK} nodes nearest {@code queryVector}, scoring with the vectors the graph
+     * itself stores, so no score provider has to be built. For a graph with fused PQ codes, the search
+     * traverses with those and reranks the best {@code rerankK} candidates with the stored vectors (inline
+     * or NVQ); otherwise every candidate is scored with the stored vectors, and {@code rerankK} only widens
+     * the search. To choose the scoring yourself, use
+     * {@link #search(SearchScoreProvider, int, int, float, float, Bits)}.
+     * <p>
+     * Requires a graph that stores its vectors, such as an {@code OnDiskGraphIndex} written with inline or
+     * NVQ vectors. An in-memory graph doesn't: search it with a {@link SearchScoreProvider}, or with
+     * {@link #search(VectorFloat, int, RandomAccessVectorValues, VectorSimilarityFunction, GraphIndex, Bits)}.
+     *
+     * @param rerankK how many candidates to collect before keeping the best {@code topK}; at least
+     *                {@code topK}
+     * @param acceptOrds which nodes are acceptable results; {@link Bits#ALL} for all
+     * @throws IllegalStateException if the graph doesn't store its vectors
+     */
+    public SearchResult search(VectorFloat<?> queryVector,
+                               int topK,
+                               int rerankK,
+                               VectorSimilarityFunction similarityFunction,
+                               Bits acceptOrds) {
+        if (!(view instanceof GraphIndex.ScoringView)) {
+            throw new IllegalStateException("This graph doesn't store its vectors, so it can't score a query on its own; "
+                    + "search with a SearchScoreProvider, or with search(query, topK, vectors, similarityFunction, graph, acceptOrds)");
+        }
+        var scoringView = (GraphIndex.ScoringView) view;
+        var reranker = scoringView.rerankerFor(queryVector, similarityFunction);
+        SearchScoreProvider ssp = scoringView.hasApproximateScores()
+                ? new DefaultSearchScoreProvider(scoringView.approximateScoreFunctionFor(queryVector, similarityFunction), reranker)
+                : new DefaultSearchScoreProvider(reranker);
+        return search(ssp, topK, rerankK, 0.0f, 0.0f, acceptOrds);
     }
 
     /**

@@ -428,17 +428,17 @@ public class OnDiskGraphIndex implements PersistableGraphIndex
     }
 
     @Override
-    public PersistableGraphIndex.GraphIndexWriterBuilder getParallelWriterBuilder(Path path) throws FileNotFoundException {
+    public OnDiskParallelGraphIndexWriter.Builder getParallelWriterBuilder(Path path) throws FileNotFoundException {
         return new OnDiskParallelGraphIndexWriter.Builder(this, path);
     }
 
     @Override
-    public PersistableGraphIndex.GraphIndexWriterBuilder getWriterBuilder(Path path) throws FileNotFoundException {
+    public OnDiskGraphIndexWriter.Builder getWriterBuilder(Path path) throws FileNotFoundException {
         return new OnDiskGraphIndexWriter.Builder(this, path);
     }
 
     @Override
-    public PersistableGraphIndex.GraphIndexWriterBuilder getWriterBuilder(IndexWriter out) {
+    public OnDiskSequentialGraphIndexWriter.Builder getWriterBuilder(IndexWriter out) {
         return new OnDiskSequentialGraphIndexWriter.Builder(this, out);
     }
 
@@ -726,6 +726,11 @@ public class OnDiskGraphIndex implements PersistableGraphIndex
             } else {
                 throw new UnsupportedOperationException("No reranker available for this graph");
             }
+        }
+
+        @Override
+        public boolean hasApproximateScores() {
+            return features.containsKey(FeatureId.FUSED_PQ);
         }
 
         @Override

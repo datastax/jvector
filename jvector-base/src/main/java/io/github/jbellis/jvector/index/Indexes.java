@@ -17,6 +17,7 @@
 package io.github.jbellis.jvector.index;
 
 import io.github.jbellis.jvector.annotations.Experimental;
+import io.github.jbellis.jvector.api.Index;
 import io.github.jbellis.jvector.graph.HnswIndexBuilder;
 import io.github.jbellis.jvector.graph.RandomAccessVectorValues;
 import io.github.jbellis.jvector.graph.RavvHnswBuilder;
@@ -29,10 +30,10 @@ import io.github.jbellis.jvector.vector.VectorSimilarityFunction;
  * Entry point for building a jvector {@link Index}: pick the backing type first, then only its
  * own parameters are available to set.
  * <p>
- * This lives here rather than as static methods on {@link Index} itself because {@link Index} is
- * part of jvector-api (the pure contract module, with no dependency on any concrete backing),
- * while the builders returned here construct concrete implementation objects and belong in
- * jvector-base alongside them.
+ * This lives here rather than as static methods on {@link Index} itself so that the
+ * {@code io.github.jbellis.jvector.api} package, which holds the backing-agnostic contract
+ * ({@link Index} and its searcher), refers to no concrete backing. That keeps the package free to
+ * move into a separate contract module later without changes for callers.
  */
 public final class Indexes {
     private Indexes() {
