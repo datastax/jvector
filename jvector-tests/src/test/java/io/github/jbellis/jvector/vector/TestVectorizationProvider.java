@@ -19,6 +19,7 @@ package io.github.jbellis.jvector.vector;
 import com.carrotsearch.randomizedtesting.RandomizedTest;
 
 import io.github.jbellis.jvector.TestUtil;
+import io.github.jbellis.jvector.vector.types.ByteSequence;
 import io.github.jbellis.jvector.vector.types.FloatArray;
 import io.github.jbellis.jvector.vector.types.VectorFloat;
 import io.github.jbellis.jvector.vector.types.VectorTypeSupport;
@@ -58,6 +59,121 @@ public class TestVectorizationProvider extends RandomizedTest {
         Assert.assertEquals(a.getVectorUtilSupport().dotProduct(v1a,v2a), b.getVectorUtilSupport().dotProduct(v1b, v2b), 0.0001f);
         Assert.assertEquals(a.getVectorUtilSupport().cosine(v1a,v2a), b.getVectorUtilSupport().cosine(v1b, v2b), 0.0001f);
         Assert.assertEquals(a.getVectorUtilSupport().squareDistance(v1a, v2a), b.getVectorUtilSupport().squareDistance(v1b, v2b), 0.0001f);
+    }
+
+    @Test
+    public void testSimilarityMetricsByte() {
+        Assume.assumeTrue(hasSimd);
+
+        VectorizationProvider a = new DefaultVectorizationProvider();
+        VectorizationProvider b = VectorizationProvider.getInstance();
+
+        // Use a prime-length vector that is not a multiple of 8 or 16
+        int dim = 107;
+        byte[] rawA = new byte[dim];
+        byte[] rawB = new byte[dim];
+        getRandom().nextBytes(rawA);
+        getRandom().nextBytes(rawB);
+
+        ByteSequence<?> bsA_scalar = a.getVectorTypeSupport().createByteSequence(rawA);
+        ByteSequence<?> bsB_scalar = a.getVectorTypeSupport().createByteSequence(rawB);
+        ByteSequence<?> bsA_simd   = b.getVectorTypeSupport().createByteSequence(rawA);
+        ByteSequence<?> bsB_simd   = b.getVectorTypeSupport().createByteSequence(rawB);
+
+        Assert.assertEquals(
+                a.getVectorUtilSupport().dotProduct(bsA_scalar, bsB_scalar),
+                b.getVectorUtilSupport().dotProduct(bsA_simd, bsB_simd),
+                0.0001f);
+        Assert.assertEquals(
+                a.getVectorUtilSupport().squareDistance(bsA_scalar, bsB_scalar),
+                b.getVectorUtilSupport().squareDistance(bsA_simd, bsB_simd),
+                0.0001f);
+        Assert.assertEquals(
+                a.getVectorUtilSupport().cosine(bsA_scalar, bsB_scalar),
+                b.getVectorUtilSupport().cosine(bsA_simd, bsB_simd),
+                0.0001f);
+    }
+
+    /**
+     * Verifies that the SIMD byte-vector kernels agree with the scalar baseline for
+     * several dimensions that stress boundary conditions in the vectorised loops:
+     * <ul>
+     *   <li>dim=1       — the absolute minimum case</li>
+     *   <li>dim=8       — exact multiple of the smallest SIMD lane width</li>
+     *   <li>dim=128     — exact multiple of larger lane widths</li>
+     *   <li>dim=256     — exact multiple of AVX2/AVX512 lane widths</li>
+     *   <li>dim=255     — one less than 256, exposes tail-loop handling</li>
+     * </ul>
+     */
+    @Test
+    public void testSimilarityMetricsByteEdgeDimensions() {
+        Assume.assumeTrue(hasSimd);
+
+        VectorizationProvider scalar = new DefaultVectorizationProvider();
+        VectorizationProvider simd   = VectorizationProvider.getInstance();
+
+        for (int dim : new int[]{1, 8, 128, 255, 256}) {
+            byte[] rawA = new byte[dim];
+            byte[] rawB = new byte[dim];
+            getRandom().nextBytes(rawA);
+            getRandom().nextBytes(rawB);
+
+            ByteSequence<?> sA = scalar.getVectorTypeSupport().createByteSequence(rawA);
+            ByteSequence<?> sB = scalar.getVectorTypeSupport().createByteSequence(rawB);
+            ByteSequence<?> vA = simd.getVectorTypeSupport().createByteSequence(rawA);
+            ByteSequence<?> vB = simd.getVectorTypeSupport().createByteSequence(rawB);
+
+            Assert.assertEquals("dotProduct dim=" + dim,
+                    scalar.getVectorUtilSupport().dotProduct(sA, sB),
+                    simd.getVectorUtilSupport().dotProduct(vA, vB),
+                    0.0001f);
+            Assert.assertEquals("squareDistance dim=" + dim,
+                    scalar.getVectorUtilSupport().squareDistance(sA, sB),
+                    simd.getVectorUtilSupport().squareDistance(vA, vB),
+                    0.0001f);
+            Assert.assertEquals("cosine dim=" + dim,
+                    scalar.getVectorUtilSupport().cosine(sA, sB),
+                    simd.getVectorUtilSupport().cosine(vA, vB),
+                    0.0001f);
+        }
+    }
+
+    /**
+     * SIMD kernels must treat bytes as signed. This test uses vectors whose
+     * correct result depends on negative byte values to catch sign-extension bugs.
+     */
+    @Test
+    public void testSimilarityMetricsByteSignHandling() {
+        Assume.assumeTrue(hasSimd);
+
+        VectorizationProvider scalar = new DefaultVectorizationProvider();
+        VectorizationProvider simd   = VectorizationProvider.getInstance();
+
+        // mix of extreme signed values: max positive 127, min negative -128
+        byte[] rawA = new byte[16];
+        byte[] rawB = new byte[16];
+        for (int i = 0; i < 16; i++) {
+            rawA[i] = (i % 2 == 0) ? (byte)  127 : (byte) -128;
+            rawB[i] = (i % 2 == 0) ? (byte) -128 : (byte)  127;
+        }
+
+        ByteSequence<?> sA = scalar.getVectorTypeSupport().createByteSequence(rawA);
+        ByteSequence<?> sB = scalar.getVectorTypeSupport().createByteSequence(rawB);
+        ByteSequence<?> vA = simd.getVectorTypeSupport().createByteSequence(rawA);
+        ByteSequence<?> vB = simd.getVectorTypeSupport().createByteSequence(rawB);
+
+        Assert.assertEquals("signed dotProduct",
+                scalar.getVectorUtilSupport().dotProduct(sA, sB),
+                simd.getVectorUtilSupport().dotProduct(vA, vB),
+                0.0001f);
+        Assert.assertEquals("signed squareDistance",
+                scalar.getVectorUtilSupport().squareDistance(sA, sB),
+                simd.getVectorUtilSupport().squareDistance(vA, vB),
+                0.0001f);
+        Assert.assertEquals("signed cosine",
+                scalar.getVectorUtilSupport().cosine(sA, sB),
+                simd.getVectorUtilSupport().cosine(vA, vB),
+                0.0001f);
     }
 
     @Test

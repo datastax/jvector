@@ -43,18 +43,18 @@ public class DataSetUtils {
     /**
      * Processes a dataset using the configured load behavior from the dataset metadata.
      */
-    public static DataSet processDataSet(String pathStr,
-                                         DataSetProperties props,
-                                         List<VectorFloat<?>> baseVectors,
-                                         List<VectorFloat<?>> queryVectors,
-                                         List<List<Integer>> groundTruth) {
+    public static DataSet<?> processDataSet(String pathStr,
+                                            DataSetProperties props,
+                                            List<VectorFloat<?>> baseVectors,
+                                            List<VectorFloat<?>> queryVectors,
+                                            List<List<Integer>> groundTruth) {
         var vsf = props.similarityFunction()
                 .orElseThrow(() -> new IllegalArgumentException(
                         "No similarity function configured for dataset: " + props.getName()));
 
         switch (props.loadBehavior()) {
             case NO_SCRUB:
-                return new SimpleDataSet(pathStr, vsf, baseVectors, queryVectors, groundTruth);
+                return new FloatDataSet(pathStr, vsf, baseVectors, queryVectors, groundTruth);
             case LEGACY_SCRUB:
                 return legacyScrubDataSet(pathStr, vsf, baseVectors, queryVectors, groundTruth);
             default:
@@ -68,15 +68,15 @@ public class DataSetUtils {
      * so that load behavior is controlled explicitly by dataset metadata.
      */
     @Deprecated(forRemoval = true)
-    public static DataSet getScrubbedDataSet(String pathStr,
-                                             VectorSimilarityFunction vsf,
-                                             List<VectorFloat<?>> baseVectors,
-                                             List<VectorFloat<?>> queryVectors,
-                                             List<List<Integer>> groundTruth) {
+    public static DataSet<?> getScrubbedDataSet(String pathStr,
+                                                VectorSimilarityFunction vsf,
+                                                List<VectorFloat<?>> baseVectors,
+                                                List<VectorFloat<?>> queryVectors,
+                                                List<List<Integer>> groundTruth) {
         return legacyScrubDataSet(pathStr, vsf, baseVectors, queryVectors, groundTruth);
     }
 
-    private static DataSet legacyScrubDataSet(String pathStr,
+    private static DataSet<?> legacyScrubDataSet(String pathStr,
                                               VectorSimilarityFunction vsf,
                                               List<VectorFloat<?>> baseVectors,
                                               List<VectorFloat<?>> queryVectors,
@@ -119,7 +119,7 @@ public class DataSetUtils {
         }
 
         assert scrubbedQueryVectors.size() == gtSet.size();
-        return new SimpleDataSet(pathStr, vsf, scrubbedBaseVectors, scrubbedQueryVectors, gtSet);
+        return new FloatDataSet(pathStr, vsf, scrubbedBaseVectors, scrubbedQueryVectors, gtSet);
     }
 
     private static boolean isValidLegacyVector(VectorFloat<?> vector, VectorSimilarityFunction vsf) {

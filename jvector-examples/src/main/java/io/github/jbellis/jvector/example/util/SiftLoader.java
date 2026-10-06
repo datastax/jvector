@@ -17,6 +17,7 @@
 package io.github.jbellis.jvector.example.util;
 
 import io.github.jbellis.jvector.vector.VectorizationProvider;
+import io.github.jbellis.jvector.vector.types.ByteSequence;
 import io.github.jbellis.jvector.vector.types.VectorFloat;
 import io.github.jbellis.jvector.vector.types.VectorTypeSupport;
 
@@ -53,6 +54,31 @@ public class SiftLoader {
                 var floatBuffer = byteBuffer.asFloatBuffer();
                 floatBuffer.get(vector);
                 vectors.add(vectorTypeSupport.createFloatVector(vector));
+            }
+        } catch (IOException ex) {
+            throw new UncheckedIOException(ex);
+        }
+        return vectors;
+    }
+
+    public static List<ByteSequence<?>> readBvecs(String filePath) {
+        var vectors = new ArrayList<ByteSequence<?>>();
+        try (var dis = new DataInputStream(new BufferedInputStream(new FileInputStream(filePath)))) {
+            while (dis.available() > 0) {
+                var dimension = Integer.reverseBytes(dis.readInt());
+                if (dimension <= 0) {
+                    throw new IOException("Corrupt bvecs file: negative or zero dimension " + dimension + " (possible file corruption or wrong format)");
+                }
+                if (dimension > 100_000) {
+                    throw new IOException("Unreasonable dimension " + dimension + " in bvecs file (possible file corruption or wrong format)");
+                }
+                var buffer = new byte[dimension];
+                dis.readFully(buffer);
+                var bv = vectorTypeSupport.createByteSequence(dimension);
+                for (int i = 0; i < dimension; i++) {
+                    bv.set(i, buffer[i]);
+                }
+                vectors.add(bv);
             }
         } catch (IOException ex) {
             throw new UncheckedIOException(ex);

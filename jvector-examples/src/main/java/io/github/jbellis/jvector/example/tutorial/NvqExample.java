@@ -27,6 +27,7 @@ import java.util.stream.IntStream;
 
 import io.github.jbellis.jvector.disk.ReaderSupplierFactory;
 import io.github.jbellis.jvector.example.benchmarks.datasets.DataSets;
+import io.github.jbellis.jvector.example.benchmarks.datasets.FloatDataSet;
 import io.github.jbellis.jvector.example.util.AccuracyMetrics;
 import io.github.jbellis.jvector.graph.GraphIndexBuilder;
 import io.github.jbellis.jvector.graph.GraphSearcher;
@@ -52,7 +53,7 @@ import me.tongfei.progressbar.ProgressBar;
 public class NvqExample {
     public static void main(String[] args) throws IOException {
         // Load a preconfigured dataset
-        var ds = DataSets.loadDataSet("ada002-100k").orElseThrow(() -> 
+        var ds = (FloatDataSet) DataSets.loadDataSet("ada002-100k").orElseThrow(() ->
             new RuntimeException("dataset not found"))
         .getDataSet();
         var dim = ds.getDimension();

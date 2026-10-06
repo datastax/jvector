@@ -49,9 +49,9 @@ import java.util.function.Supplier;
 /// @see DataSetLoader
 /// @see DataSets
 public class DataSetInfo implements DataSetProperties {
-    private final Supplier<DataSet> loader;
+    private final Supplier<DataSet<?>> loader;
     private final DataSetProperties baseProperties;
-    private volatile DataSet cached;
+    private volatile DataSet<?> cached;
 
     /// Creates a new dataset info handle.
     ///
@@ -61,7 +61,7 @@ public class DataSetInfo implements DataSetProperties {
     ///
     /// @param baseProperties     the dataset properties (name, similarity function, etc.)
     /// @param loader             a supplier that performs the deferred load; invoked at most once
-    public DataSetInfo(DataSetProperties baseProperties, Supplier<DataSet> loader) {
+    public DataSetInfo(DataSetProperties baseProperties, Supplier<DataSet<?>> loader) {
         this.baseProperties = baseProperties;
         this.loader = loader;
     }
@@ -124,7 +124,7 @@ public class DataSetInfo implements DataSetProperties {
     /// completes, after which all callers share the same cached instance.
     ///
     /// @return the ready-to-use {@link DataSet}
-    public DataSet getDataSet() {
+    public DataSet<?> getDataSet() {
         if (cached == null) {
             synchronized (this) {
                 if (cached == null) {

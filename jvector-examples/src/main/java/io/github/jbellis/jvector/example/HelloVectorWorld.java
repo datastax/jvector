@@ -52,9 +52,9 @@ public class HelloVectorWorld {
                 config.construction.neighborOverflow,
                 config.construction.addHierarchy,
                 config.construction.refineFinalGraph,
-                config.construction.getFeatureSets(),
-                config.construction.getCompressorParameters(),
-                config.search.getCompressorParameters(),
+                config.construction.getFeatureSets(ds),
+                config.construction.getCompressorParameters(ds),
+                config.search.getCompressorParameters(ds),
                 config.search.topKOverquery,
                 config.search.useSearchPruning,
                 artifacts);

@@ -19,6 +19,7 @@ import io.github.jbellis.jvector.bench.benchtools.BenchmarkParamCounter;
 import io.github.jbellis.jvector.disk.ReaderSupplier;
 import io.github.jbellis.jvector.disk.ReaderSupplierFactory;
 import io.github.jbellis.jvector.example.benchmarks.datasets.DataSet;
+import io.github.jbellis.jvector.example.benchmarks.datasets.FloatDataSet;
 import io.github.jbellis.jvector.example.benchmarks.datasets.DataSetInfo;
 import io.github.jbellis.jvector.example.benchmarks.datasets.DataSets;
 import io.github.jbellis.jvector.example.reporting.GitInfo;
@@ -251,7 +252,7 @@ public class CompactorBenchmark {
     private List<VectorFloat<?>> queryVectors;
     private List<VectorFloat<?>> baseVectors;
     private List<? extends List<Integer>> groundTruth;
-    private DataSet ds;
+    private FloatDataSet ds;
     private VectorSimilarityFunction similarityFunction;
 
     private final List<OnDiskGraphIndex> graphs = new ArrayList<>();
@@ -393,7 +394,7 @@ public class CompactorBenchmark {
             boolean needsRecallData = measureRecall && workloadMode != WorkloadMode.PARTITION;
 
             if (needsBaseVectors) {
-                ds = DataSets.loadDataSet(datasetNames)
+                ds = (FloatDataSet) DataSets.loadDataSet(datasetNames)
                         .orElseThrow(() -> new RuntimeException("Dataset not found: " + datasetNames))
                         .getDataSet();
 
@@ -432,7 +433,7 @@ public class CompactorBenchmark {
                 dimension = -1;
 
                 if (needsRecallData) {
-                    ds = DataSets.loadDataSet(datasetNames)
+                    ds = (FloatDataSet) DataSets.loadDataSet(datasetNames)
                             .orElseThrow(() -> new RuntimeException("Dataset not found: " + datasetNames))
                             .getDataSet();
                     queryVectors = ds.getQueryVectors();
@@ -595,7 +596,7 @@ public class CompactorBenchmark {
         }
     }
 
-    private void buildPartitions(DataSet ds, List<VectorFloat<?>> baseVectors) throws Exception {
+    private void buildPartitions(DataSet<?> ds, List<VectorFloat<?>> baseVectors) throws Exception {
 
         var partitionedData = DataSetPartitioner.partition(baseVectors, numPartitions, splitDistribution);
         vectorsPerSourceCount = partitionedData.sizes;

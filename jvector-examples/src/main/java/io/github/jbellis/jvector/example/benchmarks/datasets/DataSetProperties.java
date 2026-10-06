@@ -16,6 +16,7 @@
 
 package io.github.jbellis.jvector.example.benchmarks.datasets;
 
+import io.github.jbellis.jvector.vector.ByteVectorSimilarityFunction;
 import io.github.jbellis.jvector.vector.VectorSimilarityFunction;
 import org.yaml.snakeyaml.Yaml;
 
@@ -122,6 +123,18 @@ public interface DataSetProperties {
      */
     default LoadBehavior loadBehavior() {
         return LoadBehavior.LEGACY_SCRUB;
+    }
+
+    /**
+     * Maps the dataset's similarity function to its byte-vector equivalent by name.
+     * Both enums share the same three value names (EUCLIDEAN, DOT_PRODUCT, COSINE),
+     * so this is a direct valueOf mapping — no new YAML key is required.
+     *
+     * @return the byte similarity function, or empty if no similarity function is configured
+     */
+    default Optional<ByteVectorSimilarityFunction> byteSimilarityFunction() {
+        return similarityFunction()
+                .map(vsf -> ByteVectorSimilarityFunction.valueOf(vsf.name()));
     }
 
     /**

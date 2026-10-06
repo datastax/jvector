@@ -29,7 +29,7 @@ import io.github.jbellis.jvector.disk.BufferedRandomAccessWriter;
 import io.github.jbellis.jvector.disk.RandomAccessReader;
 import io.github.jbellis.jvector.disk.ReaderSupplier;
 import io.github.jbellis.jvector.disk.ReaderSupplierFactory;
-import io.github.jbellis.jvector.example.benchmarks.datasets.DataSet;
+import io.github.jbellis.jvector.example.benchmarks.datasets.FloatDataSet;
 import io.github.jbellis.jvector.example.benchmarks.datasets.DataSets;
 import io.github.jbellis.jvector.example.util.AccuracyMetrics;
 import io.github.jbellis.jvector.graph.GraphIndexBuilder;
@@ -60,7 +60,7 @@ public class LargerThanMemory {
         // The DataSet provided by loadDataSet is in-memory,
         // but you can apply the same technique even when you don't have
         // the base vectors in-memory.
-        DataSet dataset = DataSets.loadDataSet("e5-small-v2-100k").orElseThrow(() ->
+        FloatDataSet dataset = (FloatDataSet) DataSets.loadDataSet("e5-small-v2-100k").orElseThrow(() ->
             new RuntimeException("Dataset doesn't exist or wasn't configured correctly")
         ).getDataSet();
 
