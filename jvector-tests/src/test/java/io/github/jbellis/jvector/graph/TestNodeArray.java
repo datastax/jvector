@@ -298,5 +298,86 @@ public class TestNodeArray extends RandomizedTest {
       testMergeCandidatesOnce();
     }
   }
+
+  @Test
+  public void testDifferentScoreDuplicateAtEveryPositionAndCapacity() {
+    for (float offered : new float[]{-10f, 0.5f, 1f, 10f}) {
+      for (int id = 0; id < 3; id++) {
+        NodeArray a = new NodeArray(3);
+        for (int n = 0; n < 3; n++) a.addInOrder(n, 3f - n);
+        assertEquals(-1, a.insertSorted(id, offered));
+        assertEquals(-1, a.insertOrReplaceWorst(id, offered));
+        assertArrayEquals(new int[]{0,1,2}, a.copyDenseNodes());
+        assertArrayEquals(new float[]{3,2,1}, a.copyDenseScores(), 0f);
+        assertEquals(3, a.getArrayLength());
+      }
+    }
+  }
+
+  @Test(timeout=1000)
+  public void testMergeDifferentScoresAndTails() {
+    NodeArray existing = new NodeArray(3);
+    existing.addInOrder(7, 0.9f);
+    existing.addInOrder(3, 0.3f);
+    NodeArray incoming = new NodeArray(4);
+    incoming.addInOrder(3, 1f);
+    incoming.addInOrder(5, 0.8f);
+    incoming.addInOrder(7, 0.1f);
+    incoming.addInOrder(8, 0f);
+    NodeArray m = NodeArray.merge(existing, incoming);
+    assertArrayEquals(new int[]{7,5,3,8}, m.copyDenseNodes());
+    assertArrayEquals(new float[]{.9f,.8f,.3f,0},m.copyDenseScores(),0f);
+    assertArrayEquals(existing.copyDenseNodes(), NodeArray.merge(existing,new NodeArray(0)).copyDenseNodes());
+    assertArrayEquals(incoming.copyDenseNodes(), NodeArray.merge(new NodeArray(0),incoming).copyDenseNodes());
+  }
+
+  @Test
+  public void testMergePreservesTieInterleaving() {
+    NodeArray a=new NodeArray(3), b=new NodeArray(3);
+    for(int i=0;i<3;i++) { a.addInOrder(i,1f); b.addInOrder(i+3,1f); }
+    assertArrayEquals(new int[]{0,3,1,4,2,5},NodeArray.merge(a,b).copyDenseNodes());
+  }
+
+  @Test
+  public void testUniquenessAcrossNeighborhoodCapacities() {
+    for (int degree : new int[]{2, 3, 4, 7, 16, 31, 32, 33, 64, 128, 256, 512, 1024, 2048}) {
+      NodeArray existing = new NodeArray(degree);
+      for (int id = 0; id < degree; id++) existing.addInOrder(id, degree - id);
+      int[] originalIds = existing.copyDenseNodes();
+      float[] originalScores = existing.copyDenseScores();
+      for (int id : new int[]{0, degree / 2, degree - 1}) {
+        for (float score : new float[]{-1f, degree + 1f}) {
+          assertEquals(-1, existing.insertSorted(id, score));
+          assertEquals(-1, existing.insertOrReplaceWorst(id, score));
+          assertArrayEquals(originalIds, existing.copyDenseNodes());
+          assertArrayEquals(originalScores, existing.copyDenseScores(), 0f);
+          assertEquals(degree, existing.getArrayLength());
+        }
+      }
+      NodeArray incoming = new NodeArray(2 * degree);
+      for (int id = 0; id < degree; id++) incoming.addInOrder(id, 3 * degree - id);
+      for (int id = 0; id < degree; id++) incoming.addInOrder(degree + id, -1f - id);
+      NodeArray merged = NodeArray.merge(existing, incoming);
+      assertEquals(2 * degree, merged.size());
+      for (int id = 0; id < degree; id++) {
+        assertEquals(id, merged.getNode(id));
+        assertEquals(degree - id, merged.getScore(id), 0f);
+        assertEquals(degree + id, merged.getNode(degree + id));
+        assertEquals(-1f - id, merged.getScore(degree + id), 0f);
+      }
+      validateSortedByScore(merged);
+    }
+  }
+  @Test
+  public void testReplacementEvictsLowestScoreRatherThanHighestId() {
+    NodeArray a = new NodeArray(3);
+    a.addInOrder(100, 3f);
+    a.addInOrder(1, 2f);
+    a.addInOrder(2, 1f);
+    assertEquals(1, a.insertOrReplaceWorst(5, 2.5f));
+    assertArrayEquals(new int[]{100, 5, 1}, a.copyDenseNodes());
+    assertArrayEquals(new float[]{3f, 2.5f, 2f}, a.copyDenseScores(), 0f);
+  }
+
 }
 
