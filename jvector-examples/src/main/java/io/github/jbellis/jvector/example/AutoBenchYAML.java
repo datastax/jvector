@@ -164,15 +164,19 @@ public class AutoBenchYAML {
                     // Mark dataset as completed and update checkpoint, passing results
                     checkpointManager.markDatasetCompleted(datasetName, datasetResults);
 
-                    // Compaction regression — failures are non-fatal and don't block checkpointing
-                    try {
-                        logger.info("Running compaction benchmark for dataset: {}", datasetName);
-                        List<BenchResult> datasetCompactionResults = CompactionBench.run(ds);
-                        compactionResults.addAll(datasetCompactionResults);
-                        logger.info("Compaction benchmark completed for dataset: {} ({} configs)",
-                                datasetName, datasetCompactionResults.size());
-                    } catch (Exception e) {
-                        logger.error("Compaction benchmark failed for dataset {}", datasetName, e);
+                    // Compaction regression (opt-in via withCompaction: [Yes]) — failures are non-fatal and don't block checkpointing
+                    if (config.isCompactionEnabled()) {
+                        try {
+                            logger.info("Running compaction benchmark for dataset: {}", datasetName);
+                            List<BenchResult> datasetCompactionResults = CompactionBench.run(ds);
+                            compactionResults.addAll(datasetCompactionResults);
+                            logger.info("Compaction benchmark completed for dataset: {} ({} configs)",
+                                    datasetName, datasetCompactionResults.size());
+                        } catch (Exception e) {
+                            logger.error("Compaction benchmark failed for dataset {}", datasetName, e);
+                        }
+                    } else {
+                        logger.info("Skipping compaction benchmark for dataset: {} (withCompaction not enabled)", datasetName);
                     }
                 } catch (Exception e) {
                     logger.error("Exception while processing dataset {}", datasetName, e);
