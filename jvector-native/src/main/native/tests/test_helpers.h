@@ -25,9 +25,25 @@
 #include <cstdlib>
 #include <cstring>
 #include <string>
+#include <unordered_set>
 #include <vector>
 
 #include "jvector_simd.h"
+
+// ---------------------------------------------------------------------------
+// /proc/cpuinfo helpers.
+//
+// parse_cpuinfo_line(key) reads /proc/cpuinfo, finds the first line that
+// starts with `key`, and returns all whitespace-separated tokens after the
+// colon as a set.  Returns an empty set when the file is unavailable
+// (e.g. macOS) or the key is not found.
+//
+// Usage:
+//   x86-64:  parse_cpuinfo_line("flags")    → {"avx2", "avx512f", ...}
+//   AArch64: parse_cpuinfo_line("Features") → {"aes", "sve", "sve2", ...}
+// ---------------------------------------------------------------------------
+
+std::unordered_set<std::string> parse_cpuinfo_line(const std::string& key);
 
 // ---------------------------------------------------------------------------
 // Deterministic test vectors.
