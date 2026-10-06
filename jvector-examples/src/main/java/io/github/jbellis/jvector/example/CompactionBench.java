@@ -23,7 +23,7 @@ import io.github.jbellis.jvector.example.util.AccuracyMetrics;
 import io.github.jbellis.jvector.example.util.CompactionPartitionSource;
 import io.github.jbellis.jvector.example.yaml.TestDataPartition.Distribution;
 import io.github.jbellis.jvector.graph.GraphSearcher;
-import io.github.jbellis.jvector.graph.ListRandomAccessVectorValues;
+import io.github.jbellis.jvector.graph.ImmutableGraphIndex;
 import io.github.jbellis.jvector.graph.SearchResult;
 import io.github.jbellis.jvector.graph.disk.OnDiskGraphIndex;
 import io.github.jbellis.jvector.graph.disk.OnDiskGraphIndexCompactor;
@@ -143,26 +143,20 @@ public final class CompactionBench {
         String datasetName = ds.getName();
         int numPartitions = cfg.numPartitions;
 
-        // Load graphs and set up ordinal mapping: partition i's local ordinals shift by the sum of
-        // all prior partition sizes, preserving the original base-vector ordering so global ordinal
-        // k maps back to baseVectors.get(k) by construction.
+        // Load graphs; the compactor assigns the output ordinals and reports the mapping.
         List<ReaderSupplier> rss = new ArrayList<>(numPartitions);
         List<OnDiskGraphIndex> graphs = new ArrayList<>(numPartitions);
-        List<OrdinalMapper> remappers = new ArrayList<>(numPartitions);
         List<FixedBitSet> liveNodes = new ArrayList<>(numPartitions);
         try {
-            int globalOffset = 0;
             for (int i = 0; i < numPartitions; i++) {
                 ReaderSupplier rs = ReaderSupplierFactory.open(partitionPaths.get(i));
                 rss.add(rs);
                 OnDiskGraphIndex g = OnDiskGraphIndex.load(rs);
                 graphs.add(g);
                 int size = g.size(0);
-                remappers.add(new OrdinalMapper.OffsetMapper(globalOffset, size));
                 FixedBitSet live = new FixedBitSet(size);
                 live.set(0, size);  // all nodes live
                 liveNodes.add(live);
-                globalOffset += size;
             }
 
             // Recover graphDegree and precision from the actual partition graphs.
@@ -172,10 +166,12 @@ public final class CompactionBench {
 
             // Compact
             Path compactPath = tempDir.resolve("compacted");
-            var compactor = new OnDiskGraphIndexCompactor(graphs, liveNodes, remappers, vsf, null);
+            var compactor = new OnDiskGraphIndexCompactor(graphs, liveNodes, vsf, null);
             long t0 = System.currentTimeMillis();
             compactor.compact(compactPath);
             long compactionMs = System.currentTimeMillis() - t0;
+            List<List<Integer>> compactedGt = ds.getGroundTruth() == null ? null
+                    : groundTruthOrdinals(ds.getGroundTruth(), compactor.ordinalMappers(), graphs);
             logger.info("Compaction [{} {}] finished in {} ms", datasetName, cfg.dirName(), compactionMs);
 
             for (var g : graphs) g.close();
@@ -184,8 +180,7 @@ public final class CompactionBench {
             rss.clear();
 
             // Search the compacted graph: measure recall and search latency in one pass.
-            // Global ordinal k maps back to baseVectors.get(k) by construction.
-            SearchStats search = searchCompacted(compactPath, ds, baseVectors, dimension, vsf);
+            SearchStats search = searchCompacted(compactPath, ds, compactedGt, vsf);
             logger.info(String.format(
                     "%n" +
                     "  ┌─ Compaction result: %s [%s]%n" +
@@ -240,26 +235,59 @@ public final class CompactionBench {
     }
 
     /**
+     * The ground truth, expressed in the compacted graph's ordinals. The compactor assigns the
+     * output ordinals, so the dataset rows named by the ground truth have to be translated before
+     * they can be compared with what a search returns; partition {@code s} holds the rows that
+     * follow the rows of partitions {@code 0..s-1}.
+     */
+    static List<List<Integer>> groundTruthOrdinals(List<? extends List<Integer>> groundTruth,
+                                                   List<OrdinalMapper> mappers,
+                                                   List<OnDiskGraphIndex> partitions) {
+        int[] firstRow = new int[partitions.size() + 1];
+        for (int s = 0; s < partitions.size(); s++) {
+            firstRow[s + 1] = firstRow[s] + partitions.get(s).size(0);
+        }
+        List<List<Integer>> translated = new ArrayList<>(groundTruth.size());
+        for (List<Integer> rows : groundTruth) {
+            List<Integer> ordinals = new ArrayList<>(rows.size());
+            for (int row : rows) {
+                if (row < 0 || row >= firstRow[partitions.size()]) {
+                    ordinals.add(OrdinalMapper.OMITTED);   // outside the partitioned rows
+                    continue;
+                }
+                int s = partitions.size() - 1;
+                while (s > 0 && row < firstRow[s]) {
+                    s--;
+                }
+                ordinals.add(mappers.get(s).oldToNew(row - firstRow[s]));
+            }
+            translated.add(ordinals);
+        }
+        return translated;
+    }
+
+    /**
      * Searches every query against the compacted graph, timing each search, and returns recall plus
      * mean and p99 per-query latency (ms) and throughput (queries/sec, single-threaded sequential).
      */
     private static SearchStats searchCompacted(Path indexPath, DataSet ds,
-                                               List<VectorFloat<?>> baseVectors,
-                                               int dimension, VectorSimilarityFunction vsf) throws Exception {
+                                               List<? extends List<Integer>> compactedGt,
+                                               VectorSimilarityFunction vsf) throws Exception {
         var queryVectors = ds.getQueryVectors();
-        var groundTruth = ds.getGroundTruth();
-        var ravv = new ListRandomAccessVectorValues(baseVectors, dimension);
+        var groundTruth = compactedGt != null ? compactedGt : ds.getGroundTruth();
 
         try (var rs = ReaderSupplierFactory.open(indexPath)) {
             var graph = OnDiskGraphIndex.load(rs);
             try (var searcher = new GraphSearcher(graph)) {
+                var view = (ImmutableGraphIndex.ScoringView) searcher.getView();
                 searcher.usePruning(false);
                 int n = queryVectors.size();
                 List<SearchResult> results = new ArrayList<>(n);
                 long[] latenciesNanos = new long[n];
                 long totalNanos = 0;
                 for (int i = 0; i < n; i++) {
-                    var ssp = DefaultSearchScoreProvider.exact(queryVectors.get(i), vsf, ravv);
+                    // the graph's own vectors: compacted ordinals are not rows of baseVectors
+                    var ssp = new DefaultSearchScoreProvider(view.rerankerFor(queryVectors.get(i), vsf));
                     long t0 = System.nanoTime();
                     SearchResult result = searcher.search(ssp, TOP_K, TOP_K, 0f, 0f, Bits.ALL);
                     long elapsed = System.nanoTime() - t0;

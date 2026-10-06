@@ -260,6 +260,10 @@ public class CompactorBenchmark {
     private Path tempDir;
     private List<Path> storagePaths;
     private List<Integer> vectorsPerSourceCount;
+    // the ground truth in the compacted graph's ordinals, for the recall computation (the
+    // compactor assigns the output ordinals, the dataset's ground truth names rows); null when
+    // the searched index was built from scratch, whose ordinals are already the dataset's rows
+    private List<? extends List<Integer>> compactedGroundTruth;
     private String resolvedVectorizationProvider;
 
     // Paths used during execution
@@ -693,22 +697,17 @@ public class CompactorBenchmark {
         log.info("Compacting {} partitions into {}", numPartitions, compactOutputPath.toAbsolutePath());
 
 
-        List<OrdinalMapper> remappers = new ArrayList<>(numPartitions);
         List<FixedBitSet> liveNodes = new ArrayList<>(numPartitions);
-        // Remap ordinals: local [0..size-1] -> global increasing in partition order
-        int globalOrdinal = 0;
         for (int n = 0; n < numPartitions; n++) {
-            int size = graphs.get(n).size();
-            var remapper = new OrdinalMapper.OffsetMapper(globalOrdinal, size);
-            remappers.add(remapper);
-            liveNodes.add(randomLiveNodes(size, liveNodesRate, n));
-            globalOrdinal += size;
+            liveNodes.add(randomLiveNodes(graphs.get(n).size(), liveNodesRate, n));
         }
-        var compactor = new OnDiskGraphIndexCompactor(graphs, liveNodes, remappers, similarityFunction, null);
+        var compactor = new OnDiskGraphIndexCompactor(graphs, liveNodes, similarityFunction, null);
 
         long startNanos = System.nanoTime();
         compactor.compact(compactOutputPath);
         long compactionTimeMs = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - startNanos);
+        compactedGroundTruth = groundTruth == null ? null
+                : groundTruthOrdinals(groundTruth, compactor.ordinalMappers(), graphs);
         log.info("Compacted {} partitions into {} in {} ms", numPartitions, compactOutputPath.toAbsolutePath(), compactionTimeMs);
         return compactionTimeMs;
     }
@@ -882,6 +881,38 @@ public class CompactorBenchmark {
         }
     }
 
+    /**
+     * The ground truth, expressed in the compacted graph's ordinals. The compactor assigns the
+     * output ordinals, so the dataset rows named by the ground truth have to be translated before
+     * they can be compared with what a search returns; partition {@code s} holds the rows that
+     * follow the rows of partitions {@code 0..s-1}.
+     */
+    static List<List<Integer>> groundTruthOrdinals(List<? extends List<Integer>> groundTruth,
+                                                   List<OrdinalMapper> mappers,
+                                                   List<OnDiskGraphIndex> partitions) {
+        int[] firstRow = new int[partitions.size() + 1];
+        for (int s = 0; s < partitions.size(); s++) {
+            firstRow[s + 1] = firstRow[s] + partitions.get(s).size(0);
+        }
+        List<List<Integer>> translated = new ArrayList<>(groundTruth.size());
+        for (List<Integer> rows : groundTruth) {
+            List<Integer> ordinals = new ArrayList<>(rows.size());
+            for (int row : rows) {
+                if (row < 0 || row >= firstRow[partitions.size()]) {
+                    ordinals.add(OrdinalMapper.OMITTED);   // outside the partitioned rows
+                    continue;
+                }
+                int s = partitions.size() - 1;
+                while (s > 0 && row < firstRow[s]) {
+                    s--;
+                }
+                ordinals.add(mappers.get(s).oldToNew(row - firstRow[s]));
+            }
+            translated.add(ordinals);
+        }
+        return translated;
+    }
+
     private SearchStats runRecall(Path indexPath) throws Exception {
 
         log.info("Loading and searching index at {}", indexPath.toAbsolutePath());
@@ -903,7 +934,9 @@ public class CompactorBenchmark {
                     searchLatenciesNs[n] = System.nanoTime() - startNs;
                 }
                 else {
-                    var ssp = DefaultSearchScoreProvider.exact(queryVectors.get(n), similarityFunction, ravv);
+                    // the graph's own vectors: its ordinals are not rows of the base ravv
+                    var rerank = view.rerankerFor(queryVectors.get(n), similarityFunction);
+                    SearchScoreProvider ssp = new DefaultSearchScoreProvider(rerank);
                     long startNs = System.nanoTime();
                     result = searcher.search(ssp, 10, 10, 0.0f, 0.0f, Bits.ALL);
                     searchLatenciesNs[n] = System.nanoTime() - startNs;
@@ -911,7 +944,8 @@ public class CompactorBenchmark {
                 retrieved.add(result);
             }
 
-            double recall = AccuracyMetrics.recallFromSearchResults(groundTruth, retrieved, 10, 10);
+            double recall = AccuracyMetrics.recallFromSearchResults(
+                    compactedGroundTruth == null ? groundTruth : compactedGroundTruth, retrieved, 10, 10);
             SearchStats stats = SearchStats.from(recall, searchLatenciesNs);
             log.info("Recall [dataset={}, workloadMode={}, numPartitions={}, graphDegree={}, beamWidth={}, splitDistribution={}, indexPrecision={}, parallelWriteThreads={}, vectorizationProvider={}, datasetPortion={}]: {}, avgSearchLatencyMs={}, p99SearchLatencyMs={}",
                     datasetNames, workloadMode, numPartitions, graphDegree, beamWidth, splitDistribution, indexPrecision, parallelWriteThreads, resolvedVectorizationProvider, datasetPortion, recall, stats.avgSearchLatencyMs, stats.p99SearchLatencyMs);

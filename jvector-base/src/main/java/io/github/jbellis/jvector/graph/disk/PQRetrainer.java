@@ -124,6 +124,29 @@ public class PQRetrainer {
      * Performs balanced sampling across all source indexes to ensure proportional representation.
      * Guarantees minimum samples per source while respecting total sample budget.
      */
+    /**
+     * Trains a fresh codebook on a balanced sample, for sources that carry no PQ to warm-start
+     * from (full-precision merges). Returns null when the sources hold fewer vectors than the
+     * codebook has centroids.
+     */
+    public ProductQuantization train(int subspaceCount) {
+        List<SampleRef> samples = sampleBalanced(ProductQuantization.MAX_PQ_TRAINING_SET_SIZE);
+        if (samples.size() < CLUSTERS) {
+            log.info("Too few vectors ({}) to train a {}-centroid PQ", samples.size(), CLUSTERS);
+            return null;
+        }
+        samples.sort(Comparator.comparingInt((SampleRef r) -> r.source).thenComparingInt(r -> r.node));
+        long t0 = System.nanoTime();
+        List<VectorFloat<?>> trainingVectors = extractVectorsSequential(samples);
+        var ravv = new ListRandomAccessVectorValues(trainingVectors, dimension);
+        ProductQuantization result = ProductQuantization.compute(ravv, subspaceCount, CLUSTERS, true);
+        log.info("Trained a {}-subspace PQ on {} sampled vectors in {}ms",
+                 subspaceCount, trainingVectors.size(), (System.nanoTime() - t0) / 1_000_000L);
+        return result;
+    }
+
+    private static final int CLUSTERS = 256;
+
     private List<SampleRef> sampleBalanced(int totalSamples) {
         // If total live nodes <= totalSamples, return ALL
         if (numTotalNodes <= totalSamples) {
