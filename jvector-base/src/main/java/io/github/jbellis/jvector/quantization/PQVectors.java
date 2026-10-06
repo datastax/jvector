@@ -47,6 +47,27 @@ public abstract class PQVectors implements CompressedVectors {
     protected ByteSequence<?>[] compressedDataChunks;
     protected int vectorsPerChunk;
 
+    /**
+     * Then {@code IntUnaryOperator} variant that also performs check against supplied vector count.
+     */
+    public interface CheckedIntUnaryOperator extends IntUnaryOperator {
+        /**
+         * Verify that the mapped ordinals are properly packed
+         * @param vectorCount total vector count
+         */
+        default void check(int vectorCount) {
+            // Verify that the mapped ordinals are packed, ie. the total range of ordinals does not exceed
+            // the total vector count as they are mapped from 0 --> vector count - 1.
+            // This assumes no duplicates are included.
+            // Note that the total vector count cannot exceed 2B as that is Integer.MAX_VALUE
+            IntStream.range(0, vectorCount).forEach(i -> {
+                int mappedOrdinal = applyAsInt(i);
+                if (mappedOrdinal > vectorCount)
+                    throw new IllegalArgumentException("vectorCount=" + mappedOrdinal + " exceeds maximum " + vectorCount);
+            });
+        }
+    }
+
     protected PQVectors(ProductQuantization pq) {
         this.pq = pq;
     }
@@ -107,16 +128,27 @@ public abstract class PQVectors implements CompressedVectors {
      * @return the PQVectors instance
      */
     public static ImmutablePQVectors encodeAndBuild(ProductQuantization pq, int vectorCount, IntUnaryOperator ordinalsMapping, RandomAccessVectorValues ravv, ForkJoinPool simdExecutor) {
+        return encodeAndBuild(pq, vectorCount, (CheckedIntUnaryOperator) ordinalsMapping::applyAsInt, ravv, simdExecutor);
+    }
+
+    /**
+     * Build a PQVectors instance from the given RandomAccessVectorValues. The vectors are encoded in parallel
+     * and split into chunks to avoid exceeding the maximum array size.
+     *
+     * @param pq           the ProductQuantization to use
+     * @param vectorCount  the number of vectors to encode
+     * @param ordinalsMapping the graph ordinals to RAVV mapping, the function should be defined in [0, vectorCount)
+     * @param ravv         the RandomAccessVectorValues to encode
+     * @param simdExecutor the ForkJoinPool to use for SIMD operations
+     * @return the PQVectors instance
+     */
+    public static ImmutablePQVectors encodeAndBuild(ProductQuantization pq, int vectorCount, CheckedIntUnaryOperator ordinalsMapping, RandomAccessVectorValues ravv, ForkJoinPool simdExecutor) {
         // Verify that the mapped ordinals are packed, ie. the total range of ordinals does not exceed
         // the total vector count as they are mapped from 0 --> vector count - 1.
         // This assumes no duplicates are included.
         // Note that the total vector count cannot exceed 2B as that is Integer.MAX_VALUE
         if (log.isDebugEnabled() || System.getProperties().containsKey("VECTOR_DEBUG")) {
-            IntStream.range(0, vectorCount).forEach(i -> {
-                int mappedOrdinal = ordinalsMapping.applyAsInt(i);
-                if (mappedOrdinal > vectorCount)
-                    throw new IllegalArgumentException("vectorCount=" + mappedOrdinal + " exceeds maximum " + vectorCount);
-            });
+            ordinalsMapping.check(vectorCount);
             log.info("Range check completed for encodeAndBuild with vectorCount={}", vectorCount);
         }
 
