@@ -120,7 +120,7 @@ public final class DatasetInfoWriter {
                 basePath,
                 queryPath,
                 groundTruthPath,
-                ds.getBaseVectors().size(),
+                ds.getBaseRavv().size(),
                 ds.getQueryVectors().size(),
                 ds.getGroundTruth().size(),
                 ds.getDimension(),
