@@ -235,7 +235,7 @@ public class RavvHnswBuilder extends HnswIndexBuilder {
     @Override
     protected GraphIndexBuilder createGraphBuilder() {
         compressedVectors = GraphIndexBuilder.compress(vectorValues, compressionType, pqSubspaces,
-                pqGlobalCentering, pqAnisotropicThreshold, simdExecutor, parallelExecutor);
+                pqGlobalCentering, pqAnisotropicThreshold, buildExecutor, maintenanceExecutor);
         BuildScoreProvider scoreProvider = GraphIndexBuilder.buildScoreProvider(vectorValues, similarityFunction,
                 compressedVectors);
         return newGraphBuilder(scoreProvider, vectorValues.dimension());

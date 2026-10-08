@@ -86,8 +86,8 @@ public abstract class HnswIndexBuilder implements Closeable {
     float alpha = 1.2f;
     boolean addHierarchy = true;
     boolean refineFinalGraph = true;
-    ForkJoinPool simdExecutor = PhysicalCoreExecutor.pool();
-    ForkJoinPool parallelExecutor = ForkJoinPool.commonPool();
+    ForkJoinPool buildExecutor = PhysicalCoreExecutor.pool();
+    ForkJoinPool maintenanceExecutor = ForkJoinPool.commonPool();
     OnHeapGraphIndex existingGraph;
     // Whether withMaxDegree(s)/withAddHierarchy were called, as opposed to holding their defaults or a
     // recipe's values; setting them explicitly conflicts with withExistingGraph.
@@ -269,27 +269,37 @@ public abstract class HnswIndexBuilder implements Closeable {
     }
 
     /**
-     * ForkJoinPool instance for SIMD operations. Defaults to {@link PhysicalCoreExecutor#pool()},
-     * matching {@link GraphIndexBuilder}'s convenience constructors.
+     * The pool that runs the build's insert-time work: the parallel inserts of {@link #populateGraph}
+     * and {@link #buildAndPopulate()}, scoring replacement edges in {@link #removeDeletedNodes()}, and
+     * PQ/BQ encoding and PQ codebook training for {@link #withCompressionType}. This work is dominated by
+     * vectorized distance computations, which gain little from hyper-threads, so it defaults to
+     * {@link PhysicalCoreExecutor#pool()}, one thread per physical core. ({@link #addGraphNode} runs on
+     * the calling thread.) It is {@code GraphIndexBuilder}'s {@code simdExecutor}.
      */
-    public HnswIndexBuilder withSimdExecutor(ForkJoinPool simdExecutor) {
-        if (ignoredAfterBuild("withSimdExecutor", simdExecutor)) {
+    public HnswIndexBuilder withBuildExecutor(ForkJoinPool buildExecutor) {
+        Objects.requireNonNull(buildExecutor, "buildExecutor");
+        if (ignoredAfterBuild("withBuildExecutor", buildExecutor)) {
             return this;
         }
-        this.simdExecutor = simdExecutor;
+        this.buildExecutor = buildExecutor;
         return this;
     }
 
     /**
-     * ForkJoinPool instance for parallel stream operations. Defaults to
-     * {@link ForkJoinPool#commonPool()}, matching {@link GraphIndexBuilder}'s convenience
-     * constructors.
+     * The pool that runs the passes over the whole graph: the refinement and degree-enforcement passes
+     * of {@link #cleanup()}, copying and re-scoring edges in {@link #rescore}, gathering replacement
+     * edges in {@link #removeDeletedNodes()}, and sampling training vectors for PQ. Defaults to
+     * {@link ForkJoinPool#commonPool()}. It is {@code GraphIndexBuilder}'s {@code parallelExecutor}.
+     * <p>
+     * Both defaults match {@code GraphIndexBuilder}'s convenience constructors. The same pool may be
+     * passed to both settings.
      */
-    public HnswIndexBuilder withParallelExecutor(ForkJoinPool parallelExecutor) {
-        if (ignoredAfterBuild("withParallelExecutor", parallelExecutor)) {
+    public HnswIndexBuilder withMaintenanceExecutor(ForkJoinPool maintenanceExecutor) {
+        Objects.requireNonNull(maintenanceExecutor, "maintenanceExecutor");
+        if (ignoredAfterBuild("withMaintenanceExecutor", maintenanceExecutor)) {
             return this;
         }
-        this.parallelExecutor = parallelExecutor;
+        this.maintenanceExecutor = maintenanceExecutor;
         return this;
     }
 
@@ -392,10 +402,10 @@ public abstract class HnswIndexBuilder implements Closeable {
     GraphIndexBuilder newGraphBuilder(BuildScoreProvider buildScoreProvider, int dimension) {
         if (existingGraph != null) {
             return new GraphIndexBuilder(buildScoreProvider, dimension, existingGraph, beamWidth,
-                    neighborOverflow, alpha, refineFinalGraph, simdExecutor, parallelExecutor, null);
+                    neighborOverflow, alpha, refineFinalGraph, buildExecutor, maintenanceExecutor, null);
         }
         return new GraphIndexBuilder(buildScoreProvider, dimension, maxDegrees, beamWidth,
-                neighborOverflow, alpha, addHierarchy, refineFinalGraph, simdExecutor, parallelExecutor, null);
+                neighborOverflow, alpha, addHierarchy, refineFinalGraph, buildExecutor, maintenanceExecutor, null);
     }
 
     /**
@@ -443,8 +453,8 @@ public abstract class HnswIndexBuilder implements Closeable {
         rescored.neighborOverflow = other.neighborOverflow;
         rescored.alpha = other.alpha;
         rescored.refineFinalGraph = other.refineFinalGraph;
-        rescored.simdExecutor = other.simdExecutor;
-        rescored.parallelExecutor = other.parallelExecutor;
+        rescored.buildExecutor = other.buildExecutor;
+        rescored.maintenanceExecutor = other.maintenanceExecutor;
         rescored.graphBuilder = GraphIndexBuilder.rescore(source, newProvider);
         return rescored;
     }

@@ -121,7 +121,7 @@ If you only read one thing, read this!
 | constructors taking a `BuildScoreProvider` and dimension | `Indexes.hnswBuilder(bsp, dimension)` |
 | computing PQ or BQ vectors yourself to build with compressed scores | `Indexes.hnswBuilder(ravv, vsf).withCompressionType(CompressionType.PQ)` (or `BQ`) |
 | `List<Integer>` max degrees | `withMaxDegrees(list)` |
-| `refineFinalGraph`, SIMD and parallel executor arguments | `withRefineFinalGraph`, `withSimdExecutor`, `withParallelExecutor` |
+| `refineFinalGraph`, SIMD and parallel executor arguments | `withRefineFinalGraph`, `withBuildExecutor` (the SIMD executor), `withMaintenanceExecutor` (the parallel executor) |
 | `addGraphNode`, `markNodeDeleted`, `removeDeletedNodes`, `cleanup`, `insertsInProgress` | the same methods on `HnswIndexBuilder`, after `build()` |
 | `GraphIndexBuilder.rescore(builder, newBsp)` | `HnswIndexBuilder.rescore(builder, newBsp)` |
 | existing-graph constructor, or `buildAndMergeNewNodes` | `OnHeapGraphIndex.load(...)`, then `withExistingGraph(graph)` |

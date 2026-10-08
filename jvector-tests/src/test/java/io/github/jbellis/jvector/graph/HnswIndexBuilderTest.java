@@ -233,8 +233,8 @@ public class HnswIndexBuilderTest extends RandomizedTest {
                     .withNeighborOverflow(1.5f)
                     .withAlpha(1.3f)
                     .withRefineFinalGraph(false)
-                    .withSimdExecutor(pool)
-                    .withParallelExecutor(pool);
+                    .withBuildExecutor(pool)
+                    .withMaintenanceExecutor(pool);
             builder.populateGraph(ravv);
 
             HnswIndexBuilder rescored = HnswIndexBuilder.rescore(builder, bsp);
@@ -245,8 +245,8 @@ public class HnswIndexBuilderTest extends RandomizedTest {
             assertEquals(1.5f, rescored.neighborOverflow, 0.0f);
             assertEquals(1.3f, rescored.alpha, 0.0f);
             assertFalse(rescored.refineFinalGraph);
-            assertSame(pool, rescored.simdExecutor);
-            assertSame(pool, rescored.parallelExecutor);
+            assertSame(pool, rescored.buildExecutor);
+            assertSame(pool, rescored.maintenanceExecutor);
             assertEquals(List.of(24, 12), rescored.getGraph().maxDegrees());
             assertEquals(DIMENSION, rescored.getGraph().getDimension());
         } finally {

@@ -36,11 +36,11 @@ import io.github.jbellis.jvector.example.util.FilteredForkJoinPool;
 import io.github.jbellis.jvector.example.util.OnDiskGraphIndexCache;
 import io.github.jbellis.jvector.example.yaml.MetricSelection;
 import io.github.jbellis.jvector.graph.GraphIndex;
-import io.github.jbellis.jvector.graph.GraphIndexBuilder;
 import io.github.jbellis.jvector.graph.GraphSearcher;
 import io.github.jbellis.jvector.graph.RandomAccessVectorValues;
 import io.github.jbellis.jvector.graph.*;
 import io.github.jbellis.jvector.graph.disk.OnDiskGraphIndex;
+import io.github.jbellis.jvector.index.Indexes;
 import io.github.jbellis.jvector.graph.disk.OnDiskGraphIndexWriter;
 import io.github.jbellis.jvector.graph.disk.OrdinalMapper;
 import io.github.jbellis.jvector.graph.disk.RandomAccessOnDiskGraphIndexWriter;
@@ -404,7 +404,15 @@ public class Grid {
                 ? constructionMetrics.index("PQ").timeEncode(() -> buildCompressor.encodeAll(floatVectors))
                 : buildCompressor.encodeAll(floatVectors));
         var bsp = BuildScoreProvider.pqBuildScoreProvider(ds.getSimilarityFunction(), pq);
-        GraphIndexBuilder builder = new GraphIndexBuilder(bsp, floatVectors.dimension(), M, efConstruction, neighborOverflow, 1.2f, addHierarchy, refineFinalGraph);
+        // Built from the caller-trained PQ above, which is timed separately, so the builder takes the score provider
+        // rather than compressing itself. Its executors keep their defaults (physical-core pool, common pool).
+        HnswIndexBuilder builder = Indexes.hnswBuilder(bsp, floatVectors.dimension())
+                .withMaxDegree(M)
+                .withBeamWidth(efConstruction)
+                .withNeighborOverflow(neighborOverflow)
+                .withAlpha(1.2f)
+                .withAddHierarchy(addHierarchy)
+                .withRefineFinalGraph(refineFinalGraph);
 
         // use the inline vectors index as the score provider for graph construction
         Map<Set<FeatureId>, RandomAccessOnDiskGraphIndexWriter> writers = new HashMap<>();
@@ -582,19 +590,17 @@ public class Grid {
         var floatVectors = ds.getBaseRavv();
         Map<Set<FeatureId>, GraphIndex> indexes = new HashMap<>();
         long start;
-        var bsp = BuildScoreProvider.randomAccessScoreProvider(floatVectors, ds.getSimilarityFunction());
-        GraphIndexBuilder builder = new GraphIndexBuilder(bsp,
-                                                          floatVectors.dimension(),
-                                                          M,
-                                                          efConstruction,
-                                                          neighborOverflow,
-                                                          1.2f,
-                                                          addHierarchy,
-                                                          refineFinalGraph,
-                                                          PhysicalCoreExecutor.pool(),
-                                                          FilteredForkJoinPool.createFilteredPool());
+        HnswIndexBuilder builder = Indexes.hnswBuilder(floatVectors, ds.getSimilarityFunction())
+                .withMaxDegree(M)
+                .withBeamWidth(efConstruction)
+                .withNeighborOverflow(neighborOverflow)
+                .withAlpha(1.2f)
+                .withAddHierarchy(addHierarchy)
+                .withRefineFinalGraph(refineFinalGraph)
+                .withBuildExecutor(PhysicalCoreExecutor.pool())
+                .withMaintenanceExecutor(FilteredForkJoinPool.createFilteredPool());
         start = System.nanoTime();
-        var onHeapGraph = builder.build(floatVectors);
+        var onHeapGraph = builder.buildAndPopulate();
         double buildTimeS = (System.nanoTime() - start) / 1_000_000_000.0;
         System.out.format("Build (%s) M=%d overflow=%.2f ef=%d in %.2fs%n",
                           "full res",

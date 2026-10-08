@@ -252,7 +252,7 @@ public class IndexApiExample {
                 .withAlpha(1.2f)                 // > 1 keeps some longer edges for better connectivity
                 .withAddHierarchy(true)          // HNSW-style upper layers
                 .withRefineFinalGraph(true)) {   // a second pass over every node during cleanup
-            // withSimdExecutor and withParallelExecutor choose the thread pools for building and for
+            // withBuildExecutor and withMaintenanceExecutor choose the thread pools for building and for
             // compressing; they default to the physical-core pool and the common pool.
             graph = builder.buildAndPopulate();
         }
