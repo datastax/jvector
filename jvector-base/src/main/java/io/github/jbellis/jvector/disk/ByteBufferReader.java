@@ -46,9 +46,8 @@ public class ByteBufferReader implements RandomAccessReader {
 
     @Override
     public void readFully(float[] buffer) {
-        for (int i = 0; i < buffer.length; i++) {
-            buffer[i] = bb.getFloat();
-        }
+        bb.asFloatBuffer().get(buffer);
+        bb.position(bb.position() + buffer.length * Float.BYTES);
     }
 
     @Override
@@ -68,9 +67,8 @@ public class ByteBufferReader implements RandomAccessReader {
 
     @Override
     public void readFully(long[] vector) {
-        for (int i = 0; i < vector.length; i++) {
-            vector[i] = bb.getLong();
-        }
+        bb.asLongBuffer().get(vector);
+        bb.position(bb.position() + vector.length * Long.BYTES);
     }
 
     @Override
@@ -90,16 +88,14 @@ public class ByteBufferReader implements RandomAccessReader {
 
     @Override
     public void read(int[] ints, int offset, int count) {
-        for (int i = 0; i < count; i++) {
-            ints[offset + i] = bb.getInt();
-        }
+        bb.asIntBuffer().get(ints, offset, count);
+        bb.position(bb.position() + count * Integer.BYTES);
     }
 
     @Override
     public void read(float[] floats, int offset, int count) {
-        for (int i = 0; i < count; i++) {
-            floats[offset + i] = bb.getFloat();
-        }
+        bb.asFloatBuffer().get(floats, offset, count);
+        bb.position(bb.position() + count * Float.BYTES);
     }
 
     @Override
