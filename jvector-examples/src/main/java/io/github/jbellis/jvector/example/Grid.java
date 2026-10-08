@@ -35,11 +35,15 @@ import io.github.jbellis.jvector.example.util.CompressorParameters;
 import io.github.jbellis.jvector.example.util.FilteredForkJoinPool;
 import io.github.jbellis.jvector.example.util.OnDiskGraphIndexCache;
 import io.github.jbellis.jvector.example.yaml.MetricSelection;
-import io.github.jbellis.jvector.graph.ImmutableGraphIndex;
-import io.github.jbellis.jvector.graph.GraphIndexBuilder;
+import io.github.jbellis.jvector.graph.GraphIndex;
 import io.github.jbellis.jvector.graph.GraphSearcher;
 import io.github.jbellis.jvector.graph.RandomAccessVectorValues;
-import io.github.jbellis.jvector.graph.disk.*;
+import io.github.jbellis.jvector.graph.*;
+import io.github.jbellis.jvector.graph.disk.OnDiskGraphIndex;
+import io.github.jbellis.jvector.index.Indexes;
+import io.github.jbellis.jvector.graph.disk.OnDiskGraphIndexWriter;
+import io.github.jbellis.jvector.graph.disk.OrdinalMapper;
+import io.github.jbellis.jvector.graph.disk.RandomAccessOnDiskGraphIndexWriter;
 import io.github.jbellis.jvector.graph.disk.feature.Feature;
 import io.github.jbellis.jvector.graph.disk.feature.FeatureId;
 import io.github.jbellis.jvector.graph.disk.feature.FusedPQ;
@@ -250,7 +254,7 @@ public class Grid {
             String buildCompressorString =
                     (buildCompressorObj == null) ? "None" : String.valueOf(buildCompressorObj);
 
-            Map<Set<FeatureId>, ImmutableGraphIndex> indexes = new HashMap<>();
+            Map<Set<FeatureId>, GraphIndex> indexes = new HashMap<>();
             Map<Set<FeatureId>, Long> indexFileSizes = new HashMap<>();
             if (buildCompressorObj == null) {
                 indexes = buildInMemory(featureSets, M, efConstruction, neighborOverflow, addHierarchy, refineFinalGraph, ds, workDirectory);
@@ -371,9 +375,9 @@ public class Grid {
      * from the written file and the size in bytes of that file on disk.
      */
     private static final class BuildOnDiskResult {
-        final Map<Set<FeatureId>, ImmutableGraphIndex> indexes;
+        final Map<Set<FeatureId>, GraphIndex> indexes;
         final Map<Set<FeatureId>, Long> fileSizes;
-        BuildOnDiskResult(Map<Set<FeatureId>, ImmutableGraphIndex> indexes, Map<Set<FeatureId>, Long> fileSizes) {
+        BuildOnDiskResult(Map<Set<FeatureId>, GraphIndex> indexes, Map<Set<FeatureId>, Long> fileSizes) {
             this.indexes = indexes;
             this.fileSizes = fileSizes;
         }
@@ -400,7 +404,15 @@ public class Grid {
                 ? constructionMetrics.index("PQ").timeEncode(() -> buildCompressor.encodeAll(floatVectors))
                 : buildCompressor.encodeAll(floatVectors));
         var bsp = BuildScoreProvider.pqBuildScoreProvider(ds.getSimilarityFunction(), pq);
-        GraphIndexBuilder builder = new GraphIndexBuilder(bsp, floatVectors.dimension(), M, efConstruction, neighborOverflow, 1.2f, addHierarchy, refineFinalGraph);
+        // Built from the caller-trained PQ above, which is timed separately, so the builder takes the score provider
+        // rather than compressing itself. Its executors keep their defaults (physical-core pool, common pool).
+        HnswIndexBuilder builder = Indexes.hnswBuilder(bsp, floatVectors.dimension())
+                .withMaxDegree(M)
+                .withBeamWidth(efConstruction)
+                .withNeighborOverflow(neighborOverflow)
+                .withAlpha(1.2f)
+                .withAddHierarchy(addHierarchy)
+                .withRefineFinalGraph(refineFinalGraph);
 
         // use the inline vectors index as the score provider for graph construction
         Map<Set<FeatureId>, RandomAccessOnDiskGraphIndexWriter> writers = new HashMap<>();
@@ -480,7 +492,7 @@ public class Grid {
         }
 
         // open indexes and capture per-feature-set file sizes
-        Map<Set<FeatureId>, ImmutableGraphIndex> indexes = new HashMap<>();
+        Map<Set<FeatureId>, GraphIndex> indexes = new HashMap<>();
         Map<Set<FeatureId>, Long> fileSizes = new HashMap<>();
         n = 0;
         for (var features : featureSets) {
@@ -496,7 +508,7 @@ public class Grid {
     }
 
     private static BuilderWithSuppliers builderWithSuppliers(Set<FeatureId> features,
-                                                             ImmutableGraphIndex onHeapGraph,
+                                                             GraphIndex onHeapGraph,
                                                              Path outPath,
                                                              RandomAccessVectorValues floatVectors,
                                                              ProductQuantization pq,
@@ -565,32 +577,30 @@ public class Grid {
         }
     }
 
-    private static Map<Set<FeatureId>, ImmutableGraphIndex> buildInMemory(List<? extends Set<FeatureId>> featureSets,
-                                                                          int M,
-                                                                          int efConstruction,
-                                                                          float neighborOverflow,
-                                                                          boolean addHierarchy,
-                                                                          boolean refineFinalGraph,
-                                                                          DataSet ds,
-                                                                          Path testDirectory)
+    private static Map<Set<FeatureId>, GraphIndex> buildInMemory(List<? extends Set<FeatureId>> featureSets,
+                                                                 int M,
+                                                                 int efConstruction,
+                                                                 float neighborOverflow,
+                                                                 boolean addHierarchy,
+                                                                 boolean refineFinalGraph,
+                                                                 DataSet ds,
+                                                                 Path testDirectory)
             throws IOException
     {
         var floatVectors = ds.getBaseRavv();
-        Map<Set<FeatureId>, ImmutableGraphIndex> indexes = new HashMap<>();
+        Map<Set<FeatureId>, GraphIndex> indexes = new HashMap<>();
         long start;
-        var bsp = BuildScoreProvider.randomAccessScoreProvider(floatVectors, ds.getSimilarityFunction());
-        GraphIndexBuilder builder = new GraphIndexBuilder(bsp,
-                                                          floatVectors.dimension(),
-                                                          M,
-                                                          efConstruction,
-                                                          neighborOverflow,
-                                                          1.2f,
-                                                          addHierarchy,
-                                                          refineFinalGraph,
-                                                          PhysicalCoreExecutor.pool(),
-                                                          FilteredForkJoinPool.createFilteredPool());
+        HnswIndexBuilder builder = Indexes.hnswBuilder(floatVectors, ds.getSimilarityFunction())
+                .withMaxDegree(M)
+                .withBeamWidth(efConstruction)
+                .withNeighborOverflow(neighborOverflow)
+                .withAlpha(1.2f)
+                .withAddHierarchy(addHierarchy)
+                .withRefineFinalGraph(refineFinalGraph)
+                .withBuildExecutor(PhysicalCoreExecutor.pool())
+                .withMaintenanceExecutor(FilteredForkJoinPool.createFilteredPool());
         start = System.nanoTime();
-        var onHeapGraph = builder.build(floatVectors);
+        var onHeapGraph = builder.buildAndPopulate();
         double buildTimeS = (System.nanoTime() - start) / 1_000_000_000.0;
         System.out.format("Build (%s) M=%d overflow=%.2f ef=%d in %.2fs%n",
                           "full res",
@@ -861,7 +871,7 @@ public class Grid {
                                             diagnostics.startMonitoring("testDirectory", testDirectory);
                                             diagnostics.startMonitoring("indexCache", Paths.get(indexCacheDir));
                                             diagnostics.capturePrePhaseSnapshot("Build");
-                                            Map<Set<FeatureId>, ImmutableGraphIndex> indexes = new HashMap<>();
+                                            Map<Set<FeatureId>, GraphIndex> indexes = new HashMap<>();
                                             Map<Set<FeatureId>, Long> indexFileSizes = new HashMap<>();
 
                                             var compressor = getCompressor(buildCompressor, ds);
@@ -928,7 +938,7 @@ public class Grid {
                                                 indexFileSizes.putAll(result.fileSizes);
                                             }
 
-                                            ImmutableGraphIndex index = indexes.get(features);
+                                            GraphIndex index = indexes.get(features);
 
                                             // Capture post-build state
                                             diagnostics.capturePostPhaseSnapshot("Build");
@@ -1116,7 +1126,7 @@ public class Grid {
 
     public static class ConfiguredSystem implements AutoCloseable {
         DataSet ds;
-        ImmutableGraphIndex index;
+        GraphIndex index;
         CompressedVectors cv;
         Set<FeatureId> features;
 
@@ -1124,15 +1134,15 @@ public class Grid {
             return new GraphSearcher(index);
         });
 
-        ConfiguredSystem(DataSet ds, ImmutableGraphIndex index, CompressedVectors cv, Set<FeatureId> features) {
+        ConfiguredSystem(DataSet ds, GraphIndex index, CompressedVectors cv, Set<FeatureId> features) {
             this.ds = ds;
             this.index = index;
             this.cv = cv;
             this.features = features;
         }
 
-        public SearchScoreProvider scoreProviderFor(VectorFloat<?> queryVector, ImmutableGraphIndex.View view) {
-            var scoringView = (ImmutableGraphIndex.ScoringView) view;
+        public SearchScoreProvider scoreProviderFor(VectorFloat<?> queryVector, GraphIndex.View view) {
+            var scoringView = (GraphIndex.ScoringView) view;
             ScoreFunction.ApproximateScoreFunction asf;
             if (features.contains(FeatureId.FUSED_PQ)) {
                 asf = scoringView.approximateScoreFunctionFor(queryVector, ds.getSimilarityFunction());

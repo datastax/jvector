@@ -19,7 +19,7 @@ package io.github.jbellis.jvector.graph;
 import io.github.jbellis.jvector.annotations.Experimental;
 import io.github.jbellis.jvector.annotations.VisibleForTesting;
 import io.github.jbellis.jvector.disk.RandomAccessReader;
-import io.github.jbellis.jvector.graph.ImmutableGraphIndex.NodeAtLevel;
+import io.github.jbellis.jvector.graph.GraphIndex.NodeAtLevel;
 import io.github.jbellis.jvector.graph.SearchResult.NodeScore;
 import io.github.jbellis.jvector.graph.diversity.VamanaDiversityProvider;
 import io.github.jbellis.jvector.graph.similarity.BuildScoreProvider;
@@ -29,6 +29,7 @@ import io.github.jbellis.jvector.management.CompressionType;
 import io.github.jbellis.jvector.management.GraphIndexBuilderConfig;
 import io.github.jbellis.jvector.quantization.BinaryQuantization;
 import io.github.jbellis.jvector.quantization.BQVectors;
+import io.github.jbellis.jvector.quantization.CompressedVectors;
 import io.github.jbellis.jvector.quantization.PQVectors;
 import io.github.jbellis.jvector.quantization.ProductQuantization;
 import io.github.jbellis.jvector.util.*;
@@ -52,7 +53,7 @@ import static io.github.jbellis.jvector.util.DocIdSetIterator.NO_MORE_DOCS;
 import static java.lang.Math.*;
 
 /**
- * Builder for Concurrent GraphIndex. See {@link ImmutableGraphIndex} for a high level overview, and the
+ * Builder for Concurrent GraphIndex. See {@link GraphIndex} for a high level overview, and the
  * comments to `addGraphNode` for details on the concurrent building approach.
  * <p>
  * GIB allocates scratch space and copies of the RandomAccessVectorValues for each thread
@@ -93,25 +94,64 @@ public class GraphIndexBuilder implements Closeable, Accountable {
     private final Random rng;
 
     private static BuildScoreProvider getBuildScoreProvider(RandomAccessVectorValues vectorValues, VectorSimilarityFunction similarityFunction) {
-        CompressionType type = resolveJmxBuildCompressionType();
+        var config = GraphIndexBuilderConfig.getInstance();
+        int pqSubspaces = vectorValues.dimension() / config.getPqMFactor();
+        CompressedVectors compressed = compress(vectorValues, resolveJmxBuildCompressionType(), pqSubspaces,
+                                                config.isPqCenterData(), config.getPqAnisotropicThreshold(),
+                                                PhysicalCoreExecutor.pool(), ForkJoinPool.commonPool());
+        return buildScoreProvider(vectorValues, similarityFunction, compressed);
+    }
+
+    /**
+     * Compresses {@code vectorValues} for building with compressed scores: trains the quantizer and
+     * encodes every vector, using the given executors. Product quantization ({@link CompressionType#PQ})
+     * uses {@code pqSubspaces} subspaces, {@code pqGlobalCentering} and {@code pqAnisotropicThreshold},
+     * and takes its cluster count from {@link GraphIndexBuilderConfig}.
+     *
+     * @return the {@link PQVectors} or {@link BQVectors}, or null for {@link CompressionType#NONE}
+     * @throws IllegalArgumentException if {@code type} is not supported
+     */
+    static CompressedVectors compress(RandomAccessVectorValues vectorValues,
+                                      CompressionType type,
+                                      int pqSubspaces,
+                                      boolean pqGlobalCentering,
+                                      float pqAnisotropicThreshold,
+                                      ForkJoinPool simdExecutor,
+                                      ForkJoinPool parallelExecutor) {
         switch(type) {
             case NONE:
-                return BuildScoreProvider.randomAccessScoreProvider(vectorValues, similarityFunction);
+                return null;
             case PQ: {
                 var config = GraphIndexBuilderConfig.getInstance();
-                int m = vectorValues.dimension() / config.getPqMFactor();
-                var compressor = ProductQuantization.compute(vectorValues, m, config.getPqK(),
-                                                            config.isPqCenterData(), config.getPqAnisotropicThreshold());
-                PQVectors pqVectors = compressor.encodeAll(vectorValues, ForkJoinPool.commonPool());
-                return BuildScoreProvider.pqBuildScoreProvider(similarityFunction, pqVectors);
+                var compressor = ProductQuantization.compute(vectorValues, pqSubspaces, config.getPqK(),
+                                                            pqGlobalCentering, pqAnisotropicThreshold,
+                                                            simdExecutor, parallelExecutor);
+                return compressor.encodeAll(vectorValues, simdExecutor);
             }
-            case BQ: {
-                BQVectors bqVectors = (BQVectors) BinaryQuantization.compute(vectorValues).encodeAll(vectorValues, ForkJoinPool.commonPool());
-                return BuildScoreProvider.bqBuildScoreProvider(bqVectors);
-            }
+            case BQ:
+                return BinaryQuantization.compute(vectorValues, parallelExecutor).encodeAll(vectorValues, simdExecutor);
             default:
                 throw new IllegalArgumentException("Unsupported build compression type: " + type);
         }
+    }
+
+    /**
+     * Returns a build score provider for {@code vectorValues}: exact comparisons when {@code compressed}
+     * is null, otherwise comparisons of the compressed vectors from {@link #compress}.
+     */
+    static BuildScoreProvider buildScoreProvider(RandomAccessVectorValues vectorValues,
+                                                 VectorSimilarityFunction similarityFunction,
+                                                 CompressedVectors compressed) {
+        if (compressed == null) {
+            return BuildScoreProvider.randomAccessScoreProvider(vectorValues, similarityFunction);
+        }
+        if (compressed instanceof PQVectors) {
+            return BuildScoreProvider.pqBuildScoreProvider(similarityFunction, (PQVectors) compressed);
+        }
+        if (compressed instanceof BQVectors) {
+            return BuildScoreProvider.bqBuildScoreProvider((BQVectors) compressed);
+        }
+        throw new IllegalArgumentException("Unsupported compressed vectors: " + compressed.getClass().getName());
     }
 
     /**
@@ -496,8 +536,9 @@ public class GraphIndexBuilder implements Closeable, Accountable {
         }
     }
 
-    // Private workhorse — all public constructors funnel here.
-    private GraphIndexBuilder(BuildScoreProvider scoreProvider,
+    // Workhorse — all public constructors funnel here. Package-private rather than private because
+    // HnswIndexBuilder calls it directly.
+    GraphIndexBuilder(BuildScoreProvider scoreProvider,
                               int dimension,
                               List<Integer> maxDegrees,
                               int beamWidth,
@@ -605,8 +646,9 @@ public class GraphIndexBuilder implements Closeable, Accountable {
              null);
     }
 
-    // Private mutableGraphIndex workhorse — addHierarchy is always derived from the existing graph.
-    private GraphIndexBuilder(BuildScoreProvider buildScoreProvider, int dimension, MutableGraphIndex mutableGraphIndex, int beamWidth, float neighborOverflow, float alpha, boolean refineFinalGraph, ForkJoinPool simdExecutor, ForkJoinPool parallelExecutor, @SuppressWarnings("unused") Void disambiguator) {
+    // mutableGraphIndex workhorse — addHierarchy is always derived from the existing graph. Package-private
+    // rather than private because HnswIndexBuilder calls it directly.
+    GraphIndexBuilder(BuildScoreProvider buildScoreProvider, int dimension, MutableGraphIndex mutableGraphIndex, int beamWidth, float neighborOverflow, float alpha, boolean refineFinalGraph, ForkJoinPool simdExecutor, ForkJoinPool parallelExecutor, @SuppressWarnings("unused") Void disambiguator) {
         if (beamWidth <= 0) {
             throw new IllegalArgumentException("beamWidth must be positive");
         }
@@ -654,7 +696,8 @@ public class GraphIndexBuilder implements Closeable, Accountable {
                 other.addHierarchy,
                 other.refineFinalGraph,
                 other.simdExecutor,
-                other.parallelExecutor);
+                other.parallelExecutor,
+                null);
 
         var otherView = other.graph.getView();
 
@@ -686,6 +729,12 @@ public class GraphIndexBuilder implements Closeable, Accountable {
                 // hide it from every subsequent concurrent view taken on newBuilder.graph. Mark it complete now,
                 // so any view afterward sees the whole copied graph again.
                 newBuilder.graph.markComplete(new NodeAtLevel(maxLayer, i));
+
+                // Carry over a pending delete: the node is copied like any other so its edges survive
+                // until cleanup() removes it, but it must stay hidden from searches and still be removed.
+                if (other.graph.getDeletedNodes().get(i)) {
+                    newBuilder.graph.markDeleted(i);
+                }
             });
         }).join();
 
@@ -695,7 +744,13 @@ public class GraphIndexBuilder implements Closeable, Accountable {
         return newBuilder;
     }
 
-    public ImmutableGraphIndex build(RandomAccessVectorValues ravv) {
+    /**
+     * Adds every vector in {@code ravv} to the graph in parallel, at ordinals {@code 0} through
+     * {@code ravv.size() - 1}, then calls {@link #cleanup()}.
+     *
+     * @return the graph built by this builder
+     */
+    public PersistableGraphIndex build(RandomAccessVectorValues ravv) {
         var vv = ravv.threadLocalSupplier();
         int size = ravv.size();
 
@@ -799,7 +854,8 @@ public class GraphIndexBuilder implements Closeable, Accountable {
         }
     }
 
-    public ImmutableGraphIndex getGraph() {
+    /** Returns the graph this builder is building. It may still be under construction. */
+    public PersistableGraphIndex getGraph() {
         return graph;
     }
 
@@ -1213,7 +1269,7 @@ public class GraphIndexBuilder implements Closeable, Accountable {
         }
 
         graph.setDegrees(layerDegrees);
-        if (entryNode != ImmutableGraphIndex.ENTRY_NODE_ABSENT) {
+        if (entryNode != GraphIndex.ENTRY_NODE_ABSENT) {
             graph.updateEntryNode(new NodeAtLevel(graph.getMaxLevel(), entryNode));
         }
     }
@@ -1248,7 +1304,7 @@ public class GraphIndexBuilder implements Closeable, Accountable {
             graph.markComplete(new NodeAtLevel(0, nodeId));
         }
 
-        if (entryNode != ImmutableGraphIndex.ENTRY_NODE_ABSENT) {
+        if (entryNode != GraphIndex.ENTRY_NODE_ABSENT) {
             graph.updateEntryNode(new NodeAtLevel(0, entryNode));
         }
         graph.setDegrees(List.of(maxDegree));
@@ -1269,13 +1325,13 @@ public class GraphIndexBuilder implements Closeable, Accountable {
      * @throws IOException if an I/O error occurs during the graph loading or conversion process.
      */
     @Experimental
-    public static ImmutableGraphIndex buildAndMergeNewNodes(RandomAccessReader in,
-                                                            RemappedRandomAccessVectorValues newVectors,
-                                                            BuildScoreProvider buildScoreProvider,
-                                                            int startingNodeOffset,
-                                                            int beamWidth,
-                                                            float overflowRatio,
-                                                            float alpha) throws IOException {
+    public static GraphIndex buildAndMergeNewNodes(RandomAccessReader in,
+                                                    RemappedRandomAccessVectorValues newVectors,
+                                                    BuildScoreProvider buildScoreProvider,
+                                                    int startingNodeOffset,
+                                                    int beamWidth,
+                                                    float overflowRatio,
+                                                    float alpha) throws IOException {
 
             return buildAndMergeNewNodes(in, newVectors, buildScoreProvider, startingNodeOffset, beamWidth, overflowRatio, alpha, PhysicalCoreExecutor.pool(), ForkJoinPool.commonPool());
     }
@@ -1298,15 +1354,15 @@ public class GraphIndexBuilder implements Closeable, Accountable {
      * @throws IOException if an I/O error occurs during the graph loading or conversion process.
      */
     @Experimental
-    public static ImmutableGraphIndex buildAndMergeNewNodes(RandomAccessReader in,
-                                                            RemappedRandomAccessVectorValues newVectors,
-                                                            BuildScoreProvider buildScoreProvider,
-                                                            int startingNodeOffset,
-                                                            int beamWidth,
-                                                            float overflowRatio,
-                                                            float alpha,
-                                                            ForkJoinPool simdExecutor,
-                                                            ForkJoinPool parallelExecutor) throws IOException {
+    public static GraphIndex buildAndMergeNewNodes(RandomAccessReader in,
+                                                    RemappedRandomAccessVectorValues newVectors,
+                                                    BuildScoreProvider buildScoreProvider,
+                                                    int startingNodeOffset,
+                                                    int beamWidth,
+                                                    float overflowRatio,
+                                                    float alpha,
+                                                    ForkJoinPool simdExecutor,
+                                                    ForkJoinPool parallelExecutor) throws IOException {
         // TODO is looks like the graph is not properly remapped based on the new ordinals but it just retains the old ones.
         //  However, the new inserted vectors do have the new ordinals, so recall:
         //  - recall will be severely affected
