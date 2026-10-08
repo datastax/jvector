@@ -46,5 +46,5 @@ public interface DataSetLoader {
      * @param dataSetName the logical dataset name (not a filename; do not include extensions like {@code .hdf5})
      * @return a {@link DataSetInfo} handle for the dataset, if found
      */
-    Optional<DataSetInfo> loadDataSet(String dataSetName);
+    Optional<? extends DataSetInfo> loadDataSet(String dataSetName);
 }
