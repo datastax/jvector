@@ -385,6 +385,26 @@ public class DataSetLoaderSimpleMFD implements DataSetLoader {
         }
     }
 
+    /**
+     * Prepare only a catalog entry's base-vector file for a file-backed source.
+     * Uses the same cache and download rules as loadDataSet, without downloading
+     * queries/ground truth or materializing, normalizing, or scrubbing vectors.
+     *
+     * @param dataSetName the catalog dataset name
+     * @return the local base-file path, or empty if the name is not in this catalog
+     * @throws IOException if the base file cannot be prepared
+     */
+    public Optional<Path> loadBaseVectorFile(String dataSetName) throws IOException {
+        var entry = catalog.get(dataSetName);
+        if (entry == null) return Optional.empty();
+        String filename = entry.fields.get("base");
+        if (filename == null)
+            throw new IOException("Dataset '" + dataSetName + "' has no base file in catalog");
+        ensureFileAvailable(filename, entry.cacheDir,
+                entry.baseUrl != null ? entry.baseUrl : remoteBasePath);
+        return Optional.of(entry.cacheDir.resolve(filename));
+    }
+
     @Override
     public Optional<DataSetInfo> loadDataSet(String dataSetName) {
         var entry = catalog.get(dataSetName);

@@ -51,10 +51,62 @@ public class TestFvecFileVectorValues {
         for (int col = 0; col < v.length(); col++) assertEquals(Float.floatToRawIntBits(value(row, col)), Float.floatToRawIntBits(v.get(col)));
     }
 
+    @Test public void optionsAreImmutableAndValidateLimits() throws Exception {
+        var defaults = FvecFileVectorValues.Options.defaults();
+        var options = defaults.withMaxBufferBytes(1024).withIoThreads(2)
+                .withBatchVectors(7).withReadAhead(0);
+        assertEquals(64L << 20, defaults.maxBufferBytes());
+        assertEquals(48, defaults.ioThreads());
+        assertEquals(64, defaults.batchVectors());
+        assertEquals(3, defaults.readAhead());
+        assertEquals(1024, options.maxBufferBytes());
+        assertEquals(2, options.ioThreads());
+        assertEquals(7, options.batchVectors());
+        assertEquals(0, options.readAhead());
+        assertThrows(IllegalArgumentException.class, () -> defaults.withMaxBufferBytes(0));
+        assertThrows(IllegalArgumentException.class, () -> defaults.withIoThreads(0));
+        assertThrows(IllegalArgumentException.class, () -> defaults.withBatchVectors(0));
+        assertThrows(IllegalArgumentException.class, () -> defaults.withReadAhead(-1));
+        var path = file(257, 17);
+        try (var source = FvecFileVectorValues.open(path, options)) {
+            assertEquals(257 * 18L * 4 / 100, source.statistics().bufferLimitBytes);
+            try (var cursor = VectorAccess.openRange(source, 7, 10)) {
+                int row = 7;
+                while (cursor.next()) { assertEquals(row, cursor.ordinal()); equal(row++, cursor.vector()); }
+                assertEquals(10, row);
+            }
+            try (var cursor = source.openRange(source.size(), source.size())) {
+                assertFalse(cursor.next());
+            }
+            assertThrows(IndexOutOfBoundsException.class, () -> source.openRange(10, 7));
+            assertThrows(NullPointerException.class, () -> FvecFileVectorValues.open(path, null));
+        } finally { Files.delete(path); }
+    }
+
+    @Test public void copiedCursorVectorSurvivesAdvanceAndSourceClose() throws Exception {
+        var path = file(5, 17);
+        VectorFloat<?> retained;
+        try (var source = FvecFileVectorValues.open(path)) {
+            try (var cursor = VectorAccess.openRange(source, 1, 3)) {
+                assertTrue(cursor.isValueShared());
+                assertTrue(cursor.next());
+                var borrowed = cursor.vector();
+                retained = borrowed.copy();
+                assertTrue(cursor.next());
+                assertSame(borrowed, cursor.vector());
+                equal(2, borrowed);
+                equal(1, retained);
+                assertFalse(cursor.next());
+            }
+        } finally { Files.delete(path); }
+        equal(1, retained);
+    }
+
     @Test(timeout=60000) public void concurrentRangeSelectionAndPointReadsWithOneRecordBudget() throws Exception {
         for (int dimension : new int[] {17, 768, 3072}) {
             var path = file(257, dimension);
-            try (var source = FvecFileVectorValues.open(path, (dimension + 1L) * 4, 12, 64, 3)) {
+            try (var source = FvecFileVectorValues.open(path, FvecFileVectorValues.Options.defaults()
+                    .withMaxBufferBytes((dimension + 1L) * 4).withIoThreads(12))) {
                 var executor = Executors.newFixedThreadPool(48);
                 try {
                     var tasks = new ArrayList<Callable<Void>>();
@@ -64,7 +116,7 @@ public class TestFvecFileVectorValues {
                             try (var copy = source.copy()) {
                                 for (int i = 0; i < 32; i++) equal((i + seed) % source.size(), copy.getVector((i + seed) % source.size()));
                             }
-                            try (var cursor = source.openRange(seed, 17)) {
+                            try (var cursor = source.openRange(seed, seed + 17)) {
                                 int ordinal = seed;
                                 while (cursor.next()) { assertEquals(ordinal, cursor.ordinal()); equal(ordinal++, cursor.vector()); }
                             }
@@ -80,7 +132,7 @@ public class TestFvecFileVectorValues {
                 } finally { executor.shutdown(); }
                 assertTrue(source.statistics().bufferBytes <= source.statistics().bufferLimitBytes);
                 assertEquals((dimension + 1L) * 4, source.statistics().bufferBytes);
-                assertThrows(IndexOutOfBoundsException.class, () -> source.openRange(250, 8));
+                assertThrows(IndexOutOfBoundsException.class, () -> source.openRange(250, 258));
                 assertThrows(IndexOutOfBoundsException.class, () -> source.openSelection(new int[] {257}, 0, 1));
             } finally { Files.delete(path); }
         }

@@ -14,6 +14,11 @@ In the previous tutorials, we built indexes in-memory then wrote them to disk. H
 >
 > Read the [PQ paper](https://ieeexplore.ieee.org/document/5432202) for more details.
 
+For a file-backed vector source with bounded asynchronous reads, see
+[Batched input vector access](../batched-vector-access.md). Its hello-world examples
+show how to supply a `.fvecs` file directly to PQ and NVQ without preloading the
+complete input dataset.
+
 ## Loading the Dataset
 
 We'll change things up with a different dataset:

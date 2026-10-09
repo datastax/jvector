@@ -23,10 +23,12 @@ package io.github.jbellis.jvector.graph;
  */
 public interface BatchedVectorValues extends RandomAccessVectorValues {
     /**
-     * Open a cursor for [start, start + count). Invalid ranges fail before scheduling I/O.
-     * Opening may start asynchronous reads, but must not materialize the entire range.
+     * Open a cursor for [startInclusive, endExclusive), using an exclusive end. Invalid ranges
+     * fail before scheduling I/O; equal endpoints produce an empty cursor. Opening
+     * may start asynchronous reads, but must not materialize the entire range.
+     * Close the cursor with try-with-resources before closing its source.
      */
-    VectorCursor openRange(int start, int count);
+    VectorCursor openRange(int startInclusive, int endExclusive);
 
     /**
      * Open a cursor for the specified slice, preserving request order and duplicates.

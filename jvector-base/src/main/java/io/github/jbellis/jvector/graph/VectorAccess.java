@@ -36,12 +36,16 @@ public final class VectorAccess {
         void accept(int position, VectorFloat<?> vector);
     }
 
-    /** Open a range, including for sources that only implement point access. */
-    public static VectorCursor openRange(RandomAccessVectorValues source, int start, int count) {
-        Objects.checkFromIndexSize(start, count, source.size());
+    /**
+     * Open [startInclusive, endExclusive), including for sources that only implement
+     * point access. The end ordinal is excluded.
+     * Algorithms should use this utility to retain the ordinary-source fallback.
+     */
+    public static VectorCursor openRange(RandomAccessVectorValues source, int startInclusive, int endExclusive) {
+        Objects.checkFromToIndex(startInclusive, endExclusive, source.size());
         if (source instanceof BatchedVectorValues)
-            return ((BatchedVectorValues) source).openRange(start, count);
-        return pointCursor(source, start, count, null);
+            return ((BatchedVectorValues) source).openRange(startInclusive, endExclusive);
+        return pointCursor(source, startInclusive, endExclusive - startInclusive, null);
     }
 
     /** Open a selection in request order, including duplicates. */

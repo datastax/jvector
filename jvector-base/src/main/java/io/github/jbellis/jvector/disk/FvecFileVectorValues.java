@@ -69,19 +69,63 @@ public final class FvecFileVectorValues implements BatchedVectorValues, AutoClos
      * forty-eight I/O workers and three batches of read-ahead. One record is the minimum budget.
      */
     public static FvecFileVectorValues open(Path path) throws IOException {
-        return open(path, DEFAULT_MAX_BYTES, 48, 64, 3);
+        return open(path, Options.defaults());
+    }
+
+    /** Open a file with named limits. The returned root owns the shared I/O resources. */
+    public static FvecFileVectorValues open(Path path, Options options) throws IOException {
+        Objects.requireNonNull(options, "options");
+        return new FvecFileVectorValues(new Storage(path, options.maxBufferBytes, options.ioThreads,
+                options.batchVectors, options.readAhead), true);
     }
 
     /**
-     * Open with explicit limits. maxBufferBytes is also capped at 1% of the file;
-     * batchVectors is a maximum, reduced to allow concurrent consumers within that budget.
-     * The limit covers queued, in-flight and cached payload buffers across all copies.
+     * Immutable source options. Start with {@link #defaults()} and change only the
+     * limits needed. Buffer capacity is shared across all copies and cursors;
+     * retained vectors and the OS page cache are outside this payload budget.
      */
-    public static FvecFileVectorValues open(Path path, long maxBufferBytes, int ioThreads,
-                                          int batchVectors, int readAhead) throws IOException {
-        if (maxBufferBytes <= 0 || ioThreads <= 0 || batchVectors <= 0 || readAhead < 0)
-            throw new IllegalArgumentException("Invalid buffered source limits");
-        return new FvecFileVectorValues(new Storage(path, maxBufferBytes, ioThreads, batchVectors, readAhead), true);
+    public static final class Options {
+        private static final Options DEFAULTS = new Options(DEFAULT_MAX_BYTES, 48, 64, 3);
+        private final long maxBufferBytes;
+        private final int ioThreads, batchVectors, readAhead;
+
+        private Options(long maxBufferBytes, int ioThreads, int batchVectors, int readAhead) {
+            if (maxBufferBytes <= 0 || ioThreads <= 0 || batchVectors <= 0 || readAhead < 0)
+                throw new IllegalArgumentException("Invalid buffered source limits");
+            this.maxBufferBytes = maxBufferBytes;
+            this.ioThreads = ioThreads;
+            this.batchVectors = batchVectors;
+            this.readAhead = readAhead;
+        }
+
+        /** Defaults: 64 MiB maximum, 48 I/O workers, 64 vectors/batch, 3 batches ahead. */
+        public static Options defaults() { return DEFAULTS; }
+
+        /** Maximum payload bytes; also capped at 1% of file bytes, with one record minimum. */
+        public long maxBufferBytes() { return maxBufferBytes; }
+        /** Number of asynchronous I/O workers. */
+        public int ioThreads() { return ioThreads; }
+        /** Maximum vectors per batch; reduced when necessary to fit the shared budget. */
+        public int batchVectors() { return batchVectors; }
+        /** Number of speculative batches ahead of demand; zero disables read-ahead. */
+        public int readAhead() { return readAhead; }
+
+        /** Return options with a different positive maximum payload budget. */
+        public Options withMaxBufferBytes(long bytes) {
+            return new Options(bytes, ioThreads, batchVectors, readAhead);
+        }
+        /** Return options with a different positive I/O worker count. */
+        public Options withIoThreads(int threads) {
+            return new Options(maxBufferBytes, threads, batchVectors, readAhead);
+        }
+        /** Return options with a different positive maximum batch size. */
+        public Options withBatchVectors(int vectors) {
+            return new Options(maxBufferBytes, ioThreads, vectors, readAhead);
+        }
+        /** Return options with a different nonnegative number of batches ahead. */
+        public Options withReadAhead(int batches) {
+            return new Options(maxBufferBytes, ioThreads, batchVectors, batches);
+        }
     }
 
     private FvecFileVectorValues(Storage storage, boolean ownsStorage) {
@@ -98,12 +142,19 @@ public final class FvecFileVectorValues implements BatchedVectorValues, AutoClos
         if (closed || storage.closed) throw new IllegalStateException("Vector source is closed");
     }
 
-    /** Copies have no independent I/O resources; the root owns their shared storage. */
+    /**
+     * Supply one point-access view per thread. Views share the root's I/O resources
+     * and must stop being used before the root closes.
+     */
     @Override public Supplier<RandomAccessVectorValues> threadLocalSupplier() {
         var local = ThreadLocal.withInitial(this::copy);
         return local::get;
     }
 
+    /**
+     * Create a view with its own scratch vector. Closing this view leaves other views
+     * usable; closing the root invalidates every view. Point access is single-consumer.
+     */
     @Override public FvecFileVectorValues copy() {
         ensureOpen();
         return new FvecFileVectorValues(storage, false);
@@ -133,10 +184,10 @@ public final class FvecFileVectorValues implements BatchedVectorValues, AutoClos
         previousOrdinal = ordinal;
     }
 
-    @Override public VectorCursor openRange(int start, int count) {
+    @Override public VectorCursor openRange(int startInclusive, int endExclusive) {
         ensureOpen();
-        Objects.checkFromIndexSize(start, count, size());
-        return new Cursor(start, count, null);
+        Objects.checkFromToIndex(startInclusive, endExclusive, size());
+        return new Cursor(startInclusive, endExclusive - startInclusive, null);
     }
 
     @Override public VectorCursor openSelection(int[] ordinals, int offset, int count) {
@@ -160,6 +211,10 @@ public final class FvecFileVectorValues implements BatchedVectorValues, AutoClos
         }
     }
 
+    /**
+     * Close this view. For the root, first close all cursors and stop all consumers;
+     * root closure shuts down shared I/O and invalidates every copy.
+     */
     @Override public void close() throws IOException {
         if (closed) return;
         closed = true;

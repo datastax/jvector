@@ -13,6 +13,8 @@
     <name>JVector Examples</name>
     <properties>
         <awssdk.version>2.21.10</awssdk.version>
+        <!-- Empty uses public-catalog e5-small-v2-100k in the batched-access examples. -->
+        <vectorFile></vectorFile>
     </properties>
     <build>
         <plugins>
@@ -31,6 +33,34 @@
                     <skip>false</skip>
                     <workingDirectory>${project.parent.basedir}</workingDirectory>
                 </configuration>
+                <executions>
+                    <execution>
+                        <id>hello-batched-vectors</id>
+                        <goals><goal>exec</goal></goals>
+                        <configuration>
+                            <arguments>
+                                <argument>-classpath</argument>
+                                <classpath/>
+                                <argument>--add-modules=jdk.incubator.vector</argument>
+                                <argument>io.github.jbellis.jvector.example.HelloBatchedVectors</argument>
+                                <argument>${vectorFile}</argument>
+                            </arguments>
+                        </configuration>
+                    </execution>
+                    <execution>
+                        <id>hello-batched-quantization</id>
+                        <goals><goal>exec</goal></goals>
+                        <configuration>
+                            <arguments>
+                                <argument>-classpath</argument>
+                                <classpath/>
+                                <argument>--add-modules=jdk.incubator.vector</argument>
+                                <argument>io.github.jbellis.jvector.example.HelloBatchedQuantization</argument>
+                                <argument>${vectorFile}</argument>
+                            </arguments>
+                        </configuration>
+                    </execution>
+                </executions>
             </plugin>
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>

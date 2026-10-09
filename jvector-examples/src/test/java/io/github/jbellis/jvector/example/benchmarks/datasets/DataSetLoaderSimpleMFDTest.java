@@ -74,6 +74,33 @@ public class DataSetLoaderSimpleMFDTest {
     // ========================================================================
 
     @Test
+    public void preparesBaseFileWithoutLoadingOtherFacets() throws IOException {
+        writeTestCatalog(cacheDir);
+        Path catalog = cacheDir.resolve("catalog_entries.yaml");
+        Files.writeString(catalog, "_defaults:\n  cache_dir: '" +
+                cacheDir.toString().replace("'", "''") + "'\n" + Files.readString(catalog));
+        Path base = cacheDir.resolve("test_base.fvecs");
+        writeTestFvecs(base, 4, new float[][] {{1, 2, 3, 4}});
+        byte[] before = Files.readAllBytes(base);
+        var loader = new DataSetLoaderSimpleMFD(null, cacheDir.toString(), false, testMetadata);
+        assertEquals(base, loader.loadBaseVectorFile("test-ds").orElseThrow());
+        assertArrayEquals(before, Files.readAllBytes(base));
+        assertFalse(Files.exists(cacheDir.resolve("test_query.fvecs")));
+        assertFalse(Files.exists(cacheDir.resolve("test_gt.ivecs")));
+        assertFalse(loader.loadBaseVectorFile("unknown").isPresent());
+    }
+
+    @Test
+    public void missingBaseFileIsReportedWithoutMaterializingDataset() throws IOException {
+        writeTestCatalog(cacheDir);
+        Path catalog = cacheDir.resolve("catalog_entries.yaml");
+        Files.writeString(catalog, "_defaults:\n  cache_dir: '" +
+                cacheDir.toString().replace("'", "''") + "'\n" + Files.readString(catalog));
+        var loader = new DataSetLoaderSimpleMFD(null, cacheDir.toString(), false, testMetadata);
+        assertThrows(IOException.class, () -> loader.loadBaseVectorFile("test-ds"));
+    }
+
+    @Test
     public void loadsDatasetFromLocalCatalogAndFiles() throws IOException {
         writeTestCatalog(cacheDir);
         writeTestDataFiles(cacheDir);

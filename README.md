@@ -43,6 +43,9 @@ This is important because it allows you to take advantage of logarithmic search 
 
 Introductory tutorials for JVector are available in [docs/tutorials](./docs/tutorials/). Start with the [basic tutorial](./docs/tutorials/1-intro-tutorial.md) or review [VectorIntro.java](./jvector-examples/src/main/java/io/github/jbellis/jvector/example/tutorial/VectorIntro.java) for a simple example using JVector.
 
+For file-backed input datasets, see [Batched input vector access](./docs/batched-vector-access.md),
+including runnable 100k-vector examples and optional integration with PQ and NVQ.
+
 The older step-by-step guide for JV can be found [here](./docs/legacy/jvector-step-by-step.md). New users should start with the tutorials mentioned earler, but the step-by-step guide contains useful commentary for advanced users.
 
 

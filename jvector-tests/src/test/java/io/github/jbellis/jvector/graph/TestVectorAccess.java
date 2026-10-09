@@ -56,6 +56,23 @@ public class TestVectorAccess {
         } finally { pool.shutdown(); }
     }
 
+    @Test public void fallbackRangeUsesExclusiveEndAndRetainedCopiesStayStable() {
+        var vts = VectorizationProvider.getInstance().getVectorTypeSupport();
+        var source = new ListRandomAccessVectorValues(Arrays.asList(
+                vts.createFloatVector(new float[] {0}), vts.createFloatVector(new float[] {1}),
+                vts.createFloatVector(new float[] {2}), vts.createFloatVector(new float[] {3})), 1);
+        VectorFloat<?> retained;
+        try (var cursor = VectorAccess.openRange(source, 1, 3)) {
+            assertTrue(cursor.next()); assertEquals(1, cursor.ordinal());
+            retained = cursor.vector().copy();
+            assertTrue(cursor.next()); assertEquals(2, cursor.ordinal());
+            assertFalse(cursor.next());
+        }
+        assertEquals(1f, retained.get(0), 0);
+        try (var cursor = VectorAccess.openRange(source, 4, 4)) { assertFalse(cursor.next()); }
+        assertThrows(IndexOutOfBoundsException.class, () -> VectorAccess.openRange(source, 3, 1));
+    }
+
     @Test public void residentFallbackDoesNotCopyVectors() {
         var vts = VectorizationProvider.getInstance().getVectorTypeSupport();
         var vector = vts.createFloatVector(new float[] {3});
@@ -63,7 +80,7 @@ public class TestVectorAccess {
         var pool = new ForkJoinPool(2);
         try { assertSame(vector, VectorAccess.copySelected(source, new int[] {0}, pool).get(0)); }
         finally { pool.shutdown(); }
-        assertThrows(IndexOutOfBoundsException.class, () -> VectorAccess.openRange(source, 1, 1));
+        assertThrows(IndexOutOfBoundsException.class, () -> VectorAccess.openRange(source, 1, 2));
         assertThrows(IndexOutOfBoundsException.class, () -> VectorAccess.openSelection(source, new int[] {1}, 0, 1));
         try (var cursor = VectorAccess.openRange(source, 0, 0)) { assertFalse(cursor.next()); }
     }

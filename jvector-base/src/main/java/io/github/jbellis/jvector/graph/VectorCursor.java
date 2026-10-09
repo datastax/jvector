@@ -21,6 +21,8 @@ import io.github.jbellis.jvector.vector.types.VectorFloat;
 /**
  * A single-consumer cursor over an ordered vector request. Close it to release read-ahead.
  * Independent cursors may be consumed concurrently; the source must outlive its cursors.
+ * Use try-with-resources. A shared vector is borrowed: call {@code vector().copy()}
+ * before retaining it beyond the next advance or cursor closure.
  * I/O failures are reported as {@link java.io.UncheckedIOException}.
  */
 public interface VectorCursor extends AutoCloseable {
