@@ -11,7 +11,9 @@ changing their public quantization calls or requiring existing integrations to a
 **How to Enable**
 
 Supply `FvecFileVectorValues.open(path)` as the input source. Immutable `Options`
-customize I/O workers, batch size, read-ahead and the shared payload budget. The default
+customize I/O workers, batch size, read-ahead and the shared payload budget. I/O workers
+default to JVector's physical-core compute sizing used by Grid, on a separate owned
+pool for blocking reads. The default
 budget is at most 1% of file bytes or 64 MiB, with one record as the minimum. See
 [Batched input vector access](../../batched-vector-access.md) for runnable 100k examples.
 

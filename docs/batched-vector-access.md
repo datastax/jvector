@@ -64,6 +64,20 @@ little-endian dimension integer followed by that many float32 coordinates; every
 record must have the same dimension. I/O failures during consumption propagate as
 `UncheckedIOException`.
 
+## Dataset streaming and caches
+
+Prepare the input through the existing dataset catalog/download cache, then open
+its local `.fvecs` path with `FvecFileVectorValues`. The examples use
+`loadBaseVectorFile`, which honors catalog cache settings and `DATASET_CACHE_DIR`
+without materializing the base vectors. Downloads must finish before the source
+is opened; cursors stream a stable local file, not an in-progress remote download.
+
+The source retains bounded reusable read buffers during consumption. It does not
+change persistent dataset, index, or quantizer caches. File preparation stays
+outside construction timing; demand reads during training and encoding remain
+part of those library calls. Existing preload paths are still available; merely
+adding this source does not switch existing Grid/BenchYAML configurations to it.
+
 ## Random ordinals: fetch an arbitrary selection
 
 Use a selection when the algorithm knows several requested ordinals ahead of time,
@@ -152,7 +166,6 @@ Most callers use `open(path)`. Immutable named options customize individual limi
 ```java
 var options = FvecFileVectorValues.Options.defaults()
         .withMaxBufferBytes(32L << 20)
-        .withIoThreads(8)
         .withBatchVectors(64)
         .withReadAhead(3);
 try (var source = FvecFileVectorValues.open(path, options)) {
@@ -160,8 +173,14 @@ try (var source = FvecFileVectorValues.open(path, options)) {
 }
 ```
 
-Defaults are 48 I/O workers, at most 64 vectors per batch, and three batches of
-read-ahead. Payload capacity is capped at `min(1% of file bytes, 64 MiB)`, with one
+The default I/O worker count follows `PhysicalCoreExecutor`, the compute sizing
+used by Grid and BenchYAML. It adapts to the machine and honors
+`-Djvector.physical_core_count`; there is no fixed core count. Blocking file reads
+run on a separate source-owned pool so they do not occupy compute workers.
+`withIoThreads(count)` remains available for explicit benchmark tuning. The
+quantization example uses the shared compute pool and does not shut it down.
+
+Other defaults are at most 64 vectors per batch and three batches of read-ahead. Payload capacity is capped at `min(1% of file bytes, 64 MiB)`, with one
 record as the minimum. A configured maximum is also capped at 1% of the file.
 Copies and cursors share the budget, including queued, in-flight and ready payloads.
 Read-ahead zero disables speculative batches. Selected reads fetch requested records

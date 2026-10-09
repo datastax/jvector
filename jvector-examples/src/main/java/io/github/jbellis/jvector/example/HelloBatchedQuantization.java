@@ -20,12 +20,13 @@ import io.github.jbellis.jvector.disk.FvecFileVectorValues;
 import io.github.jbellis.jvector.quantization.NVQuantization;
 import io.github.jbellis.jvector.quantization.ProductQuantization;
 
-import java.util.concurrent.ForkJoinPool;
+import io.github.jbellis.jvector.util.PhysicalCoreExecutor;
 
 /** Train and encode directly from a file through the ordinary PQ and NVQ APIs. */
 public class HelloBatchedQuantization {
     public static void main(String[] args) throws Exception {
-        var executor = new ForkJoinPool(Math.min(8, Runtime.getRuntime().availableProcessors()));
+        // Use the same shared compute pool as Grid; the source owns a separate I/O pool.
+        var executor = PhysicalCoreExecutor.pool();
         try (var source = FvecFileVectorValues.open(HelloVectorFile.path(args))) {
             if (source.size() < 256)
                 throw new IllegalArgumentException("PQ example requires at least 256 vectors");
@@ -41,8 +42,6 @@ public class HelloBatchedQuantization {
             var nvq = NVQuantization.compute(source, 1);
             var nvqVectors = nvq.encodeAll(source, executor);
             System.out.printf("NVQ encoded %,d vectors%n", nvqVectors.count());
-        } finally {
-            executor.shutdown();
         }
     }
 }

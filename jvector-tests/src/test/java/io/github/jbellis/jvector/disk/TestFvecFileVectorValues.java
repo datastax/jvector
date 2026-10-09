@@ -20,6 +20,7 @@ import io.github.jbellis.jvector.graph.ListRandomAccessVectorValues;
 import io.github.jbellis.jvector.graph.VectorAccess;
 import io.github.jbellis.jvector.quantization.NVQuantization;
 import io.github.jbellis.jvector.quantization.ProductQuantization;
+import io.github.jbellis.jvector.util.PhysicalCoreExecutor;
 import io.github.jbellis.jvector.vector.VectorizationProvider;
 import io.github.jbellis.jvector.vector.types.VectorFloat;
 import org.junit.Test;
@@ -56,7 +57,7 @@ public class TestFvecFileVectorValues {
         var options = defaults.withMaxBufferBytes(1024).withIoThreads(2)
                 .withBatchVectors(7).withReadAhead(0);
         assertEquals(64L << 20, defaults.maxBufferBytes());
-        assertEquals(48, defaults.ioThreads());
+        assertEquals(PhysicalCoreExecutor.pool().getParallelism(), defaults.ioThreads());
         assertEquals(64, defaults.batchVectors());
         assertEquals(3, defaults.readAhead());
         assertEquals(1024, options.maxBufferBytes());

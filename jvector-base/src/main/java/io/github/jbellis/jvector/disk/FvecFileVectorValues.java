@@ -19,6 +19,7 @@ package io.github.jbellis.jvector.disk;
 import io.github.jbellis.jvector.graph.BatchedVectorValues;
 import io.github.jbellis.jvector.graph.RandomAccessVectorValues;
 import io.github.jbellis.jvector.graph.VectorCursor;
+import io.github.jbellis.jvector.util.PhysicalCoreExecutor;
 import io.github.jbellis.jvector.vector.VectorizationProvider;
 import io.github.jbellis.jvector.vector.types.VectorFloat;
 import io.github.jbellis.jvector.vector.types.VectorTypeSupport;
@@ -66,7 +67,8 @@ public final class FvecFileVectorValues implements BatchedVectorValues, AutoClos
 
     /**
      * Open with at most min(1% of file bytes, 64 MiB) of reusable I/O buffers,
-     * forty-eight I/O workers and three batches of read-ahead. One record is the minimum budget.
+     * I/O workers sized by {@link PhysicalCoreExecutor}, and three batches of read-ahead.
+     * One record is the minimum budget; blocking reads use a separate owned executor.
      */
     public static FvecFileVectorValues open(Path path) throws IOException {
         return open(path, Options.defaults());
@@ -85,7 +87,6 @@ public final class FvecFileVectorValues implements BatchedVectorValues, AutoClos
      * retained vectors and the OS page cache are outside this payload budget.
      */
     public static final class Options {
-        private static final Options DEFAULTS = new Options(DEFAULT_MAX_BYTES, 48, 64, 3);
         private final long maxBufferBytes;
         private final int ioThreads, batchVectors, readAhead;
 
@@ -98,8 +99,10 @@ public final class FvecFileVectorValues implements BatchedVectorValues, AutoClos
             this.readAhead = readAhead;
         }
 
-        /** Defaults: 64 MiB maximum, 48 I/O workers, 64 vectors/batch, 3 batches ahead. */
-        public static Options defaults() { return DEFAULTS; }
+        /** Defaults: 64 MiB maximum, Grid compute parallelism, 64 vectors/batch, 3 batches ahead. */
+        public static Options defaults() {
+            return new Options(DEFAULT_MAX_BYTES, PhysicalCoreExecutor.getPhysicalCoreCount(), 64, 3);
+        }
 
         /** Maximum payload bytes; also capped at 1% of file bytes, with one record minimum. */
         public long maxBufferBytes() { return maxBufferBytes; }
