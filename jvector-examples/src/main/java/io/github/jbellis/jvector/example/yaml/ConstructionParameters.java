@@ -18,9 +18,10 @@ package io.github.jbellis.jvector.example.yaml;
 
 import io.github.jbellis.jvector.graph.disk.feature.FeatureId;
 
+import java.util.ArrayList;
 import java.util.EnumSet;
+import java.util.LinkedHashSet;
 import java.util.List;
-import java.util.stream.Collectors;
 
 
 public class ConstructionParameters extends CommonParameters {
@@ -34,39 +35,64 @@ public class ConstructionParameters extends CommonParameters {
     public Boolean useSavedIndexIfExists;
 
     public List<EnumSet<FeatureId>> getFeatureSets() {
-        List<EnumSet<FeatureId>> featureSets = null;
+        var featureSets = new LinkedHashSet<EnumSet<FeatureId>>();
+        boolean hasPQConstruction = hasConstructionCompressor("PQ");
+        boolean hasASHConstruction = hasConstructionCompressor("ASH");
+
         for (var fusedItem : fusedGraph) {
-            var newFeatures = reranking.stream().map(item -> {
-                EnumSet<FeatureId> features;
+            for (var item : reranking) {
+                EnumSet<FeatureId> baseFeatures;
 
                 switch (item) {
                     case "FP":
-                        if (fusedItem) {
-                            features = EnumSet.of(FeatureId.INLINE_VECTORS, FeatureId.FUSED_PQ);
-                        } else {
-                            features = EnumSet.of(FeatureId.INLINE_VECTORS);
-                        }
+                        baseFeatures = EnumSet.of(FeatureId.INLINE_VECTORS);
                         break;
                     case "NVQ":
-                        if (fusedItem) {
-                            features = EnumSet.of(FeatureId.NVQ_VECTORS, FeatureId.FUSED_PQ);
-                        } else {
-                            features = EnumSet.of(FeatureId.NVQ_VECTORS);
-                        }
+                        baseFeatures = EnumSet.of(FeatureId.NVQ_VECTORS);
                         break;
                     default:
                         throw new IllegalArgumentException("Only 'FP' and 'NVQ' are supported");
                 }
 
-                return features;
-            }).collect(Collectors.toList());
-            if (featureSets == null) {
-                featureSets = newFeatures;
-            } else {
-                featureSets.addAll(newFeatures);
+                if (!fusedItem) {
+                    featureSets.add(baseFeatures);
+                    continue;
+                }
+
+                boolean addedFused = false;
+                if (hasPQConstruction) {
+                    var features = EnumSet.copyOf(baseFeatures);
+                    features.add(FeatureId.FUSED_PQ);
+                    featureSets.add(features);
+                    addedFused = true;
+                }
+                if (hasASHConstruction) {
+                    var features = EnumSet.copyOf(baseFeatures);
+                    features.add(FeatureId.FUSED_ASH);
+                    featureSets.add(features);
+                    addedFused = true;
+                }
+
+                if (!addedFused) {
+                    throw new IllegalArgumentException(
+                            "fusedGraph=Yes requires construction compression type PQ or ASH");
+                }
             }
         }
 
-        return featureSets;
+        return new ArrayList<>(featureSets);
+    }
+
+    private boolean hasConstructionCompressor(String type) {
+        if (compression == null) {
+            return false;
+        }
+
+        for (Compression c : compression) {
+            if (c != null && c.type != null && c.type.equalsIgnoreCase(type)) {
+                return true;
+            }
+        }
+        return false;
     }
 }

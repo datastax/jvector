@@ -100,6 +100,12 @@ abstract class AbstractGraphIndexFormat implements GraphIndexFormat {
         return supportsMultiLayer;
     }
 
+    /** Fused features arrive with version 6; {@link GraphIndexFormatV6} overrides this. */
+    @Override
+    public boolean supportsFusedFeatures() {
+        return false;
+    }
+
     @Override
     public boolean usesFooter() {
         return usesFooter;
@@ -408,12 +414,22 @@ abstract class AbstractGraphIndexFormat implements GraphIndexFormat {
     }
 
     /**
+     * Helper to create the frozen set of features supported by version 7: everything in version 6
+     * plus {@link FeatureId#FUSED_ASH}. Deliberately enumerated for the same reason as
+     * {@link #v6Features()}.
+     */
+    protected static Set<FeatureId> v7Features() {
+        return EnumSet.of(FeatureId.INLINE_VECTORS, FeatureId.FUSED_PQ, FeatureId.NVQ_VECTORS,
+                FeatureId.SEPARATED_VECTORS, FeatureId.SEPARATED_NVQ, FeatureId.FUSED_ASH);
+    }
+
+    /**
      * Helper to create the frozen set of features supported by version 6.
      * Deliberately enumerated rather than {@code EnumSet.allOf(FeatureId.class)}: version 6's
      * supported-feature set is a historical fact about a shipped format and must not change just
      * because a new {@link FeatureId} is added to the enum for some future version.
      */
-    protected static Set<FeatureId> allFeatures() {
+    protected static Set<FeatureId> v6Features() {
         return EnumSet.of(FeatureId.INLINE_VECTORS, FeatureId.FUSED_PQ, FeatureId.NVQ_VECTORS,
                 FeatureId.SEPARATED_VECTORS, FeatureId.SEPARATED_NVQ);
     }

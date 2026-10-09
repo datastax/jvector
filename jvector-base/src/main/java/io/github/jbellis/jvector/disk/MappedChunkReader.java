@@ -288,6 +288,18 @@ public class MappedChunkReader implements RandomAccessReader {
         tmp.flip().asFloatBuffer().get(floats, offset, count);
     }
 
+    @Override
+    public byte readByte() {
+        try {
+            ensureAvailable(1);
+            byte v = currentBuffer.get();
+            position++;
+            return v;
+        } catch (IOException e) {
+            throw new RuntimeException(e);
+        }
+    }
+
     /**
      * Returns the total length of the file.
      *

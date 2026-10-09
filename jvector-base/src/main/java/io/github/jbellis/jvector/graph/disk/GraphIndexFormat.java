@@ -75,6 +75,15 @@ public interface GraphIndexFormat {
     boolean supportsMultiLayer();
 
     /**
+     * Checks if this version uses the fused-feature layout (version 6+): a fused feature's packed
+     * neighbor data is stored inline in each L0 record, and the fused feature's source data for the
+     * in-memory hierarchy is written in a block after the sparse levels. Which fused features a
+     * version can store is still governed by {@link #supportsFeature}.
+     * @return true if fused features are supported
+     */
+    boolean supportsFusedFeatures();
+
+    /**
      * Checks if this version uses a footer for metadata instead of a header.
      * @return true if footer-based metadata is used
      */
@@ -114,7 +123,7 @@ public interface GraphIndexFormat {
 
     /**
      * Returns the feature map for this format version, ordered as required by the on-disk layout.
-     * Versions 2–5 preserve the natural {@link FeatureId} enum ordinal order; version 6 places
+     * Versions 2–5 preserve the natural {@link FeatureId} enum ordinal order; version 6+ places
      * fused features last so that non-fused inline features occupy a contiguous prefix.
      * The returned map preserves insertion order.
      *

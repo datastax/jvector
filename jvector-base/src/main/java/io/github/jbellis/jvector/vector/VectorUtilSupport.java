@@ -35,6 +35,72 @@ import java.util.List;
  */
 public interface VectorUtilSupport {
 
+  /** Effective ASH kernel tuning for benchmark diagnostics. */
+  default String ashKernelDescription() { return "portable scalar ASH kernels"; }
+
+  /** Query factories select the tuned entry point once, outside the scoring hot loop. */
+  default boolean usesAshProjectionTuning() { return false; }
+
+  /** Explicitly tuned projection kernel; the ordinary entry point retains its compact default loop. */
+  default float ashProjectionDotTuned(float[] query, byte[] code, int dimensions, int bitsPerDimension) {
+    return ashProjectionDot(query, code, dimensions, bitsPerDimension);
+  }
+
+  /** Whether ASH nibble lookup and accumulation are implemented with SIMD. */
+  default boolean supportsAshLutScoring() { return false; }
+
+  /** Exact integer lookup for encoded C=1 query pairs. LUT stride is 32 (two repeated 16-entry tables). */
+    default void ashSymmetricLutScore(byte[] codes, int groups, int stride, int lane, int count,
+                                      short[] lut, float[] out, int outOffset) {
+        for (int i = 0; i < count; i++) {
+            long sum = 0;
+            for (int g = 0; g < groups; g++) {
+                int nibble = (codes[(g / 2) * stride + lane + i] >>> (4 * (g % 2))) & 15;
+                sum += lut[g * 32 + nibble];
+            }
+            out[outOffset + i] = sum * .25f;
+        }
+    }
+
+  /** Packed-to-packed integer dot products for symmetric ASH. */
+  default boolean supportsAshSymmetricScoring() { return false; }
+
+  default float ashSymmetricDot(long[] aBits, byte[] aCodes, long[] bBits, byte[] bCodes,
+                                int dimensions, int bits) {
+    throw new UnsupportedOperationException("Symmetric ASH SIMD is unavailable on this backend");
+  }
+
+  /** Whether canonical 2/4-bit projection codes have a single-vector SIMD kernel. */
+  default boolean supportsAshProjectionScoring() { return false; }
+
+  /** Dot product of a projected query with a canonical signed-magnitude 2/4-bit code. */
+  default float ashProjectionDot(float[] query, byte[] code, int dimensions, int bitsPerDimension) {
+    if (bitsPerDimension != 2 && bitsPerDimension != 4) {
+      throw new IllegalArgumentException("Projection scoring requires 2 or 4 bits per dimension");
+    }
+    java.util.Objects.checkFromIndexSize(0, dimensions, query.length);
+    int perByte = 8 / bitsPerDimension;
+    java.util.Objects.checkFromIndexSize(0, dimensions / perByte + (dimensions % perByte == 0 ? 0 : 1), code.length);
+    int sign = 1 << (bitsPerDimension - 1);
+    float sum = 0;
+    for (int i = 0; i < dimensions; i++) {
+      int field = (code[i / perByte] & 255) >>> ((i % perByte) * bitsPerDimension);
+      float magnitude = (field & (sign - 1)) + 0.5f;
+      sum += query[i] * ((field & sign) == 0 ? -magnitude : magnitude);
+    }
+    return sum;
+  }
+
+  /**
+   * Scores contiguous lanes in a byte-interleaved ASH block using a 16-entry LUT per nibble.
+   * Even groups occupy low nibbles; odd groups occupy high nibbles. Each byte row has
+   * {@code stride} lanes. Writes projection dot products, without per-vector headers.
+   */
+  default void ashLutScore(byte[] codes, int offset, int groups, int stride,
+                           int lane, int count, float[] lut, float[] out, int outOffset) {
+    ASHLutScoring.score(codes, offset, groups, stride, lane, count, lut, out, outOffset);
+  }
+
   /** Calculates the dot product of the given float arrays. */
   float dotProduct(VectorFloat<?> a, VectorFloat<?> b);
 
@@ -242,4 +308,171 @@ public interface VectorUtilSupport {
    */
   float nvqUniformLoss(VectorFloat<?> vector, float minValue, float maxValue, int nBits);
 
+  // ------------------------------------------------------------------
+  // ASH kernels (default scalar implementations)
+  // ------------------------------------------------------------------
+
+  /**
+   * @return true if this backend provides a SIMD implementation of the masked-load kernel as described in the ASH paper.
+   */
+  default boolean supportsAshMaskedLoad() {
+    return false;
+  }
+
+  /**
+   * Dot product between a matrix row and a dense vector.
+   * Used by ASH projection: y_i = <A_i, x>.
+   *
+   * Contract: Arow.length == x.length.
+   * Default is scalar; SIMD backends may override.
+   */
+  default float ashDotRow(float[] Arow, float[] x) {
+    assert Arow.length == x.length : "Arow.length != x.length";
+    float acc = 0.0f;
+    for (int i = 0; i < x.length; i++) {
+      acc += Arow[i] * x[i];
+    }
+    return acc;
+  }
+
+  /**
+   * Computes maskedAdd for a single vector stored in packed *by-vector* form.
+   * Returns:
+   *   maskedAdd = <tildeQ, b>
+   *
+   * packedBits layout:
+   *   packedBits[packedBase + w] is 64-bit word w for this vector.
+   *
+   * Default implementation is scalar bit-walk with a register accumulator.
+   * SIMD backends may override.
+   */
+  default float ashMaskedAddAllWords(
+          float[] tildeQ,
+          int d,
+          long[] packedBits,
+          int packedBase,  // ord * nWords (by-vector contiguous)
+          int nWords
+  ) {
+    float maskedAdd = 0f; // register accumulator (critical!)
+
+    for (int w = 0; w < nWords; w++) {
+      long word = packedBits[packedBase + w];
+      int baseDim = w * 64;
+
+      // Walk set bits (fast when sparse; matches your block fallback style)
+      while (word != 0L) {
+        int bit = Long.numberOfTrailingZeros(word);
+        int idx = baseDim + bit;
+        if (idx < d) maskedAdd += tildeQ[idx];
+        word &= (word - 1);
+      }
+    }
+
+    return maskedAdd;
+  }
+
+  // In VectorUtilSupport interface
+  float ashMaskedAddFlat(float[] tildeQ, int qOffset, long[] allPackedVectors, int packedBase, int d, int words);
+
+  // In VectorUtilSupport interface
+  float ashMaskedAdd_512(float[] tildeQ, int qOffset, long[] allPackedVectors, int packedBase, int d, int words);
+
+  // In VectorUtilSupport interface
+  float ashMaskedAddFlat_dense(float[] tildeQ, int qOffset, long[] allPackedVectors, int packedBase, int d, int words);
+
+  /**
+   * Computes maskedAdd for a block slice of vectors stored in packed block-column-major form.
+   * For each lane in [0, blockLen), writes:
+   *   outMaskedAdd[lane] = <tildeQ, b_lane>
+   * packedBits layout:
+   *   packedBits[blockWordBase + w*blockSize + laneIndex] is 64-bit word w for that lane.
+   * Default implementation is scalar bit-walk with a register accumulator per lane.
+   * SIMD backends may override.
+   */
+  default void ashMaskedAddBlockAllWords(
+          float[] tildeQ,
+          int d,
+          long[] packedBits,
+          int packedBase,  // blockId * nWords * blockSize
+          int nWords,
+          int blockSize,
+          int laneStart,
+          int blockLen,
+          float[] outMaskedAdd
+  ) {
+    assert laneStart >= 0;
+    assert blockLen >= 0;
+    assert laneStart + blockLen <= blockSize;
+    assert outMaskedAdd.length >= blockLen : "outMaskedAdd too small";
+
+    for (int lane = 0; lane < blockLen; lane++) {
+      float maskedAdd = 0f; // register accumulator (critical!)
+      int laneIndex = laneStart + lane;
+
+      for (int w = 0; w < nWords; w++) {
+        long word = packedBits[packedBase + (w * blockSize) + laneIndex];
+        int baseDim = w * 64;
+
+        while (word != 0L) {
+          int bit = Long.numberOfTrailingZeros(word);
+          int idx = baseDim + bit;
+          if (idx < d) maskedAdd += tildeQ[idx];
+          word &= (word - 1);
+        }
+      }
+
+      outMaskedAdd[lane] = maskedAdd;
+    }
+  }
+
+  /**
+   * Computes maskedAdd for a block slice using a pooled landmark-specific query buffer.
+   *
+   * <p>This is identical to {@link #ashMaskedAddBlockAllWords(float[], int, long[], int, int, int, int, int, float[])}
+   * except that the query vector is read from {@code tildeQPool} at offsets {@code tildeBase + j}.</p>
+   *
+   * <p>tildeQPool layout:
+   * <ul>
+   *   <li>{@code tildeQPool[tildeBase + j]} is q̃_c[j] for the caller-selected landmark c</li>
+   * </ul>
+   *
+   * <p>Default implementation is scalar bit-walk with register accumulation, reading from the pool.</p>
+   */
+  default void ashMaskedAddBlockAllWordsPooled(
+          float[] tildeQPool,
+          int tildeBase,   // base offset into tildeQPool for this landmark (e.g., c * d)
+          int d,
+          long[] packedBits,
+          int packedBase,  // blockId * nWords * blockSize
+          int nWords,
+          int blockSize,
+          int laneStart,
+          int blockLen,
+          float[] outMaskedAdd
+  ) {
+    assert tildeBase >= 0;
+    assert laneStart >= 0;
+    assert blockLen >= 0;
+    assert laneStart + blockLen <= blockSize;
+    assert outMaskedAdd.length >= blockLen : "outMaskedAdd too small";
+
+    for (int lane = 0; lane < blockLen; lane++) {
+      float maskedAdd = 0f; // register accumulator
+      int laneIndex = laneStart + lane;
+
+      for (int w = 0; w < nWords; w++) {
+        long word = packedBits[packedBase + (w * blockSize) + laneIndex];
+        int baseDim = w * 64;
+
+        while (word != 0L) {
+          int bit = Long.numberOfTrailingZeros(word);
+          int j = baseDim + bit;
+          if (j < d) maskedAdd += tildeQPool[tildeBase + j];
+          word &= (word - 1);
+        }
+      }
+
+      outMaskedAdd[lane] = maskedAdd;
+    }
+  }
 }

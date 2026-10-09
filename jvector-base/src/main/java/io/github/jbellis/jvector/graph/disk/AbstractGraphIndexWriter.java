@@ -85,7 +85,7 @@ public abstract class AbstractGraphIndexWriter<T extends IndexWriter> implements
         if (fusedFeaturesCount > 1) {
             throw new IllegalArgumentException("At most one fused feature is allowed");
         }
-        if (fusedFeaturesCount == 1 && !graphIndexFormat.supportsFeature(FeatureId.FUSED_PQ)) {
+        if (fusedFeaturesCount == 1 && !graphIndexFormat.supportsFusedFeatures()) {
             throw new IllegalArgumentException("Fused features require version 6 or higher");
         }
         this.out = out;

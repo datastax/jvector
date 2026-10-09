@@ -335,7 +335,7 @@ public class TestOnDiskGraphIndex extends RandomizedTest {
              var onDiskGraph = OnDiskGraphIndex.load(readerSupplier);
              var onDiskView = onDiskGraph.getView())
         {
-            assertEquals(88, onDiskGraph.ramBytesUsed()); // Current size of graph that hasn't been read from
+            assertEquals(96, onDiskGraph.ramBytesUsed()); // Current size of graph that hasn't been read from (scales with FeatureId.values().length)
             assertEquals(32, onDiskGraph.getDegree(0));
             assertEquals(2, onDiskGraph.version);
             assertEquals(100_000, onDiskGraph.size(0));

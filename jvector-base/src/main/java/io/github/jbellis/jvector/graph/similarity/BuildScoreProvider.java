@@ -18,6 +18,9 @@ package io.github.jbellis.jvector.graph.similarity;
 
 import io.github.jbellis.jvector.graph.RandomAccessVectorValues;
 import io.github.jbellis.jvector.graph.RemappedRandomAccessVectorValues;
+import io.github.jbellis.jvector.quantization.AsymmetricHashing;
+import io.github.jbellis.jvector.quantization.ASHVectors;
+import io.github.jbellis.jvector.quantization.ASHSymmetricScorer;
 import io.github.jbellis.jvector.quantization.BQVectors;
 import io.github.jbellis.jvector.quantization.PQVectors;
 import io.github.jbellis.jvector.vector.VectorSimilarityFunction;
@@ -253,6 +256,62 @@ public interface BuildScoreProvider {
                         return bqv.similarityBetween(encoded1, bqv.get(node2));
                     }
                 };
+            }
+        };
+    }
+
+    /**
+     * Returns a BSP that performs approximate score comparisons using the given ASHVectors.
+     *
+     * <p><b>Construction (node-node) scoring:</b> Uses symmetric ASH–ASH dot-product approximation
+     * computed from the complete encoded payload + per-vector header fields (scale, offset).
+     *
+     * <p><b>Query (vector-node) scoring:</b> Delegates to ASHVectors' query-time score function
+     * (asymmetric float query → ASH vector).
+     *
+     * <p><b>Constraint:</b> This provider requires {@code C=1} (single landmark) and
+     * {@link VectorSimilarityFunction#DOT_PRODUCT}.
+     */
+    static BuildScoreProvider ashBuildScoreProvider(VectorSimilarityFunction vsf, ASHVectors ashv) {
+        if (vsf != VectorSimilarityFunction.DOT_PRODUCT) {
+            throw new UnsupportedOperationException("ASH build scoring supports DOT_PRODUCT only");
+        }
+
+        final AsymmetricHashing ash = ashv.getCompressor();
+        if (ash.landmarkCount != 1) {
+            throw new IllegalArgumentException("ASH build scoring requires landmarkCount==1, got " + ash.landmarkCount);
+        }
+
+        final var symmetric = new ASHSymmetricScorer(ashv);
+
+        return new BuildScoreProvider() {
+            @Override
+            public boolean isExact() {
+                return false;
+            }
+
+            @Override
+            public VectorFloat<?> approximateCentroid() {
+                // In the C=1 case, ASH uses the dataset mean as its single landmark.
+                // Return a copy so callers can't mutate ASH's internal landmark.
+                return ash.landmarks[0].copy();
+            }
+
+            @Override
+            public SearchScoreProvider searchProviderFor(VectorFloat<?> vector) {
+                // Query-time asymmetric scoring is already implemented by ASHVectors.
+                return new DefaultSearchScoreProvider(ashv.precomputedScoreFunctionFor(vector, vsf), null, true);
+            }
+
+            @Override
+            public SearchScoreProvider searchProviderFor(int node1) {
+                return new DefaultSearchScoreProvider(symmetric.scoreFunctionFor(node1), null, true);
+            }
+
+            @Override
+            public SearchScoreProvider diversityProviderFor(int node1) {
+                // Keep search/diversity consistent for approximate scoring.
+                return searchProviderFor(node1);
             }
         };
     }

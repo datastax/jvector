@@ -1,0 +1,37 @@
+[
+  {
+    "case": "cohere-1m-b4-ash",
+    "build_s": [
+      "203.342001607"
+    ],
+    "gc_pause_s": 0.6757420000000003,
+    "max_gc_pause_ms": 38.576,
+    "compilation_events": {
+      "nmethod": 7407,
+      "make_not_entrant": 2082,
+      "deoptimized": 1528,
+      "failure": 1
+    },
+    "compilation_failures": {
+      "concurrent class loading": 1
+    }
+  },
+  {
+    "case": "cohere-1m-b4-pq",
+    "build_s": [
+      "350.110698789"
+    ],
+    "gc_pause_s": 1.651136,
+    "max_gc_pause_ms": 69.35,
+    "compilation_events": {
+      "nmethod": 6856,
+      "make_not_entrant": 1841,
+      "deoptimized": 903,
+      "failure": 2
+    },
+    "compilation_failures": {
+      "retry without subsuming loads": 1,
+      "concurrent class loading": 1
+    }
+  }
+]
