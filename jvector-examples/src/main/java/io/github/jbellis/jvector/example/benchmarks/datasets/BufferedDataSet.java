@@ -58,7 +58,7 @@ final class BufferedDataSet implements DataSet {
             try { base.close(); } catch (IOException closeFailure) { failure.addSuppressed(closeFailure); }
             throw failure;
         }
-        System.out.printf("%n%s: %d buffered base and %d resident query vectors, dimensions %d%n",
+        System.out.printf("%n%s: %d base and %d query vectors loaded, dimensions %d (buffered)%n",
                 name, base.size(), queries.size(), base.dimension());
     }
 

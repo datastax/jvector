@@ -74,7 +74,7 @@ public class DataSets {
                                                   Collection<DataSetLoader> loaders,
                                                   BaseVectorLoading loading) {
         java.util.Objects.requireNonNull(loading, "loading");
-        logger.info("loading dataset [{}] with {} base vectors", dataSetName, loading);
+        logger.info("loading dataset [{}] (base vector loading: {})", dataSetName, loading);
         if (dataSetName.endsWith(".hdf5")) {
             throw new InvalidParameterException("DataSet names are not meant to be file names. Did you mean " + dataSetName.replace(".hdf5", "") + "? ");
         }
