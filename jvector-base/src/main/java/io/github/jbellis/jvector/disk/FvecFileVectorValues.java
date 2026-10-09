@@ -66,10 +66,10 @@ public final class FvecFileVectorValues implements BatchedVectorValues, AutoClos
 
     /**
      * Open with at most min(1% of file bytes, 64 MiB) of reusable I/O buffers,
-     * twelve I/O workers and three batches of read-ahead. One record is the minimum budget.
+     * forty-eight I/O workers and three batches of read-ahead. One record is the minimum budget.
      */
     public static FvecFileVectorValues open(Path path) throws IOException {
-        return open(path, DEFAULT_MAX_BYTES, 12, 64, 3);
+        return open(path, DEFAULT_MAX_BYTES, 48, 64, 3);
     }
 
     /**
@@ -163,6 +163,7 @@ public final class FvecFileVectorValues implements BatchedVectorValues, AutoClos
     @Override public void close() throws IOException {
         if (closed) return;
         closed = true;
+        currentRead = null;
         if (ownsStorage) storage.close();
     }
 
@@ -235,7 +236,8 @@ public final class FvecFileVectorValues implements BatchedVectorValues, AutoClos
     private static final class Buffer extends ByteBufferReader {
         final FloatBuffer floats;
         Buffer(int bytes) {
-            super(ByteBuffer.allocate(bytes).order(ByteOrder.LITTLE_ENDIAN));
+            // Read directly into the pooled payload; heap buffers require a temporary native copy.
+            super(ByteBuffer.allocateDirect(bytes).order(ByteOrder.LITTLE_ENDIAN));
             floats = bb.asFloatBuffer();
         }
         @Override public void read(float[] destination, int offset, int count) {
@@ -280,15 +282,17 @@ public final class FvecFileVectorValues implements BatchedVectorValues, AutoClos
                 ByteBuffer header = ByteBuffer.allocate(4).order(ByteOrder.LITTLE_ENDIAN);
                 readFully(channel, header, 0); header.flip();
                 dimension = header.getInt();
-                if (dimension <= 0) throw new IOException("Invalid fvec dimension: " + dimension);
-                rowBytes = Math.multiplyExact(Math.addExact(dimension, 1), 4);
+                if (dimension <= 0 || dimension > Integer.MAX_VALUE / 4 - 1)
+                    throw new IOException("Invalid fvec dimension: " + dimension);
+                rowBytes = (dimension + 1) * 4;
                 long length = channel.size();
                 if (length % rowBytes != 0 || length / rowBytes > Integer.MAX_VALUE)
                     throw new IOException("Invalid fvec file length: " + length);
                 size = (int) (length / rowBytes);
                 budget = Math.max(rowBytes, Math.min(maxBytes, length / 100));
                 // Leave room for concurrent consumers and their three-batch look-ahead.
-                batchVectors = (int) Math.max(1, Math.min(maxBatch, budget / (4L * threads * (ahead + 1L) * rowBytes)));
+                long concurrentRows = budget / rowBytes / threads / (ahead + 1L);
+                batchVectors = (int) Math.max(1, Math.min(Math.min(maxBatch, Integer.MAX_VALUE / rowBytes), concurrentRows));
                 readAhead = ahead;
                 slots = (int) Math.min(Integer.MAX_VALUE, budget / (batchVectors * (long) rowBytes));
                 executor = new ThreadPoolExecutor(threads, threads, 0, TimeUnit.MILLISECONDS,

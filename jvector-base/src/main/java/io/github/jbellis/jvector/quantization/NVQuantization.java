@@ -147,6 +147,7 @@ public class NVQuantization implements VectorCompressor<NVQuantization.Quantized
      * @param nSubVectors number of subvectors
      */
     public static NVQuantization compute(RandomAccessVectorValues ravv, int nSubVectors) {
+        Objects.checkIndex(0, ravv.size()); // Preserve rejection of an empty training source.
         var globalMean = vectorTypeSupport.createFloatVector(ravv.dimension());
         try (var cursor = VectorAccess.openRange(ravv, 0, ravv.size())) {
             while (cursor.next()) VectorUtil.addInPlace(globalMean, cursor.vector());

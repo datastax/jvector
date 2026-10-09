@@ -134,6 +134,10 @@ public class TestFvecFileVectorValues {
         assertThrows(IOException.class, () -> FvecFileVectorValues.open(path));
         Files.write(path, ByteBuffer.allocate(4).order(ByteOrder.LITTLE_ENDIAN).putInt(-1).array());
         assertThrows(IOException.class, () -> FvecFileVectorValues.open(path));
+        Files.write(path, ByteBuffer.allocate(4).order(ByteOrder.LITTLE_ENDIAN).putInt(Integer.MAX_VALUE).array());
+        assertThrows(IOException.class, () -> FvecFileVectorValues.open(path));
+        assertThrows(IndexOutOfBoundsException.class, () ->
+                NVQuantization.compute(new ListRandomAccessVectorValues(new ArrayList<>(), 17), 1));
         Files.delete(path);
         final Path malformed = file(5, 17);
         try {
