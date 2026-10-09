@@ -23,7 +23,7 @@ public enum BaseVectorLoading {
     BUFFERED,
     PRELOAD;
 
-    /** BenchYAML/Grid default; an explicit property selects the resident baseline. */
+    /** BenchYAML/AutoBenchYAML default; an explicit property selects the resident baseline. */
     public static BaseVectorLoading forBenchmark() {
         String value = System.getProperty("jvector.dataset_loader", "buffered");
         try {

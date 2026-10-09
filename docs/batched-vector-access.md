@@ -75,7 +75,7 @@ is opened; cursors stream a stable local file, not an in-progress remote downloa
 The source retains bounded reusable read buffers during consumption. It does not
 change persistent dataset, index, or quantizer caches. File preparation stays
 outside construction timing; demand reads during training and encoding remain
-part of those library calls. Grid runs launched through BenchYAML use buffered base vectors by default. Use
+part of those library calls. Grid runs launched through BenchYAML or AutoBenchYAML use buffered base vectors by default. Use
 `-Djvector.dataset_loader=preload` for a full resident baseline; `buffered` selects
 the default explicitly. Queries and ground truth remain resident. Buffered loading
 requires `NO_SCRUB` metadata and preserves ordinals and stored values. The harness
