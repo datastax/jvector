@@ -19,6 +19,7 @@ package io.github.jbellis.jvector.quantization;
 import io.github.jbellis.jvector.disk.IndexWriter;
 import io.github.jbellis.jvector.disk.RandomAccessReader;
 import io.github.jbellis.jvector.graph.RandomAccessVectorValues;
+import io.github.jbellis.jvector.graph.VectorAccess;
 import io.github.jbellis.jvector.graph.disk.CompactionContext;
 import io.github.jbellis.jvector.graph.disk.QuantizationCompactionStrategy;
 import io.github.jbellis.jvector.graph.similarity.ScoreFunction;
@@ -133,20 +134,13 @@ public abstract class PQVectors implements CompressedVectors {
         // Encode the vectors in parallel into the compressed data chunks
         // The changes are concurrent, but because they are coordinated and do not overlap, we can use parallel streams
         // and then we are guaranteed safe publication because we join the thread after completion.
-        var ravvCopy = ravv.threadLocalSupplier();
-        simdExecutor.submit(() -> IntStream.range(0, vectorCount)
-                        .parallel()
-                        .forEach(ordinal -> {
-                            // Retrieve the slice and mutate it.
-                            var localRavv = ravvCopy.get();
-                            var slice = PQVectors.get(chunks, ordinal, layout.fullChunkVectors, pq.getSubspaceCount());
-                            var vector = localRavv.getVector(ordinalsMapping.applyAsInt(ordinal));
-                            if (vector != null)
-                                pq.encodeTo(vector, slice);
-                            else
-                                slice.zero();
-                        }))
-                .join();
+        VectorAccess.forEach(ravv, vectorCount, ordinalsMapping, simdExecutor, (ordinal, vector) -> {
+            var slice = PQVectors.get(chunks, ordinal, layout.fullChunkVectors, pq.getSubspaceCount());
+            if (vector != null)
+                pq.encodeTo(vector, slice);
+            else
+                slice.zero();
+        });
 
         return new ImmutablePQVectors(pq, chunks, vectorCount, layout.fullChunkVectors);
     }
