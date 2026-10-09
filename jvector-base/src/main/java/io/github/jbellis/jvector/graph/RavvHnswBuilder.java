@@ -19,6 +19,8 @@ package io.github.jbellis.jvector.graph;
 import io.github.jbellis.jvector.graph.similarity.BuildScoreProvider;
 import io.github.jbellis.jvector.index.HnswRecipe;
 import io.github.jbellis.jvector.management.CompressionType;
+import io.github.jbellis.jvector.quantization.ASHVectors;
+import io.github.jbellis.jvector.quantization.AsymmetricHashing;
 import io.github.jbellis.jvector.quantization.CompressedVectors;
 import io.github.jbellis.jvector.quantization.KMeansPlusPlusClusterer;
 import io.github.jbellis.jvector.quantization.PQVectors;
@@ -36,8 +38,10 @@ import java.util.Objects;
  * {@link #withCompressionType}: exact comparisons for {@link CompressionType#NONE}, or the vectors
  * are first compressed with product quantization ({@link CompressionType#PQ}, configured with
  * {@link #withPqSubspaces}, {@link #withPqGlobalCentering} and {@link #withPqAnisotropicThreshold},
- * whose defaults match Cassandra's) or binary quantization
- * ({@link CompressionType#BQ}) and the graph is built with the compressed scores.
+ * whose defaults match Cassandra's), binary quantization ({@link CompressionType#BQ}) or asymmetric
+ * hashing ({@link CompressionType#ASH}, configured with {@link #withAshProjectedDimensions} and
+ * {@link #withAshBitsPerDimension}, and for {@link VectorSimilarityFunction#DOT_PRODUCT} only), and the
+ * graph is built with the compressed scores.
  */
 public class RavvHnswBuilder extends HnswIndexBuilder {
     private final RandomAccessVectorValues vectorValues;
@@ -46,6 +50,8 @@ public class RavvHnswBuilder extends HnswIndexBuilder {
     private int pqSubspaces;
     private boolean pqGlobalCentering = false;
     private float pqAnisotropicThreshold = KMeansPlusPlusClusterer.UNWEIGHTED;
+    private int ashProjectedDimensions;
+    private int ashBitsPerDimension = AsymmetricHashing.DEFAULT_BITS_PER_DIMENSION;
     // Written once, under the base class's lock, before the volatile graphBuilder is published.
     private CompressedVectors compressedVectors;
 
@@ -58,11 +64,17 @@ public class RavvHnswBuilder extends HnswIndexBuilder {
         this.vectorValues = Objects.requireNonNull(vectorValues, "vectorValues");
         this.similarityFunction = Objects.requireNonNull(similarityFunction, "similarityFunction");
         this.pqSubspaces = defaultPqSubspaces(vectorValues.dimension());
+        this.ashProjectedDimensions = vectorValues.dimension();
     }
 
     @Override
     public HnswIndexBuilder withCompressionType(CompressionType compressionType) {
         Objects.requireNonNull(compressionType, "compressionType");
+        if (compressionType == CompressionType.ASH && similarityFunction != VectorSimilarityFunction.DOT_PRODUCT) {
+            throw new IllegalArgumentException("CompressionType.ASH supports DOT_PRODUCT similarity only, but this builder "
+                    + "compares vectors with " + similarityFunction + "; for unit-length vectors DOT_PRODUCT ranks "
+                    + "neighbors the same way COSINE and EUCLIDEAN do");
+        }
         if (ignoredAfterBuild("withCompressionType", compressionType)) {
             return this;
         }
@@ -109,6 +121,42 @@ public class RavvHnswBuilder extends HnswIndexBuilder {
         }
         this.pqAnisotropicThreshold = pqAnisotropicThreshold;
         return this;
+    }
+
+    @Override
+    public HnswIndexBuilder withAshProjectedDimensions(int projectedDimensions) {
+        int dimension = vectorValues.dimension();
+        if (projectedDimensions < 1 || projectedDimensions > dimension) {
+            throw new IllegalArgumentException(String.format(
+                    "ashProjectedDimensions must be between 1 and the vector dimension, %d (was %d)", dimension, projectedDimensions));
+        }
+        if (ignoredAfterBuild("withAshProjectedDimensions", projectedDimensions)) {
+            return this;
+        }
+        this.ashProjectedDimensions = projectedDimensions;
+        return this;
+    }
+
+    @Override
+    public HnswIndexBuilder withAshBitsPerDimension(int bitsPerDimension) {
+        if (bitsPerDimension < 1 || bitsPerDimension > 9) {
+            throw new IllegalArgumentException("ashBitsPerDimension must be between 1 and 9 (was " + bitsPerDimension + ")");
+        }
+        if (ignoredAfterBuild("withAshBitsPerDimension", bitsPerDimension)) {
+            return this;
+        }
+        this.ashBitsPerDimension = bitsPerDimension;
+        return this;
+    }
+
+    /** The number of ASH projected dimensions this builder will use. */
+    int ashProjectedDimensions() {
+        return ashProjectedDimensions;
+    }
+
+    /** The number of ASH bits per projected dimension this builder will use. */
+    int ashBitsPerDimension() {
+        return ashBitsPerDimension;
     }
 
     boolean pqGlobalCentering() {
@@ -174,7 +222,9 @@ public class RavvHnswBuilder extends HnswIndexBuilder {
      * {@inheritDoc}
      * <p>
      * For {@link CompressionType#PQ} these are {@link PQVectors}, whose {@code getCompressor()} is the
-     * trained {@code ProductQuantization}; for {@link CompressionType#BQ}, {@code BQVectors}.
+     * trained {@code ProductQuantization}; for {@link CompressionType#BQ}, {@code BQVectors}; for
+     * {@link CompressionType#ASH}, {@link ASHVectors}, whose {@code getCompressor()} is the trained
+     * {@code AsymmetricHashing}.
      *
      * @throws IllegalStateException if the graph hasn't been built yet and compression is enabled
      */
@@ -196,7 +246,7 @@ public class RavvHnswBuilder extends HnswIndexBuilder {
     }
 
     @Override
-    void applyPqRecipe(HnswRecipe recipe) {
+    void applyCompressionRecipe(HnswRecipe recipe) {
         if (recipe.has(HnswRecipe.Param.PQ_SUBSPACES)) {
             int subspaces = recipe.get(HnswRecipe.Param.PQ_SUBSPACES);
             if (subspaces == 0) {
@@ -210,6 +260,17 @@ public class RavvHnswBuilder extends HnswIndexBuilder {
         }
         if (recipe.has(HnswRecipe.Param.PQ_ANISOTROPIC_THRESHOLD)) {
             withPqAnisotropicThreshold(recipe.get(HnswRecipe.Param.PQ_ANISOTROPIC_THRESHOLD));
+        }
+        if (recipe.has(HnswRecipe.Param.ASH_PROJECTED_DIMENSIONS)) {
+            int dimensions = recipe.get(HnswRecipe.Param.ASH_PROJECTED_DIMENSIONS);
+            if (dimensions == 0) {
+                ashProjectedDimensions = vectorValues.dimension();
+            } else {
+                withAshProjectedDimensions(dimensions);
+            }
+        }
+        if (recipe.has(HnswRecipe.Param.ASH_BITS_PER_DIMENSION)) {
+            withAshBitsPerDimension(recipe.get(HnswRecipe.Param.ASH_BITS_PER_DIMENSION));
         }
     }
 
@@ -226,7 +287,7 @@ public class RavvHnswBuilder extends HnswIndexBuilder {
     /**
      * {@inheritDoc}
      * <p>
-     * With {@link CompressionType#PQ} or {@link CompressionType#BQ}, this first trains the
+     * With {@link CompressionType#PQ}, {@link CompressionType#BQ} or {@link CompressionType#ASH}, this first trains the
      * quantization on, and encodes, all of the vectors, using this builder's executors, which can take
      * significant time.
      *
@@ -235,7 +296,8 @@ public class RavvHnswBuilder extends HnswIndexBuilder {
     @Override
     protected GraphIndexBuilder createGraphBuilder() {
         compressedVectors = GraphIndexBuilder.compress(vectorValues, compressionType, pqSubspaces,
-                pqGlobalCentering, pqAnisotropicThreshold, buildExecutor, maintenanceExecutor);
+                pqGlobalCentering, pqAnisotropicThreshold, ashProjectedDimensions, ashBitsPerDimension,
+                buildExecutor, maintenanceExecutor);
         BuildScoreProvider scoreProvider = GraphIndexBuilder.buildScoreProvider(vectorValues, similarityFunction,
                 compressedVectors);
         return newGraphBuilder(scoreProvider, vectorValues.dimension());

@@ -270,7 +270,8 @@ public interface BuildScoreProvider {
      * (asymmetric float query → ASH vector).
      *
      * <p><b>Constraint:</b> This provider requires {@code C=1} (single landmark) and
-     * {@link VectorSimilarityFunction#DOT_PRODUCT}.
+     * {@link VectorSimilarityFunction#DOT_PRODUCT}. See the limitations listed on
+     * {@link io.github.jbellis.jvector.quantization.AsymmetricHashing}.
      */
     static BuildScoreProvider ashBuildScoreProvider(VectorSimilarityFunction vsf, ASHVectors ashv) {
         if (vsf != VectorSimilarityFunction.DOT_PRODUCT) {

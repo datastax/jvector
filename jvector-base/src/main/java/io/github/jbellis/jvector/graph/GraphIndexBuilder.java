@@ -27,6 +27,8 @@ import io.github.jbellis.jvector.graph.similarity.ScoreFunction;
 import io.github.jbellis.jvector.graph.similarity.SearchScoreProvider;
 import io.github.jbellis.jvector.management.CompressionType;
 import io.github.jbellis.jvector.management.GraphIndexBuilderConfig;
+import io.github.jbellis.jvector.quantization.ASHVectors;
+import io.github.jbellis.jvector.quantization.AsymmetricHashing;
 import io.github.jbellis.jvector.quantization.BinaryQuantization;
 import io.github.jbellis.jvector.quantization.BQVectors;
 import io.github.jbellis.jvector.quantization.CompressedVectors;
@@ -96,8 +98,10 @@ public class GraphIndexBuilder implements Closeable, Accountable {
     private static BuildScoreProvider getBuildScoreProvider(RandomAccessVectorValues vectorValues, VectorSimilarityFunction similarityFunction) {
         var config = GraphIndexBuilderConfig.getInstance();
         int pqSubspaces = vectorValues.dimension() / config.getPqMFactor();
+        // ASH has no JMX settings of its own; it uses the builder's defaults.
         CompressedVectors compressed = compress(vectorValues, resolveJmxBuildCompressionType(), pqSubspaces,
                                                 config.isPqCenterData(), config.getPqAnisotropicThreshold(),
+                                                vectorValues.dimension(), AsymmetricHashing.DEFAULT_BITS_PER_DIMENSION,
                                                 PhysicalCoreExecutor.pool(), ForkJoinPool.commonPool());
         return buildScoreProvider(vectorValues, similarityFunction, compressed);
     }
@@ -106,9 +110,13 @@ public class GraphIndexBuilder implements Closeable, Accountable {
      * Compresses {@code vectorValues} for building with compressed scores: trains the quantizer and
      * encodes every vector, using the given executors. Product quantization ({@link CompressionType#PQ})
      * uses {@code pqSubspaces} subspaces, {@code pqGlobalCentering} and {@code pqAnisotropicThreshold},
-     * and takes its cluster count from {@link GraphIndexBuilderConfig}.
+     * and takes its cluster count from {@link GraphIndexBuilderConfig}. Asymmetric hashing
+     * ({@link CompressionType#ASH}) projects to {@code ashProjectedDimensions} dimensions of
+     * {@code ashBitsPerDimension} bits each, trained with ITQ around a single landmark, as ASH
+     * construction scoring requires.
      *
-     * @return the {@link PQVectors} or {@link BQVectors}, or null for {@link CompressionType#NONE}
+     * @return the {@link PQVectors}, {@link BQVectors} or {@link ASHVectors}, or null for
+     *         {@link CompressionType#NONE}
      * @throws IllegalArgumentException if {@code type} is not supported
      */
     static CompressedVectors compress(RandomAccessVectorValues vectorValues,
@@ -116,6 +124,8 @@ public class GraphIndexBuilder implements Closeable, Accountable {
                                       int pqSubspaces,
                                       boolean pqGlobalCentering,
                                       float pqAnisotropicThreshold,
+                                      int ashProjectedDimensions,
+                                      int ashBitsPerDimension,
                                       ForkJoinPool simdExecutor,
                                       ForkJoinPool parallelExecutor) {
         switch(type) {
@@ -130,6 +140,16 @@ public class GraphIndexBuilder implements Closeable, Accountable {
             }
             case BQ:
                 return BinaryQuantization.compute(vectorValues, parallelExecutor).encodeAll(vectorValues, simdExecutor);
+            case ASH: {
+                int encodedBits = AsymmetricHashing.HEADER_BITS + ashProjectedDimensions * ashBitsPerDimension;
+                AsymmetricHashing ash;
+                try {
+                    ash = AsymmetricHashing.initialize(vectorValues, AsymmetricHashing.ITQ, encodedBits, 1, ashBitsPerDimension);
+                } catch (IOException e) {
+                    throw new UncheckedIOException(e);
+                }
+                return ash.encodeAll(vectorValues, simdExecutor);
+            }
             default:
                 throw new IllegalArgumentException("Unsupported build compression type: " + type);
         }
@@ -150,6 +170,9 @@ public class GraphIndexBuilder implements Closeable, Accountable {
         }
         if (compressed instanceof BQVectors) {
             return BuildScoreProvider.bqBuildScoreProvider((BQVectors) compressed);
+        }
+        if (compressed instanceof ASHVectors) {
+            return BuildScoreProvider.ashBuildScoreProvider(similarityFunction, (ASHVectors) compressed);
         }
         throw new IllegalArgumentException("Unsupported compressed vectors: " + compressed.getClass().getName());
     }

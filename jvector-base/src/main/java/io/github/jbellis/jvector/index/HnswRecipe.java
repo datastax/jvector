@@ -47,7 +47,9 @@ public enum HnswRecipe {
             Map.entry(Param.REFINE_FINAL_GRAPH, true),
             Map.entry(Param.PQ_SUBSPACES, 0),
             Map.entry(Param.PQ_GLOBAL_CENTERING, false),
-            Map.entry(Param.PQ_ANISOTROPIC_THRESHOLD, -1.0f))),
+            Map.entry(Param.PQ_ANISOTROPIC_THRESHOLD, -1.0f),
+            Map.entry(Param.ASH_PROJECTED_DIMENSIONS, 0),
+            Map.entry(Param.ASH_BITS_PER_DIMENSION, 2))),
     /** Favors recall over build and search speed. Not defined yet. */
     HIGH_RECALL(Map.of()),
     /** Favors build and search speed over recall. Not defined yet. */
@@ -80,6 +82,10 @@ public enum HnswRecipe {
         public static final String PQ_GLOBAL_CENTERING = "pqGlobalCentering";
         /** {@code Float}: {@code -1.0} is unweighted. */
         public static final String PQ_ANISOTROPIC_THRESHOLD = "pqAnisotropicThreshold";
+        /** {@code Integer}: ASH projected dimensions; {@code 0} means the builder's default, the vector dimension. */
+        public static final String ASH_PROJECTED_DIMENSIONS = "ashProjectedDimensions";
+        /** {@code Integer}: ASH bits per projected dimension. */
+        public static final String ASH_BITS_PER_DIMENSION = "ashBitsPerDimension";
 
         private Param() {
         }

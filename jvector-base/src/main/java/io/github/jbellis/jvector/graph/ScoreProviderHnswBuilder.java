@@ -88,6 +88,20 @@ public class ScoreProviderHnswBuilder extends HnswIndexBuilder {
         return this;
     }
 
+    /** Not supported: logs a warning and leaves the builder unchanged; see {@link #withPqSubspaces}. */
+    @Override
+    public HnswIndexBuilder withAshProjectedDimensions(int projectedDimensions) {
+        logger.warn("ASH projected dimensions are not supported when using a BuildScoreProvider. Ignoring the provided value: {}", projectedDimensions);
+        return this;
+    }
+
+    /** Not supported: logs a warning and leaves the builder unchanged; see {@link #withPqSubspaces}. */
+    @Override
+    public HnswIndexBuilder withAshBitsPerDimension(int bitsPerDimension) {
+        logger.warn("ASH bits per dimension are not supported when using a BuildScoreProvider. Ignoring the provided value: {}", bitsPerDimension);
+        return this;
+    }
+
     @Override
     boolean scoresExactly() {
         return scoreProvider.isExact();

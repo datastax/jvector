@@ -51,6 +51,10 @@ import java.util.function.IntFunction;
  * it is based on 4-bit projection groups and a 16-entry query LUT per group.
  * Core standalone ASH may support additional bit widths, but those are not part
  * of the fused graph hot path.</p>
+ *
+ * <p>Requires on-disk format version 7 or later, scores {@code VectorSimilarityFunction.DOT_PRODUCT}
+ * only, and does not support compaction yet. See the limitations listed on
+ * {@link AsymmetricHashing}.</p>
  */
 public class FusedASH extends AbstractFeature implements FusedFeature {
     private final int maxDegree;

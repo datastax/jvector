@@ -40,14 +40,47 @@ import java.util.stream.IntStream;
 import org.apache.commons.math3.linear.RealMatrix;
 import org.apache.commons.math3.linear.Array2DRowRealMatrix;
 import org.netlib.util.intW;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 /**
  * Asymmetric Hashing (ASH) for float vectors.
  * Encodes each vector into a fixed-length code using a learned or random
  * orthonormal projection. The 1-bit case stores only sign bits; multibit ASH
  * stores either generic sign/extra bits or the C++-style fast-scan projection code for 2/4-bit ASH.
+ * <p>
+ * Each code is a {@value #HEADER_BYTES}-byte header (scale, offset and landmark id) followed by
+ * {@code bitsPerDimension} bits for each of {@code quantizedDim} projected dimensions. Queries are
+ * scored at full precision against the codes ({@link ASHVectors}), and during construction codes are
+ * scored against each other.
+ *
+ * <h2>Limitations</h2>
+ * These apply to every way of using ASH: training it directly with {@link #initialize}, building with
+ * {@code CompressionType.ASH}, or storing the codes as a {@code FusedASH} graph feature.
+ * <ul>
+ *     <li><b>Dot product only.</b> ASH scores {@code VectorSimilarityFunction.DOT_PRODUCT} and nothing
+ *     else; asking for a score function with another similarity throws
+ *     {@link UnsupportedOperationException}. For unit-length vectors, dot product ranks neighbors exactly
+ *     as cosine and Euclidean do, so normalize the vectors and use {@code DOT_PRODUCT}. Scores are
+ *     reported on the {@code (1 + dot) / 2} scale, like {@code DOT_PRODUCT} elsewhere.</li>
+ *     <li><b>One landmark to build with.</b> Graph construction scores codes against each other, which
+ *     requires {@code landmarkCount == 1} ({@code BuildScoreProvider.ashBuildScoreProvider} rejects
+ *     anything else). Codes with up to 256 landmarks can be used for searching.</li>
+ *     <li><b>Code shape.</b> {@code bitsPerDimension} is 1 to 9, and {@code quantizedDim} is at most the
+ *     vector dimension. {@link #initialize} takes the total size, {@code encodedBits}, which is
+ *     {@link #HEADER_BITS} plus {@code quantizedDim * bitsPerDimension}. The fixed header weighs more
+ *     at low dimensions: for 64-dimension vectors, a 64-bit body is only about 60% of the code.</li>
+ *     <li><b>Fused ASH.</b> The {@code FusedASH} graph feature supports 1, 2 and 4 bits per dimension
+ *     only, and needs on-disk format version 7 or later.</li>
+ *     <li><b>Not yet supported.</b> There is no mutable ASH vectors class (like
+ *     {@code MutablePQVectors}), so codes can't be maintained incrementally for an index built from
+ *     streamed vectors, and no codebook refinement and rescore (like {@code ProductQuantization.refine}).
+ *     Compacting graphs with the {@code FusedASH} feature ({@code OnDiskGraphIndexCompactor}) throws
+ *     {@link UnsupportedOperationException}.</li>
+ * </ul>
  */
 public class AsymmetricHashing implements VectorCompressor<AsymmetricHashing.QuantizedVector>, Accountable {
+    private static final Logger logger = LoggerFactory.getLogger(AsymmetricHashing.class);
     public static final int ITQ = 1, RANDOM = 2;
     private static final int MAGIC = 0x75EC4015;
 
@@ -64,7 +97,7 @@ public class AsymmetricHashing implements VectorCompressor<AsymmetricHashing.Qua
     private static final int TRAINING_ITERS = 25;
 
     /** Default number of stored bits per projected dimension. */
-    private static final int DEFAULT_BITS_PER_DIMENSION = 2;
+    public static final int DEFAULT_BITS_PER_DIMENSION = 2;
 
     // Physical header size, reflecting actual stored fields:
     //  - scale: fp16 (16 bits), where scale = ||x − μ|| / ||code||
@@ -240,11 +273,16 @@ public class AsymmetricHashing implements VectorCompressor<AsymmetricHashing.Qua
     }
 
     /**
-     * Initialize ASH index-wide parameters using the legacy 1-bit body layout.
+     * Initialize ASH index-wide parameters with the default of {@value #DEFAULT_BITS_PER_DIMENSION} bits
+     * per projected dimension. Equivalent to
+     * {@code initialize(ravv, optimizer, encodedBits, landmarkCount, DEFAULT_BITS_PER_DIMENSION)}.
      *
      * @param ravv the vectors to quantize
-     * @param optimizer the optimizer to use
-     * @param encodedBits the number of bits used to encode vector, including the header
+     * @param optimizer the optimizer to use, {@link #ITQ} or {@link #RANDOM}
+     * @param encodedBits the number of bits used to encode a vector, including the {@value #HEADER_BITS}-bit
+     *        header; {@code encodedBits - HEADER_BITS} must be a multiple of the bits per dimension
+     * @param landmarkCount number of landmarks, in [1, 256]
+     * @return the trained ASH
      */
     public static AsymmetricHashing initialize(RandomAccessVectorValues ravv,
                                                int optimizer,
@@ -278,11 +316,8 @@ public class AsymmetricHashing implements VectorCompressor<AsymmetricHashing.Qua
         int originalDim = ravvCopy.getVector(0).length();
         final int quantizedDim = validateEncodedBits(encodedBits, HEADER_BITS, originalDim, bitsPerDimension);
 
-        System.out.println(
-                "\tASH initialized with landmarkCount=" + landmarkCount +
-                        ", quantizedDim=" + quantizedDim +
-                        ", bitsPerDimension=" + bitsPerDimension
-        );
+        logger.debug("ASH initializing with landmarkCount={}, quantizedDim={}, bitsPerDimension={}",
+                landmarkCount, quantizedDim, bitsPerDimension);
 
         // NOTE: points are treated as read-only by KMeansPlusPlusClusterer.
         // Materialize and L2-normalize points
@@ -325,13 +360,10 @@ public class AsymmetricHashing implements VectorCompressor<AsymmetricHashing.Qua
 
             long kmEnd = System.nanoTime();
 
-            System.out.printf(
-                    "\tKMeans++ (C=%d, N=%d, D=%d) took %.3f seconds%n",
-                    landmarkCount,
-                    points.length,
-                    originalDim,
-                    (kmEnd - kmStart) / 1e9
-            );
+            if (logger.isDebugEnabled()) {
+                logger.debug(String.format(java.util.Locale.ROOT, "ASH landmark KMeans++ (C=%d, N=%d, D=%d) took %.3f seconds",
+                        landmarkCount, points.length, originalDim, (kmEnd - kmStart) / 1e9));
+            }
 
             landmarks = new VectorFloat<?>[landmarkCount];
             for (int c = 0; c < landmarkCount; c++) {
@@ -1619,7 +1651,7 @@ public class AsymmetricHashing implements VectorCompressor<AsymmetricHashing.Qua
             Random rng,
             int nTrainingIterations
     ) {
-        logProgress("\t[stage] Starting runITQTrainer...");
+        logger.debug("ITQ training: starting");
 
         validateBitsPerDimension(bitsPerDimension);
 
@@ -1635,10 +1667,10 @@ public class AsymmetricHashing implements VectorCompressor<AsymmetricHashing.Qua
         double[] xCol = serializeColumnMajor(xHdNorm);
 
         // PCA basis P = V[:, :d] from SVD(X), matching the Python reference.
-        logProgress("\t[stage] Starting Native SVD for PCA...");
+        logger.debug("ITQ training: starting SVD for PCA");
         double[] vtCol = computeNativeVt(xCol, N, D);    // [D x D], column-major
         double[] pCol = extractPcaBasis(vtCol, D, d);    // [D x d], column-major
-        logProgress("\t[stage] Completed Native SVD for PCA...");
+        logger.debug("ITQ training: completed SVD for PCA");
 
         // Xld = X @ P, shape [N x d].
         double[] xldCol = nativeMultiply(xCol, N, D, pCol, d);
@@ -1650,7 +1682,7 @@ public class AsymmetricHashing implements VectorCompressor<AsymmetricHashing.Qua
         double[] xtrCol = new double[N * d];
         double[] xencCol = new double[N * d];
 
-        logProgress("\t[stage] ITQ training iterations started...");
+        logger.debug("ITQ training: iterations started");
         long startTime = System.nanoTime();
 
         double[] recentLosses = new double[3];
@@ -1667,7 +1699,7 @@ public class AsymmetricHashing implements VectorCompressor<AsymmetricHashing.Qua
             ProjectionTrainingLoss loss = computeTrainingLossFromUpdateMatrix(rCol, mCol, N);
             printTrainingLoss(epoch, loss);
             if (epoch >= 8 && recentLosses[(epoch - 3) % 3] - loss.loss <= 0.01 * loss.loss) {
-                logProgress("ITQ early stop at epoch " + epoch);
+                logger.debug("ITQ training: early stop at epoch {}", epoch);
                 break;
             }
             recentLosses[epoch % 3] = loss.loss;
@@ -1677,7 +1709,7 @@ public class AsymmetricHashing implements VectorCompressor<AsymmetricHashing.Qua
         rCol = orthogonalize(mCol, d, d);
 
         double loopTime = (System.nanoTime() - startTime) / 1e9;
-        logProgress("\t[stage] ITQ training completed in " + loopTime + " seconds.");
+        logger.debug("ITQ training: completed in {} seconds", loopTime);
 
         // W = P @ R, shape [D x d].
         double[] wCol = nativeMultiply(pCol, D, d, rCol, d);
@@ -1716,9 +1748,11 @@ public class AsymmetricHashing implements VectorCompressor<AsymmetricHashing.Qua
     }
 
     private static void printTrainingLoss(int epoch, ProjectionTrainingLoss loss) {
-        logProgress(String.format(java.util.Locale.ROOT,
-                "projection_train epoch=%2d ip_loss=%.5f loss=%.5f",
-                epoch, loss.ip, loss.loss));
+        if (logger.isDebugEnabled()) {
+            logger.debug(String.format(java.util.Locale.ROOT,
+                    "ITQ training: epoch=%2d ip_loss=%.5f loss=%.5f",
+                    epoch, loss.ip, loss.loss));
+        }
     }
 
     private static final float[] K_TIGHT_START = {
@@ -2628,11 +2662,6 @@ public class AsymmetricHashing implements VectorCompressor<AsymmetricHashing.Qua
             h = 31 * h + vectorHash(v);
         }
         return h;
-    }
-
-    private static void logProgress(String msg) {
-        System.out.println(msg);
-        System.out.flush();
     }
 
     @Override

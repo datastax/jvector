@@ -45,6 +45,9 @@ import java.util.Objects;
  *
  * <p>Fused graph neighborhoods are scored separately by {@link FusedASHDecoder},
  * using the same similarity scale and shared numerical kernels.</p>
+ *
+ * <p>Scoring supports {@code VectorSimilarityFunction.DOT_PRODUCT} only. See the limitations
+ * listed on {@link AsymmetricHashing}.</p>
  */
 public class ASHVectors implements CompressedVectors {
 

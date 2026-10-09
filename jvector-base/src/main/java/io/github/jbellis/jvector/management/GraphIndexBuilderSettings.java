@@ -95,7 +95,10 @@ public interface GraphIndexBuilderSettings {
 
     /**
      * Returns the compression type used during graph construction scoring.
-     * Valid values are the names of {@link CompressionType} constants: {@code "NONE"}, {@code "PQ"}, {@code "BQ"}.
+     * Valid values are the names of {@link CompressionType} constants: {@code "NONE"}, {@code "PQ"}, {@code "BQ"},
+     * {@code "ASH"}. ASH has no settings here: it uses the builder's defaults (as many projected dimensions as
+     * the vectors have, {@code AsymmetricHashing.DEFAULT_BITS_PER_DIMENSION} bits each), and supports only
+     * {@code VectorSimilarityFunction.DOT_PRODUCT}.
      */
     String getBuildCompressionType();
 
@@ -103,7 +106,7 @@ public interface GraphIndexBuilderSettings {
      * Sets the compression type used during graph construction scoring.
      * Matching is case-insensitive; the value is normalized to the canonical enum name on storage.
      *
-     * @param compressionType one of {@code "NONE"}, {@code "PQ"}, {@code "BQ"} (case-insensitive)
+     * @param compressionType one of {@code "NONE"}, {@code "PQ"}, {@code "BQ"}, {@code "ASH"} (case-insensitive)
      * @throws IllegalArgumentException if the value does not match any {@link CompressionType}
      */
     void setBuildCompressionType(String compressionType);

@@ -24,12 +24,16 @@ import io.github.jbellis.jvector.index.HnswRecipe;
 import io.github.jbellis.jvector.api.Index;
 import io.github.jbellis.jvector.index.Indexes;
 import io.github.jbellis.jvector.management.CompressionType;
+import io.github.jbellis.jvector.quantization.ASHVectors;
+import io.github.jbellis.jvector.quantization.AsymmetricHashing;
 import io.github.jbellis.jvector.quantization.BQVectors;
 import io.github.jbellis.jvector.quantization.CompressedVectors;
 import io.github.jbellis.jvector.quantization.PQVectors;
 import io.github.jbellis.jvector.quantization.ProductQuantization;
 import io.github.jbellis.jvector.util.Bits;
 import io.github.jbellis.jvector.vector.VectorSimilarityFunction;
+import io.github.jbellis.jvector.vector.VectorUtil;
+import io.github.jbellis.jvector.vector.types.VectorFloat;
 import org.junit.Test;
 
 import java.util.ArrayList;
@@ -1000,6 +1004,82 @@ public class HnswIndexBuilderTest extends RandomizedTest {
         assertSame(scoreProviderBuilder, scoreProviderBuilder.withPqSubspaces(4));
         assertSame(scoreProviderBuilder, scoreProviderBuilder.withPqGlobalCentering(true));
         assertSame(scoreProviderBuilder, scoreProviderBuilder.withPqAnisotropicThreshold(0.2f));
+    }
+
+    /** Unit-length random vectors, for ASH, which scores dot products. */
+    private static ListRandomAccessVectorValues randomUnitRavv(int n, int dimension) {
+        List<VectorFloat<?>> vectors = createRandomVectors(n, dimension);
+        vectors.forEach(VectorUtil::l2normalize);
+        return new ListRandomAccessVectorValues(vectors, dimension);
+    }
+
+    @Test
+    public void ashCompressionBuildsAWorkingGraph() {
+        int n = 2_000;
+        int dimension = 32;
+        var ravv = randomUnitRavv(n, dimension);
+        HnswIndexBuilder builder = configured(Indexes.hnswBuilder(ravv, VectorSimilarityFunction.DOT_PRODUCT))
+                .withCompressionType(CompressionType.ASH);
+        PersistableGraphIndex graph = builder.buildAndPopulate();
+        assertEquals(n, graph.size(0));
+
+        // the builder's defaults reach training: every dimension projected, the default bit width, one landmark
+        CompressedVectors compressed = builder.getCompressedVectors();
+        assertTrue(compressed instanceof ASHVectors);
+        assertEquals(n, compressed.count());
+        AsymmetricHashing ash = ((ASHVectors) compressed).getCompressor();
+        assertEquals(dimension, ash.quantizedDim);
+        assertEquals(AsymmetricHashing.DEFAULT_BITS_PER_DIMENSION, ash.bitsPerDimension);
+        assertEquals(1, ash.landmarkCount);
+
+        // built with approximate scores, searched with exact ones
+        assertTrue(selfRecall(graph, ravv, range(0, n)) > 0.8);
+    }
+
+    @Test
+    public void ashSettingsReachTraining() {
+        var ravv = randomUnitRavv(1_000, 32);
+        HnswIndexBuilder builder = Indexes.hnswBuilder(ravv, VectorSimilarityFunction.DOT_PRODUCT)
+                .withCompressionType(CompressionType.ASH)
+                .withAshProjectedDimensions(16)
+                .withAshBitsPerDimension(4);
+        builder.build();
+        AsymmetricHashing ash = ((ASHVectors) builder.getCompressedVectors()).getCompressor();
+        assertEquals(16, ash.quantizedDim);
+        assertEquals(4, ash.bitsPerDimension);
+        assertEquals(AsymmetricHashing.HEADER_BITS + 16 * 4, ash.encodedBits);
+    }
+
+    @Test
+    public void ashRequiresDotProductAndValidSettings() {
+        int dimension = 32;
+        var ravv = randomUnitRavv(10, dimension);
+        for (VectorSimilarityFunction vsf : new VectorSimilarityFunction[] {
+                VectorSimilarityFunction.EUCLIDEAN, VectorSimilarityFunction.COSINE}) {
+            expectIllegalArgument(() -> Indexes.hnswBuilder(ravv, vsf).withCompressionType(CompressionType.ASH), "DOT_PRODUCT");
+        }
+        var dot = VectorSimilarityFunction.DOT_PRODUCT;
+        expectIllegalArgument(() -> Indexes.hnswBuilder(ravv, dot).withAshProjectedDimensions(0), "between 1 and the vector dimension");
+        expectIllegalArgument(() -> Indexes.hnswBuilder(ravv, dot).withAshProjectedDimensions(dimension + 1), "between 1 and the vector dimension");
+        expectIllegalArgument(() -> Indexes.hnswBuilder(ravv, dot).withAshBitsPerDimension(0), "ashBitsPerDimension");
+        expectIllegalArgument(() -> Indexes.hnswBuilder(ravv, dot).withAshBitsPerDimension(10), "ashBitsPerDimension");
+
+        // ignored, with a warning, by a score-provider builder
+        HnswIndexBuilder scoreProviderBuilder = Indexes.hnswBuilder(BuildScoreProvider.randomAccessScoreProvider(ravv, dot), dimension);
+        assertSame(scoreProviderBuilder, scoreProviderBuilder.withAshProjectedDimensions(4));
+        assertSame(scoreProviderBuilder, scoreProviderBuilder.withAshBitsPerDimension(4));
+    }
+
+    @Test
+    public void defaultRecipeRestatesTheAshDefaults() {
+        int dimension = 32;
+        var ravv = randomUnitRavv(10, dimension);
+        RavvHnswBuilder builder = (RavvHnswBuilder) Indexes.hnswBuilder(ravv, VectorSimilarityFunction.DOT_PRODUCT)
+                .withAshProjectedDimensions(8)
+                .withAshBitsPerDimension(4)
+                .applyRecipe(HnswRecipe.DEFAULT);
+        assertEquals(dimension, builder.ashProjectedDimensions());
+        assertEquals(AsymmetricHashing.DEFAULT_BITS_PER_DIMENSION, builder.ashBitsPerDimension());
     }
 
     @Test

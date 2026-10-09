@@ -33,6 +33,7 @@ import io.github.jbellis.jvector.graph.disk.OnDiskGraphIndex;
 import io.github.jbellis.jvector.graph.disk.OnDiskGraphIndexWriter;
 import io.github.jbellis.jvector.graph.disk.feature.Feature;
 import io.github.jbellis.jvector.graph.disk.feature.FeatureId;
+import io.github.jbellis.jvector.graph.disk.feature.FusedASH;
 import io.github.jbellis.jvector.graph.disk.feature.FusedPQ;
 import io.github.jbellis.jvector.graph.disk.feature.InlineVectors;
 import io.github.jbellis.jvector.graph.disk.feature.NVQ;
@@ -46,6 +47,8 @@ import io.github.jbellis.jvector.api.IndexSearcher;
 import io.github.jbellis.jvector.index.Indexes;
 import io.github.jbellis.jvector.ivf.IvfIndex;
 import io.github.jbellis.jvector.management.CompressionType;
+import io.github.jbellis.jvector.quantization.ASHVectors;
+import io.github.jbellis.jvector.quantization.AsymmetricHashing;
 import io.github.jbellis.jvector.quantization.CompressedVectors;
 import io.github.jbellis.jvector.quantization.MutablePQVectors;
 import io.github.jbellis.jvector.quantization.NVQVectors;
@@ -60,6 +63,7 @@ import io.github.jbellis.jvector.vector.types.VectorFloat;
 import io.github.jbellis.jvector.vector.types.VectorTypeSupport;
 
 import java.io.IOException;
+import java.io.UncheckedIOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -95,7 +99,7 @@ import java.util.stream.Stream;
  * to end.
  * <p>
  * The common case is one call, and everything else is an optional {@code withXxx} setting on the same
- * builder. Compression is one of those settings: name a {@link CompressionType} and the builder trains the
+ * builder. Compression is one of those settings: name a {@link CompressionType} (PQ, BQ or ASH) and the builder trains the
  * quantizer and encodes the vectors itself, and {@link HnswIndexBuilder#getCompressedVectors()} hands back
  * what it trained, ready to search with or write to disk:
  * <pre>{@code
@@ -106,7 +110,7 @@ import java.util.stream.Stream;
  * }</pre>
  * Persisting and searching have shortcuts too: {@code graph.writeTo(path, vectors)} writes the graph with
  * its vectors stored inline, and {@code searcher.search(query, topK, rerankK, similarityFunction, filter)} searches an
- * on-disk graph with the vectors it stores, using fused PQ codes when it has them.
+ * on-disk graph with the vectors it stores, using fused PQ or ASH codes when it has them.
  * <p>
  * Sections, in the order {@link #main} runs them:
  * <ol>
@@ -125,6 +129,12 @@ import java.util.stream.Stream;
  *     the parallel writer's threads (Cassandra compaction with parallel writing).</li>
  *     <li><b>Separately stored PQ codes</b> &mdash; inline or NVQ vectors in the graph, PQ codes beside
  *     it, written sequentially (OpenSearch).</li>
+ *     <li><b>Building with ASH scores</b> &mdash; {@code withCompressionType(ASH)}, searching with the
+ *     codes in memory, and trading code size for recall.</li>
+ *     <li><b>Fused ASH on disk</b> &mdash; each node's record carries its neighbors' ASH codes (on-disk
+ *     format version 7), with inline or NVQ vectors for reranking.</li>
+ *     <li><b>Separately stored ASH codes</b> &mdash; the layout of the PQ section before, with ASH
+ *     codes beside the graph.</li>
  *     <li><b>Incremental construction</b> &mdash; inserting from several threads while searching,
  *     deleting, and writing a graph with deleted nodes (Cassandra memtables).</li>
  *     <li><b>Your own score provider, and a PQ rescore</b> &mdash; streaming vectors in with PQ codes
@@ -152,6 +162,13 @@ public class IndexApiExample {
     private static final VectorSimilarityFunction SIMILARITY_FUNCTION = VectorSimilarityFunction.EUCLIDEAN;
     /** NVQ sub-vectors: Cassandra's default ({@code JVectorVersionUtil.NUM_SUB_VECTORS}). */
     private static final int NVQ_SUB_VECTORS = 2;
+    /**
+     * ASH scores dot products only. The vectors here are unit length, so dot product ranks neighbors
+     * exactly as {@link #SIMILARITY_FUNCTION} does and the ASH sections share the ground truth.
+     */
+    private static final VectorSimilarityFunction ASH_SIMILARITY_FUNCTION = VectorSimilarityFunction.DOT_PRODUCT;
+    /** Bits stored per projected dimension in the ASH sections' codes: the benchmarks' default. */
+    private static final int ASH_BITS_PER_DIMENSION = 2;
 
     public static void main(String[] args) throws IOException {
         VectorTypeSupport vts = VectorizationProvider.getInstance().getVectorTypeSupport();
@@ -171,11 +188,14 @@ public class IndexApiExample {
             Path fusedPath = section5FusedPq(ds, pqBuild, workDir);
             section6NvqAndFusedPq(ds, pqBuild, workDir);
             section7SeparatePqCodes(ds, pqBuild, workDir);
-            section8IncrementalBuild(ds, workDir);
-            section9ScoreProviderAndRescore(ds, workDir);
-            section10ContinuingASavedGraph(ds, workDir);
-            section11SearchOptions(ds, fusedPath);
-            section12ValidationRecipesAndIvf(ds);
+            AshBuild ashBuild = section8AshBuild(ds);
+            section9FusedAsh(ds, ashBuild, workDir);
+            section10SeparateAshCodes(ds, ashBuild, workDir);
+            section11IncrementalBuild(ds, workDir);
+            section12ScoreProviderAndRescore(ds, workDir);
+            section13ContinuingASavedGraph(ds, workDir);
+            section14SearchOptions(ds, fusedPath);
+            section15ValidationRecipesAndIvf(ds);
         } finally {
             try (Stream<Path> files = Files.list(workDir)) {
                 for (Path p : (Iterable<Path>) files::iterator) {
@@ -459,7 +479,7 @@ public class IndexApiExample {
      * max degree and the codebook, and each node's state is built from a view of the graph and the PQ
      * codes: both straight from the builder in section 3.
      *
-     * @return the path of the fused graph, searched again in section 11
+     * @return the path of the fused graph, searched again in section 14
      */
     private static Path section5FusedPq(Dataset ds, PqBuild pqBuild, Path workDir) throws IOException {
         header("5. Fused PQ: neighbors' PQ codes in each node record");
@@ -476,7 +496,7 @@ public class IndexApiExample {
             writer.write(states);
         }
         // Cassandra also writes the codebook on its own, so a later compaction can refine it rather than
-        // retrain from scratch (section 9). Searching doesn't need it.
+        // retrain from scratch (section 12). Searching doesn't need it.
         Path codebookPath = workDir.resolve("fused.codebook");
         try (SimpleWriter out = new SimpleWriter(codebookPath)) {
             pqBuild.pq().write(out, OnDiskGraphIndex.CURRENT_VERSION);
@@ -579,7 +599,218 @@ public class IndexApiExample {
     }
 
     // ---------------------------------------------------------------------------------------------
-    // 8. Incremental construction
+    // 8. Building with ASH scores
+    // ---------------------------------------------------------------------------------------------
+
+    /** A graph built with ASH scores, and the ASH codes it was built with. */
+    private static final class AshBuild {
+        final PersistableGraphIndex graph;
+        final ASHVectors ashVectors;
+
+        AshBuild(PersistableGraphIndex graph, ASHVectors ashVectors) {
+            this.graph = graph;
+            this.ashVectors = ashVectors;
+        }
+
+        AsymmetricHashing ash() {
+            return ashVectors.getCompressor();
+        }
+    }
+
+    /**
+     * ASH (asymmetric hashing) projects each vector onto a learned orthonormal basis and keeps a few bits
+     * per projected dimension, plus a 5-byte header (a scale, an offset and a landmark id). Queries stay at
+     * full precision and are scored against the codes (the "asymmetric" part), while construction scores
+     * nodes against each other code-to-code, which makes building much cheaper than with exact scores.
+     * <p>
+     * ASH scores {@link VectorSimilarityFunction#DOT_PRODUCT} only, so the ASH sections (8-10) use
+     * {@link #ASH_SIMILARITY_FUNCTION}. These vectors are unit length, where dot product ranks neighbors
+     * exactly as Euclidean distance does, so the ground truth is the same as everywhere else.
+     * <p>
+     * As with PQ in section 3, {@code withCompressionType(CompressionType.ASH)} has the builder train ASH,
+     * encode the vectors and build with ASH scores, and {@link HnswIndexBuilder#getCompressedVectors()}
+     * returns the {@link ASHVectors}. The builder needs {@code DOT_PRODUCT} and rejects ASH otherwise. The
+     * {@link AsymmetricHashing} class documentation lists ASH's other limitations.
+     */
+    private static AshBuild section8AshBuild(Dataset ds) throws IOException {
+        header("8. Building with ASH scores");
+
+        // The code is ASH_BITS_PER_DIMENSION bits for each of DIMENSION projected dimensions, plus a 5-byte
+        // header. Both settings are optional: these are the defaults, set explicitly.
+        long start = System.nanoTime();
+        PersistableGraphIndex graph;
+        ASHVectors ashVectors;
+        try (HnswIndexBuilder builder = Indexes.hnswBuilder(ds.ravv, ASH_SIMILARITY_FUNCTION)
+                .withCompressionType(CompressionType.ASH)
+                .withAshProjectedDimensions(DIMENSION)
+                .withAshBitsPerDimension(ASH_BITS_PER_DIMENSION)) {
+            graph = builder.buildAndPopulate();
+            ashVectors = (ASHVectors) builder.getCompressedVectors();
+        }
+        AsymmetricHashing ash = ashVectors.getCompressor();
+        System.out.printf("ASH-scored build: %,d nodes in %.1fs; %d dimensions x %d bits + header = %d bytes/vector (from %d)%n",
+                graph.size(0), seconds(start), ash.quantizedDim, ash.bitsPerDimension, ash.compressedVectorSize(),
+                DIMENSION * Float.BYTES);
+
+        // Searching: score the full-precision query against the ASH codes, and rerank the best RERANK_K
+        // candidates exactly, as with PQ in section 3.
+        try (GraphSearcher searcher = graph.searcher()) {
+            ScoreProviderFactory reranked = q -> new DefaultSearchScoreProvider(
+                    ashVectors.precomputedScoreFunctionFor(q, ASH_SIMILARITY_FUNCTION),
+                    ds.ravv.rerankerFor(q, ASH_SIMILARITY_FUNCTION));
+            report("ASH build: ASH scores + exact rerank", recall(ds, searcher, RERANK_K, reranked));
+            report("ASH build: ASH scores only (rerankless)", recall(ds, searcher, TOP_K,
+                    q -> new DefaultSearchScoreProvider(ashVectors.precomputedScoreFunctionFor(q, ASH_SIMILARITY_FUNCTION))));
+
+            // Adaptive termination: for dot-product scores, stop expanding once the best unexpanded
+            // candidate is clearly worse than the current k-th best result. A score provider opts in with
+            // the third constructor argument; GraphSearcher.setAdaptiveTerminationEnabled turns it off globally.
+            ScoreProviderFactory adaptive = q -> new DefaultSearchScoreProvider(
+                    ashVectors.precomputedScoreFunctionFor(q, ASH_SIMILARITY_FUNCTION),
+                    ds.ravv.rerankerFor(q, ASH_SIMILARITY_FUNCTION),
+                    true);
+            System.out.printf("  standard termination: %.0f nodes visited per query; adaptive: %.0f%n",
+                    meanVisited(ds, searcher, RERANK_K, reranked), meanVisited(ds, searcher, RERANK_K, adaptive));
+            report("ASH build: ASH scores + exact rerank, adaptive termination", recall(ds, searcher, RERANK_K, adaptive));
+        }
+
+        // Code size against recall. Any ASH codes can search the graph, not only the ones it was built
+        // with, so this trains a few more and searches the same graph with each. Training ASH yourself,
+        // as here, gives the settings the builder doesn't expose: the optimizer (ITQ learns the projection,
+        // RANDOM skips training) and the landmarks. More landmarks (the last line) center each vector on its
+        // nearest of several k-means centroids instead of the mean; they can be used for searching, but
+        // construction scoring needs exactly one. To build with ASH you trained yourself, pass
+        // BuildScoreProvider.ashBuildScoreProvider(DOT_PRODUCT, codes) to Indexes.hnswBuilder, as section 12
+        // does with PQ codes.
+        System.out.println("Searching the same graph with other ASH codes:");
+        int[][] configs = {
+                // projected dimensions, bits per dimension, landmarks
+                {DIMENSION, 1, 1},
+                {DIMENSION / 2, 2, 1},
+                {DIMENSION, 4, 1},
+                {DIMENSION, 2, 16},
+        };
+        try (GraphSearcher searcher = graph.searcher()) {
+            for (int[] config : configs) {
+                ASHVectors codes = trainAsh(ds, config[0], config[1], config[2]).encodeAll(ds.ravv, ForkJoinPool.commonPool());
+                report(String.format("%d dims x %d bits, %d landmark(s): %d bytes/vector", config[0], config[1], config[2],
+                                codes.getCompressor().compressedVectorSize()),
+                        recall(ds, searcher, RERANK_K, q -> new DefaultSearchScoreProvider(
+                                codes.precomputedScoreFunctionFor(q, ASH_SIMILARITY_FUNCTION),
+                                ds.ravv.rerankerFor(q, ASH_SIMILARITY_FUNCTION))));
+            }
+        }
+
+        return new AshBuild(graph, ashVectors);
+    }
+
+    // ---------------------------------------------------------------------------------------------
+    // 9. Fused ASH on disk
+    // ---------------------------------------------------------------------------------------------
+
+    /**
+     * {@link FusedASH} is ASH's counterpart to fused PQ (section 5): each node's record carries its
+     * neighbors' ASH codes, packed in blocks so that a search scores a whole neighborhood at once. Like
+     * fused PQ, the feature takes the graph's max degree and the trained ASH, and each node's state is
+     * built from a view of the graph and the codes, here straight from section 8. Fused ASH supports 1, 2
+     * and 4 bits per dimension, and needs on-disk format version 7, the writers' default.
+     */
+    private static void section9FusedAsh(Dataset ds, AshBuild ashBuild, Path workDir) throws IOException {
+        header("9. Fused ASH: neighbors' ASH codes in each node record");
+
+        Path graphPath = workDir.resolve("fused-ash.graph");
+        try (GraphIndex.View view = ashBuild.graph.getView();
+             GraphIndexWriter writer = ashBuild.graph.getWriterBuilder(graphPath)
+                     .with(new InlineVectors(DIMENSION))
+                     .with(new FusedASH(ashBuild.graph.maxDegree(), ashBuild.ash()))
+                     .build()) {
+            var states = new EnumMap<FeatureId, IntFunction<Feature.State>>(FeatureId.class);
+            states.put(FeatureId.INLINE_VECTORS, node -> new InlineVectors.State(ds.ravv.getVector(node)));
+            states.put(FeatureId.FUSED_ASH, node -> new FusedASH.State(view, ashBuild.ashVectors, node));
+            writer.write(states);
+        }
+        // The trained ASH is stored in the graph's header, so nothing else is needed to search.
+        System.out.printf("graph %,d bytes (ASH codes inside)%n", Files.size(graphPath));
+
+        // As with fused PQ, the stored-vector search traverses with the fused codes and reranks the best
+        // RERANK_K candidates with the inline vectors. Pass the dot-product similarity.
+        searchOnDisk(ds, graphPath, "fused ASH + inline rerank", RERANK_K, ASH_SIMILARITY_FUNCTION);
+        // Choosing the scoring yourself: rerankless, and with adaptive termination (section 8).
+        searchOnDisk(ds, graphPath, "fused ASH only (rerankless)", TOP_K,
+                (view, q) -> new DefaultSearchScoreProvider(view.approximateScoreFunctionFor(q, ASH_SIMILARITY_FUNCTION)));
+        searchOnDisk(ds, graphPath, "fused ASH + inline rerank, adaptive termination", RERANK_K,
+                (view, q) -> new DefaultSearchScoreProvider(view.approximateScoreFunctionFor(q, ASH_SIMILARITY_FUNCTION),
+                                                            view.rerankerFor(q, ASH_SIMILARITY_FUNCTION),
+                                                            true));
+
+        // NVQ vectors for reranking instead of full precision, and the parallel writer, as section 6 does
+        // with fused PQ: the smallest graph here.
+        NVQuantization nvq = NVQuantization.compute(ds.ravv, NVQ_SUB_VECTORS);
+        Path nvqPath = workDir.resolve("nvq-fused-ash.graph");
+        try (GraphIndex.View view = ashBuild.graph.getView();
+             GraphIndexWriter writer = ashBuild.graph.getParallelWriterBuilder(nvqPath)
+                     .with(new NVQ(nvq))
+                     .with(new FusedASH(ashBuild.graph.maxDegree(), ashBuild.ash()))
+                     .build()) {
+            var states = new EnumMap<FeatureId, IntFunction<Feature.State>>(FeatureId.class);
+            states.put(FeatureId.NVQ_VECTORS, node -> new NVQ.State(nvq.encode(ds.ravv.getVector(node))));
+            states.put(FeatureId.FUSED_ASH, node -> new FusedASH.State(view, ashBuild.ashVectors, node));
+            writer.write(states);
+        }
+        searchOnDisk(ds, nvqPath, String.format("NVQ + fused ASH, parallel writer (%,d bytes)", Files.size(nvqPath)),
+                RERANK_K, ASH_SIMILARITY_FUNCTION);
+
+        System.out.println("Fused ASH needs format version 7; an older version is rejected:");
+        expectFailure(() -> {
+            try (GraphIndexWriter ignored = ashBuild.graph.getWriterBuilder(workDir.resolve("v6.graph"))
+                    .withVersion(6)
+                    .with(new InlineVectors(DIMENSION))
+                    .with(new FusedASH(ashBuild.graph.maxDegree(), ashBuild.ash()))
+                    .build()) {
+                throw new AssertionError("version 6 accepted fused ASH");
+            } catch (IOException e) {
+                throw new UncheckedIOException(e);
+            }
+        });
+    }
+
+    // ---------------------------------------------------------------------------------------------
+    // 10. Separately stored ASH codes
+    // ---------------------------------------------------------------------------------------------
+
+    /**
+     * The layout of section 7 with ASH codes in place of PQ: the graph stores vectors for reranking, and
+     * the ASH codes are written beside it and loaded into memory for traversal. {@link ASHVectors#write}
+     * stores the trained ASH and the codes together.
+     */
+    private static void section10SeparateAshCodes(Dataset ds, AshBuild ashBuild, Path workDir) throws IOException {
+        header("10. Separately stored ASH codes, sequential writer");
+
+        Path ashPath = workDir.resolve("graph.ash");
+        try (SimpleWriter out = new SimpleWriter(ashPath)) {
+            ashBuild.ashVectors.write(out, OnDiskGraphIndex.CURRENT_VERSION);
+        }
+        ASHVectors loadedAsh;
+        try (ReaderSupplier rs = ReaderSupplierFactory.open(ashPath);
+             var reader = rs.get()) {
+            loadedAsh = ASHVectors.load(reader);
+        }
+
+        Path graphPath = workDir.resolve("inline-with-ash.graph");
+        try (SimpleWriter out = new SimpleWriter(graphPath);
+             GraphIndexWriter writer = ashBuild.graph.getWriterBuilder(out)
+                     .with(new InlineVectors(DIMENSION))
+                     .build()) {
+            writer.write(inlineVectorStates(ds));
+        }
+        System.out.printf("graph %,d bytes, ASH codes %,d bytes%n", Files.size(graphPath), Files.size(ashPath));
+        searchOnDisk(ds, graphPath, "in-memory ASH + inline rerank", RERANK_K,
+                (view, q) -> new DefaultSearchScoreProvider(loadedAsh.precomputedScoreFunctionFor(q, ASH_SIMILARITY_FUNCTION),
+                                                            view.rerankerFor(q, ASH_SIMILARITY_FUNCTION)));
+    }
+
+    // ---------------------------------------------------------------------------------------------
+    // 11. Incremental construction
     // ---------------------------------------------------------------------------------------------
 
     /**
@@ -589,8 +820,8 @@ public class IndexApiExample {
      * {@code cleanup()}, which runs once the inserts and deletes are done, and before writing. This is
      * Cassandra's memtable index.
      */
-    private static void section8IncrementalBuild(Dataset ds, Path workDir) throws IOException {
-        header("8. Incremental construction, with deletes");
+    private static void section11IncrementalBuild(Dataset ds, Path workDir) throws IOException {
+        header("11. Incremental construction, with deletes");
         int n = ds.ravv.size();
 
         // Delete every 100th node, skipping the true nearest neighbors of the queries so that recall
@@ -677,7 +908,7 @@ public class IndexApiExample {
     }
 
     // ---------------------------------------------------------------------------------------------
-    // 9. Your own score provider, and a PQ rescore
+    // 12. Your own score provider, and a PQ rescore
     // ---------------------------------------------------------------------------------------------
 
     /**
@@ -692,8 +923,8 @@ public class IndexApiExample {
      * phases with the rescore between them; a caller inserting concurrently, as Cassandra does, holds its
      * own lock around the rescore.
      */
-    private static void section9ScoreProviderAndRescore(Dataset ds, Path workDir) throws IOException {
-        header("9. Your own score provider, and a PQ rescore");
+    private static void section12ScoreProviderAndRescore(Dataset ds, Path workDir) throws IOException {
+        header("12. Your own score provider, and a PQ rescore");
         int n = ds.ravv.size();
         int half = n / 2;
 
@@ -749,7 +980,7 @@ public class IndexApiExample {
     }
 
     // ---------------------------------------------------------------------------------------------
-    // 10. Continuing a saved graph
+    // 13. Continuing a saved graph
     // ---------------------------------------------------------------------------------------------
 
     /**
@@ -760,8 +991,8 @@ public class IndexApiExample {
      * {@code OnHeapGraphIndex.load}, then handed to {@code withExistingGraph}.
      */
     @SuppressWarnings("deprecation") // OnHeapGraphIndex.save/load are deprecated and experimental
-    private static void section10ContinuingASavedGraph(Dataset ds, Path workDir) throws IOException {
-        header("10. Continuing a saved graph");
+    private static void section13ContinuingASavedGraph(Dataset ds, Path workDir) throws IOException {
+        header("13. Continuing a saved graph");
 
         // The base graph: the first three quarters of the vectors.
         int baseCount = ds.ravv.size() * 3 / 4;
@@ -809,12 +1040,12 @@ public class IndexApiExample {
     }
 
     // ---------------------------------------------------------------------------------------------
-    // 11. Search options
+    // 14. Search options
     // ---------------------------------------------------------------------------------------------
 
     /** Searching the fused-PQ graph from section 5 with the options a {@link GraphSearcher} offers. */
-    private static void section11SearchOptions(Dataset ds, Path fusedPath) throws IOException {
-        header("11. Search options (on the fused-PQ graph from section 5)");
+    private static void section14SearchOptions(Dataset ds, Path fusedPath) throws IOException {
+        header("14. Search options (on the fused-PQ graph from section 5)");
         try (ReaderSupplier rs = ReaderSupplierFactory.open(fusedPath);
              OnDiskGraphIndex onDisk = OnDiskGraphIndex.load(rs);
              GraphSearcher searcher = onDisk.searcher()) {
@@ -844,11 +1075,11 @@ public class IndexApiExample {
     }
 
     // ---------------------------------------------------------------------------------------------
-    // 12. Validation, recipes and IVF
+    // 15. Validation, recipes and IVF
     // ---------------------------------------------------------------------------------------------
 
-    private static void section12ValidationRecipesAndIvf(Dataset ds) {
-        header("12. Validation, recipes and IVF");
+    private static void section15ValidationRecipesAndIvf(Dataset ds) {
+        header("15. Validation, recipes and IVF");
 
         System.out.println("Out-of-range settings are rejected when the graph is built:");
         expectFailure(() -> Indexes.hnswBuilder(ds.ravv, SIMILARITY_FUNCTION).withBeamWidth(0).build());
@@ -860,6 +1091,10 @@ public class IndexApiExample {
                 .withMaxDegrees(List.of(32, 16))
                 .withAddHierarchy(false)
                 .build());
+
+        System.out.println("ASH scores dot products only:");
+        expectFailure(() -> Indexes.hnswBuilder(ds.ravv, VectorSimilarityFunction.EUCLIDEAN)
+                .withCompressionType(CompressionType.ASH));
 
         System.out.println("Compressed vectors exist only once the graph is built:");
         expectFailure(() -> Indexes.hnswBuilder(ds.ravv, SIMILARITY_FUNCTION)
@@ -895,7 +1130,7 @@ public class IndexApiExample {
      * stored-vector search chooses (e.g. rerankless, or with separately stored PQ codes). The view of an
      * {@link OnDiskGraphIndex} is a {@link GraphIndex.ScoringView}: its reranker scores with whichever
      * vectors the graph stores (inline or NVQ), and for a fused graph its approximate score function
-     * uses the fused PQ codes.
+     * uses the fused PQ or ASH codes.
      */
     @FunctionalInterface
     private interface ViewScoring {
@@ -913,10 +1148,17 @@ public class IndexApiExample {
      * with the PQ codes and reranks with the stored vectors; otherwise it scores with the stored vectors.
      */
     private static void searchOnDisk(Dataset ds, Path path, String label, int rerankK) throws IOException {
+        searchOnDisk(ds, path, label, rerankK, SIMILARITY_FUNCTION);
+    }
+
+    /** As {@link #searchOnDisk(Dataset, Path, String, int)}, scoring with {@code similarityFunction}. */
+    private static void searchOnDisk(Dataset ds, Path path, String label, int rerankK,
+                                     VectorSimilarityFunction similarityFunction) throws IOException {
         try (ReaderSupplier rs = ReaderSupplierFactory.open(path);
              OnDiskGraphIndex onDisk = OnDiskGraphIndex.load(rs);
              GraphSearcher searcher = onDisk.searcher()) {
-            report(label, recallStored(ds, searcher, rerankK));
+            report(label, recall(ds, ds.groundTruth, Bits.ALL, node -> node,
+                    storedVectorSearch(searcher, rerankK, similarityFunction)));
         }
     }
 
@@ -991,7 +1233,32 @@ public class IndexApiExample {
     }
 
     private static QuerySearch storedVectorSearch(GraphSearcher searcher, int rerankK) {
-        return (q, acceptOrds) -> searcher.search(q, TOP_K, rerankK, SIMILARITY_FUNCTION, acceptOrds);
+        return storedVectorSearch(searcher, rerankK, SIMILARITY_FUNCTION);
+    }
+
+    private static QuerySearch storedVectorSearch(GraphSearcher searcher, int rerankK,
+                                                  VectorSimilarityFunction similarityFunction) {
+        return (q, acceptOrds) -> searcher.search(q, TOP_K, rerankK, similarityFunction, acceptOrds);
+    }
+
+    /** Mean number of nodes a search visits over the dataset's queries, scoring with {@code ssp}. */
+    private static double meanVisited(Dataset ds, GraphSearcher searcher, int rerankK, ScoreProviderFactory ssp) {
+        long visited = 0;
+        for (VectorFloat<?> q : ds.queries) {
+            visited += searcher.search(ssp.forQuery(q), TOP_K, rerankK, 0.0f, 0.0f, Bits.ALL).getVisitedCount();
+        }
+        return visited / (double) ds.queries.size();
+    }
+
+    /**
+     * Trains ASH on the dataset with ITQ: {@code projectedDimensions} projected dimensions of
+     * {@code bitsPerDimension} bits each, centered on {@code landmarks} landmarks.
+     */
+    private static AsymmetricHashing trainAsh(Dataset ds, int projectedDimensions, int bitsPerDimension, int landmarks)
+            throws IOException {
+        // initialize takes the total code size in bits, header included.
+        int encodedBits = AsymmetricHashing.HEADER_BITS + projectedDimensions * bitsPerDimension;
+        return AsymmetricHashing.initialize(ds.ravv, AsymmetricHashing.ITQ, encodedBits, landmarks, bitsPerDimension);
     }
 
     /**

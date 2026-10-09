@@ -110,6 +110,15 @@ public abstract class HnswIndexBuilder implements Closeable {
      * compressed (approximate) scores. Defaults to {@link CompressionType#NONE}. Only
      * {@link RavvHnswBuilder} supports it; {@link ScoreProviderHnswBuilder} logs a warning and
      * ignores it, since its score provider is fixed.
+     * <p>
+     * {@link CompressionType#ASH} supports {@code VectorSimilarityFunction.DOT_PRODUCT} only, so the
+     * builder rejects it for any other similarity function; for unit-length vectors, dot product ranks
+     * neighbors the same way cosine and Euclidean do. It is configured with
+     * {@link #withAshProjectedDimensions} and {@link #withAshBitsPerDimension}; see
+     * {@code AsymmetricHashing} for its other limitations.
+     *
+     * @throws IllegalArgumentException if this builder can't apply {@code compressionType}, e.g.
+     *         {@link CompressionType#ASH} with a similarity function other than {@code DOT_PRODUCT}
      */
     public abstract HnswIndexBuilder withCompressionType(CompressionType compressionType);
 
@@ -151,9 +160,36 @@ public abstract class HnswIndexBuilder implements Closeable {
     public abstract HnswIndexBuilder withPqAnisotropicThreshold(float pqAnisotropicThreshold);
 
     /**
+     * The number of dimensions asymmetric hashing projects each vector onto, when
+     * {@link #withCompressionType} is {@link CompressionType#ASH}. Each projected dimension is stored
+     * in {@link #withAshBitsPerDimension} bits, and every code also carries a 5-byte header, so a code
+     * is about {@code 5 + projectedDimensions * bitsPerDimension / 8} bytes (some bit widths pad to
+     * 64-bit words; {@code AsymmetricHashing.compressedVectorSize()} gives the exact size). Fewer
+     * dimensions give smaller codes and coarser scores. Defaults to the vector dimension. Has no effect with other
+     * compression types. Only {@link RavvHnswBuilder} supports it; {@link ScoreProviderHnswBuilder}
+     * logs a warning and ignores it.
+     *
+     * @throws IllegalArgumentException if {@code projectedDimensions} is less than 1 or greater than the
+     *         vector dimension
+     */
+    public abstract HnswIndexBuilder withAshProjectedDimensions(int projectedDimensions);
+
+    /**
+     * The number of bits asymmetric hashing stores per projected dimension, when
+     * {@link #withCompressionType} is {@link CompressionType#ASH}. More bits give more accurate
+     * scores and larger codes. Defaults to {@code AsymmetricHashing.DEFAULT_BITS_PER_DIMENSION} (2).
+     * Writing the codes as a {@code FusedASH} feature requires 1, 2 or 4. Has no effect with other
+     * compression types. Only {@link RavvHnswBuilder} supports it; {@link ScoreProviderHnswBuilder}
+     * logs a warning and ignores it.
+     *
+     * @throws IllegalArgumentException if {@code bitsPerDimension} is not between 1 and 9
+     */
+    public abstract HnswIndexBuilder withAshBitsPerDimension(int bitsPerDimension);
+
+    /**
      * The compressed vectors the graph was built with, when this builder compressed them itself (see
      * {@link #withCompressionType}). Reuse them to search with compressed scores, or to write them to
-     * disk, e.g. as a {@code FusedPQ} feature, without training a second quantizer:
+     * disk, e.g. as a {@code FusedPQ} or {@code FusedASH} feature, without training a second quantizer:
      * <pre>{@code
      * var builder = Indexes.hnswBuilder(ravv, vsf).withCompressionType(CompressionType.PQ);
      * PersistableGraphIndex graph = builder.buildAndPopulate();
@@ -271,7 +307,7 @@ public abstract class HnswIndexBuilder implements Closeable {
     /**
      * The pool that runs the build's insert-time work: the parallel inserts of {@link #populateGraph}
      * and {@link #buildAndPopulate()}, scoring replacement edges in {@link #removeDeletedNodes()}, and
-     * PQ/BQ encoding and PQ codebook training for {@link #withCompressionType}. This work is dominated by
+     * PQ/BQ/ASH encoding and PQ codebook training for {@link #withCompressionType}. This work is dominated by
      * vectorized distance computations, which gain little from hyper-threads, so it defaults to
      * {@link PhysicalCoreExecutor#pool()}, one thread per physical core. ({@link #addGraphNode} runs on
      * the calling thread.) It is {@code GraphIndexBuilder}'s {@code simdExecutor}.
@@ -374,15 +410,15 @@ public abstract class HnswIndexBuilder implements Closeable {
         if (recipe.has(HnswRecipe.Param.REFINE_FINAL_GRAPH)) {
             refineFinalGraph = recipe.get(HnswRecipe.Param.REFINE_FINAL_GRAPH);
         }
-        applyPqRecipe(recipe);
+        applyCompressionRecipe(recipe);
         return this;
     }
 
     /**
-     * Applies a recipe's PQ training settings. Nothing to do by default: only {@link RavvHnswBuilder}
-     * trains PQ.
+     * Applies a recipe's PQ and ASH training settings. Nothing to do by default: only
+     * {@link RavvHnswBuilder} trains a quantizer.
      */
-    void applyPqRecipe(HnswRecipe recipe) {
+    void applyCompressionRecipe(HnswRecipe recipe) {
     }
 
     /** Whether this builder scores with exact comparisons, as opposed to compressed vectors. */
