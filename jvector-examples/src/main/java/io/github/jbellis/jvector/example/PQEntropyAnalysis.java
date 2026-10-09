@@ -43,12 +43,12 @@ import java.util.concurrent.ForkJoinPool;
  *
  * <p>
  * This is NOT a benchmark:
+ * </p>
  * <ul>
  *   <li>No timing loops</li>
  *   <li>No scoring</li>
  *   <li>No SIMD assumptions</li>
  * </ul>
- * </p>
  */
 public class PQEntropyAnalysis {
 

@@ -321,7 +321,7 @@ public interface VectorUtilSupport {
 
   /**
    * Dot product between a matrix row and a dense vector.
-   * Used by ASH projection: y_i = <A_i, x>.
+   * Used by ASH projection: {@code y_i = <A_i, x>}.
    *
    * Contract: Arow.length == x.length.
    * Default is scalar; SIMD backends may override.
@@ -338,7 +338,7 @@ public interface VectorUtilSupport {
   /**
    * Computes maskedAdd for a single vector stored in packed *by-vector* form.
    * Returns:
-   *   maskedAdd = <tildeQ, b>
+   *   {@code maskedAdd = <tildeQ, b>}
    *
    * packedBits layout:
    *   packedBits[packedBase + w] is 64-bit word w for this vector.
@@ -383,7 +383,7 @@ public interface VectorUtilSupport {
   /**
    * Computes maskedAdd for a block slice of vectors stored in packed block-column-major form.
    * For each lane in [0, blockLen), writes:
-   *   outMaskedAdd[lane] = <tildeQ, b_lane>
+   *   {@code outMaskedAdd[lane] = <tildeQ, b_lane>}
    * packedBits layout:
    *   packedBits[blockWordBase + w*blockSize + laneIndex] is 64-bit word w for that lane.
    * Default implementation is scalar bit-walk with a register accumulator per lane.

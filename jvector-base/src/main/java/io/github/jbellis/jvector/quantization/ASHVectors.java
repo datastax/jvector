@@ -952,7 +952,7 @@ public class ASHVectors implements CompressedVectors {
     }
 
     /**
-     * Stable, linear-time reorder by landmark id (C <= 256).
+     * Stable, linear-time reorder by landmark id ({@code C <= 256}).
      * Fills reordered header arrays in the same pass (no second constructor scan).
      */
     public LandmarkOrder reorderByLandmarkFast() {
