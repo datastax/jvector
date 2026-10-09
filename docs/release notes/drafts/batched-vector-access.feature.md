@@ -17,6 +17,10 @@ pool for blocking reads. The default
 budget is at most 1% of file bytes or 64 MiB, with one record as the minimum. See
 [Batched input vector access](../../batched-vector-access.md) for runnable 100k examples.
 
+BenchYAML/Grid use buffered base loading by default. Select
+`-Djvector.dataset_loader=preload` for the resident baseline. File-backed loading
+requires `NO_SCRUB` metadata; queries and ground truth stay resident.
+
 **Notes**
 
 Files must remain immutable. Cursor vectors can be borrowed; copy before retaining

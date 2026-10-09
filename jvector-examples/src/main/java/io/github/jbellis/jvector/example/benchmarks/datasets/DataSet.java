@@ -20,12 +20,17 @@ import io.github.jbellis.jvector.graph.RandomAccessVectorValues;
 import io.github.jbellis.jvector.vector.VectorSimilarityFunction;
 import io.github.jbellis.jvector.vector.types.VectorFloat;
 
+import java.io.IOException;
 import java.util.*;
 
 /**
  * This provides a uniform way to access vector test data, regardless of where it comes from or how it is implemented.
  */
-public interface DataSet {
+public interface DataSet extends AutoCloseable {
+
+    /** Release file-backed input resources after all benchmark consumers stop. */
+    @Override
+    default void close() throws IOException {}
 
     /**
      * Get dimensions of the vectors in this dataset.

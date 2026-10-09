@@ -19,7 +19,6 @@ package io.github.jbellis.jvector.example;
 import io.github.jbellis.jvector.disk.FvecFileVectorValues;
 import io.github.jbellis.jvector.quantization.NVQuantization;
 import io.github.jbellis.jvector.quantization.ProductQuantization;
-
 import io.github.jbellis.jvector.util.PhysicalCoreExecutor;
 
 /** Train and encode directly from a file through the ordinary PQ and NVQ APIs. */

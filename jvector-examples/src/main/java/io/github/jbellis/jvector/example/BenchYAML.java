@@ -16,7 +16,7 @@
 
 package io.github.jbellis.jvector.example;
 
-import io.github.jbellis.jvector.example.benchmarks.datasets.DataSet;
+import io.github.jbellis.jvector.example.benchmarks.datasets.BaseVectorLoading;
 import io.github.jbellis.jvector.example.benchmarks.datasets.DataSets;
 import io.github.jbellis.jvector.example.reporting.RunArtifacts;
 import io.github.jbellis.jvector.example.reporting.SearchReportingCatalog;
@@ -115,28 +115,30 @@ public class BenchYAML {
         }
 
 
+        var loading = BaseVectorLoading.forBenchmark();
         for (var config : allConfigs) {
 
             String datasetName = config.dataset;
-            DataSet ds = DataSets.loadDataSet(datasetName).orElseThrow(
+            try (var ds = DataSets.loadDataSet(datasetName, loading).orElseThrow(
                     () -> new RuntimeException("Could not load dataset:" + datasetName)
-            ).getDataSet();
-            // Register dataset info the first time we actually load the dataset for benchmarking
-            artifacts.registerDataset(datasetName, ds);
+            ).getDataSet()) {
+                // Register dataset info the first time we actually load the dataset for benchmarking
+                artifacts.registerDataset(datasetName, ds);
 
-            Grid.runAll(ds,
-                    config.construction.useSavedIndexIfExists,
-                    config.construction.outDegree,
-                    config.construction.efConstruction,
-                    config.construction.neighborOverflow,
-                    config.construction.addHierarchy,
-                    config.construction.refineFinalGraph,
-                    config.construction.getFeatureSets(),
-                    config.construction.getCompressorParameters(),
-                    config.search.getCompressorParameters(),
-                    config.search.topKOverquery,
-                    config.search.useSearchPruning,
-                    artifacts);
+                Grid.runAll(ds,
+                        config.construction.useSavedIndexIfExists,
+                        config.construction.outDegree,
+                        config.construction.efConstruction,
+                        config.construction.neighborOverflow,
+                        config.construction.addHierarchy,
+                        config.construction.refineFinalGraph,
+                        config.construction.getFeatureSets(),
+                        config.construction.getCompressorParameters(),
+                        config.search.getCompressorParameters(),
+                        config.search.topKOverquery,
+                        config.search.useSearchPruning,
+                        artifacts);
+            }
         }
     }
 

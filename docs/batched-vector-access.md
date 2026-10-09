@@ -75,8 +75,14 @@ is opened; cursors stream a stable local file, not an in-progress remote downloa
 The source retains bounded reusable read buffers during consumption. It does not
 change persistent dataset, index, or quantizer caches. File preparation stays
 outside construction timing; demand reads during training and encoding remain
-part of those library calls. Existing preload paths are still available; merely
-adding this source does not switch existing Grid/BenchYAML configurations to it.
+part of those library calls. Grid runs launched through BenchYAML use buffered base vectors by default. Use
+`-Djvector.dataset_loader=preload` for a full resident baseline; `buffered` selects
+the default explicitly. Queries and ground truth remain resident. Buffered loading
+requires `NO_SCRUB` metadata and preserves ordinals and stored values. The harness
+closes its source after each configuration. Direct calls to the existing
+`DataSets.loadDataSet(name)` retain their previous preload behavior; harness callers
+can select `BaseVectorLoading.BUFFERED` explicitly. Application-supplied JVector
+vector sources and the core indexing API are unchanged.
 
 ## Random ordinals: fetch an arbitrary selection
 
@@ -180,7 +186,8 @@ run on a separate source-owned pool so they do not occupy compute workers.
 `withIoThreads(count)` remains available for explicit benchmark tuning. The
 quantization example uses the shared compute pool and does not shut it down.
 
-Other defaults are at most 64 vectors per batch and three batches of read-ahead. Payload capacity is capped at `min(1% of file bytes, 64 MiB)`, with one
+Other defaults are at most 64 vectors per batch and three batches of
+read-ahead. Payload capacity is capped at `min(1% of file bytes, 64 MiB)`, with one
 record as the minimum. A configured maximum is also capped at 1% of the file.
 Copies and cursors share the budget, including queued, in-flight and ready payloads.
 Read-ahead zero disables speculative batches. Selected reads fetch requested records

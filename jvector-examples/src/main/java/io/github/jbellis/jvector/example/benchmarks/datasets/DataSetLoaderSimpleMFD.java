@@ -407,6 +407,12 @@ public class DataSetLoaderSimpleMFD implements DataSetLoader {
 
     @Override
     public Optional<DataSetInfo> loadDataSet(String dataSetName) {
+        return loadDataSet(dataSetName, BaseVectorLoading.PRELOAD);
+    }
+
+    @Override
+    public Optional<DataSetInfo> loadDataSet(String dataSetName, BaseVectorLoading loading) {
+        java.util.Objects.requireNonNull(loading, "loading");
         var entry = catalog.get(dataSetName);
         if (entry == null) return Optional.empty();
 
@@ -444,9 +450,19 @@ public class DataSetLoaderSimpleMFD implements DataSetLoader {
                                 "Dataset '%s' was found in dataset catalog, but no metadata entry was found in dataset-metadata.yml. ",
                                 dataSetName)));
         return Optional.of(new DataSetInfo(props, () -> {
-            var baseVectors = SiftLoader.readFvecs(effectiveCacheDir.resolve(baseFile).toString());
+            if (loading == BaseVectorLoading.BUFFERED && props.loadBehavior() != DataSetProperties.LoadBehavior.NO_SCRUB)
+                throw new IllegalArgumentException("Buffered loading requires NO_SCRUB metadata for " + dataSetName);
             var queryVectors = SiftLoader.readFvecs(effectiveCacheDir.resolve(queryFile).toString());
             var gtVectors = SiftLoader.readIvecs(effectiveCacheDir.resolve(gtFile).toString());
+            if (loading == BaseVectorLoading.BUFFERED) {
+                try {
+                    return new BufferedDataSet(dataSetName, props.similarityFunction().orElseThrow(),
+                            effectiveCacheDir.resolve(baseFile), queryVectors, gtVectors);
+                } catch (IOException e) {
+                    throw new UncheckedIOException(e);
+                }
+            }
+            var baseVectors = SiftLoader.readFvecs(effectiveCacheDir.resolve(baseFile).toString());
             return DataSetUtils.processDataSet(dataSetName, props, baseVectors, queryVectors, gtVectors);
         }));
     }
