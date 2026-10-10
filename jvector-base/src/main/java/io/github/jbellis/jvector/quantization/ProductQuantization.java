@@ -20,6 +20,7 @@ import io.github.jbellis.jvector.annotations.VisibleForTesting;
 import io.github.jbellis.jvector.disk.IndexWriter;
 import io.github.jbellis.jvector.disk.RandomAccessReader;
 import io.github.jbellis.jvector.graph.RandomAccessVectorValues;
+import io.github.jbellis.jvector.graph.VectorAccess;
 import io.github.jbellis.jvector.graph.disk.OnDiskGraphIndex;
 import io.github.jbellis.jvector.util.Accountable;
 import io.github.jbellis.jvector.util.PhysicalCoreExecutor;
@@ -167,15 +168,7 @@ public class ProductQuantization implements VectorCompressor<ByteSequence<?>>, A
             ordinalStream = IntStream.of(ordinalArray);
         }
 
-        var ravvCopy = ravv.threadLocalSupplier();
-        return parallelExecutor.submit(() -> ordinalStream.parallel()
-                        .mapToObj(targetOrd -> {
-                            var localRavv = ravvCopy.get();
-                            VectorFloat<?> v = localRavv.getVector(targetOrd);
-                            return localRavv.isValueShared() ? v.copy() : v;
-                        })
-                        .collect(Collectors.toList()))
-                .join();
+        return VectorAccess.copySelected(ravv, ordinalStream.toArray(), parallelExecutor);
     }
 
     /**

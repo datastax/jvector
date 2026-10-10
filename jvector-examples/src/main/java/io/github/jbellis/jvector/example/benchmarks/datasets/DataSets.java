@@ -62,14 +62,26 @@ public class DataSets {
     /// @param loaders     the loaders to try, in priority order
     /// @return a lazy {@link DataSetInfo} handle, or empty if no loader recognises the name
     public static Optional<DataSetInfo> loadDataSet(String dataSetName, Collection<DataSetLoader> loaders) {
-        logger.info("loading dataset [{}]", dataSetName);
+        return loadDataSet(dataSetName, loaders, BaseVectorLoading.PRELOAD);
+    }
+
+    /// Select base-vector loading explicitly for a benchmark harness.
+    public static Optional<DataSetInfo> loadDataSet(String dataSetName, BaseVectorLoading loading) {
+        return loadDataSet(dataSetName, defaultLoaders, loading);
+    }
+
+    public static Optional<DataSetInfo> loadDataSet(String dataSetName,
+                                                  Collection<DataSetLoader> loaders,
+                                                  BaseVectorLoading loading) {
+        java.util.Objects.requireNonNull(loading, "loading");
+        logger.info("loading dataset [{}] (base vector loading: {})", dataSetName, loading);
         if (dataSetName.endsWith(".hdf5")) {
             throw new InvalidParameterException("DataSet names are not meant to be file names. Did you mean " + dataSetName.replace(".hdf5", "") + "? ");
         }
 
         for (DataSetLoader loader : loaders) {
             logger.trace("trying loader [{}]", loader.getClass().getSimpleName());
-            Optional<DataSetInfo> dataSetLoaded = loader.loadDataSet(dataSetName);
+            Optional<DataSetInfo> dataSetLoaded = loader.loadDataSet(dataSetName, loading);
             if (dataSetLoaded.isPresent()) {
                 logger.info("dataset [{}] found with loader [{}]", dataSetName, loader.getClass().getSimpleName());
                 return dataSetLoaded;

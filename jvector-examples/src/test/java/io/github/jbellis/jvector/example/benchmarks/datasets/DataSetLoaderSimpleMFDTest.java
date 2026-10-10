@@ -74,6 +74,33 @@ public class DataSetLoaderSimpleMFDTest {
     // ========================================================================
 
     @Test
+    public void preparesBaseFileWithoutLoadingOtherFacets() throws IOException {
+        writeTestCatalog(cacheDir);
+        Path catalog = cacheDir.resolve("catalog_entries.yaml");
+        Files.writeString(catalog, "_defaults:\n  cache_dir: '" +
+                cacheDir.toString().replace("'", "''") + "'\n" + Files.readString(catalog));
+        Path base = cacheDir.resolve("test_base.fvecs");
+        writeTestFvecs(base, 4, new float[][] {{1, 2, 3, 4}});
+        byte[] before = Files.readAllBytes(base);
+        var loader = new DataSetLoaderSimpleMFD(null, cacheDir.toString(), false, testMetadata);
+        assertEquals(base, loader.loadBaseVectorFile("test-ds").orElseThrow());
+        assertArrayEquals(before, Files.readAllBytes(base));
+        assertFalse(Files.exists(cacheDir.resolve("test_query.fvecs")));
+        assertFalse(Files.exists(cacheDir.resolve("test_gt.ivecs")));
+        assertFalse(loader.loadBaseVectorFile("unknown").isPresent());
+    }
+
+    @Test
+    public void missingBaseFileIsReportedWithoutMaterializingDataset() throws IOException {
+        writeTestCatalog(cacheDir);
+        Path catalog = cacheDir.resolve("catalog_entries.yaml");
+        Files.writeString(catalog, "_defaults:\n  cache_dir: '" +
+                cacheDir.toString().replace("'", "''") + "'\n" + Files.readString(catalog));
+        var loader = new DataSetLoaderSimpleMFD(null, cacheDir.toString(), false, testMetadata);
+        assertThrows(IOException.class, () -> loader.loadBaseVectorFile("test-ds"));
+    }
+
+    @Test
     public void loadsDatasetFromLocalCatalogAndFiles() throws IOException {
         writeTestCatalog(cacheDir);
         writeTestDataFiles(cacheDir);
@@ -91,6 +118,78 @@ public class DataSetLoaderSimpleMFDTest {
         assertEquals(2, ds.getQueryVectors().size());
         assertEquals(2, ds.getGroundTruth().size());
         assertEquals(4, ds.getDimension());
+    }
+
+    @Test
+    public void bufferedModePreservesValuesAndClosesItsSource() throws Exception {
+        writeTestCatalog(cacheDir);
+        writeTestDataFiles(cacheDir);
+        var loader = new DataSetLoaderSimpleMFD(null, cacheDir.toString(), false, testMetadata);
+        var info = DataSets.loadDataSet("test-ds", java.util.List.of(loader), BaseVectorLoading.BUFFERED).orElseThrow();
+        var ds = info.getDataSet();
+        assertSame(ds, info.getDataSet());
+        var values = ds.getBaseRavv();
+        var file = assertInstanceOf(io.github.jbellis.jvector.disk.FvecFileVectorValues.class, values);
+        assertEquals(0, file.statistics().bufferBytes, "Preparing a dataset must not scan its base file");
+        var retained = ds.getBaseVectors().get(0);
+        ds.getBaseVectors().get(1);
+        assertEquals(1f, retained.get(0));
+        assertEquals(0f, retained.get(1));
+        try (ds; var preload = loader.loadDataSet("test-ds").orElseThrow().getDataSet()) {
+            assertEquals(preload.getGroundTruth(), ds.getGroundTruth());
+            assertEquals(preload.getSimilarityFunction(), ds.getSimilarityFunction());
+            var consumers = java.util.concurrent.Executors.newFixedThreadPool(4);
+            try {
+                var tasks = new java.util.ArrayList<java.util.concurrent.Callable<Void>>();
+                for (int worker = 0; worker < 16; worker++) {
+                    tasks.add(() -> {
+                        try (var view = file.copy()) {
+                            for (int pass = 0; pass < 20; pass++) {
+                                for (int ordinal = 0; ordinal < ds.getBaseVectors().size(); ordinal++) {
+                                    var expected = preload.getBaseVectors().get(ordinal);
+                                    var actual = view.getVector(ordinal);
+                                    for (int col = 0; col < expected.length(); col++)
+                                        assertEquals(Float.floatToRawIntBits(expected.get(col)), Float.floatToRawIntBits(actual.get(col)));
+                                }
+                            }
+                        }
+                        return null;
+                    });
+                }
+                for (var result : consumers.invokeAll(tasks)) result.get();
+            } finally { consumers.shutdown(); }
+        }
+        assertThrows(IllegalStateException.class, () -> values.getVector(0));
+        assertEquals(1f, retained.get(0), "Compatibility list returns an independent vector");
+    }
+
+    @Test
+    public void bufferedModeRejectsLegacyScrubbing() throws IOException {
+        writeTestCatalog(cacheDir);
+        writeTestDataFiles(cacheDir);
+        Path metadataFile = tempFolder.newFile("legacy_metadata.yml").toPath();
+        Files.writeString(metadataFile, "test-ds:\n  similarity_function: COSINE\n  load_behavior: LEGACY_SCRUB\n");
+        var loader = new DataSetLoaderSimpleMFD(null, cacheDir.toString(), false,
+                DataSetMetadataReader.load(metadataFile.toString()));
+        var info = loader.loadDataSet("test-ds", BaseVectorLoading.BUFFERED).orElseThrow();
+        var failure = assertThrows(IllegalArgumentException.class, info::getDataSet);
+        assertTrue(failure.getMessage().contains("NO_SCRUB"));
+    }
+
+    @Test
+    public void benchmarkDefaultsToBufferedWithExplicitPreloadOverride() {
+        String previous = System.getProperty("jvector.dataset_loader");
+        try {
+            System.clearProperty("jvector.dataset_loader");
+            assertEquals(BaseVectorLoading.BUFFERED, BaseVectorLoading.forBenchmark());
+            System.setProperty("jvector.dataset_loader", "preload");
+            assertEquals(BaseVectorLoading.PRELOAD, BaseVectorLoading.forBenchmark());
+            System.setProperty("jvector.dataset_loader", "typo");
+            assertThrows(IllegalArgumentException.class, BaseVectorLoading::forBenchmark);
+        } finally {
+            if (previous == null) System.clearProperty("jvector.dataset_loader");
+            else System.setProperty("jvector.dataset_loader", previous);
+        }
     }
 
     @Test

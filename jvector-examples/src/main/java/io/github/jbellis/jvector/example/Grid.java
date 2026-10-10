@@ -508,11 +508,13 @@ public class Grid {
         builder.withMapper(identityMapper);
 
         Map<FeatureId, IntFunction<Feature.State>> suppliers = new EnumMap<>(FeatureId.class);
+        // File-backed sources reuse scratch vectors; inline writes need a view per worker.
+        var writerVectors = floatVectors.threadLocalSupplier();
         for (var featureId : features) {
             switch (featureId) {
                 case INLINE_VECTORS:
                     builder.with(new InlineVectors(floatVectors.dimension()));
-                    suppliers.put(FeatureId.INLINE_VECTORS, ordinal -> new InlineVectors.State(floatVectors.getVector(ordinal)));
+                    suppliers.put(FeatureId.INLINE_VECTORS, ordinal -> new InlineVectors.State(writerVectors.get().getVector(ordinal)));
                     break;
                 case FUSED_PQ:
                     if (pq == null) {
@@ -528,7 +530,7 @@ public class Grid {
                             ? constructionMetrics.index("NVQ").timeCompute(() -> NVQuantization.compute(floatVectors, nSubVectors))
                             : NVQuantization.compute(floatVectors, nSubVectors);
                     builder.with(new NVQ(nvq));
-                    suppliers.put(FeatureId.NVQ_VECTORS, ordinal -> new NVQ.State(nvq.encode(floatVectors.getVector(ordinal))));
+                    suppliers.put(FeatureId.NVQ_VECTORS, ordinal -> new NVQ.State(nvq.encode(writerVectors.get().getVector(ordinal))));
                     break;
 
             }

@@ -20,6 +20,7 @@ import io.github.jbellis.jvector.annotations.VisibleForTesting;
 import io.github.jbellis.jvector.disk.IndexWriter;
 import io.github.jbellis.jvector.disk.RandomAccessReader;
 import io.github.jbellis.jvector.graph.RandomAccessVectorValues;
+import io.github.jbellis.jvector.graph.VectorAccess;
 import io.github.jbellis.jvector.graph.disk.OnDiskGraphIndex;
 import io.github.jbellis.jvector.util.Accountable;
 import io.github.jbellis.jvector.vector.VectorUtil;
@@ -33,8 +34,6 @@ import java.util.Arrays;
 import java.util.List;
 import java.util.Objects;
 import java.util.concurrent.ForkJoinPool;
-import java.util.stream.Collectors;
-import java.util.stream.IntStream;
 
 import static io.github.jbellis.jvector.quantization.KMeansPlusPlusClusterer.UNWEIGHTED;
 import static io.github.jbellis.jvector.vector.VectorUtil.sub;
@@ -148,13 +147,12 @@ public class NVQuantization implements VectorCompressor<NVQuantization.Quantized
      * @param nSubVectors number of subvectors
      */
     public static NVQuantization compute(RandomAccessVectorValues ravv, int nSubVectors) {
-        var ravvCopy = ravv.threadLocalSupplier().get();
-        var dim = ravvCopy.getVector(0).length();
-        var globalMean = vectorTypeSupport.createFloatVector(dim);
-        for (int i = 0; i < ravvCopy.size(); i++) {
-            VectorUtil.addInPlace(globalMean, ravvCopy.getVector(i));
+        Objects.checkIndex(0, ravv.size()); // Preserve rejection of an empty training source.
+        var globalMean = vectorTypeSupport.createFloatVector(ravv.dimension());
+        try (var cursor = VectorAccess.openRange(ravv, 0, ravv.size())) {
+            while (cursor.next()) VectorUtil.addInPlace(globalMean, cursor.vector());
         }
-        VectorUtil.scale(globalMean, 1.0f / ravvCopy.size());
+        VectorUtil.scale(globalMean, 1.0f / ravv.size());
         return create(globalMean, nSubVectors);
     }
 
@@ -180,17 +178,10 @@ public class NVQuantization implements VectorCompressor<NVQuantization.Quantized
      */
     @Override
     public NVQVectors encodeAll(RandomAccessVectorValues ravv, ForkJoinPool parallelExecutor) {
-        var ravvCopy = ravv.threadLocalSupplier();
-        return new NVQVectors(this,
-                parallelExecutor.submit(() -> IntStream.range(0, ravv.size())
-                                .parallel()
-                                .mapToObj(i -> {
-                                    var localRavv = ravvCopy.get();
-                                    VectorFloat<?> v = localRavv.getVector(i);
-                                    return encode(v);
-                                })
-                                .toArray(QuantizedVector[]::new))
-                        .join());
+        var encoded = new QuantizedVector[ravv.size()];
+        VectorAccess.forEach(ravv, ravv.size(), java.util.function.IntUnaryOperator.identity(),
+                parallelExecutor, (ordinal, vector) -> encoded[ordinal] = encode(vector));
+        return new NVQVectors(this, encoded);
     }
 
     /**

@@ -20,7 +20,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import io.github.jbellis.jvector.example.util.BenchmarkSummarizer;
 import io.github.jbellis.jvector.example.util.BenchmarkSummarizer.SummaryStats;
 import io.github.jbellis.jvector.example.util.CheckpointManager;
-import io.github.jbellis.jvector.example.benchmarks.datasets.DataSet;
+import io.github.jbellis.jvector.example.benchmarks.datasets.BaseVectorLoading;
 import io.github.jbellis.jvector.example.benchmarks.datasets.DataSets;
 import io.github.jbellis.jvector.example.yaml.DatasetCollection;
 import io.github.jbellis.jvector.example.yaml.MultiConfig;
@@ -112,6 +112,8 @@ public class AutoBenchYAML {
         // Add results from checkpoint if present
         results.addAll(checkpointManager.getCompletedResults());
 
+        var loading = BaseVectorLoading.forBenchmark();
+
         // Process datasets from regex patterns
         if (!datasetNames.isEmpty()) {
             for (var datasetName : datasetNames) {
@@ -122,10 +124,9 @@ public class AutoBenchYAML {
                 }
 
                 logger.info("Loading dataset: {}", datasetName);
-                try {
-                    DataSet ds = DataSets.loadDataSet(datasetName).orElseThrow(
-                            () -> new RuntimeException("Dataset " + datasetName + " not found")
-                    ).getDataSet();
+                try (var ds = DataSets.loadDataSet(datasetName, loading).orElseThrow(
+                        () -> new RuntimeException("Dataset " + datasetName + " not found")
+                ).getDataSet()) {
                     logger.info("Dataset loaded: {} with {} vectors", datasetName, ds.getBaseVectors().size());
 
                     String normalizedDatasetName = datasetName;
