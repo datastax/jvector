@@ -102,3 +102,13 @@ RESULT [2,1,0]
   * `BULKLOAD {localpath}`
     * Bulk loads a local file in numpy format Rows x Columns
     
+
+### Vector prefetching benchmark
+
+Compare preload, synchronous demand reads, and the PR's buffered source with
+`io.github.jbellis.jvector.example.VectorPrefetchBenchmark`. Use `--workload scan`
+or `--workload sample --samples N`; each launch runs the three arms sequentially
+in fresh JVMs. PQ/NVQ and named quantization parameters are selectable.
+
+See [command-line and IntelliJ instructions](../docs/vector-prefetch-benchmark.md)
+for cold-file-cache verification, timing boundaries and future vector/loader adapters.

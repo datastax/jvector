@@ -210,3 +210,9 @@ reads and payload allocation, not physical device I/O.
   only; closing the root invalidates all copies and releases the shared resources.
 - Direct payload buffers become eligible for JVM reclamation after references are
   released; closure does not promise immediate native-memory reclamation.
+
+## Measure input loading
+
+The [vector prefetching benchmark](vector-prefetch-benchmark.md) compares the exact
+buffered source with full preload and demand-only reads, using separate full-scan
+and sampled quantization workloads. It runs from the command line or IntelliJ.
