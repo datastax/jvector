@@ -58,6 +58,7 @@ import java.util.function.Supplier;
 public final class FvecFileVectorValues implements BatchedVectorValues, AutoCloseable {
     private static final VectorTypeSupport VTS = VectorizationProvider.getInstance().getVectorTypeSupport();
     private static final long DEFAULT_MAX_BYTES = 64L << 20;
+    private static final int MAX_ZERO_READS = 16;
     private final Storage storage;
     private final boolean ownsStorage;
     private final VectorFloat<?> scratch;
@@ -528,12 +529,20 @@ public final class FvecFileVectorValues implements BatchedVectorValues, AutoClos
         }
     }
 
-    private static void readFully(FileChannel channel, ByteBuffer buffer, long offset) throws IOException {
+    static void readFully(FileChannel channel, ByteBuffer buffer, long offset) throws IOException {
         int start = buffer.position();
+        int zeroReads = 0;
         while (buffer.hasRemaining()) {
             int n = channel.read(buffer, offset + buffer.position() - start);
             if (n < 0) throw new EOFException("Truncated fvec record at " + offset);
-            if (n == 0) Thread.onSpinWait();
+            if (n == 0) {
+                // A broken channel must not spin forever or prevent the I/O pool from closing.
+                if (++zeroReads >= MAX_ZERO_READS)
+                    throw new IOException("No progress reading fvec data at " + (offset + buffer.position() - start));
+                Thread.onSpinWait();
+            } else {
+                zeroReads = 0;
+            }
         }
     }
 }
