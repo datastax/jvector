@@ -854,38 +854,38 @@ public class DataSetLoaderSimpleMFD implements DataSetLoader {
 
         S3TransferManager tm = getS3TransferManager();
 
-        DownloadFileRequest request = DownloadFileRequest.builder()
-                .getObjectRequest(b -> b.bucket(bucket).key(key))
-                .addTransferListener(LoggingTransferListener.create())
-                .destination(localPath)
-                .build();
-
-        boolean downloaded = false;
+        Path targetDir = localPath.toAbsolutePath().getParent();
+        Files.createDirectories(targetDir);
         for (int i = 0; i < 3; i++) { // 3 retries
+            // Only this attempt owns the temporary path; the shared cache name stays unpublished.
+            Path tempFile = Files.createTempFile(targetDir, "download-", ".tmp");
             try {
+                DownloadFileRequest request = DownloadFileRequest.builder()
+                        .getObjectRequest(b -> b.bucket(bucket).key(key))
+                        .addTransferListener(LoggingTransferListener.create())
+                        .destination(tempFile)
+                        .build();
                 FileDownload downloadFile = tm.downloadFile(request);
                 CompletedFileDownload result = downloadFile.completionFuture().join();
-                long downloadedSize = Files.size(localPath);
+                long downloadedSize = Files.size(tempFile);
                 Long expectedSize = result.response().contentLength();
 
-                // Null check prevents NullPointerException during unboxing.
-                // If expectedSize is null, we trust the transfer manager's successful completion.
+                // If size is unavailable, trust the transfer manager's successful completion.
                 if (expectedSize != null && downloadedSize != expectedSize) {
                     logger.error("Incomplete download (got {} of {} bytes). Retrying...", downloadedSize, expectedSize);
-                    Files.deleteIfExists(localPath);
                     continue;
                 }
 
-                downloaded = true;
-                break;
+                // Readers see a complete file, and a failed concurrent attempt cannot delete it.
+                Files.move(tempFile, localPath, StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING);
+                return;
             } catch (Exception e) {
                 logger.error("Download attempt {} failed for {}: {}", i + 1, redact(key), redact(e.getMessage()));
-                Files.deleteIfExists(localPath);
+            } finally {
+                Files.deleteIfExists(tempFile);
             }
         }
-        if (!downloaded) {
-            throw new IOException("Failed to download " + redact(s3Url) + " after 3 attempts");
-        }
+        throw new IOException("Failed to download " + redact(s3Url) + " after 3 attempts");
     }
 
     private static S3AsyncClient s3AsyncClient() {
