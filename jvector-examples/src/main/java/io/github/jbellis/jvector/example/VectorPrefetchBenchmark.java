@@ -43,30 +43,24 @@ import java.util.SplittableRandom;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 
-/** Shared runner for the independently runnable streaming and sampling microbenchmarks. */
+/** Measures sample retrieval, quantizer training, full-set encoding and an encoded-score sink. */
 public final class VectorPrefetchBenchmark {
     private VectorPrefetchBenchmark() {}
 
     public static void main(String[] args) throws Exception {
-        var options = Options.parse(args);
-        String workload = options.get("workload", "scan");
-        if (!workload.equals("scan") && !workload.equals("sample"))
-            throw new IllegalArgumentException("--workload must be scan or sample");
-        run(args, workload.equals("sample"));
+        run(args);
     }
 
-    private static void run(String[] args, boolean sampled) throws Exception {
+    private static void run(String[] args) throws Exception {
         var options = Options.parse(args);
         if (options.contains("help")) {
-            System.out.println("Usage: VectorPrefetchBenchmark --workload scan|sample"
-                    + " [--dataset catalog-name | --file vectors.fvecs] [--samples 10000]"
+            System.out.println("Usage: VectorPrefetchBenchmark"
+                    + " [--dataset catalog-name | --file vectors.fvecs] [--samples 128000]"
                     + " [--mode all|preload|demand|prefetch] [--quantizer nvq|pq|adapter-class] [--quantizer-options key=value,...] [--loader-options key=value,...]"
                     + " [--metric DOT_PRODUCT|EUCLIDEAN|COSINE] [--query-file queries.fvecs]"
                     + " [--cache cold|uncontrolled] [--seed 42] [--progress-seconds 30]");
             return;
         }
-        if (!sampled && options.contains("samples"))
-            throw new IllegalArgumentException("--samples requires --workload sample");
         if (!options.contains("child")) {
             Path file = options.file(); // Finish catalog/download preparation before launching timed arms.
             var modes = options.get("mode", "all").equals("all")
@@ -92,7 +86,7 @@ public final class VectorPrefetchBenchmark {
                         String line;
                         while ((line = output.readLine()) != null) {
                             System.out.println(line);
-                            if (line.startsWith("| scan |") || line.startsWith("| sample |")) rows.add(line);
+                            if (line.startsWith("| pipeline |")) rows.add(line);
                         }
                     }
                     int exit = child.waitFor(); // One arm at a time, including when launched from IntelliJ.
@@ -111,10 +105,10 @@ public final class VectorPrefetchBenchmark {
             rows.forEach(System.out::println);
             return;
         }
-        measure(options, sampled);
+        measure(options);
     }
 
-    private static void measure(Options options, boolean sampled) throws Exception {
+    private static void measure(Options options) throws Exception {
         Path file = Path.of(options.get("file", ""));
         String mode = options.get("mode", "all");
         options.checkMode(mode);
@@ -140,11 +134,11 @@ public final class VectorPrefetchBenchmark {
                 query = queries.getVector(0).copy();
             }
         }
-        int[] ordinals = sampled ? sample(count, options.positiveInt("samples", 10000), options.longValue("seed", 42)) : null;
-        int selectedCount = sampled ? ordinals.length : count;
+        int[] ordinals = sample(count, options.positiveInt("samples", Math.min(count, 128000)), options.longValue("seed", 42));
+        int selectedCount = ordinals.length;
         if (quantizer.equals("pq") && selectedCount < integer(quantizerOptions, "clusters", 256)) throw new IllegalArgumentException("PQ requires at least the configured cluster count of selected vectors");
-        System.out.printf("%s: %s, candidates=%,d, selected=%,d, dimensions=%d, compute workers=%d%n",
-                sampled ? "Sampling" : "Streaming", mode, count, selectedCount, dimension, executor.getParallelism());
+        System.out.printf("Pipeline: %s, encoding candidates=%,d, training samples=%,d, dimensions=%d, compute workers=%d%n",
+                mode, count, selectedCount, dimension, executor.getParallelism());
         System.out.printf("Quantizer=%s, metric=%s, sample seed=%d, query=%s, provider=%s%n",
                 quantizer, metric, options.longValue("seed", 42), heldOut ? "held-out final base vector" : "first query-file vector",
                 VectorizationProvider.getInstance().getClass().getSimpleName());
@@ -156,7 +150,7 @@ public final class VectorPrefetchBenchmark {
         try (var progress = new Progress(options.nonnegativeInt("progress-seconds", 30))) {
             long begin = System.nanoTime();
             double preloadSeconds = 0;
-            progress.phase(mode.equals("preload") ? "preload preparation (excluded)" : "load/select");
+            progress.phase(mode.equals("preload") ? "preload preparation (excluded)" : "sample retrieval");
             try (var input = loader(mode).open(file, loaderOptions)) {
                 var original = input.values();
                 if (original.size() != count + (heldOut ? 1 : 0) || original.dimension() != dimension)
@@ -167,12 +161,13 @@ public final class VectorPrefetchBenchmark {
                     System.out.printf(Locale.ROOT, "Resident preload preparation: %.3f s (excluded from comparison)%n", preloadSeconds);
                     // The resident baseline measures work after all input vectors are available.
                     begin = System.nanoTime();
-                    progress.phase("load/select");
+                    progress.phase("sample retrieval");
                 }
-                if (sampled) vectors = new ListRandomAccessVectorValues(VectorAccess.copySelected(vectors, ordinals, executor), dimension);
+                RandomAccessVectorValues trainingVectors = new ListRandomAccessVectorValues(
+                        VectorAccess.copySelected(vectors, ordinals, executor), dimension);
                 long loaded = System.nanoTime();
                 progress.phase("train");
-                Encoder encoder = quantizerFactory.train(vectors, quantizerOptions, executor);
+                Encoder encoder = quantizerFactory.train(trainingVectors, quantizerOptions, executor);
                 long trained = System.nanoTime();
                 progress.phase("encode");
                 var encoded = encoder.encode(vectors, executor);
@@ -191,10 +186,10 @@ public final class VectorPrefetchBenchmark {
                 }
                 long finished = System.nanoTime();
                 progress.phase("complete");
-                int ordinal = sampled ? ordinals[nearest] : nearest;
+                int ordinal = nearest; // Encoding and scoring always retain full base ordinals.
                 printHeader();
                 System.out.printf(Locale.ROOT, "| %s | %s | %s | %.3f | %.3f | %.3f | %.3f | %.3f | %d | %.8f | %.9f |%n",
-                        sampled ? "sample" : "scan", mode, mode.equals("preload") ? String.format(Locale.ROOT, "%.3f", preloadSeconds) : "—", seconds(loaded - begin), seconds(trained - loaded),
+                        "pipeline", mode, mode.equals("preload") ? String.format(Locale.ROOT, "%.3f", preloadSeconds) : "—", seconds(loaded - begin), seconds(trained - loaded),
                         seconds(encodedAt - trained), seconds(finished - encodedAt), seconds(finished - begin), ordinal, best, checksum);
                 String statistics = input.statistics();
                 if (!statistics.isEmpty()) System.out.println(statistics);
@@ -328,7 +323,7 @@ public final class VectorPrefetchBenchmark {
         return Boolean.parseBoolean(value);
     }
     private static void printHeader() {
-        System.out.println("| Workload | Arm | Preload s (excluded) | Load/select s | Train s | Encode s | Sink s | Comparison total s | Nearest ordinal | Score | Score sum |");
+        System.out.println("| Workload | Arm | Preload s (excluded) | Sample s | Train s | Encode s | Sink s | Comparison total s | Nearest ordinal | Score | Score sum |");
         System.out.println("|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|");
     }
 
@@ -410,7 +405,7 @@ public final class VectorPrefetchBenchmark {
         private final LinkedHashMap<String, String> values;
         Options(LinkedHashMap<String, String> values) { this.values = values; }
         private static final Set<String> KEYS = Set.of("dataset", "file", "samples", "mode", "quantizer", "metric",
-                "query-file", "cache", "seed", "progress-seconds", "help", "child", "quantizer-options", "loader-options", "workload");
+                "query-file", "cache", "seed", "progress-seconds", "help", "child", "quantizer-options", "loader-options");
         static Options parse(String[] args) {
             var values = new LinkedHashMap<String, String>();
             for (int i = 0; i < args.length; i++) {

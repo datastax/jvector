@@ -79,7 +79,8 @@ public class VectorPrefetchBenchmarkTest {
                 io.github.jbellis.jvector.quantization.NVQVectors expected = null;
                 for (var source : sources) {
                     var vectors = sampled ? new ListRandomAccessVectorValues(VectorAccess.copySelected(source, ordinals, pool), 16) : source;
-                    var encoded = NVQuantization.compute(vectors, 1).encodeAll(vectors, pool);
+                    var encoded = NVQuantization.compute(vectors, 1).encodeAll(source, pool);
+                    assertEquals(preload.size(), encoded.count());
                     if (expected == null) expected = encoded;
                     else assertEquals(expected, encoded);
                     var scorer = encoded.scoreFunctionFor(preload.getVector(100), VectorSimilarityFunction.DOT_PRODUCT);
@@ -96,19 +97,22 @@ public class VectorPrefetchBenchmarkTest {
 
     @Test public void customLoaderAndNonCompressorRepresentationAreSelectable() throws Exception {
         Path file = input();
-        var args = new String[]{"--workload", "sample", "--file", file.toString(), "--samples", "32",
+        var args = new String[]{"--file", file.toString(), "--samples", "32",
                 "--mode", CustomLoader.class.getName(), "--quantizer", CustomRepresentation.class.getName(),
                 "--quantizer-options", "example=accepted", "--loader-options", "example=accepted",
                 "--cache", "uncontrolled", "--progress-seconds", "0", "--child"};
         CustomLoader.closed = false;
+        CustomRepresentation.trainedCount = CustomRepresentation.encodedCount = 0;
         VectorPrefetchBenchmark.main(args);
         assertTrue(CustomLoader.closed);
+        assertEquals(32, CustomRepresentation.trainedCount);
+        assertEquals(255, CustomRepresentation.encodedCount);
     }
 
     @Test public void builtInPQAndNVQAcceptNamedParameters() throws Exception {
         Path file = input();
         for (var quantizer : new String[]{"pq", "nvq"}) {
-            VectorPrefetchBenchmark.main(new String[]{"--workload", "sample", "--file", file.toString(),
+            VectorPrefetchBenchmark.main(new String[]{"--file", file.toString(),
                     "--samples", "32", "--mode", "prefetch", "--quantizer", quantizer,
                     "--quantizer-options", quantizer.equals("pq") ? "subspaces=2,clusters=16,center=false,anisotropic=-1"
                             : "subvectors=2,learn=false",
@@ -131,10 +135,13 @@ public class VectorPrefetchBenchmarkTest {
 
     // Exercise a representation that has a score function but does not implement VectorCompressor.
     public static final class CustomRepresentation implements VectorPrefetchBenchmark.Quantizer {
+        static int trainedCount, encodedCount;
         public VectorPrefetchBenchmark.Encoder train(io.github.jbellis.jvector.graph.RandomAccessVectorValues source,
                 java.util.Map<String, String> parameters, ForkJoinPool executor) {
             assertEquals("accepted", parameters.get("example"));
+            trainedCount = source.size();
             return (values, pool) -> {
+                encodedCount = values.size();
                 var ordinals = java.util.stream.IntStream.range(0, values.size()).toArray();
                 var vectors = VectorAccess.copySelected(values, ordinals, pool);
                 return new VectorPrefetchBenchmark.Encoded() {

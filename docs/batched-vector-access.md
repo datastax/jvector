@@ -214,5 +214,5 @@ reads and payload allocation, not physical device I/O.
 ## Measure input loading
 
 The [vector prefetching benchmark](vector-prefetch-benchmark.md) compares the exact
-buffered source with full preload and demand-only reads, using separate full-scan
-and sampled quantization workloads. It runs from the command line or IntelliJ.
+buffered source with full preload and demand-only reads, timing sample retrieval,
+training and full-set encoding separately. It runs from the command line or IntelliJ.

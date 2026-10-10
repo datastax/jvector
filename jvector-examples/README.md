@@ -106,9 +106,9 @@ RESULT [2,1,0]
 ### Vector prefetching benchmark
 
 Compare preload, synchronous demand reads, and the PR's buffered source with
-`io.github.jbellis.jvector.example.VectorPrefetchBenchmark`. Use `--workload scan`
-or `--workload sample --samples N`; each launch runs the three arms sequentially
-in fresh JVMs. PQ/NVQ and named quantization parameters are selectable.
+`io.github.jbellis.jvector.example.VectorPrefetchBenchmark`. Use `--samples N` for training sample size;
+each launch samples, trains, and encodes the entire candidate set, running the
+three arms sequentially in fresh JVMs. PQ/NVQ and named quantization parameters are selectable.
 
 See [command-line and IntelliJ instructions](../docs/vector-prefetch-benchmark.md)
 for cold-file-cache verification, timing boundaries and future vector/loader adapters.

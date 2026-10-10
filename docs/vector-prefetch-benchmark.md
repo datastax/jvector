@@ -1,14 +1,16 @@
 # Vector prefetching benchmark
 
-`VectorPrefetchBenchmark --workload scan` scans the full base set.
-`--workload sample` loads a reproducible uniform sample without replacement. Both train a new quantizer, encode their candidate set,
-then find its nearest vector to one query using JVector's quantized score function.
-These are pipeline microbenchmarks, not index builds or recall measurements.
+`VectorPrefetchBenchmark` retrieves a reproducible training sample, trains a new
+quantizer, calls `encodeAll` on the **entire base candidate set**, then scores the
+encoded vectors against one query as a sink. This isolates the input operations
+that buffered access can benefit: arbitrary sample retrieval and full-set encoding.
+Training and scoring are timed separately; scoring uses encoded resident output,
+not the input prefetcher. This is not an index build or recall measurement.
 
 Each launch compares three arms **one at a time**, in fresh JVMs:
 
-1. **preload**: the usual `SiftLoader.readFvecs` full resident preload, even in the
-   sampled benchmark, **outside comparison timing**; the sample is then selected
+1. **preload**: the usual `SiftLoader.readFvecs` full resident preload
+   **outside comparison timing**; the sample is then selected
    from resident vectors inside timing. This is the ideal resident-input baseline.
 2. **demand**: synchronous positional reads of requested records, without a cache,
    I/O executor, batching or speculative read-ahead. Float decoding matches the PR source.
@@ -47,24 +49,18 @@ baseline; no machine-specific heap or core count is built into these benchmarks.
 ```bash
 java --add-modules=jdk.incubator.vector --enable-native-access=ALL-UNNAMED \
   -cp "$JV_EXAMPLES" io.github.jbellis.jvector.example.VectorPrefetchBenchmark \
-  --workload scan --dataset cohere-english-v3-10M
-
-# Run separately, after the scan exits:
-java --add-modules=jdk.incubator.vector --enable-native-access=ALL-UNNAMED \
-  -cp "$JV_EXAMPLES" io.github.jbellis.jvector.example.VectorPrefetchBenchmark \
-  --workload sample --dataset cohere-english-v3-10M --samples 128000
+  --dataset cohere-english-v3-10M --samples 128000 --quantizer pq
 ```
 
 Use any name in your dataset catalog, or `--file /path/to/base.fvecs` instead of
 `--dataset`. The default is the public catalog's `e5-small-v2-100k`; sampling defaults
-to 10,000 candidates. `DATASET_CACHE_DIR` applies to catalog preparation. Downloaded
+to 128,000 training vectors, or the candidate count if smaller. `DATASET_CACHE_DIR` applies to catalog preparation. Downloaded
 files and existing caches are never deleted or rewritten. Files must be immutable.
 
 ### IntelliJ
 
-Create **separate Application configurations**, both using the main class
-`io.github.jbellis.jvector.example.VectorPrefetchBenchmark`. Select `--workload scan`
-in one and `--workload sample` in the other.
+Create an Application configuration using the main class
+`io.github.jbellis.jvector.example.VectorPrefetchBenchmark`.
 
 Select the `jvector-examples` module classpath and JDK 23. Use the repository root
 as working directory. VM options:
@@ -74,8 +70,7 @@ as working directory. VM options:
 ```
 
 Program arguments are the same as the command line, e.g.
-`--workload scan --dataset cohere-english-v3-10M`, or
-`--workload sample --dataset cohere-english-v3-10M --samples 128000` for sampling.
+`--dataset cohere-english-v3-10M --samples 128000 --quantizer pq`.
 Heap and provider settings from the launching JVM are inherited by each arm;
 debugger/profiler agents are not inherited, avoiding port conflicts. Child JVM
 output appears in the same IntelliJ console. Stopping the launcher also stops its
@@ -94,7 +89,7 @@ own active child. Start only one microbenchmark configuration at a time.
 - `--query-file /path/to/queries.fvecs`: use its first query. Otherwise, use the last
   base vector as a held-out query and exclude it from all candidate sets. Thus the
   default full scan encodes N−1 candidates, and avoids a trivial self-match.
-- `--samples N`, `--seed 42`: sampling count and deterministic ordinal seed; all
+- `--samples N`, `--seed 42`: training sample count and deterministic ordinal seed; all
   arms use identical ordinals in identical order. The complete ordinal array is
   supplied to `VectorAccess.copySelected` up front; the PR schedules bounded
   asynchronous read-ahead across concurrent selection cursors, rather than
@@ -102,7 +97,7 @@ own active child. Start only one microbenchmark configuration at a time.
 - `--progress-seconds 30`: phase transitions and infrequent elapsed-time updates;
   `0` disables periodic updates. There is no per-vector logging or monitoring scan.
 
-Console tables show excluded preload preparation, load/select, training, encoding,
+Console tables show excluded preload preparation, sample retrieval, training, encoding,
 sink and comparison total elapsed seconds,
 the winning original ordinal, its score and a sum of all scores. For preload, totals
 start **after the entire base set is resident**; its file-load preparation is reported
@@ -110,13 +105,16 @@ separately and excluded. For demand and prefetch, totals start before file-sourc
 open and include input reads. All totals finish when the sink completes; JVM launch,
 download, ordinal generation, cold-cache preparation, and resource closure are excluded.
 This measures the penalty of file-backed input relative to already resident input,
-not the time to load and process the dataset from scratch. For file scans,
-demand I/O remains inside training/encoding time; source-open time alone is not the
-time to load the dataset. Samples are materialized during load/select, then both
-training and encoding operate on those same resident samples. NVQ's `compute`
-stage computes a mean; its per-vector parameter learning is included in encoding.
+not the time to load and process the dataset from scratch. Sample retrieval includes materialization and the loader's source-open work for
+file arms. Training operates on those resident samples. Encoding always operates
+on the complete candidate source, so file-arm encoding includes required input I/O.
+Source-open time alone is not the time to load the dataset. NVQ's `compute` stage
+computes the selected training set's mean; per-vector parameter learning is in
+full-set encoding. Use `--samples` equal to the candidate count when evaluating
+NVQ's usual full-base mean. Retained training vectors are separate from the
+prefetcher's bounded I/O payload budget.
 Encoded vectors remain resident for the sink; this is not a bounded-total-memory
-streaming quantizer. Preload additionally retains the complete raw base set.
+encoding pipeline. Preload additionally retains the complete raw base set.
 
 Source counters report **logical** reads/bytes, not SSD traffic. No graph is built,
 no saved quantizer is reused, and the benchmark does not measure index recall or QPS.
