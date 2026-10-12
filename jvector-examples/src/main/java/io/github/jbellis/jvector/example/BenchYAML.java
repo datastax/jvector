@@ -118,7 +118,7 @@ public class BenchYAML {
         for (var config : allConfigs) {
 
             String datasetName = config.dataset;
-            DataSet ds = DataSets.loadDataSet(datasetName).orElseThrow(
+            DataSet<?> ds = DataSets.loadDataSet(datasetName).orElseThrow(
                     () -> new RuntimeException("Could not load dataset:" + datasetName)
             ).getDataSet();
             // Register dataset info the first time we actually load the dataset for benchmarking
@@ -131,9 +131,9 @@ public class BenchYAML {
                     config.construction.neighborOverflow,
                     config.construction.addHierarchy,
                     config.construction.refineFinalGraph,
-                    config.construction.getFeatureSets(),
-                    config.construction.getCompressorParameters(),
-                    config.search.getCompressorParameters(),
+                    config.construction.getFeatureSets(ds),
+                    config.construction.getCompressorParameters(ds),
+                    config.search.getCompressorParameters(ds),
                     config.search.topKOverquery,
                     config.search.useSearchPruning,
                     artifacts);

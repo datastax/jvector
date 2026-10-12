@@ -17,7 +17,7 @@
 package io.github.jbellis.jvector.graph.disk;
 
 import io.github.jbellis.jvector.disk.ReaderSupplierFactory;
-import io.github.jbellis.jvector.example.benchmarks.datasets.DataSet;
+import io.github.jbellis.jvector.example.benchmarks.datasets.FloatDataSet;
 import io.github.jbellis.jvector.example.benchmarks.datasets.DataSets;
 import io.github.jbellis.jvector.graph.GraphIndexBuilder;
 import io.github.jbellis.jvector.graph.ImmutableGraphIndex;
@@ -302,7 +302,7 @@ public class ParallelWriteExample {
         String datasetName = args.length > 0 ? args[0] : "cohere-english-v3-100k";
 
         System.out.println("Loading dataset: " + datasetName);
-        DataSet ds = DataSets.loadDataSet(datasetName).orElseThrow(
+        FloatDataSet ds = (FloatDataSet) DataSets.loadDataSet(datasetName).orElseThrow(
                 () -> new RuntimeException("Dataset " + datasetName + " not found")
         ).getDataSet();
         System.out.printf("Loaded %d vectors of dimension %d%n", ds.getBaseVectors().size(), ds.getDimension());

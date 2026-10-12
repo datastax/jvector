@@ -154,14 +154,22 @@ public class ThroughputBenchmark extends AbstractQueryBenchmark {
                             .forEach(k -> {
                                 long queryStart = System.nanoTime();
 
-                                // Generate a random vector
-                                VectorFloat<?> randQ = vts.createFloatVector(dim);
-                                for (int j = 0; j < dim; j++) {
-                                    randQ.set(j, ThreadLocalRandom.current().nextFloat());
+                                SearchResult sr;
+                                if (cs.getDataSet() instanceof io.github.jbellis.jvector.example.benchmarks.datasets.ByteDataSet) {
+                                    var randQ = vts.createByteSequence(dim);
+                                    for (int j = 0; j < dim; j++) {
+                                        randQ.set(j, (byte) ThreadLocalRandom.current().nextInt(-128, 128));
+                                    }
+                                    sr = QueryExecutor.executeQuery(cs, topK, rerankK, usePruning, randQ);
+                                } else {
+                                    // Generate a random vector
+                                    VectorFloat<?> randQ = vts.createFloatVector(dim);
+                                    for (int j = 0; j < dim; j++) {
+                                        randQ.set(j, ThreadLocalRandom.current().nextFloat());
+                                    }
+                                    VectorUtil.l2normalize(randQ);
+                                    sr = QueryExecutor.executeQuery(cs, topK, rerankK, usePruning, randQ);
                                 }
-                                VectorUtil.l2normalize(randQ);
-                                SearchResult sr = QueryExecutor.executeQuery(
-                                        cs, topK, rerankK, usePruning, randQ);
                                 SINK += sr.getVisitedCount();
 
                                 long queryEnd = System.nanoTime();
