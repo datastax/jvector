@@ -40,7 +40,15 @@
 #   query: private_query.fvecs
 #   gt: private_gt.ivecs
 
-sift1m-128-euclidean-int8:
-  base: /home/raghuveer/myplayground/dataset-processing/runs/sift1m_hdf5/sift1m_base_975462.bvecs
-  query: /home/raghuveer/myplayground/dataset-processing/runs/sift1m_hdf5/sift1m_query_10000.bvecs
-  gt: /home/raghuveer/myplayground/dataset-processing/runs/sift1m_hdf5/sift1m_gt_l2_100.ivecs
+#sift1m-128-euclidean-int8:
+#  base: /home/raghuveer/myplayground/dataset-processing/runs/sift1m_hdf5/sift1m_base_975462.bvecs
+#  query: /home/raghuveer/myplayground/dataset-processing/runs/sift1m_hdf5/sift1m_query_10000.bvecs
+#  gt: /home/raghuveer/myplayground/dataset-processing/runs/sift1m_hdf5/sift1m_gt_l2_100.ivecs
+#wikipedia-2023-11-en-mxbai-int8-1m:
+#  base: /home/ubuntu/dataset_cache/int8-datasets/processed/wikipedia-2023-11-en-mxbai-int8-1m/wikipedia_2023_11_en_mxbai_int8_base_987060.bvecs
+#  query: /home/ubuntu/dataset_cache/int8-datasets/processed/wikipedia-2023-11-en-mxbai-int8-1m/wikipedia_2023_11_en_mxbai_int8_query_10000.bvecs
+#  gt: /home/ubuntu/dataset_cache/int8-datasets/processed/wikipedia-2023-11-en-mxbai-int8-1m/wikipedia_2023_11_en_mxbai_int8_gt_ip_100.ivecs
+#wiki-multilingual-v3-int8-1m:
+#  base: /home/ubuntu/dataset_cache/int8-datasets/processed/wiki-multilingual-v3-int8-1m/wiki_multilingual_v3_int8_base_999158.bvecs
+#  query: /home/ubuntu/dataset_cache/int8-datasets/processed/wiki-multilingual-v3-int8-1m/wiki_multilingual_v3_int8_query_10000.bvecs
+#  gt: /home/ubuntu/dataset_cache/int8-datasets/processed/wiki-multilingual-v3-int8-1m/wiki_multilingual_v3_int8_gt_ip_100.ivecs
