@@ -45,7 +45,7 @@ public class StaticSetVectorsBenchmark {
     private List<VectorFloat<?>> queryVectors;
     private List<List<Integer>> groundTruth;
     private GraphIndexBuilder graphIndexBuilder;
-    private ImmutableGraphIndex graphIndex;
+    private GraphIndex graphIndex;
     int originalDimension;
 
     @Setup

@@ -18,7 +18,7 @@ package io.github.jbellis.jvector.graph.disk;
 
 import io.github.jbellis.jvector.disk.BufferedRandomAccessWriter;
 import io.github.jbellis.jvector.disk.RandomAccessWriter;
-import io.github.jbellis.jvector.graph.ImmutableGraphIndex;
+import io.github.jbellis.jvector.graph.GraphIndex;
 import io.github.jbellis.jvector.graph.disk.feature.Feature;
 import io.github.jbellis.jvector.graph.disk.feature.FeatureId;
 
@@ -79,7 +79,7 @@ public class OnDiskGraphIndexWriter extends RandomAccessOnDiskGraphIndexWriter {
     OnDiskGraphIndexWriter(RandomAccessWriter randomAccessWriter,
                                    int version,
                                    long startOffset,
-                                   ImmutableGraphIndex graph,
+                                   GraphIndex graph,
                                    OrdinalMapper oldToNewOrdinals,
                                    int dimension,
                                    EnumMap<FeatureId, Feature> features)
@@ -91,8 +91,8 @@ public class OnDiskGraphIndexWriter extends RandomAccessOnDiskGraphIndexWriter {
      * Writes L0 records sequentially
      */
     @Override
-    protected void writeL0Records(ImmutableGraphIndex.View view,
-                                          Map<FeatureId, IntFunction<Feature.State>> featureStateSuppliers) throws IOException {
+    protected void writeL0Records(GraphIndex.View view,
+                                  Map<FeatureId, IntFunction<Feature.State>> featureStateSuppliers) throws IOException {
         // for each graph node, write the associated features, followed by its neighbors at L0
         for (int newOrdinal = 0; newOrdinal <= ordinalMapper.maxOrdinal(); newOrdinal++) {
             var originalOrdinal = ordinalMapper.newToOld(newOrdinal);
@@ -157,11 +157,15 @@ public class OnDiskGraphIndexWriter extends RandomAccessOnDiskGraphIndexWriter {
     public static class Builder extends AbstractGraphIndexWriter.Builder<OnDiskGraphIndexWriter, RandomAccessWriter> {
         private long startOffset = 0L;
 
-        public Builder(ImmutableGraphIndex graphIndex, Path outPath) throws FileNotFoundException {
-            this(graphIndex, new BufferedRandomAccessWriter(outPath));
+        /**
+         * Writes to the file at {@code outPath}, which is opened (and created if needed) by
+         * {@link #build()}, not here; the writer that {@code build()} returns closes it.
+         */
+        public Builder(GraphIndex graphIndex, Path outPath) throws FileNotFoundException {
+            super(graphIndex, () -> new BufferedRandomAccessWriter(outPath));
         }
 
-        public Builder(ImmutableGraphIndex graphIndex, RandomAccessWriter out) {
+        public Builder(GraphIndex graphIndex, RandomAccessWriter out) {
             super(graphIndex, out);
         }
 
@@ -171,6 +175,33 @@ public class OnDiskGraphIndexWriter extends RandomAccessOnDiskGraphIndexWriter {
          */
         public Builder withStartOffset(long startOffset) {
             this.startOffset = startOffset;
+            return this;
+        }
+
+        // Overridden only to return this builder's own type, so the options specific to this writer
+        // stay reachable after a common option in a chain.
+
+        @Override
+        public Builder with(Feature feature) {
+            super.with(feature);
+            return this;
+        }
+
+        @Override
+        public Builder withMapper(OrdinalMapper ordinalMapper) {
+            super.withMapper(ordinalMapper);
+            return this;
+        }
+
+        @Override
+        public Builder withMap(Map<Integer, Integer> oldToNewOrdinals) {
+            super.withMap(oldToNewOrdinals);
+            return this;
+        }
+
+        @Override
+        public Builder withVersion(int version) {
+            super.withVersion(version);
             return this;
         }
 

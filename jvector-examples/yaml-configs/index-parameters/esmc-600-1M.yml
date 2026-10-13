@@ -1,0 +1,47 @@
+yamlSchemaVersion: 2
+onDiskIndexVersion: 7
+
+dataset: esmc-600-1M
+
+construction:
+  outDegree: [64]
+  efConstruction: [200]
+  neighborOverflow: [1.6f]
+  addHierarchy: [No]
+  refineFinalGraph: [Yes]
+  fusedGraph: [No]
+  compression:
+    - type: ASH
+      parameters:
+        compressionRatio: 32
+        optimizer: ITQ
+        landmarkCount: 1
+        bitsPerDimension: 2
+# To use PQ, comment out ASH and uncomment PQ in both sections.
+#    - type: PQ
+#      parameters:
+#        mFactor: 8
+#        k: 256
+#        anisotropicThreshold: -1.0
+  reranking:
+    - FP
+  useSavedIndexIfExists: Yes # If yes, the system will attempt to locate a cached copy of the index instead of constructing
+
+search:
+  topKOverquery:
+    10: [1.00, 1.25, 1.56, 1.95, 2.44, 3.05, 3.81, 4.77, 5.96, 7.45, 9.31, 11.64]
+#    100: [1.0]
+  useSearchPruning: [No]
+  compression:
+    - type: ASH
+      parameters:
+        compressionRatio: 32
+        optimizer: ITQ
+        landmarkCount: 1
+        bitsPerDimension: 2
+# To use PQ, comment out ASH and uncomment PQ in both sections.
+#    - type: PQ
+#      parameters:
+#        mFactor: 8
+#        k: 256
+#        anisotropicThreshold: -1.0

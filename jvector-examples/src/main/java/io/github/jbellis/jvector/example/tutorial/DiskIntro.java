@@ -30,7 +30,7 @@ import io.github.jbellis.jvector.example.benchmarks.datasets.DataSets;
 import io.github.jbellis.jvector.example.util.AccuracyMetrics;
 import io.github.jbellis.jvector.graph.GraphIndexBuilder;
 import io.github.jbellis.jvector.graph.GraphSearcher;
-import io.github.jbellis.jvector.graph.ImmutableGraphIndex;
+import io.github.jbellis.jvector.graph.GraphIndex;
 import io.github.jbellis.jvector.graph.RandomAccessVectorValues;
 import io.github.jbellis.jvector.graph.SearchResult;
 import io.github.jbellis.jvector.graph.disk.GraphIndexWriter;
@@ -71,7 +71,7 @@ public class DiskIntro {
         System.out.println("Building the graph, may take a few minutes");
 
         // nothing new here
-        ImmutableGraphIndex heapGraph;
+        GraphIndex heapGraph;
         try (GraphIndexBuilder builder = new GraphIndexBuilder(bsp, dim, M, ef, overflow, alpha, addHierarchy)) {
             heapGraph = builder.build(ravv);
         }

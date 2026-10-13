@@ -34,6 +34,10 @@ import java.util.concurrent.atomic.AtomicInteger;
 import static org.junit.Assert.*;
 
 public class TestDatasetPrefetching {
+    // Track the current versions so a format or schema bump doesn't break these tests.
+    private static final String HEADER =
+            "yamlSchemaVersion: 2\nonDiskIndexVersion: " + OnDiskGraphIndex.CURRENT_VERSION + "\n";
+
     private MultiConfig config(String build, String search, boolean fused, String rerank) {
         var config = new MultiConfig();
         config.construction = new ConstructionParameters();
@@ -49,18 +53,18 @@ public class TestDatasetPrefetching {
     @Test public void yamlDefaultsToResidentAndOptInIsParsed() throws Exception {
         var file = Files.createTempFile("prefetch-flag", ".yml");
         try {
-            Files.writeString(file, "yamlSchemaVersion: 1\nonDiskIndexVersion: 6\n");
+            Files.writeString(file, HEADER);
             assertFalse(MultiConfig.getConfig(file.toString()).useDatasetPrefetching);
-            Files.writeString(file, "yamlSchemaVersion: 1\nonDiskIndexVersion: 6\nuseDatasetPrefetching: false\n");
+            Files.writeString(file, HEADER + "useDatasetPrefetching: false\n");
             assertFalse(MultiConfig.getConfig(file.toString()).useDatasetPrefetching);
-            Files.writeString(file, "yamlSchemaVersion: 1\nonDiskIndexVersion: 6\nuseDatasetPrefetching: true\n");
+            Files.writeString(file, HEADER + "useDatasetPrefetching: true\n");
             assertTrue(MultiConfig.getConfig(file.toString()).useDatasetPrefetching);
         } finally { Files.delete(file); }
     }
     @Test public void datasetPrefetchingAndCompactionOptionsAreIndependent() throws Exception {
         var file = Files.createTempFile("prefetch-compaction-flags", ".yml");
         try {
-            String common = "yamlSchemaVersion: 1\nonDiskIndexVersion: 6\nuseDatasetPrefetching: true\n";
+            String common = HEADER + "useDatasetPrefetching: true\n";
             Files.writeString(file, common);
             var config = MultiConfig.getConfig(file.toString());
             assertTrue(config.useDatasetPrefetching);
@@ -78,7 +82,7 @@ public class TestDatasetPrefetching {
     @Test public void versionedYamlRejectsUnknownSettings() throws Exception {
         var file = Files.createTempFile("prefetch-unknown-setting", ".yml");
         try {
-            Files.writeString(file, "yamlSchemaVersion: 1\nonDiskIndexVersion: 6\nuseDatasetPrefetching: false\nunknownSetting: true\n");
+            Files.writeString(file, HEADER + "useDatasetPrefetching: false\nunknownSetting: true\n");
             assertThrows(org.yaml.snakeyaml.error.YAMLException.class,
                     () -> MultiConfig.getConfig(file.toString()));
         } finally { Files.delete(file); }

@@ -11,6 +11,7 @@ dataset_
 **results**.jsonl
 
 ### Bench caches
+compressor_cache/
 pq_cache/
 index_cache/
 dataset_cache/
@@ -64,3 +65,5 @@ dependency-reduced-pom.xml
 results.csv
 **/datasets/custom/**
 **/dataset_cache/**
+
+design-notes/*

@@ -26,6 +26,7 @@ import java.io.IOException;
 import java.util.EnumMap;
 import java.util.LinkedHashMap;
 import java.util.Map;
+import java.util.Set;
 import java.util.function.IntFunction;
 import java.util.stream.Collectors;
 
@@ -44,7 +45,20 @@ class GraphIndexFormatV6 extends GraphIndexFormatV5 {
 
     /** Creates the singleton format for version 6. */
     GraphIndexFormatV6() {
-        super(6, allFeatures());
+        super(6, v6Features());
+    }
+
+    /**
+     * Protected constructor for subclasses (V7) that share V6's wire format but support a
+     * different set of features.
+     */
+    protected GraphIndexFormatV6(int version, Set<FeatureId> supportedFeatures) {
+        super(version, supportedFeatures);
+    }
+
+    @Override
+    public boolean supportsFusedFeatures() {
+        return true;
     }
 
     /** Places fused features last so non-fused inline features occupy a contiguous prefix. */

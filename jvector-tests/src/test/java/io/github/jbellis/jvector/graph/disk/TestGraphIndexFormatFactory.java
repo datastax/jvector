@@ -89,9 +89,14 @@ public class TestGraphIndexFormatFactory extends RandomizedTest {
         assertFalse(v2.usesFooter());
         assertEquals(EnumSet.of(FeatureId.INLINE_VECTORS), v2.getSupportedFeatures());
 
-        // versions 3-5 support every feature except FUSED_PQ; multi-layer arrives at v4,
+        // versions 3-5 support every non-fused feature; multi-layer arrives at v4,
         // footer-based metadata arrives at v5.
-        var nonFused = EnumSet.complementOf(EnumSet.of(FeatureId.FUSED_PQ));
+        var nonFused = EnumSet.of(FeatureId.INLINE_VECTORS, FeatureId.NVQ_VECTORS,
+                FeatureId.SEPARATED_VECTORS, FeatureId.SEPARATED_NVQ);
+        for (int version : new int[]{2, 3, 4, 5}) {
+            assertFalse("version " + version + " should not support fused features",
+                    GraphIndexFormatFactory.forVersion(version).supportsFusedFeatures());
+        }
         for (int version : new int[]{3, 4, 5}) {
             var format = GraphIndexFormatFactory.forVersion(version);
             assertEquals("version " + version + " supported features", nonFused, format.getSupportedFeatures());
@@ -100,11 +105,27 @@ public class TestGraphIndexFormatFactory extends RandomizedTest {
             assertEquals("version " + version + " footer usage", version >= 5, format.usesFooter());
         }
 
+        // v6 adds FUSED_PQ
+        var v6Features = EnumSet.copyOf(nonFused);
+        v6Features.add(FeatureId.FUSED_PQ);
         var v6 = GraphIndexFormatFactory.forVersion(6);
         assertTrue(v6.supportsMultiLayer());
         assertTrue(v6.usesFooter());
+        assertTrue(v6.supportsFusedFeatures());
         assertTrue(v6.supportsFeature(FeatureId.FUSED_PQ));
-        assertEquals(EnumSet.allOf(FeatureId.class), v6.getSupportedFeatures());
+        assertFalse(v6.supportsFeature(FeatureId.FUSED_ASH));
+        assertEquals(v6Features, v6.getSupportedFeatures());
+
+        // v7 adds FUSED_ASH
+        var v7Features = EnumSet.copyOf(v6Features);
+        v7Features.add(FeatureId.FUSED_ASH);
+        var v7 = GraphIndexFormatFactory.forVersion(7);
+        assertTrue(v7.supportsMultiLayer());
+        assertTrue(v7.usesFooter());
+        assertTrue(v7.supportsFusedFeatures());
+        assertTrue(v7.supportsFeature(FeatureId.FUSED_PQ));
+        assertTrue(v7.supportsFeature(FeatureId.FUSED_ASH));
+        assertEquals(v7Features, v7.getSupportedFeatures());
     }
 
     @Test

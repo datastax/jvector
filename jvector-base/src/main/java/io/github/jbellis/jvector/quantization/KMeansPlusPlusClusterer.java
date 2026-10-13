@@ -38,6 +38,13 @@ import static java.lang.Math.max;
 public class KMeansPlusPlusClusterer {
     private static final VectorTypeSupport vectorTypeSupport = VectorizationProvider.getInstance().getVectorTypeSupport();
 
+    // Observability flags (disabled by default)
+    private static final boolean VERBOSE_KMEANS =
+            Boolean.getBoolean("jvector.kmeans.verbose");
+
+    private static final boolean VERBOSE_KMEANS_TIMING =
+            Boolean.getBoolean("jvector.kmeans.timing");
+
     public static final float UNWEIGHTED = -1.0f;
 
     // number of centroids to compute
@@ -129,18 +136,74 @@ public class KMeansPlusPlusClusterer {
      * @return a VectorFloat of cluster centroids.
      */
     public VectorFloat<?> cluster(int unweightedIterations, int anisotropicIterations) {
-        // Always cluster unweighted first, it is significantly faster
+
+        final int n = points.length;
+        final int threshold = Math.max(1, (int) (0.01 * n));
+
+        // ------------------------------------------------------------
+        // Unweighted (isotropic) k-means phase
+        // ------------------------------------------------------------
         for (int i = 0; i < unweightedIterations; i++) {
+
+            long t0 = VERBOSE_KMEANS_TIMING ? System.nanoTime() : 0L;
             int changedCount = clusterOnceUnweighted();
-            if (changedCount <= 0.01 * points.length) {
+            long t1 = VERBOSE_KMEANS_TIMING ? System.nanoTime() : 0L;
+
+            if (VERBOSE_KMEANS) {
+                System.out.printf(
+                        "KMeans unweighted iter %d: %d/%d reassigned (%.3f%%)%n",
+                        i,
+                        changedCount,
+                        n,
+                        100.0 * changedCount / n
+                );
+            }
+
+            if (VERBOSE_KMEANS_TIMING) {
+                System.out.printf(
+                        "  time = %.3f ms%n",
+                        (t1 - t0) * 1e-6
+                );
+            }
+
+            if (changedCount <= threshold) {
+                if (VERBOSE_KMEANS) {
+                    System.out.println("KMeans unweighted converged early");
+                }
                 break;
             }
         }
 
-        // Optionally, refine using anisotropic clustering
+        // ------------------------------------------------------------
+        // Anisotropic refinement phase
+        // ------------------------------------------------------------
         for (int i = 0; i < anisotropicIterations; i++) {
+
+            long t0 = VERBOSE_KMEANS_TIMING ? System.nanoTime() : 0L;
             int changedCount = clusterOnceAnisotropic();
-            if (changedCount <= 0.01 * points.length) {
+            long t1 = VERBOSE_KMEANS_TIMING ? System.nanoTime() : 0L;
+
+            if (VERBOSE_KMEANS) {
+                System.out.printf(
+                        "KMeans anisotropic iter %d: %d/%d reassigned (%.3f%%)%n",
+                        i,
+                        changedCount,
+                        n,
+                        100.0 * changedCount / n
+                );
+            }
+
+            if (VERBOSE_KMEANS_TIMING) {
+                System.out.printf(
+                        "  time = %.3f ms%n",
+                        (t1 - t0) * 1e-6
+                );
+            }
+
+            if (changedCount <= threshold) {
+                if (VERBOSE_KMEANS) {
+                    System.out.println("KMeans anisotropic converged early");
+                }
                 break;
             }
         }

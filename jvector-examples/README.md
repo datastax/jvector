@@ -17,6 +17,13 @@ and vector ownership; the second trains and encodes with PQ and NVQ. See
 [Batched input vector access](../docs/batched-vector-access.md) for configuration,
 source lifecycle, and integration guidance.
 
+### IndexApiExample
+A walkthrough of building, writing and searching graph indexes with the `Indexes` API: the one-call build,
+building with PQ or BQ compression, every graph writer, fused PQ and NVQ on disk, incremental construction with
+deletes, and continuing a saved graph. Each section prints its recall against brute force.
+
+> `mvn compile exec:exec@index-api-example`
+
 ### SiftSmall 
 A simple benchmark for the sift dataset located in the [siftsmall](./siftsmall) directory in the project root.
 

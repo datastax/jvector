@@ -20,7 +20,7 @@ import io.github.jbellis.jvector.disk.IndexWriter;
 import io.github.jbellis.jvector.disk.RandomAccessReader;
 import io.github.jbellis.jvector.disk.RandomAccessWriter;
 import io.github.jbellis.jvector.disk.ReaderSupplier;
-import io.github.jbellis.jvector.graph.ImmutableGraphIndex;
+import io.github.jbellis.jvector.graph.GraphIndex;
 import io.github.jbellis.jvector.graph.OnHeapGraphIndex;
 import io.github.jbellis.jvector.graph.disk.feature.Feature;
 import io.github.jbellis.jvector.graph.disk.feature.FeatureId;
@@ -100,6 +100,12 @@ abstract class AbstractGraphIndexFormat implements GraphIndexFormat {
         return supportsMultiLayer;
     }
 
+    /** Fused features arrive with version 6; {@link GraphIndexFormatV6} overrides this. */
+    @Override
+    public boolean supportsFusedFeatures() {
+        return false;
+    }
+
     @Override
     public boolean usesFooter() {
         return usesFooter;
@@ -168,7 +174,7 @@ abstract class AbstractGraphIndexFormat implements GraphIndexFormat {
         final int entryNode;
         try (var view = ctx.graph.getView()) {
             var en = view.entryNode();
-            entryNode = en == null ? ImmutableGraphIndex.ENTRY_NODE_ABSENT : ctx.ordinalMapper.oldToNew(en.node);
+            entryNode = en == null ? GraphIndex.ENTRY_NODE_ABSENT : ctx.ordinalMapper.oldToNew(en.node);
         }
         var commonHeader = new CommonHeader(getVersion(), ctx.dimension, entryNode, layerInfo, ctx.ordinalMapper.maxOrdinal() + 1);
         var header = new Header(commonHeader, ctx.featureMap);
@@ -190,7 +196,7 @@ abstract class AbstractGraphIndexFormat implements GraphIndexFormat {
         final int entryNode;
         try (var view = ctx.graph.getView()) {
             var en = view.entryNode();
-            entryNode = en == null ? ImmutableGraphIndex.ENTRY_NODE_ABSENT : ctx.ordinalMapper.oldToNew(en.node);
+            entryNode = en == null ? GraphIndex.ENTRY_NODE_ABSENT : ctx.ordinalMapper.oldToNew(en.node);
         }
         var commonHeader = new CommonHeader(getVersion(), ctx.dimension, entryNode, layerInfo, ctx.ordinalMapper.maxOrdinal() + 1);
         var header = new Header(commonHeader, ctx.featureMap);
@@ -408,12 +414,22 @@ abstract class AbstractGraphIndexFormat implements GraphIndexFormat {
     }
 
     /**
+     * Helper to create the frozen set of features supported by version 7: everything in version 6
+     * plus {@link FeatureId#FUSED_ASH}. Deliberately enumerated for the same reason as
+     * {@link #v6Features()}.
+     */
+    protected static Set<FeatureId> v7Features() {
+        return EnumSet.of(FeatureId.INLINE_VECTORS, FeatureId.FUSED_PQ, FeatureId.NVQ_VECTORS,
+                FeatureId.SEPARATED_VECTORS, FeatureId.SEPARATED_NVQ, FeatureId.FUSED_ASH);
+    }
+
+    /**
      * Helper to create the frozen set of features supported by version 6.
      * Deliberately enumerated rather than {@code EnumSet.allOf(FeatureId.class)}: version 6's
      * supported-feature set is a historical fact about a shipped format and must not change just
      * because a new {@link FeatureId} is added to the enum for some future version.
      */
-    protected static Set<FeatureId> allFeatures() {
+    protected static Set<FeatureId> v6Features() {
         return EnumSet.of(FeatureId.INLINE_VECTORS, FeatureId.FUSED_PQ, FeatureId.NVQ_VECTORS,
                 FeatureId.SEPARATED_VECTORS, FeatureId.SEPARATED_NVQ);
     }

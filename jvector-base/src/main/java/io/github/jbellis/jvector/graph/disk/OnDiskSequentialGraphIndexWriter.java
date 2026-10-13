@@ -17,8 +17,9 @@
 package io.github.jbellis.jvector.graph.disk;
 
 import io.github.jbellis.jvector.disk.IndexWriter;
-import io.github.jbellis.jvector.graph.ImmutableGraphIndex;
-import io.github.jbellis.jvector.graph.disk.feature.*;
+import io.github.jbellis.jvector.graph.GraphIndex;
+import io.github.jbellis.jvector.graph.disk.feature.Feature;
+import io.github.jbellis.jvector.graph.disk.feature.FeatureId;
 
 import java.io.IOException;
 import java.util.EnumMap;
@@ -56,7 +57,7 @@ public class OnDiskSequentialGraphIndexWriter extends AbstractGraphIndexWriter<I
 
     OnDiskSequentialGraphIndexWriter(IndexWriter out,
                                              int version,
-                                             ImmutableGraphIndex graph,
+                                             GraphIndex graph,
                                              OrdinalMapper oldToNewOrdinals,
                                              int dimension,
                                              EnumMap<FeatureId, Feature> features)
@@ -89,7 +90,7 @@ public class OnDiskSequentialGraphIndexWriter extends AbstractGraphIndexWriter<I
      * Builder for {@link OnDiskSequentialGraphIndexWriter}, with optional features.
      */
     public static class Builder extends AbstractGraphIndexWriter.Builder<OnDiskSequentialGraphIndexWriter, IndexWriter> {
-        public Builder(ImmutableGraphIndex graphIndex, IndexWriter out) {
+        public Builder(GraphIndex graphIndex, IndexWriter out) {
             super(graphIndex, out);
         }
 
@@ -97,6 +98,33 @@ public class OnDiskSequentialGraphIndexWriter extends AbstractGraphIndexWriter<I
         protected OnDiskSequentialGraphIndexWriter reallyBuild(int dimension) {
             return new OnDiskSequentialGraphIndexWriter(out, version, graphIndex, ordinalMapper, dimension, features);
 
+        }
+
+        // Overridden only to return this builder's own type, so the options specific to this writer
+        // stay reachable after a common option in a chain.
+
+        @Override
+        public Builder with(Feature feature) {
+            super.with(feature);
+            return this;
+        }
+
+        @Override
+        public Builder withMapper(OrdinalMapper ordinalMapper) {
+            super.withMapper(ordinalMapper);
+            return this;
+        }
+
+        @Override
+        public Builder withMap(Map<Integer, Integer> oldToNewOrdinals) {
+            super.withMap(oldToNewOrdinals);
+            return this;
+        }
+
+        @Override
+        public Builder withVersion(int version) {
+            super.withVersion(version);
+            return this;
         }
     }
 }

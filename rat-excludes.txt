@@ -32,7 +32,7 @@ yaml-configs/**/*.yaml
 yaml-configs/**/*.yml
 yaml-configs/**/.catalog-cache/**
 src/main/resources/logback.xml
-docs/**/*.md
+docs/**
 yaml-configs/**/*.md
 local_datasets/**
 **/datasets/**

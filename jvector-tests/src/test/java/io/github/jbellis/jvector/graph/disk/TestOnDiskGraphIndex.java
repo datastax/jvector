@@ -20,12 +20,7 @@ import com.carrotsearch.randomizedtesting.RandomizedTest;
 import com.carrotsearch.randomizedtesting.annotations.ThreadLeakScope;
 import io.github.jbellis.jvector.TestUtil;
 import io.github.jbellis.jvector.disk.SimpleMappedReader;
-import io.github.jbellis.jvector.graph.GraphIndexBuilder;
-import io.github.jbellis.jvector.graph.GraphSearcher;
-import io.github.jbellis.jvector.graph.ImmutableGraphIndex;
-import io.github.jbellis.jvector.graph.ListRandomAccessVectorValues;
-import io.github.jbellis.jvector.graph.NodesIterator;
-import io.github.jbellis.jvector.graph.RandomAccessVectorValues;
+import io.github.jbellis.jvector.graph.*;
 import io.github.jbellis.jvector.graph.TestVectorGraph;
 import io.github.jbellis.jvector.graph.disk.feature.Feature;
 import io.github.jbellis.jvector.graph.disk.feature.FeatureId;
@@ -61,7 +56,7 @@ public class TestOnDiskGraphIndex extends RandomizedTest {
 
     private TestUtil.FullyConnectedGraphIndex fullyConnectedGraph;
     private TestUtil.RandomlyConnectedGraphIndex randomlyConnectedGraph;
-    private ImmutableGraphIndex emptyGraph;
+    private GraphIndex emptyGraph;
 
     @Before
     public void setup() throws IOException {
@@ -340,7 +335,7 @@ public class TestOnDiskGraphIndex extends RandomizedTest {
              var onDiskGraph = OnDiskGraphIndex.load(readerSupplier);
              var onDiskView = onDiskGraph.getView())
         {
-            assertEquals(88, onDiskGraph.ramBytesUsed()); // Current size of graph that hasn't been read from
+            assertEquals(96, onDiskGraph.ramBytesUsed()); // Current size of graph that hasn't been read from (scales with FeatureId.values().length)
             assertEquals(32, onDiskGraph.getDegree(0));
             assertEquals(2, onDiskGraph.version);
             assertEquals(100_000, onDiskGraph.size(0));
@@ -392,7 +387,7 @@ public class TestOnDiskGraphIndex extends RandomizedTest {
     }
 
     private void versionRoundTrip(int version, boolean hierarchical) throws Exception {
-        ImmutableGraphIndex graph = hierarchical
+        GraphIndex graph = hierarchical
                 ? new TestUtil.RandomlyConnectedGraphIndex(
                         List.of(new CommonHeader.LayerInfo(50, 8), new CommonHeader.LayerInfo(5, 3)),
                         getRandom())

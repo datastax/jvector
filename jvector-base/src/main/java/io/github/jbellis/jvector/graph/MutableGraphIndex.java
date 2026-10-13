@@ -32,13 +32,13 @@ import java.util.stream.IntStream;
 
 
 /**
- * An {@link ImmutableGraphIndex} that offers concurrent access; for typical graphs you will get significant
+ * A {@link GraphIndex} that offers concurrent access; for typical graphs you will get significant
  * speedups in construction and searching as you add threads.
  *
  * <p>The base layer (layer 0) contains all nodes, while higher layers are stored in sparse maps.
  * For searching, use a view obtained from {@link #getView()} which supports level–aware operations.
  */
-interface MutableGraphIndex extends ImmutableGraphIndex {
+interface MutableGraphIndex extends PersistableGraphIndex {
     /**
      * Add the given node ordinal with an empty set of neighbors.
      *
@@ -164,7 +164,8 @@ interface MutableGraphIndex extends ImmutableGraphIndex {
 
     /**
      * Signals that all mutations have been completed and the graph will not be mutated any further.
-     * Should be called by the builder after all mutations are completed (during cleanup).
+     * Should be called by the builder after all mutations are completed (during cleanup). Adding a
+     * node afterwards clears the signal again, until the next call.
      */
     void setAllMutationsCompleted();
 

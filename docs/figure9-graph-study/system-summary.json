@@ -1,0 +1,162 @@
+[
+  {
+    "case": "cohere-english-v3-1M-b2-pq-r2",
+    "pid": "2035635",
+    "from_utc": "2026-09-19T20:30:27.089599+00:00",
+    "to_utc": "2026-09-19T20:34:59.294364+00:00",
+    "min_available_GiB": 320.67454528808594,
+    "max_rss_GiB": 22.119491577148438,
+    "max_dirty_writeback_GiB": 3.08685302734375,
+    "max_memory_psi_avg10": 0.0
+  },
+  {
+    "case": "cohere-english-v3-1M-b2-pq-r2",
+    "pid": "2037555",
+    "from_utc": "2026-09-19T20:35:04.320821+00:00",
+    "to_utc": "2026-09-19T20:35:34.495364+00:00",
+    "min_available_GiB": 324.8975257873535,
+    "max_rss_GiB": 21.283061981201172,
+    "max_dirty_writeback_GiB": 0.0055694580078125,
+    "max_memory_psi_avg10": 0.0
+  },
+  {
+    "case": "cohere-english-v3-1M-b2-ash-r2",
+    "pid": "2038257",
+    "from_utc": "2026-09-19T20:35:39.520745+00:00",
+    "to_utc": "2026-09-19T20:39:31.266594+00:00",
+    "min_available_GiB": 316.5094299316406,
+    "max_rss_GiB": 23.954978942871094,
+    "max_dirty_writeback_GiB": 6.342803955078125,
+    "max_memory_psi_avg10": 0.0
+  },
+  {
+    "case": "cohere-english-v3-1M-b2-ash-r2",
+    "pid": "2039608",
+    "from_utc": "2026-09-19T20:39:36.294845+00:00",
+    "to_utc": "2026-09-19T20:40:06.513302+00:00",
+    "min_available_GiB": 321.39935302734375,
+    "max_rss_GiB": 25.008392333984375,
+    "max_dirty_writeback_GiB": 0.000514984130859375,
+    "max_memory_psi_avg10": 0.0
+  },
+  {
+    "case": "cohere-english-v3-1M-b4-pq-r2",
+    "pid": "2040168",
+    "from_utc": "2026-09-19T20:40:11.542975+00:00",
+    "to_utc": "2026-09-19T20:46:29.965677+00:00",
+    "min_available_GiB": 321.69421005249023,
+    "max_rss_GiB": 23.741764068603516,
+    "max_dirty_writeback_GiB": 5.1027984619140625,
+    "max_memory_psi_avg10": 0.0
+  },
+  {
+    "case": "cohere-english-v3-1M-b4-pq-r2",
+    "pid": "2042565",
+    "from_utc": "2026-09-19T20:46:40.022028+00:00",
+    "to_utc": "2026-09-19T20:47:10.261674+00:00",
+    "min_available_GiB": 324.74349212646484,
+    "max_rss_GiB": 23.483871459960938,
+    "max_dirty_writeback_GiB": 0.0050201416015625,
+    "max_memory_psi_avg10": 0.0
+  },
+  {
+    "case": "cohere-english-v3-1M-b4-ash-r2",
+    "pid": "2043265",
+    "from_utc": "2026-09-19T20:47:15.292182+00:00",
+    "to_utc": "2026-09-19T20:51:12.183433+00:00",
+    "min_available_GiB": 319.2004508972168,
+    "max_rss_GiB": 26.202648162841797,
+    "max_dirty_writeback_GiB": 8.726558685302734,
+    "max_memory_psi_avg10": 0.0
+  },
+  {
+    "case": "cohere-english-v3-1M-b4-ash-r2",
+    "pid": "2045044",
+    "from_utc": "2026-09-19T20:51:17.211849+00:00",
+    "to_utc": "2026-09-19T20:51:47.450795+00:00",
+    "min_available_GiB": 324.8402404785156,
+    "max_rss_GiB": 24.63471221923828,
+    "max_dirty_writeback_GiB": 0.001110076904296875,
+    "max_memory_psi_avg10": 0.0
+  },
+  {
+    "case": "cohere-english-v3-1M-b4-ash-r1",
+    "pid": "2057944",
+    "from_utc": "2026-09-19T21:19:22.866606+00:00",
+    "to_utc": "2026-09-19T21:21:19.922627+00:00",
+    "min_available_GiB": 328.5126152038574,
+    "max_rss_GiB": 20.657455444335938,
+    "max_dirty_writeback_GiB": 0.005218505859375,
+    "max_memory_psi_avg10": 0.0
+  },
+  {
+    "case": "cohere-100k-b2-ash",
+    "pid": "2058896",
+    "from_utc": "2026-09-19T21:21:45.134857+00:00",
+    "to_utc": "2026-09-19T21:22:00.303707+00:00",
+    "min_available_GiB": 333.24229431152344,
+    "max_rss_GiB": 6.707263946533203,
+    "max_dirty_writeback_GiB": 0.6126480102539062,
+    "max_memory_psi_avg10": 0.0
+  },
+  {
+    "case": "cohere-100k-b2-ash",
+    "pid": "2060298",
+    "from_utc": "2026-09-19T21:25:06.850904+00:00",
+    "to_utc": "2026-09-19T21:25:22.002665+00:00",
+    "min_available_GiB": 334.38719177246094,
+    "max_rss_GiB": 5.549938201904297,
+    "max_dirty_writeback_GiB": 0.8749160766601562,
+    "max_memory_psi_avg10": 0.0
+  },
+  {
+    "case": "cohere-100k-b2-pq",
+    "pid": "2060984",
+    "from_utc": "2026-09-19T21:25:27.082719+00:00",
+    "to_utc": "2026-09-19T21:25:47.338261+00:00",
+    "min_available_GiB": 318.1367721557617,
+    "max_rss_GiB": 21.780776977539062,
+    "max_dirty_writeback_GiB": 0.7725296020507812,
+    "max_memory_psi_avg10": 0.0
+  },
+  {
+    "case": "cohere-100k-b4-ash",
+    "pid": "2061586",
+    "from_utc": "2026-09-19T21:25:52.388155+00:00",
+    "to_utc": "2026-09-19T21:26:12.654560+00:00",
+    "min_available_GiB": 335.6449546813965,
+    "max_rss_GiB": 4.201637268066406,
+    "max_dirty_writeback_GiB": 1.6809310913085938,
+    "max_memory_psi_avg10": 0.0
+  },
+  {
+    "case": "cohere-100k-b4-pq",
+    "pid": "2062247",
+    "from_utc": "2026-09-19T21:26:17.706419+00:00",
+    "to_utc": "2026-09-19T21:26:58.288125+00:00",
+    "min_available_GiB": 333.78203201293945,
+    "max_rss_GiB": 6.060382843017578,
+    "max_dirty_writeback_GiB": 1.7176704406738281,
+    "max_memory_psi_avg10": 0.0
+  },
+  {
+    "case": "cohere-1m-b4-ash",
+    "pid": "2062996",
+    "from_utc": "2026-09-19T21:27:13.430324+00:00",
+    "to_utc": "2026-09-19T21:30:46.023376+00:00",
+    "min_available_GiB": 321.1495819091797,
+    "max_rss_GiB": 18.847640991210938,
+    "max_dirty_writeback_GiB": 3.8353195190429688,
+    "max_memory_psi_avg10": 0.0
+  },
+  {
+    "case": "cohere-1m-b4-pq",
+    "pid": "2064589",
+    "from_utc": "2026-09-19T21:30:51.080848+00:00",
+    "to_utc": "2026-09-19T21:36:51.520063+00:00",
+    "min_available_GiB": 317.8377342224121,
+    "max_rss_GiB": 21.94839859008789,
+    "max_dirty_writeback_GiB": 5.549713134765625,
+    "max_memory_psi_avg10": 0.0
+  }
+]

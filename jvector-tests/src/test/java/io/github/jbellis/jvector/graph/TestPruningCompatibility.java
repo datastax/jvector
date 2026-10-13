@@ -196,12 +196,12 @@ public class TestPruningCompatibility extends LuceneTestCase {
 
     private static class Fixture {
         final RandomAccessVectorValues ravv;
-        final ImmutableGraphIndex graph;
+        final GraphIndex graph;
         final FixedBitSet evenOrds;
         final VectorFloat<?>[] queries;
 
         Fixture(RandomAccessVectorValues ravv,
-                ImmutableGraphIndex graph,
+                GraphIndex graph,
                 FixedBitSet evenOrds,
                 VectorFloat<?>[] queries) {
             this.ravv = ravv;

@@ -21,6 +21,7 @@ import io.github.jbellis.jvector.LuceneTestCase;
 import io.github.jbellis.jvector.TestUtil;
 import io.github.jbellis.jvector.disk.SimpleMappedReader;
 import io.github.jbellis.jvector.graph.similarity.BuildScoreProvider;
+import io.github.jbellis.jvector.util.Bits;
 import io.github.jbellis.jvector.vector.VectorSimilarityFunction;
 import io.github.jbellis.jvector.vector.VectorizationProvider;
 import io.github.jbellis.jvector.vector.types.VectorFloat;
@@ -33,11 +34,13 @@ import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
+import java.util.List;
 import java.util.function.Supplier;
 
 import static io.github.jbellis.jvector.TestUtil.assertGraphEquals;
 import static io.github.jbellis.jvector.graph.TestVectorGraph.createRandomFloatVectors;
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
 
@@ -233,6 +236,45 @@ public class GraphIndexBuilderTest extends LuceneTestCase {
         assertEquals(ravv.size(), builder.graph.size(0));
         assertNull(builder.graph.entryNode());
         assertGraphEquals(graph, builder.graph);
+    }
+
+    /**
+     * Regression test: rescore() copies every node into a new graph, and used to drop the set of nodes
+     * marked deleted, so a node deleted before a rescore became live again and survived cleanup().
+     */
+    @Test
+    public void testRescoreKeepsPendingDeletes() throws IOException {
+        int n = 200;
+        int dimension = 8;
+        var ravv = new ListRandomAccessVectorValues(List.of(createRandomFloatVectors(n, dimension, random())), dimension);
+        var vsf = VectorSimilarityFunction.EUCLIDEAN;
+        var bsp = BuildScoreProvider.randomAccessScoreProvider(ravv, vsf);
+        try (var builder = new GraphIndexBuilder(bsp, dimension, 16, 50, 1.2f, 1.2f, true)) {
+            for (int i = 0; i < n; i++) {
+                builder.addGraphNode(i, ravv.getVector(i));
+            }
+            builder.markNodeDeleted(7);
+            builder.markNodeDeleted(13);
+
+            try (var rescored = GraphIndexBuilder.rescore(builder, BuildScoreProvider.randomAccessScoreProvider(ravv, vsf))) {
+                var graph = (OnHeapGraphIndex) rescored.getGraph();
+                assertTrue(graph.getDeletedNodes().get(7));
+                assertTrue(graph.getDeletedNodes().get(13));
+                assertEquals(2, graph.getDeletedNodes().cardinality());
+
+                // still hidden from searches...
+                var result = GraphSearcher.search(ravv.getVector(7), 5, ravv, vsf, graph, Bits.ALL);
+                for (var ns : result.getNodes()) {
+                    assertTrue("deleted node " + ns.node + " returned after rescore", ns.node != 7 && ns.node != 13);
+                }
+
+                // ...and still removed by cleanup()
+                rescored.cleanup();
+                assertFalse(graph.containsNode(7));
+                assertFalse(graph.containsNode(13));
+                assertEquals(n - 2, graph.size(0));
+            }
+        }
     }
 
     // Because RandomAccessVectorValues is exposed in such a way that it allows for subsequent additions to the

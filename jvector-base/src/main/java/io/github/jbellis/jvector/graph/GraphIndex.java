@@ -24,7 +24,7 @@
 
 package io.github.jbellis.jvector.graph;
 
-import io.github.jbellis.jvector.graph.disk.OrdinalMapper;
+import io.github.jbellis.jvector.api.Index;
 import io.github.jbellis.jvector.graph.similarity.ScoreFunction;
 import io.github.jbellis.jvector.util.Accountable;
 import io.github.jbellis.jvector.util.Bits;
@@ -47,7 +47,7 @@ import java.io.IOException;
  * All methods are threadsafe.  Operations that require persistent state are wrapped
  * in a View that should be created per accessing thread.
  */
-public interface ImmutableGraphIndex extends AutoCloseable, Accountable {
+public interface GraphIndex extends Index, Accountable {
     /** Marks entry node as absent (fe, empty graph) */
     int ENTRY_NODE_ABSENT = -1;
 
@@ -76,6 +76,20 @@ public interface ImmutableGraphIndex extends AutoCloseable, Accountable {
      * View per search.
      */
     View getView();
+
+    /**
+     * Returns a new {@link GraphSearcher} over a fresh {@link #getView()} of this graph. Equivalent to
+     * {@code new GraphSearcher(graph)}.
+     * <p>
+     * Creating a searcher allocates its scratch space (and, for an on-disk graph, a reader), so reuse it
+     * for many searches rather than creating one per search. A searcher is not thread-safe: keep one per
+     * thread. For an in-memory graph that is still being built, a searcher sees the graph as of its view;
+     * call {@link GraphSearcher#setView setView(graph.getView())} before a search to include the nodes
+     * added since.
+     */
+    default GraphSearcher searcher() {
+        return new GraphSearcher(this);
+    }
 
     /**
      * @return the maximum number of edges per node across any layer
@@ -218,9 +232,17 @@ public interface ImmutableGraphIndex extends AutoCloseable, Accountable {
     interface ScoringView extends View {
         ScoreFunction.ExactScoreFunction rerankerFor(VectorFloat<?> queryVector, VectorSimilarityFunction vsf);
         ScoreFunction.ApproximateScoreFunction approximateScoreFunctionFor(VectorFloat<?> queryVector, VectorSimilarityFunction vsf);
+
+        /**
+         * Whether {@link #approximateScoreFunctionFor} is supported, e.g. because the graph stores fused PQ
+         * codes. When it isn't, that method throws {@link UnsupportedOperationException}.
+         */
+        default boolean hasApproximateScores() {
+            return false;
+        }
     }
 
-    static String prettyPrint(ImmutableGraphIndex graph) {
+    static String prettyPrint(GraphIndex graph) {
         StringBuilder sb = new StringBuilder();
         sb.append(graph);
         sb.append("\n");

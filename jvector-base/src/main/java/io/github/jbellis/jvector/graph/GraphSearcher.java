@@ -25,7 +25,8 @@
 package io.github.jbellis.jvector.graph;
 
 import io.github.jbellis.jvector.annotations.Experimental;
-import io.github.jbellis.jvector.graph.ImmutableGraphIndex.NodeAtLevel;
+import io.github.jbellis.jvector.api.IndexSearcher;
+import io.github.jbellis.jvector.graph.GraphIndex.NodeAtLevel;
 import io.github.jbellis.jvector.graph.similarity.DefaultSearchScoreProvider;
 import io.github.jbellis.jvector.graph.similarity.ScoreFunction;
 import io.github.jbellis.jvector.graph.similarity.SearchScoreProvider;
@@ -37,16 +38,15 @@ import io.github.jbellis.jvector.vector.types.VectorFloat;
 import org.agrona.collections.Int2ObjectHashMap;
 import org.agrona.collections.IntHashSet;
 
-import java.io.Closeable;
 import java.io.IOException;
 
 
 /**
  * Searches a graph to find nearest neighbors to a query vector. For more background on the
- * search algorithm, see {@link ImmutableGraphIndex}.
+ * search algorithm, see {@link GraphIndex}.
  */
-public class GraphSearcher implements Closeable {
-    private ImmutableGraphIndex.View view;
+public class GraphSearcher implements IndexSearcher {
+    private GraphIndex.View view;
 
     // Scratch data structures that are used in each {@link #searchInternal} call. These can be expensive
     // to allocate, so they're cleared and reused across calls.
@@ -62,6 +62,11 @@ public class GraphSearcher implements Closeable {
     private CachingReranker cachingReranker;
 
     private boolean pruneSearch;
+    private boolean adaptiveTerminationEnabled = true;
+    private float adaptiveTerminationGamma = AdaptiveTermination.DEFAULT_GAMMA;
+    private final AdaptiveTermination adaptiveTermination = new AdaptiveTermination();
+    private final NodeQueue adaptiveResults = new NodeQueue(new BoundedLongHeap(100), NodeQueue.Order.MIN_HEAP);
+    private final IntHashSet adaptiveResultMembers = new IntHashSet();
     private final ScoreTracker.ScoreTrackerFactory scoreTrackerFactory;
 
     private int visitedCount;
@@ -71,14 +76,14 @@ public class GraphSearcher implements Closeable {
     /**
      * Creates a new graph searcher from the given GraphIndex
      */
-    public GraphSearcher(ImmutableGraphIndex graph) {
+    public GraphSearcher(GraphIndex graph) {
         this(graph.getView());
     }
 
     /**
      * Creates a new graph searcher from the given GraphIndex.View
      */
-    protected GraphSearcher(ImmutableGraphIndex.View view) {
+    protected GraphSearcher(GraphIndex.View view) {
         this.view = view;
         this.candidates = new NodeQueue(new GrowableLongHeap(100), NodeQueue.Order.MAX_HEAP);
         this.evictedResults = new NodesUnsorted(100);
@@ -112,7 +117,7 @@ public class GraphSearcher implements Closeable {
         cachingReranker = new CachingReranker(scoreProvider);
     }
 
-    public ImmutableGraphIndex.View getView() {
+    public GraphIndex.View getView() {
         return view;
     }
 
@@ -138,11 +143,63 @@ public class GraphSearcher implements Closeable {
         pruneSearch = false;
     }
 
+    /** Enable or disable adaptive stopping for score providers that explicitly support it. */
+    public void useAdaptiveTermination(boolean enabled) {
+        adaptiveTerminationEnabled = enabled;
+    }
+
+    /** Configure the relative squared-distance margin for adaptive stopping. */
+    public void useAdaptiveTermination(boolean enabled, float gamma) {
+        AdaptiveTermination.validateGamma(gamma);
+        adaptiveTerminationEnabled = enabled;
+        adaptiveTerminationGamma = gamma;
+    }
+
+    /**
+     * Searches for the {@code topK} nodes nearest {@code queryVector}, scoring with the vectors the graph
+     * itself stores, so no score provider has to be built. For a graph with fused PQ codes, the search
+     * traverses with those and reranks the best {@code rerankK} candidates with the stored vectors (inline
+     * or NVQ); otherwise every candidate is scored with the stored vectors, and {@code rerankK} only widens
+     * the search. To choose the scoring yourself, use
+     * {@link #search(SearchScoreProvider, int, int, float, float, Bits)}.
+     * <p>
+     * Requires a graph that stores its vectors, such as an {@code OnDiskGraphIndex} written with inline or
+     * NVQ vectors. An in-memory graph doesn't: search it with a {@link SearchScoreProvider}, or with
+     * {@link #search(VectorFloat, int, RandomAccessVectorValues, VectorSimilarityFunction, GraphIndex, Bits)}.
+     *
+     * @param rerankK how many candidates to collect before keeping the best {@code topK}; at least
+     *                {@code topK}
+     * @param acceptOrds which nodes are acceptable results; {@link Bits#ALL} for all
+     * @throws IllegalStateException if the graph doesn't store its vectors
+     * @throws UnsupportedOperationException if the graph stores its vectors only as separated features
+     *         ({@code SEPARATED_VECTORS} or {@code SEPARATED_NVQ}), which its view can't rerank with; search
+     *         those with a {@link SearchScoreProvider}
+     */
+    public SearchResult search(VectorFloat<?> queryVector,
+                               int topK,
+                               int rerankK,
+                               VectorSimilarityFunction similarityFunction,
+                               Bits acceptOrds) {
+        if (!(view instanceof GraphIndex.ScoringView)) {
+            throw new IllegalStateException("This graph doesn't store its vectors, so it can't score a query on its own; "
+                    + "search with a SearchScoreProvider, or with search(query, topK, vectors, similarityFunction, graph, acceptOrds)");
+        }
+        var scoringView = (GraphIndex.ScoringView) view;
+        // With fused PQ, approximateScoreFunctionFor creates its own reranker internally, so each query creates
+        // two (for NVQ, each precomputes per-query state). Callers building the score provider by hand do the
+        // same today; sharing one would need a ScoringView API change. A possible later optimization.
+        var reranker = scoringView.rerankerFor(queryVector, similarityFunction);
+        SearchScoreProvider ssp = scoringView.hasApproximateScores()
+                ? new DefaultSearchScoreProvider(scoringView.approximateScoreFunctionFor(queryVector, similarityFunction), reranker)
+                : new DefaultSearchScoreProvider(reranker);
+        return search(ssp, topK, rerankK, 0.0f, 0.0f, acceptOrds);
+    }
+
     /**
      * Convenience function for simple one-off searches.  It is caller's responsibility to make sure that it
      * is the unique owner of the vectors instance passed in here.
      */
-    public static SearchResult search(VectorFloat<?> queryVector, int topK, RandomAccessVectorValues vectors, VectorSimilarityFunction similarityFunction, ImmutableGraphIndex graph, Bits acceptOrds) {
+    public static SearchResult search(VectorFloat<?> queryVector, int topK, RandomAccessVectorValues vectors, VectorSimilarityFunction similarityFunction, GraphIndex graph, Bits acceptOrds) {
         try (var searcher = new GraphSearcher(graph)) {
             var ssp = DefaultSearchScoreProvider.exact(queryVector, similarityFunction, vectors);
             return searcher.search(ssp, topK, acceptOrds);
@@ -155,7 +212,7 @@ public class GraphSearcher implements Closeable {
      * Convenience function for simple one-off searches.  It is caller's responsibility to make sure that it
      * is the unique owner of the vectors instance passed in here.
      */
-    public static SearchResult search(VectorFloat<?> queryVector, int topK, int rerankK, RandomAccessVectorValues vectors, VectorSimilarityFunction similarityFunction, ImmutableGraphIndex graph, Bits acceptOrds) {
+    public static SearchResult search(VectorFloat<?> queryVector, int topK, int rerankK, RandomAccessVectorValues vectors, VectorSimilarityFunction similarityFunction, GraphIndex graph, Bits acceptOrds) {
         try (var searcher = new GraphSearcher(graph)) {
             var ssp = DefaultSearchScoreProvider.exact(queryVector, similarityFunction, vectors);
             return searcher.search(ssp, topK, rerankK, 0.f, 0.f, acceptOrds);
@@ -173,7 +230,7 @@ public class GraphSearcher implements Closeable {
      *
      * @param view the new view
      */
-    public void setView(ImmutableGraphIndex.View view) {
+    public void setView(GraphIndex.View view) {
         this.view = view;
     }
 
@@ -182,9 +239,9 @@ public class GraphSearcher implements Closeable {
      */
     @Deprecated
     public static class Builder {
-        private final ImmutableGraphIndex.View view;
+        private final GraphIndex.View view;
 
-        public Builder(ImmutableGraphIndex.View view) {
+        public Builder(GraphIndex.View view) {
             this.view = view;
         }
 
@@ -352,20 +409,17 @@ public class GraphSearcher implements Closeable {
         expandedCountBaseLayer = 0;
     }
 
-    private boolean stopSearch(NodeQueue localCandidates, ScoreTracker scoreTracker, int rerankK, float threshold) {
-        float topCandidateScore = localCandidates.topScore();
-
-        // we're done when we have K results and the best candidate is worse than the worst result so far
-        if (approximateResults.size() >= rerankK && topCandidateScore < approximateResults.topScore()) {
-            return true;
+    private boolean stopSearch(NodeQueue localCandidates, ScoreTracker scoreTracker, int rerankK,
+                               float threshold, boolean adaptive) {
+        if (adaptive && approximateResults.size() >= rerankK) {
+            var decision = adaptiveTermination.shouldTerminate(localCandidates.topScore(), adaptiveResults);
+            if (decision == AdaptiveTermination.Decision.CONTINUE) return false;
+            if (decision == AdaptiveTermination.Decision.TERMINATE)
+                return !adaptiveResultMembers.contains(localCandidates.topNode());
         }
-
-        // preserve legacy threshold early termination
-        if (threshold > 0 && scoreTracker.shouldStop()) {
-            return true;
-        }
-
-        return false;
+        if (approximateResults.size() >= rerankK
+                && localCandidates.topScore() < approximateResults.topScore()) return true;
+        return threshold > 0 && scoreTracker.shouldStop();
     }
 
     /**
@@ -412,14 +466,26 @@ public class GraphSearcher implements Closeable {
         try {
             assert approximateResults.size() == 0; // should be cleared by setEntryPointsFromPreviousLayer
             approximateResults.setMaxSize(rerankK);
+            boolean adaptive = adaptiveTerminationEnabled
+                    && scoreProvider.supportsAdaptiveDotProductTermination()
+                    && level == 0 && threshold == 0.0f && rerankK > 0;
+            if (adaptive) resetAdaptiveTermination(rerankK, acceptOrdsThisLayer);
 
             // TopK and filtered pruning are disabled. Threshold searches retain their
             // legacy threshold early-termination path inside ScoreTrackerFactory.
             var scoreTracker = scoreTrackerFactory.getScoreTracker(false, rerankK, threshold);
 
+            var scoreFunction = scoreProvider.scoreFunction();
+            GraphIndex.NeighborProcessor neighborProcessor = (node2, score) -> {
+                if (adaptive && acceptOrdsThisLayer.get(node2)) offerAdaptiveResult(node2, score, rerankK);
+                scoreTracker.track(score);
+                candidates.push(node2, score);
+                visitedCount++;
+            };
+
             // the main search loop
             while (candidates.size() > 0) {
-                if (stopSearch(candidates, scoreTracker, rerankK, threshold)) {
+                if (stopSearch(candidates, scoreTracker, rerankK, threshold, adaptive)) {
                     break;
                 }
 
@@ -428,6 +494,7 @@ public class GraphSearcher implements Closeable {
                 int topCandidateNode = candidates.pop();
                 if (acceptOrdsThisLayer.get(topCandidateNode) && topCandidateScore >= threshold) {
                     addTopCandidate(topCandidateNode, topCandidateScore, rerankK);
+                    if (adaptive) offerAdaptiveResult(topCandidateNode, topCandidateScore, rerankK);
                 }
 
                 // skip edge loading if we've found a local maximum and we have enough results
@@ -441,12 +508,6 @@ public class GraphSearcher implements Closeable {
                 expandedCount++;
 
                 // score the neighbors of the top candidate and add them to the queue
-                var scoreFunction = scoreProvider.scoreFunction();
-                ImmutableGraphIndex.NeighborProcessor neighborProcessor = (node2, score) -> {
-                    scoreTracker.track(score);
-                    candidates.push(node2, score);
-                    visitedCount++;
-                };
                 view.processNeighbors(level, topCandidateNode, scoreFunction, visited::add, neighborProcessor);
             }
         } catch (Throwable t) {
@@ -509,6 +570,29 @@ public class GraphSearcher implements Closeable {
     SearchResult resume(int topK, int rerankK, float threshold, float rerankFloor) {
         searchLayer0(topK, rerankK, threshold);
         return reranking(topK, rerankK, rerankFloor);
+    }
+
+    private void resetAdaptiveTermination(int rerankK, Bits accepted) {
+        adaptiveTermination.reset(rerankK, adaptiveTerminationGamma, scoreProvider.adaptiveScoresAreRawDotProducts());
+        adaptiveResults.clear();
+        adaptiveResults.setMaxSize(rerankK);
+        adaptiveResultMembers.clear();
+        candidates.foreach((node, score) -> {
+            if (accepted.get(node)) offerAdaptiveResult(node, score, rerankK);
+        });
+    }
+
+    private void offerAdaptiveResult(int node, float score, int rerankK) {
+        if (adaptiveResultMembers.contains(node)) return;
+        if (adaptiveResults.size() < rerankK) {
+            adaptiveResults.push(node, score);
+            adaptiveResultMembers.add(node);
+        } else if (score > adaptiveResults.topScore()) {
+            int evicted = adaptiveResults.topNode();
+            adaptiveResults.push(node, score);
+            adaptiveResultMembers.remove(evicted);
+            adaptiveResultMembers.add(node);
+        }
     }
 
     @SuppressWarnings("StatementWithEmptyBody")

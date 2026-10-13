@@ -888,7 +888,7 @@ public class CompactorBenchmark {
         try (var rs = ReaderSupplierFactory.open(indexPath)) {
             var graph = OnDiskGraphIndex.load(rs);
             GraphSearcher searcher = new GraphSearcher(graph);
-            var view = (ImmutableGraphIndex.ScoringView) searcher.getView();
+            var view = (GraphIndex.ScoringView) searcher.getView();
             searcher.usePruning(false);
             List<SearchResult> retrieved = new ArrayList<>(queryVectors.size());
             long[] searchLatenciesNs = new long[queryVectors.size()];
