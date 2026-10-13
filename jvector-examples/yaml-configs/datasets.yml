@@ -1,3 +1,6 @@
+int8:
+  - wikipedia-2023-11-en-mxbai-int8-1m
+  - wiki-multilingual-v3-int8-1m
 jvector-100k:
   - cohere-english-v3-100k
   - ada002-100k
