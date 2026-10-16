@@ -103,7 +103,9 @@ public class TestBufferedGraphCompatibility {
                                                     + ", metric=" + metric + ", refine=" + refine,
                                             residentAdjacency, adjacency(graph));
                                     // A file-backed shared source must not overwrite insertion/diversity queries.
-                                    var result = GraphSearcher.search(vectors.get(5), 10, resident, metric, graph, Bits.ALL);
+                                    // Binary edges use Hamming distance, so exact-metric searches need more candidates.
+                                    int searchBudget = mode == 2 ? 20 : 10;
+                                    var result = GraphSearcher.search(vectors.get(5), 10, searchBudget, resident, metric, graph, Bits.ALL);
                                     assertTrue("dimension=" + dimension + ", build=" + (mode == 0 ? "exact" : mode == 1 ? "PQ" : "BQ")
                                                     + ", metric=" + metric + ", refine=" + refine + ", provider="
                                                     + VectorizationProvider.getInstance().getClass().getSimpleName()
@@ -141,7 +143,7 @@ public class TestBufferedGraphCompatibility {
                                                                 : new DefaultSearchScoreProvider(reranker);
                                                         var answer = searcher.search(scores, 10, Bits.ALL);
                                                         if (expectedAnswer == null) expectedAnswer = answer;
-                                                        else assertEquals(expectedAnswer, answer);
+                                                        else assertSameAnswer(expectedAnswer, answer);
                                                     }
                                                 } finally { Files.delete(graphFile); }
                                             }
@@ -154,5 +156,29 @@ public class TestBufferedGraphCompatibility {
                 } finally { Files.delete(path); }
             }
         } finally { pool.shutdown(); single.shutdown(); }
+    }
+
+    private static void assertSameAnswer(SearchResult expected, SearchResult actual) {
+        assertEquals("visited", expected.getVisitedCount(), actual.getVisitedCount());
+        assertEquals("expanded", expected.getExpandedCount(), actual.getExpandedCount());
+        assertEquals("expanded base layer", expected.getExpandedCountBaseLayer(), actual.getExpandedCountBaseLayer());
+        assertEquals("reranked", expected.getRerankedCount(), actual.getRerankedCount());
+        assertSameScore("worst approximate score", expected.getWorstApproximateScoreInTopK(), actual.getWorstApproximateScoreInTopK());
+        var expectedNodes = expected.getNodes();
+        var actualNodes = actual.getNodes();
+        assertEquals("result count", expectedNodes.length, actualNodes.length);
+        for (int i = 0; i < expectedNodes.length; i++) {
+            assertEquals("node at rank " + i, expectedNodes[i].node, actualNodes[i].node);
+            assertSameScore("score at rank " + i, expectedNodes[i].score, actualNodes[i].score);
+        }
+    }
+
+    private static void assertSameScore(String message, float expected, float actual) {
+        // SIMD ADD reductions can change addition order between JIT tiers.
+        if (Float.isFinite(expected)) {
+            assertEquals(message, expected, actual, Math.max(1e-6f, Math.abs(expected) * 2e-6f));
+        } else {
+            assertEquals(message, Float.floatToIntBits(expected), Float.floatToIntBits(actual));
+        }
     }
 }

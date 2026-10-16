@@ -66,7 +66,9 @@ final class NativeVectorUtilSupport extends PanamaVectorUtilSupport
 
     @Override
     protected FloatVector fromVectorFloat(VectorSpecies<Float> SPEC, VectorFloat<?> vector, int offset, int[] indices, int indicesOffset) {
-        throw new UnsupportedOperationException("Assembly not supported with memory segments.");
+        // Native vectors are heap-backed; inherited Java gather kernels can read that array directly.
+        return FloatVector.fromArray(SPEC, ((MemorySegmentVectorFloat) vector).array(),
+                offset, indices, indicesOffset);
     }
 
     @Override
