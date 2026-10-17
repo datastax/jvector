@@ -16,7 +16,6 @@
 
 package io.github.jbellis.jvector.graph;
 
-import io.github.jbellis.jvector.annotations.VisibleForTesting;
 import io.github.jbellis.jvector.graph.diversity.DiversityProvider;
 import io.github.jbellis.jvector.util.BitSet;
 import io.github.jbellis.jvector.util.Bits;
@@ -249,16 +248,10 @@ public class ConcurrentNeighborMap {
                 return this;
             }
 
-            // merge all the candidates into a single array and compute the diverse ones to keep
-            // from that.
-            NodeArray merged;
-            if (size() > 0) {
-                merged = NodeArray.merge(this, toMerge);
-                retainDiverseInternal(merged, 0, map);
-            } else {
-                merged = toMerge.copy(); // still need to copy in case we lose the race
-                retainDiverseInternal(merged, 0, map);
-            }
+            // Merge into a fresh array, deduplicating even initial candidate batches.
+            // Pruning must not modify the inputs, which may be reused after a failed CAS.
+            NodeArray merged = NodeArray.merge(this, toMerge);
+            retainDiverseInternal(merged, 0, map);
             // insertDiverse usually gets called with a LOT of candidates, so trim down the resulting NodeArray
             var nextNodes = merged.getArrayLength() <= map.nodeArrayLength()
                     ? merged
@@ -269,12 +262,10 @@ public class ConcurrentNeighborMap {
         private Neighbors insertNotDiverse(int node, float score, ConcurrentNeighborMap map) {
             int maxDegree = map.maxDegree;
             assert size() <= maxDegree : "insertNotDiverse called before enforcing degree/diversity";
+            int insertionPoint = insertionPoint(node, score);
+            if (insertionPoint == -1) return this;
             var next = copy(maxDegree); // we are only called during cleanup -- use actual maxDegree not nodeArrayLength()
-            int insertedAt = next.insertOrReplaceWorst(node, score);
-            if (insertedAt == -1) {
-                // node already existed in the array -- this is rare enough that we don't check up front
-                return this;
-            }
+            int insertedAt = next.insertOrReplaceWorstAt(insertionPoint, node, score);
             next.diverseBefore = min(insertedAt, diverseBefore);
             return next;
         }
@@ -304,7 +295,7 @@ public class ConcurrentNeighborMap {
 
             var insertionPoint = insertionPoint(neighborId, score);
             if (insertionPoint == -1) {
-                // "new" node already existed
+                // Reject duplicate IDs without changing the neighborhood or its pruning state.
                 return null;
             }
 
@@ -328,17 +319,7 @@ public class ConcurrentNeighborMap {
                     + Integer.BYTES; // diverseBefore
         }
 
-        /** Only for testing; this is a linear search */
-        @VisibleForTesting
-        boolean contains(int i) {
-            var it = this.iterator();
-            while (it.hasNext()) {
-                if (it.nextInt() == i) {
-                    return true;
-                }
-            }
-            return false;
-        }
+
     }
 
     private static class NeighborWithShortEdges {

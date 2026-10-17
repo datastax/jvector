@@ -249,4 +249,50 @@ public class GraphIndexBuilderTest extends LuceneTestCase {
             }
         }
     }
+
+    @Test
+    public void testFullPrecisionNeighborUniquenessAcrossLayers() throws IOException {
+        var random = new java.util.Random(522L);
+        var vectors = new ArrayList<VectorFloat<?>>();
+        for (int node = 0; node < 192; node++) {
+            float[] values = new float[16];
+            double norm = 0;
+            for (int d = 0; d < values.length; d++) {
+                values[d] = random.nextFloat() - 0.5f;
+                norm += values[d] * values[d];
+            }
+            for (int d = 0; d < values.length; d++) values[d] /= (float) Math.sqrt(norm);
+            vectors.add(vts.createFloatVector(values));
+        }
+        var ravv = new ListRandomAccessVectorValues(vectors, 16);
+        for (boolean hierarchy : new boolean[]{false, true}) {
+            for (int degree : new int[]{2, 3, 16, 32, 64}) {
+                try (var builder = new GraphIndexBuilder(ravv, VectorSimilarityFunction.DOT_PRODUCT,
+                        degree, 100, 1.2f, 1.2f, hierarchy)) {
+                    for (int node = 0; node < ravv.size(); node++) builder.addGraphNode(node, ravv.getVector(node));
+                    assertUniqueNeighbors(builder.getGraph());
+                    builder.cleanup();
+                    assertUniqueNeighbors(builder.getGraph());
+                }
+            }
+        }
+    }
+
+    private static void assertUniqueNeighbors(ImmutableGraphIndex graph) throws IOException {
+        try (var view = graph.getView()) {
+            for (int level = 0; level <= graph.getMaxLevel(); level++) {
+                var nodes = graph.getNodes(level);
+                while (nodes.hasNext()) {
+                    int source = nodes.nextInt();
+                    var seen = new java.util.HashSet<Integer>();
+                    var neighbors = view.getNeighborsIterator(level, source);
+                    while (neighbors.hasNext()) {
+                        int target = neighbors.nextInt();
+                        assertTrue("Repeated edge at level " + level + ": " + source + " -> " + target,
+                                seen.add(target));
+                    }
+                }
+            }
+        }
+    }
 }
