@@ -102,11 +102,11 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
     // The raw-vector store every merge scans: a sidecar strategy whose "code" is the vector.
     private QuantizationCompactionStrategy vectorStore = QuantizationCompactionStrategy.NONE;
     // The cell walk scans cells for a range of nodes at once. The range is bounded by this many nodes, by the
-    // memory its query vectors take (about 3 GB), and by the memory of its (cell, node) pairs: a share of
-    // the heap, since a node probes many small cells to fill its scan budget.
+    // memory its query vectors take and by the memory of its (cell, node) pairs, both shares of the heap,
+    // since a node probes many small cells to fill its scan budget; see exactJoinRange.
     private static final int EXACT_JOIN_MAX_RANGE = 1 << 22;
-    private static final long EXACT_JOIN_QUERY_BYTES = 3L << 30;
-    private static final long EXACT_JOIN_PAIR_BYTES_MIN = 512L << 20, EXACT_JOIN_PAIR_BYTES_MAX = 8L << 30;
+    private static final long EXACT_JOIN_QUERY_BYTES_MIN = 3L << 30;
+    private static final long EXACT_JOIN_PAIR_BYTES_MIN = 512L << 20, EXACT_JOIN_PAIR_BYTES_MAX = 32L << 30;
     private static final int MIN_SEARCH_TOP_K = 2;
     private static final int SEARCH_TOP_K_MULTIPLIER = 4;
 
@@ -832,10 +832,21 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
                         // nodes are one contiguous range, so a group of consecutive batches is a range of
                         // new ordinals. The cell walk scans for the whole range before its batches run.
                         OrdinalMapper m = remappers.get(s);
-                        int range = exactJoinRange(s);
+                        int range = exactJoinRange(s, 0, 0, 0);
                         log.info("Cell walk: source {} in ranges of {} nodes", s, range);
                         int gStart = 0;
                         while (gStart < batches.size()) {
+                            ExactJoin previous = exactJoin;
+                            exactJoin = null;                       // released before the next walk allocates
+                            if (previous != null) {
+                                // size the next range from the pairs the previous one measured
+                                int next = exactJoinRange(s, previous.n, previous.pairsWalked, previous.maxTargetPairs);
+                                if (next != range) {
+                                    log.info("Cell walk: source {} ranges of {} nodes ({} pairs per node measured)",
+                                             s, next, previous.pairsWalked / Math.max(1, previous.n));
+                                    range = next;
+                                }
+                            }
                             BatchSpec first = batches.get(gStart);
                             int lo = m.oldToNew(first.nodes[first.start]);
                             int gEnd = gStart, hi = lo;
@@ -848,9 +859,9 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
                             }
                             exactJoin = cellWalk(s, lo, hi, params.searchTopK);
                             runBatchesWithBackpressure(batches.subList(gStart, gEnd), ecs, submitOne, writeResults);
-                            exactJoin = null;
                             gStart = gEnd;
                         }
+                        exactJoin = null;
                     }
                 }
 
@@ -2380,23 +2391,44 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
 
     /**
      * Node range size of the cell walk for source {@code src}: at most {@link #EXACT_JOIN_MAX_RANGE}
-     * nodes, about {@link #EXACT_JOIN_QUERY_BYTES} of query vectors, and (cell, node) pairs within
-     * an eighth of the heap. A node records one pair per cell it probes, and it probes cells until
-     * {@link #CELL_BUDGET} members per larger target, so the pairs per node follow from the cell
-     * sizes: with every source's level-1 nodes as cells that is a few hundred pairs per target.
+     * nodes, query vectors within a sixteenth of the heap (at least {@link #EXACT_JOIN_QUERY_BYTES_MIN}),
+     * and (cell, node) pairs within an eighth of the heap, so pairs with their growth slack, the
+     * per-target sort copy and the queries stay around a third. Every range streams the targets'
+     * store once, so the range is as large as the heap allows: a store larger than RAM is read
+     * from the device once per range.
+     *
+     * <p>Before the first range of a source the pairs per node are bounded from the cell sizes: a
+     * node records one pair per cell it probes, and it probes cells until {@link #CELL_BUDGET}
+     * members per larger target, which overstates the count several times. After the first range
+     * the measured counts take over ({@code measuredPairs} over {@code measuredNodes}, with
+     * {@code measuredMaxTarget} the busiest target's pairs), and a target's pair array is kept
+     * under half the array limit even if the next range doubles them.
      */
-    private int exactJoinRange(int src) {
-        long byQueries = EXACT_JOIN_QUERY_BYTES / (4L * dimension);
-        long pairsPerNode = 0;
-        int maxProbes = beamScoredCapacity(CELL_PROBE_EF, cellMap.degree[1]);
-        for (int t = 0; t < sources.size(); t++) {
-            if (sizeRank[t] <= sizeRank[src]) continue;                       // only larger sources are scanned
-            long membersPerCell = Math.max(1, numLiveNodesPerSource.get(t) / Math.max(1, cellCount));
-            pairsPerNode += Math.min(maxProbes, (CELL_BUDGET + membersPerCell - 1) / membersPerCell);
+    private int exactJoinRange(int src, long measuredNodes, long measuredPairs, long measuredMaxTarget) {
+        long heap = Runtime.getRuntime().maxMemory();
+        long queryBudget = Math.max(EXACT_JOIN_QUERY_BYTES_MIN, heap / 16);
+        long byQueries = queryBudget / (4L * dimension);
+        long pairBudget = Math.max(EXACT_JOIN_PAIR_BYTES_MIN, Math.min(EXACT_JOIN_PAIR_BYTES_MAX, heap / 8));
+        long pairsPerNode, maxTargetPerNode;
+        if (measuredNodes > 0) {
+            pairsPerNode = (measuredPairs + measuredNodes - 1) / measuredNodes;
+            maxTargetPerNode = (measuredMaxTarget + measuredNodes - 1) / measuredNodes;
+        } else {
+            pairsPerNode = 0;
+            maxTargetPerNode = 0;
+            int maxProbes = beamScoredCapacity(CELL_PROBE_EF, cellMap.degree[1]);
+            for (int t = 0; t < sources.size(); t++) {
+                if (sizeRank[t] <= sizeRank[src]) continue;                       // only larger sources are scanned
+                long membersPerCell = Math.max(1, numLiveNodesPerSource.get(t) / Math.max(1, cellCount));
+                long perTarget = Math.min(maxProbes, (CELL_BUDGET + membersPerCell - 1) / membersPerCell);
+                pairsPerNode += perTarget;
+                maxTargetPerNode = Math.max(maxTargetPerNode, perTarget);
+            }
         }
-        long pairBudget = Math.max(EXACT_JOIN_PAIR_BYTES_MIN, Math.min(EXACT_JOIN_PAIR_BYTES_MAX, Runtime.getRuntime().maxMemory() / 8));
         long byPairs = pairsPerNode == 0 ? Long.MAX_VALUE : pairBudget / (Long.BYTES * pairsPerNode);
-        return (int) Math.max(1 << 16, Math.min(EXACT_JOIN_MAX_RANGE, Math.min(byQueries, byPairs)));
+        long byTarget = maxTargetPerNode == 0 ? Long.MAX_VALUE : (Integer.MAX_VALUE / 2L) / maxTargetPerNode;
+        long range = Math.min(Math.min(EXACT_JOIN_MAX_RANGE, byQueries), Math.min(byPairs, byTarget));
+        return (int) Math.max(1 << 16, range);
     }
 
     /**
@@ -2468,7 +2500,7 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
         joinAll(phase1);
         final long t1 = System.nanoTime();
         // phase 2: per target, sort the pairs by cell and walk the cells in ordinal order
-        long pairTotal = 0;
+        long pairTotal = 0, maxTargetPairs = 0;
         for (int target = 0; target < sources.size(); target++) {
             final int ti = j.targetIndex[target];
             if (ti < 0) continue;
@@ -2485,7 +2517,9 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
             if (total == 0) continue;
             Arrays.parallelSort(pairs);
             pairTotal += total;
+            maxTargetPairs = Math.max(maxTargetPairs, total);
             final int[] starts = cellStart[target];
+            final int rowBytes = candidateStore.codeSize();
             // split the sorted pairs into contiguous cell ranges for the workers
             int tasks2 = Math.max(1, Math.min(taskWindowSize * 8, total / 4096));
             List<Callable<Void>> phase2 = new ArrayList<>();
@@ -2544,6 +2578,8 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
             }
             joinAll(phase2);
         }
+        j.pairsWalked = pairTotal;
+        j.maxTargetPairs = maxTargetPairs;
         log.info("Cell walk: source {} ordinals [{}, {}): probes {} ms, {} (cell, node) pairs over {} targets, walk {} ms",
                  src, lo, hi, (t1 - t0) / 1_000_000, pairTotal, j.targets, (System.nanoTime() - t1) / 1_000_000);
         return j;

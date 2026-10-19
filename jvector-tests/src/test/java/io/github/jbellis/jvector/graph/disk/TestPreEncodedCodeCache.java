@@ -79,7 +79,6 @@ public class TestPreEncodedCodeCache extends RandomizedTest {
         return p;
     }
 
-
     /** Round-trips every ordinal with chunks small enough that most ordinals land in a different one. */
     @Test
     public void testRoundTripAcrossChunkBoundaries() throws IOException {

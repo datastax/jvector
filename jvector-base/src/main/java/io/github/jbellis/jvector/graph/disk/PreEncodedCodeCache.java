@@ -155,7 +155,6 @@ public final class PreEncodedCodeCache implements AutoCloseable {
         return (long) count * codeSize;
     }
 
-
     /** Bytes per code. */
     public int codeSize() {
         return codeSize;

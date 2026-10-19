@@ -34,6 +34,8 @@ final class ExactJoin {
     final long[] heaps;                // [(targetIndex * n + i) * k + j]
     final int[] sizes;                 // [targetIndex * n + i]
     final float[] thresholds;          // score of the k-th best so far, -inf until the heap is full
+    long pairsWalked;                  // (cell, node) pairs the walk scored, all targets; sizes the next range
+    long maxTargetPairs;               // the busiest target's share of them
     final Object[] locks = new Object[1024];
 
     private final int numSources;
