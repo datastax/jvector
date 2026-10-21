@@ -17,7 +17,9 @@
 package io.github.jbellis.jvector.example.benchmarks;
 
 import io.github.jbellis.jvector.example.Grid.ConfiguredSystem;
+import io.github.jbellis.jvector.example.benchmarks.datasets.ByteDataSet;
 import io.github.jbellis.jvector.graph.SearchResult;
+import io.github.jbellis.jvector.vector.types.ByteSequence;
 import io.github.jbellis.jvector.vector.types.VectorFloat;
 import io.github.jbellis.jvector.vector.types.VectorTypeSupport;
 import io.github.jbellis.jvector.vector.VectorUtil;
@@ -140,7 +142,7 @@ public class ThroughputBenchmark extends AbstractQueryBenchmark {
         }
         try (BenchmarkDiagnostics diagnostics = new BenchmarkDiagnostics(diagnosticLevel)) {
 
-            int totalQueries = cs.getDataSet().getQueryVectors().size();
+            int totalQueries = cs.getDataSet().getQueryCount();
             int dim = cs.getDataSet().getDimension();
 
             // Warmup Phase with diagnostics
@@ -154,14 +156,24 @@ public class ThroughputBenchmark extends AbstractQueryBenchmark {
                             .forEach(k -> {
                                 long queryStart = System.nanoTime();
 
-                                // Generate a random vector
-                                VectorFloat<?> randQ = vts.createFloatVector(dim);
-                                for (int j = 0; j < dim; j++) {
-                                    randQ.set(j, ThreadLocalRandom.current().nextFloat());
+                                SearchResult sr;
+                                if (cs.getDataSet() instanceof ByteDataSet) {
+                                    // Int8 dataset: random signed byte query
+                                    ByteSequence<?> randB = vts.createByteSequence(dim);
+                                    for (int j = 0; j < dim; j++) {
+                                        randB.set(j, (byte) ThreadLocalRandom.current().nextInt(-128, 128));
+                                    }
+                                    sr = QueryExecutor.executeQuery(cs, topK, rerankK, usePruning, randB);
+                                } else {
+                                    // Generate a random vector
+                                    VectorFloat<?> randQ = vts.createFloatVector(dim);
+                                    for (int j = 0; j < dim; j++) {
+                                        randQ.set(j, ThreadLocalRandom.current().nextFloat());
+                                    }
+                                    VectorUtil.l2normalize(randQ);
+                                    sr = QueryExecutor.executeQuery(
+                                            cs, topK, rerankK, usePruning, randQ);
                                 }
-                                VectorUtil.l2normalize(randQ);
-                                SearchResult sr = QueryExecutor.executeQuery(
-                                        cs, topK, rerankK, usePruning, randQ);
                                 SINK += sr.getVisitedCount();
 
                                 long queryEnd = System.nanoTime();

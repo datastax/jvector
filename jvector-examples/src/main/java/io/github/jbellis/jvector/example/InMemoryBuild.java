@@ -17,11 +17,13 @@
 package io.github.jbellis.jvector.example;
 
 import io.github.jbellis.jvector.disk.ReaderSupplierFactory;
+import io.github.jbellis.jvector.example.benchmarks.datasets.ByteDataSet;
 import io.github.jbellis.jvector.example.benchmarks.datasets.DataSet;
 import io.github.jbellis.jvector.graph.ImmutableGraphIndex;
 import io.github.jbellis.jvector.graph.disk.OnDiskGraphIndex;
 import io.github.jbellis.jvector.graph.disk.feature.Feature;
 import io.github.jbellis.jvector.graph.disk.feature.FeatureId;
+import io.github.jbellis.jvector.graph.disk.feature.InlineByteVectors;
 
 import java.io.IOException;
 import java.nio.file.Path;
@@ -81,6 +83,43 @@ final class InMemoryBuild implements IndexBuildStrategy {
 
             var index = OnDiskGraphIndex.load(ReaderSupplierFactory.open(graphPath));
             indexes.put(features, index);
+        }
+        return new BuiltIndexes(indexes, new LinkedHashMap<>(), buildTimeS);
+    }
+
+    /**
+     * Builds an int8 index in memory and writes it with the INLINE_BYTE_VECTORS feature, the only
+     * feature int8 datasets support. Every requested feature set maps to such an index.
+     */
+    BuiltIndexes buildInt8(List<? extends Set<FeatureId>> featureSets, BuildConfig build, ByteDataSet ds) throws IOException {
+        var byteVectors = ds.getBaseRavv();
+        Map<Set<FeatureId>, ImmutableGraphIndex> indexes = new LinkedHashMap<>();
+        var builder = GraphBuilderFactory.forByteVectors(byteVectors, ds.getSimilarityFunction(), build);
+        long start = System.nanoTime();
+        var onHeapGraph = builder.build(byteVectors);
+        double buildTimeS = (System.nanoTime() - start) / 1_000_000_000.0;
+        System.out.format("Build (int8) M=%d overflow=%.2f ef=%d in %.2fs%n",
+                          build.M, build.neighborOverflow, build.efConstruction, buildTimeS);
+        for (int i = 0; i <= onHeapGraph.getMaxLevel(); i++) {
+            System.out.format("  L%d: %d nodes, %.2f avg degree%n",
+                              i, onHeapGraph.size(i), onHeapGraph.getAverageDegree(i));
+        }
+        int n = 0;
+        for (var features : featureSets) {
+            if (features.contains(FeatureId.FUSED_PQ)) {
+                System.out.println("Skipping Fused ADC feature when building in memory");
+                continue;
+            }
+            var graphPath = workDirectory.resolve("graph" + n++);
+            var writerBuilder = GraphBuilderFactory.writerBuilder(onHeapGraph, graphPath, byteVectors.size())
+                    .with(new InlineByteVectors(byteVectors.dimension()));
+            try (var writer = writerBuilder.build()) {
+                start = System.nanoTime();
+                writer.write(Map.of(FeatureId.INLINE_BYTE_VECTORS,
+                                    ordinal -> new InlineByteVectors.State(byteVectors.getVector(ordinal))));
+                System.out.format("Wrote %s in %.2fs%n", features, (System.nanoTime() - start) / 1_000_000_000.0);
+            }
+            indexes.put(features, OnDiskGraphIndex.load(ReaderSupplierFactory.open(graphPath)));
         }
         return new BuiltIndexes(indexes, new LinkedHashMap<>(), buildTimeS);
     }
