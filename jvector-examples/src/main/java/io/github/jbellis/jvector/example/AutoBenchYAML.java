@@ -21,6 +21,8 @@ import io.github.jbellis.jvector.example.util.BenchmarkSummarizer;
 import io.github.jbellis.jvector.example.util.BenchmarkSummarizer.SummaryStats;
 import io.github.jbellis.jvector.example.util.CheckpointManager;
 import io.github.jbellis.jvector.example.benchmarks.datasets.BaseVectorLoading;
+import io.github.jbellis.jvector.example.benchmarks.datasets.ByteDataSet;
+import io.github.jbellis.jvector.example.benchmarks.datasets.DataSet;
 import io.github.jbellis.jvector.example.benchmarks.datasets.DataSets;
 import io.github.jbellis.jvector.example.yaml.DatasetCollection;
 import io.github.jbellis.jvector.example.yaml.MultiConfig;
@@ -147,7 +149,10 @@ public class AutoBenchYAML {
                     try (var ds = DataSets.loadDataSet(datasetName, loading).orElseThrow(
                             () -> new RuntimeException("Dataset " + datasetName + " not found")
                     ).getDataSet()) {
-                        logger.info("Dataset loaded: {} with {} vectors", datasetName, ds.getBaseVectors().size());
+                        logger.info("Dataset loaded: {} with {} vectors", datasetName, ds.size());
+                        if (ds instanceof ByteDataSet) {
+                            config.validateForInt8Dataset();
+                        }
 
                         List<BenchResult> datasetResults = Grid.runAllAndCollectResults(ds,
                                 config.construction.useSavedIndexIfExists,
@@ -169,24 +174,28 @@ public class AutoBenchYAML {
 
                         // Compaction regression is opt-in; failures remain non-fatal.
                         if (config.isCompactionEnabled()) {
-                            try {
-                                logger.info("Running compaction benchmark for dataset: {}", datasetName);
-                                List<BenchResult> datasetCompactionResults;
-                                if (loading == BaseVectorLoading.BUFFERED) {
-                                    // This legacy validation queries raw originals; keep its resident source.
-                                    try (var resident = DataSets.loadDataSet(datasetName, BaseVectorLoading.PRELOAD)
-                                            .orElseThrow(() -> new RuntimeException("Dataset " + datasetName + " not found"))
-                                            .getDataSet()) {
-                                        datasetCompactionResults = CompactionBench.run(resident);
+                            if (ds instanceof ByteDataSet) {
+                                logger.info("Skipping compaction benchmark for int8 dataset: {}", datasetName);
+                            } else {
+                                try {
+                                    logger.info("Running compaction benchmark for dataset: {}", datasetName);
+                                    List<BenchResult> datasetCompactionResults;
+                                    if (loading == BaseVectorLoading.BUFFERED) {
+                                        // This legacy validation queries raw originals; keep its resident source.
+                                        try (var resident = DataSets.loadDataSet(datasetName, BaseVectorLoading.PRELOAD)
+                                                .orElseThrow(() -> new RuntimeException("Dataset " + datasetName + " not found"))
+                                                .<DataSet>getDataSet()) {
+                                            datasetCompactionResults = CompactionBench.run(resident);
+                                        }
+                                    } else {
+                                        datasetCompactionResults = CompactionBench.run((DataSet) ds);
                                     }
-                                } else {
-                                    datasetCompactionResults = CompactionBench.run(ds);
+                                    compactionResults.addAll(datasetCompactionResults);
+                                    logger.info("Compaction benchmark completed for dataset: {} ({} configs)",
+                                            datasetName, datasetCompactionResults.size());
+                                } catch (Exception e) {
+                                    logger.error("Compaction benchmark failed for dataset {}", datasetName, e);
                                 }
-                                compactionResults.addAll(datasetCompactionResults);
-                                logger.info("Compaction benchmark completed for dataset: {} ({} configs)",
-                                        datasetName, datasetCompactionResults.size());
-                            } catch (Exception e) {
-                                logger.error("Compaction benchmark failed for dataset {}", datasetName, e);
                             }
                         } else {
                             logger.info("Skipping compaction benchmark for dataset: {} (withCompaction not enabled)", datasetName);
