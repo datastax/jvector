@@ -66,7 +66,6 @@ class NativeVectorUtilSupport extends PanamaVectorUtilSupport
     }
 
     @Override
-<<<<<<< HEAD
     public boolean tryUpdateKMeansDistances(VectorFloat<?>[] points, VectorFloat<?> centroid,
                                            VectorFloat<?> minima, VectorFloat<?> scratch) {
         return NativeKMeansInitialization.update(points, centroid, minima, scratch);
@@ -90,6 +89,7 @@ class NativeVectorUtilSupport extends PanamaVectorUtilSupport
     @Override
     public VectorFloat<?> nvqSub(VectorFloat<?> a, int aOffset, VectorFloat<?> b, int bOffset, int length) {
         return NativeNVQArithmetic.sub(a, aOffset, b, bOffset, length);
+    }
 
     @Override
     public float dotProduct(ByteSequence<?> a, ByteSequence<?> b) {
