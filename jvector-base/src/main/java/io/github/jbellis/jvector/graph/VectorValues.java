@@ -63,7 +63,7 @@ public interface VectorValues<V> {
      * Returns a supplier of thread-local copies of this instance.
      */
     @SuppressWarnings("unchecked")
-    default Supplier<VectorValues<V>> threadLocalSupplier() {
+    default Supplier<? extends VectorValues<V>> threadLocalSupplier() {
         if (!isValueShared()) {
             return () -> this;
         }

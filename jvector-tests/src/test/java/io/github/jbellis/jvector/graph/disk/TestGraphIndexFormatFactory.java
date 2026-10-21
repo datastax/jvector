@@ -89,9 +89,9 @@ public class TestGraphIndexFormatFactory extends RandomizedTest {
         assertFalse(v2.usesFooter());
         assertEquals(EnumSet.of(FeatureId.INLINE_VECTORS), v2.getSupportedFeatures());
 
-        // versions 3-5 support every feature except FUSED_PQ; multi-layer arrives at v4,
-        // footer-based metadata arrives at v5.
-        var nonFused = EnumSet.complementOf(EnumSet.of(FeatureId.FUSED_PQ));
+        // versions 3-5 support every feature except FUSED_PQ and INLINE_BYTE_VECTORS (both v6+);
+        // multi-layer arrives at v4, footer-based metadata arrives at v5.
+        var nonFused = EnumSet.complementOf(EnumSet.of(FeatureId.FUSED_PQ, FeatureId.INLINE_BYTE_VECTORS));
         for (int version : new int[]{3, 4, 5}) {
             var format = GraphIndexFormatFactory.forVersion(version);
             assertEquals("version " + version + " supported features", nonFused, format.getSupportedFeatures());

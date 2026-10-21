@@ -736,11 +736,21 @@ public class GraphIndexBuilder implements Closeable, Accountable {
     public ImmutableGraphIndex build(VectorValues<?> ravv) {
         int size = ravv.size();
 
-        simdExecutor.submit(() -> {
-            IntStream.range(0, size).parallel().forEach(node -> {
-                addGraphNode(node, scoreProvider.searchProviderFor(node));
-            });
-        }).join();
+        if (ravv instanceof RandomAccessVectorValues) {
+            // Float sources may share (borrowed) vectors; read each through a per-thread view.
+            var vv = ((RandomAccessVectorValues) ravv).threadLocalSupplier();
+            simdExecutor.submit(() -> {
+                IntStream.range(0, size).parallel().forEach(node -> {
+                    addGraphNode(node, vv.get().getVector(node));
+                });
+            }).join();
+        } else {
+            simdExecutor.submit(() -> {
+                IntStream.range(0, size).parallel().forEach(node -> {
+                    addGraphNode(node, scoreProvider.searchProviderFor(node));
+                });
+            }).join();
+        }
 
         cleanup();
         return graph;

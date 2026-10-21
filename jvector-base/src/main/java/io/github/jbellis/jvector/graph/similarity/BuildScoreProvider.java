@@ -125,10 +125,8 @@ public interface BuildScoreProvider {
     static BuildScoreProvider randomAccessScoreProvider(RandomAccessVectorValues ravv, VectorSimilarityFunction similarityFunction) {
         // We need two sources of vectors in order to perform diversity check comparisons without
         // colliding.  ThreadLocalSupplier makes this a no-op if the RAVV is actually un-shared.
-        var vectorsRaw = ravv.threadLocalSupplier();
-        var vectorsCopyRaw = ravv.threadLocalSupplier();
-        Supplier<RandomAccessVectorValues> vectors = asRandomAccessSupplier(vectorsRaw);
-        Supplier<RandomAccessVectorValues> vectorsCopy = asRandomAccessSupplier(vectorsCopyRaw);
+        Supplier<RandomAccessVectorValues> vectors = ravv.threadLocalSupplier();
+        Supplier<RandomAccessVectorValues> vectorsCopy = ravv.threadLocalSupplier();
 
         return new BuildScoreProvider() {
             /// Exact scores against `node1`.
@@ -246,15 +244,6 @@ public interface BuildScoreProvider {
         };
     }
 
-    private static Supplier<RandomAccessVectorValues> asRandomAccessSupplier(Supplier<VectorValues<VectorFloat<?>>> supplier) {
-        return () -> {
-            var v = supplier.get();
-            if (!(v instanceof RandomAccessVectorValues)) {
-                throw new IllegalStateException("Supplier returned VectorValues instance of " + v.getClass().getName() + " which does not implement RandomAccessVectorValues");
-            }
-            return (RandomAccessVectorValues) v;
-        };
-    }
 
     /**
      * Returns a BSP that performs exact score comparisons using the given
