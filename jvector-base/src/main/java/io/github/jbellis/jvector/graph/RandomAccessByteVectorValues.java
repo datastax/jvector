@@ -16,7 +16,10 @@
 
 package io.github.jbellis.jvector.graph;
 
+import io.github.jbellis.jvector.util.ExplicitThreadLocal;
 import io.github.jbellis.jvector.vector.types.ByteSequence;
+
+import java.util.function.Supplier;
 
 /**
  * Provides random access to byte (int8) vectors by dense ordinal.
@@ -34,4 +37,20 @@ public interface RandomAccessByteVectorValues extends VectorValues<ByteSequence<
      */
     @Override
     RandomAccessByteVectorValues copy();
+
+    /**
+     * Returns a supplier of thread-local copies of the RAVV.
+     */
+    @Override
+    default Supplier<RandomAccessByteVectorValues> threadLocalSupplier() {
+        if (!isValueShared()) {
+            return () -> this;
+        }
+
+        if (this instanceof AutoCloseable) {
+            VectorValues.LOG.warning("VectorValues is shared and implements AutoCloseable; threadLocalSupplier() may lead to leaks");
+        }
+        var tl = ExplicitThreadLocal.withInitial(this::copy);
+        return tl::get;
+    }
 }

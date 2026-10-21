@@ -76,6 +76,22 @@ public interface RandomAccessVectorValues extends VectorValues<VectorFloat<?>> {
     RandomAccessVectorValues copy();
 
     /**
+     * Returns a supplier of thread-local copies of the RAVV.
+     */
+    @Override
+    default Supplier<RandomAccessVectorValues> threadLocalSupplier() {
+        if (!isValueShared()) {
+            return () -> this;
+        }
+
+        if (this instanceof AutoCloseable) {
+            VectorValues.LOG.warning("VectorValues is shared and implements AutoCloseable; threadLocalSupplier() may lead to leaks");
+        }
+        var tl = ExplicitThreadLocal.withInitial(this::copy);
+        return tl::get;
+    }
+
+    /**
      * Convenience method to create an ExactScoreFunction for reranking.  The resulting function is NOT thread-safe.
      */
     default ScoreFunction.ExactScoreFunction rerankerFor(VectorFloat<?> queryVector, VectorSimilarityFunction vsf) {
