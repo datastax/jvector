@@ -112,9 +112,12 @@ openai-1536-1m:
 sift1m-128-euclidean-int8:
   similarity_function: EUCLIDEAN
   load_behavior: NO_SCRUB
+  is_int8: true
 wikipedia-2023-11-en-mxbai-int8-1m:
   similarity_function: DOT_PRODUCT
   load_behavior: NO_SCRUB
+  is_int8: true
 wiki-multilingual-v3-int8-1m:
   similarity_function: DOT_PRODUCT
   load_behavior: NO_SCRUB
+  is_int8: true

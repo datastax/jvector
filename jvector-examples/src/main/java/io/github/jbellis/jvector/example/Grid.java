@@ -26,6 +26,8 @@ import io.github.jbellis.jvector.example.benchmarks.QueryTester;
 import io.github.jbellis.jvector.example.benchmarks.ThroughputBenchmark;
 import io.github.jbellis.jvector.example.benchmarks.diagnostics.BenchmarkDiagnostics;
 import io.github.jbellis.jvector.example.benchmarks.diagnostics.DiagnosticLevel;
+import io.github.jbellis.jvector.example.benchmarks.datasets.BaseDataSet;
+import io.github.jbellis.jvector.example.benchmarks.datasets.ByteDataSet;
 import io.github.jbellis.jvector.example.benchmarks.datasets.DataSet;
 import io.github.jbellis.jvector.example.reporting.RunArtifacts;
 import io.github.jbellis.jvector.example.util.CompressorParameters;
@@ -42,6 +44,8 @@ import io.github.jbellis.jvector.graph.similarity.SearchScoreProvider;
 import io.github.jbellis.jvector.quantization.CompressedVectors;
 import io.github.jbellis.jvector.quantization.VectorCompressor;
 import io.github.jbellis.jvector.util.ExplicitThreadLocal;
+import io.github.jbellis.jvector.vector.ByteVectorSimilarityFunction;
+import io.github.jbellis.jvector.vector.types.ByteSequence;
 import io.github.jbellis.jvector.vector.types.VectorFloat;
 
 import java.io.IOException;
@@ -85,7 +89,7 @@ public class Grid {
      * Runs {@code spec} against {@code ds}, printing console tables and writing experiments.csv rows as
      * selected by {@code artifacts}.
      */
-    public static void run(DataSet ds, GridSpec spec, RunArtifacts artifacts) throws IOException {
+    public static void run(BaseDataSet ds, GridSpec spec, RunArtifacts artifacts) throws IOException {
         runGrid(ds, spec, () -> setupBenchmarks(artifacts.benchmarksToCompute()), reportingListeners(artifacts));
     }
 
@@ -93,7 +97,7 @@ public class Grid {
      * Runs {@code spec} against {@code ds} with the fixed regression benchmarks, printing console tables
      * and returning one result per measurement.
      */
-    public static List<BenchResult> runAndCollectResults(DataSet ds, GridSpec spec) throws IOException {
+    public static List<BenchResult> runAndCollectResults(BaseDataSet ds, GridSpec spec) throws IOException {
         var collector = new BenchResultCollector();
         runGrid(ds, spec, Grid::regressionBenchmarks,
                 List.of(new ConsoleReportListener(RunArtifacts.disabled()), collector));
@@ -111,7 +115,7 @@ public class Grid {
      * @param benchmarks creates the query benchmarks for each index and search compressor
      * @param listeners receive every measurement, in order
      */
-    private static void runGrid(DataSet ds,
+    private static void runGrid(BaseDataSet ds,
                                 GridSpec spec,
                                 Supplier<List<QueryBenchmark>> benchmarks,
                                 List<GridListener> listeners) throws IOException
@@ -191,7 +195,7 @@ public class Grid {
                             Map<Integer, List<Double>> topKGrid,
                             List<Boolean> usePruningGrid,
                             RunArtifacts artifacts,
-                            DataSet ds,
+                            BaseDataSet ds,
                             Path workDirectory) throws IOException
     {
         var build = BuildConfig.builder()
@@ -215,7 +219,7 @@ public class Grid {
                                     List<? extends Set<FeatureId>> featureSets,
                                     BuildConfig build,
                                     SearchConfig search,
-                                    DataSet ds,
+                                    BaseDataSet ds,
                                     Path workDirectory,
                                     Supplier<List<QueryBenchmark>> benchmarks,
                                     List<GridListener> listeners) throws IOException
@@ -228,26 +232,37 @@ public class Grid {
             diagnostics.startMonitoring("testDirectory", workDirectory);
             diagnostics.startMonitoring("indexCache", Paths.get(indexCacheDir));
             diagnostics.capturePrePhaseSnapshot("Graph Build");
-            System.out.printf("%s: Dataset similarity function is %s%n", ds.getName(), ds.getSimilarityFunction());
+            String sfLabel = (ds instanceof ByteDataSet)
+                    ? ((ByteDataSet) ds).getSimilarityFunction().toString()
+                    : ((DataSet) ds).getSimilarityFunction().toString();
+            System.out.printf("%s: Dataset similarity function is %s%n", ds.getName(), sfLabel);
 
             // Resolve build compressor (and label quant type) so we can record compute time
             VectorCompressor<?> buildCompressorObj = null;
             String buildQuantType = null;
 
-            if (build.buildCompressor != null) {
-                var buildParams = build.buildCompressor.apply(ds);
+            // Int8 datasets only support compression type "None" (enforced by MultiConfig.validateForInt8Dataset),
+            // so there is no build compressor for them.
+            if (build.buildCompressor != null && !(ds instanceof ByteDataSet)) {
+                var floatDs = (DataSet) ds;
+                var buildParams = build.buildCompressor.apply(floatDs);
                 buildQuantType = quantTypeOf(buildParams); // "PQ", "BQ", or null
-                buildCompressorObj = getCompressor(build.buildCompressor, ds, constructionMetrics, Phase.INDEX, buildQuantType);
+                buildCompressorObj = getCompressor(build.buildCompressor, floatDs, constructionMetrics, Phase.INDEX, buildQuantType);
             }
 
             // Used in logging
             String buildCompressorString =
                     (buildCompressorObj == null) ? "None" : String.valueOf(buildCompressorObj);
 
-            IndexBuildStrategy strategy = (buildCompressorObj == null)
-                    ? new InMemoryBuild(workDirectory)
-                    : new CompressedOnDiskBuild(cache, workDirectory, buildCompressorObj, constructionMetrics);
-            var built = strategy.build(featureSets, build, ds);
+            IndexBuildStrategy.BuiltIndexes built;
+            if (ds instanceof ByteDataSet) {
+                built = new InMemoryBuild(workDirectory).buildInt8(featureSets, build, (ByteDataSet) ds);
+            } else {
+                IndexBuildStrategy strategy = (buildCompressorObj == null)
+                        ? new InMemoryBuild(workDirectory)
+                        : new CompressedOnDiskBuild(cache, workDirectory, buildCompressorObj, constructionMetrics);
+                built = strategy.build(featureSets, build, (DataSet) ds);
+            }
             // Null when every index came from the index cache. Read it from here, not the per-dataset map,
             // which still holds the previous build config's time in that case.
             Double indexBuildTimeS = built.buildTimeS;
@@ -283,10 +298,14 @@ public class Grid {
                         if (FeatureProviders.anyMatch(featureSetForIndex, FeatureProvider::providesApproximateScoring)) {
                             cv = null;
                             System.out.format("%s: configured to use FUSED PQ, skipping vector compression%n", ds.getName());
+                        } else if (ds instanceof ByteDataSet) {
+                            cv = null;
+                            System.out.format("%s: No search compressor configured, FULL PRECISION vectors will be used for search%n", ds.getName());
                         } else {
-                            var searchParams = cpSupplier.apply(ds);
+                            var floatDs = (DataSet) ds;
+                            var searchParams = cpSupplier.apply(floatDs);
                             String searchQuantType = quantTypeOf(searchParams); // "PQ", "BQ", or null
-                            var compressor = getCompressor(cpSupplier, ds, constructionMetrics, Phase.SEARCH, searchQuantType);
+                            var compressor = getCompressor(cpSupplier, floatDs, constructionMetrics, Phase.SEARCH, searchQuantType);
 
                             if (compressor == null) {
                                 cv = null;
@@ -294,14 +313,14 @@ public class Grid {
                             } else {
                                 long start = System.nanoTime();
                                 cv = constructionMetrics.search(searchQuantType)
-                                        .timeEncode(() -> compressor.encodeAll(ds.getBaseRavv()));
+                                        .timeEncode(() -> compressor.encodeAll(floatDs.getBaseRavv()));
                                 double encodingTimeS = (System.nanoTime() - start) / 1_000_000_000.0;
                                 if (cv == null) {
                                     throw new IllegalStateException(String.format(
                                             "Compressor '%s' was provided but failed to encode vectors for dataset '%s'. " +
                                                     "Aborting to prevent false recall results.", compressor, ds.getName()));
                                 }
-                                System.out.format("%s: %s encoded %d vectors [%.2f MB] in %.2fs%n", ds.getName(), compressor, ds.getBaseVectors().size(), (cv.ramBytesUsed() / 1024f / 1024f), encodingTimeS);
+                                System.out.format("%s: %s encoded %d vectors [%.2f MB] in %.2fs%n", ds.getName(), compressor, ds.size(), (cv.ramBytesUsed() / 1024f / 1024f), encodingTimeS);
                             }
                         }
 
@@ -638,7 +657,7 @@ public class Grid {
     }
 
     public static class ConfiguredSystem implements AutoCloseable {
-        DataSet ds;
+        BaseDataSet ds;
         ImmutableGraphIndex index;
         CompressedVectors cv;
         Set<FeatureId> features;
@@ -650,38 +669,50 @@ public class Grid {
             return new GraphSearcher(index);
         });
 
-        ConfiguredSystem(DataSet ds, ImmutableGraphIndex index, CompressedVectors cv, Set<FeatureId> features) {
+        ConfiguredSystem(BaseDataSet ds, ImmutableGraphIndex index, CompressedVectors cv, Set<FeatureId> features) {
             this.ds = ds;
             this.index = index;
             this.cv = cv;
             this.features = features;
             this.scoresFromIndex = FeatureProviders.anyMatch(features, FeatureProvider::providesApproximateScoring);
             // File-backed sources borrow scratch storage; concurrent scorers need separate views.
-            this.exactVectors = ds.getBaseRavv().threadLocalSupplier();
+            // Int8 datasets do not have float base vectors; leave exactVectors null.
+            this.exactVectors = ds instanceof DataSet ? ((DataSet) ds).getBaseRavv().threadLocalSupplier() : null;
         }
 
+        /** Score provider for float query vectors (float datasets). */
         public SearchScoreProvider scoreProviderFor(VectorFloat<?> queryVector, ImmutableGraphIndex.View view) {
+            var floatDs = (DataSet) ds;
             var scoringView = (ImmutableGraphIndex.ScoringView) view;
             ScoreFunction.ApproximateScoreFunction asf;
             if (scoresFromIndex) {
-                asf = scoringView.approximateScoreFunctionFor(queryVector, ds.getSimilarityFunction());
+                asf = scoringView.approximateScoreFunctionFor(queryVector, floatDs.getSimilarityFunction());
             } else {
                 // if we're not compressing then just use the exact score function
                 if (cv == null) {
-                    return DefaultSearchScoreProvider.exact(queryVector, ds.getSimilarityFunction(), exactVectors.get());
+                    return DefaultSearchScoreProvider.exact(queryVector, floatDs.getSimilarityFunction(), exactVectors.get());
                 }
 
-                asf = cv.precomputedScoreFunctionFor(queryVector, ds.getSimilarityFunction());
+                asf = cv.precomputedScoreFunctionFor(queryVector, floatDs.getSimilarityFunction());
             }
-            var rr = scoringView.rerankerFor(queryVector, ds.getSimilarityFunction());
+            var rr = scoringView.rerankerFor(queryVector, floatDs.getSimilarityFunction());
             return new DefaultSearchScoreProvider(asf, rr);
+        }
+
+        /** Score provider for int8 byte query vectors (int8 datasets). */
+        public SearchScoreProvider scoreProviderFor(ByteSequence<?> queryBytes, ImmutableGraphIndex.View view) {
+            var byteDs = (ByteDataSet) ds;
+            ByteVectorSimilarityFunction bvsf = byteDs.getSimilarityFunction();
+            var diskView = (OnDiskGraphIndex.View) view;
+            ScoreFunction.ExactScoreFunction sf = diskView.byteVectorRerankerFor(queryBytes, bvsf);
+            return new DefaultSearchScoreProvider(sf);
         }
 
         public GraphSearcher getSearcher() {
             return searchers.get();
         }
 
-        public DataSet getDataSet() {
+        public BaseDataSet getDataSet() {
             return ds;
         }
 
