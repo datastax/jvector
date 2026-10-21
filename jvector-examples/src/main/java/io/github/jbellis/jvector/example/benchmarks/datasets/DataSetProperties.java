@@ -54,6 +54,9 @@ public interface DataSetProperties {
     /// Canonical key for how benchmark loaders should treat the dataset at load time.
     String KEY_LOAD_BEHAVIOR = "load_behavior";
 
+    /// Canonical key for whether the dataset uses native int8 (signed byte) vectors ({@link Boolean}).
+    String KEY_IS_INT8 = "is_int8";
+
     /**
      * Controls benchmark-loader behavior for this dataset.
      *
@@ -129,6 +132,14 @@ public interface DataSetProperties {
      * As any additional qualifiers are added to this data carrier, this method should be updated accordingly.
      * @return true, if the dataset is known to be valid for indexing and querying.
      */
+    /**
+     * Returns true if this dataset stores native signed int8 (byte) vectors.
+     * When true, loaders must use {@code readBvecs} and return a {@code ByteSimpleDataSet}.
+     */
+    default boolean isInt8() {
+        return false;
+    }
+
     default boolean isValid() {
         return isZeroVectorFree() && isDuplicateVectorFree();
     }
@@ -260,6 +271,11 @@ public interface DataSetProperties {
                 return LoadBehavior.valueOf((String) value);
             }
             return LoadBehavior.LEGACY_SCRUB;
+        }
+
+        @Override
+        public boolean isInt8() {
+            return Boolean.TRUE.equals(properties.get(KEY_IS_INT8));
         }
     }
 }
