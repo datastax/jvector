@@ -18,6 +18,7 @@ package io.github.jbellis.jvector.disk;
 
 import io.github.jbellis.jvector.graph.BatchedVectorValues;
 import io.github.jbellis.jvector.graph.RandomAccessVectorValues;
+import io.github.jbellis.jvector.graph.VectorValues;
 import io.github.jbellis.jvector.graph.VectorCursor;
 import io.github.jbellis.jvector.util.PhysicalCoreExecutor;
 import io.github.jbellis.jvector.vector.VectorizationProvider;
@@ -155,7 +156,7 @@ public final class FvecFileVectorValues implements BatchedVectorValues, AutoClos
      * Supply one point-access view per thread. Views share the root's I/O resources
      * and must stop being used before the root closes.
      */
-    @Override public Supplier<RandomAccessVectorValues> threadLocalSupplier() {
+    @Override public Supplier<VectorValues<VectorFloat<?>>> threadLocalSupplier() {
         var local = ThreadLocal.withInitial(this::copy);
         return local::get;
     }

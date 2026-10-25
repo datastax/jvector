@@ -18,6 +18,7 @@ package io.github.jbellis.jvector.example;
 
 import io.github.jbellis.jvector.disk.ByteBufferReader;
 import io.github.jbellis.jvector.graph.RandomAccessVectorValues;
+import io.github.jbellis.jvector.graph.VectorValues;
 import io.github.jbellis.jvector.vector.VectorizationProvider;
 import io.github.jbellis.jvector.vector.types.VectorFloat;
 import io.github.jbellis.jvector.vector.types.VectorTypeSupport;
@@ -78,7 +79,7 @@ final class DemandFvecVectorValues implements RandomAccessVectorValues, AutoClos
     @Override public int dimension() { return dimension; }
     @Override public boolean isValueShared() { return true; }
     @Override public DemandFvecVectorValues copy() { return new DemandFvecVectorValues(this); }
-    @Override public java.util.function.Supplier<RandomAccessVectorValues> threadLocalSupplier() {
+    @Override public java.util.function.Supplier<VectorValues<VectorFloat<?>>> threadLocalSupplier() {
         // Views share the owner's channel; closing the owner releases it after all workers finish.
         var local = ThreadLocal.withInitial(this::copy);
         return local::get;

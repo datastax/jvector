@@ -41,6 +41,7 @@ import io.github.jbellis.jvector.graph.GraphIndexBuilder;
 import io.github.jbellis.jvector.graph.VectorAccess;
 import io.github.jbellis.jvector.graph.GraphSearcher;
 import io.github.jbellis.jvector.graph.RandomAccessVectorValues;
+import io.github.jbellis.jvector.graph.VectorValues;
 import io.github.jbellis.jvector.graph.disk.*;
 import io.github.jbellis.jvector.graph.disk.feature.Feature;
 import io.github.jbellis.jvector.graph.disk.feature.FeatureId;
@@ -1224,7 +1225,7 @@ public class Grid {
         ImmutableGraphIndex index;
         CompressedVectors cv;
         Set<FeatureId> features;
-        private final Supplier<RandomAccessVectorValues> exactVectors;
+        private final Supplier<VectorValues<VectorFloat<?>>> exactVectors;
 
         private final ExplicitThreadLocal<GraphSearcher> searchers = ExplicitThreadLocal.withInitial(() -> {
             return new GraphSearcher(index);
@@ -1247,7 +1248,7 @@ public class Grid {
             } else {
                 // if we're not compressing then just use the exact score function
                 if (cv == null) {
-                    return DefaultSearchScoreProvider.exact(queryVector, ds.getSimilarityFunction(), exactVectors.get());
+                    return DefaultSearchScoreProvider.exact(queryVector, ds.getSimilarityFunction(), (RandomAccessVectorValues) exactVectors.get());
                 }
 
                 asf = cv.precomputedScoreFunctionFor(queryVector, ds.getSimilarityFunction());
