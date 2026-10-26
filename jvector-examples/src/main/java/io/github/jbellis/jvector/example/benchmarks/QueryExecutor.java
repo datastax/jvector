@@ -17,13 +17,17 @@
 package io.github.jbellis.jvector.example.benchmarks;
 
 import io.github.jbellis.jvector.example.Grid.ConfiguredSystem;
+import io.github.jbellis.jvector.example.benchmarks.datasets.ByteDataSet;
+import io.github.jbellis.jvector.example.benchmarks.datasets.DataSet;
 import io.github.jbellis.jvector.graph.SearchResult;
 import io.github.jbellis.jvector.util.Bits;
+import io.github.jbellis.jvector.vector.types.ByteSequence;
 import io.github.jbellis.jvector.vector.types.VectorFloat;
 
 public class QueryExecutor {
     /**
      * Executes the query at index i using the given parameters.
+     * Dispatches to the int8 or float path depending on the dataset type.
      *
      * @param cs         Configured system that contains the query vectors.
      * @param topK       Number of top results.
@@ -33,16 +37,31 @@ public class QueryExecutor {
      * @return the SearchResult for query i.
      */
     public static SearchResult executeQuery(ConfiguredSystem cs, int topK, int rerankK, boolean usePruning, int i) {
-        var queryVector = cs.getDataSet().getQueryVectors().get(i);
+        if (cs.getDataSet() instanceof ByteDataSet) {
+            ByteDataSet byteDs = (ByteDataSet) cs.getDataSet();
+            return executeByteQuery(cs, topK, rerankK, usePruning, byteDs.getQueryVectors().get(i));
+        }
+        var queryVector = ((DataSet) cs.getDataSet()).getQueryVectors().get(i);
         return executeQuery(cs, topK, rerankK, usePruning, queryVector);
     }
 
     // Overload to allow single query injection (e.g., for warm-up with random vectors)
-    public static SearchResult executeQuery(ConfiguredSystem cs, int topK, int rerankK, boolean usePruning, VectorFloat<?> queryVector
-    ) {
+    public static SearchResult executeQuery(ConfiguredSystem cs, int topK, int rerankK, boolean usePruning, VectorFloat<?> queryVector) {
         var searcher = cs.getSearcher();
         searcher.usePruning(usePruning);
         var sf = cs.scoreProviderFor(queryVector, searcher.getView());
+        return searcher.search(sf, topK, rerankK, 0.0f, 0.0f, Bits.ALL);
+    }
+
+    // Overload to allow single int8 query injection (e.g., for warm-up with random vectors)
+    public static SearchResult executeQuery(ConfiguredSystem cs, int topK, int rerankK, boolean usePruning, ByteSequence<?> queryBytes) {
+        return executeByteQuery(cs, topK, rerankK, usePruning, queryBytes);
+    }
+
+    private static SearchResult executeByteQuery(ConfiguredSystem cs, int topK, int rerankK, boolean usePruning, ByteSequence<?> queryBytes) {
+        var searcher = cs.getSearcher();
+        searcher.usePruning(usePruning);
+        var sf = cs.scoreProviderFor(queryBytes, searcher.getView());
         return searcher.search(sf, topK, rerankK, 0.0f, 0.0f, Bits.ALL);
     }
 }

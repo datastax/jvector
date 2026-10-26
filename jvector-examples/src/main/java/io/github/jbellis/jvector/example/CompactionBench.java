@@ -121,7 +121,7 @@ public final class CompactionBench {
     private static BenchResult runConfig(DataSet ds, PartitionConfig cfg) throws Exception {
         String datasetName = ds.getName();
         logger.info("Compaction bench [{}] config {}: {} vectors",
-                datasetName, cfg.dirName(), ds.getBaseVectors().size());
+                datasetName, cfg.dirName(), ds.size());
 
         // 1. Fetch pre-built partitions from S3 (cached locally).
         List<Path> partitionPaths = CompactionPartitionSource.ensurePartitions(

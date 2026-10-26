@@ -16,6 +16,7 @@
 package io.github.jbellis.jvector.example.benchmarks.datasets;
 
 import io.github.jbellis.jvector.example.util.SiftLoader;
+import io.github.jbellis.jvector.vector.ByteVectorSimilarityFunction;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.yaml.snakeyaml.Yaml;
@@ -452,8 +453,17 @@ public class DataSetLoaderSimpleMFD implements DataSetLoader {
         return Optional.of(new DataSetInfo(props, () -> {
             if (loading == BaseVectorLoading.BUFFERED && props.loadBehavior() != DataSetProperties.LoadBehavior.NO_SCRUB)
                 throw new IllegalArgumentException("Buffered loading requires NO_SCRUB metadata for " + dataSetName);
-            var queryVectors = SiftLoader.readFvecs(effectiveCacheDir.resolve(queryFile).toString());
             var gtVectors = SiftLoader.readIvecs(effectiveCacheDir.resolve(gtFile).toString());
+            if (props.isInt8()) {
+                if (loading == BaseVectorLoading.BUFFERED)
+                    throw new IllegalArgumentException("Buffered loading is not supported for int8 datasets: " + dataSetName);
+                var bvsf = ByteVectorSimilarityFunction.valueOf(
+                        props.similarityFunction().orElseThrow().name());
+                var baseVectors = SiftLoader.readBvecs(effectiveCacheDir.resolve(baseFile).toString());
+                var queryVectors = SiftLoader.readBvecs(effectiveCacheDir.resolve(queryFile).toString());
+                return new ByteSimpleDataSet(dataSetName, bvsf, baseVectors, queryVectors, gtVectors);
+            }
+            var queryVectors = SiftLoader.readFvecs(effectiveCacheDir.resolve(queryFile).toString());
             if (loading == BaseVectorLoading.BUFFERED) {
                 try {
                     return new BufferedDataSet(dataSetName, props.similarityFunction().orElseThrow(),

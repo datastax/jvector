@@ -61,3 +61,6 @@ void closest_centroid_f32(void) {}
 void nvq_growth_rate(void) {}
 void scale_to_f32(void) {}
 void subtract_add_in_place_f32(void) {}
+void dot_product_i8(void) {}
+void euclidean_i8(void) {}
+void cosine_i8(void) {}

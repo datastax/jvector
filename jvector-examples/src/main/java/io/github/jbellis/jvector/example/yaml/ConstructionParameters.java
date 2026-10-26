@@ -35,8 +35,11 @@ public class ConstructionParameters extends CommonParameters {
 
     public List<EnumSet<FeatureId>> getFeatureSets() {
         List<EnumSet<FeatureId>> featureSets = null;
-        for (var fusedItem : fusedGraph) {
-            var newFeatures = reranking.stream().map(item -> {
+        // Optional in YAML (e.g. int8 configs omit it): default to full-precision, non-fused.
+        var rerankingItems = reranking == null ? List.of("FP") : reranking;
+        var fusedItems = fusedGraph == null ? List.of(false) : fusedGraph;
+        for (var fusedItem : fusedItems) {
+            var newFeatures = rerankingItems.stream().map(item -> {
                 EnumSet<FeatureId> features;
 
                 switch (item) {

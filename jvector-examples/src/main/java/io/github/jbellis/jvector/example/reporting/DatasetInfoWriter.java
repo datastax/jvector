@@ -16,6 +16,8 @@
 
 package io.github.jbellis.jvector.example.reporting;
 
+import io.github.jbellis.jvector.example.benchmarks.datasets.BaseDataSet;
+import io.github.jbellis.jvector.example.benchmarks.datasets.ByteDataSet;
 import io.github.jbellis.jvector.example.benchmarks.datasets.DataSet;
 
 import java.io.IOException;
@@ -114,17 +116,20 @@ public final class DatasetInfoWriter {
                                   String basePath,
                                   String queryPath,
                                   String groundTruthPath,
-                                  DataSet ds) {
+                                  BaseDataSet ds) {
+        String sf = (ds instanceof ByteDataSet)
+                ? ((ByteDataSet) ds).getSimilarityFunction().toString()
+                : ((DataSet) ds).getSimilarityFunction().toString();
         return new Row(
                 datasetName,
                 basePath,
                 queryPath,
                 groundTruthPath,
-                ds.getBaseVectors().size(),
-                ds.getQueryVectors().size(),
+                ds.size(),
+                ds.getQueryCount(),
                 ds.getGroundTruth().size(),
                 ds.getDimension(),
-                ds.getSimilarityFunction().toString()
+                sf
         );
     }
 

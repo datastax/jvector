@@ -415,7 +415,7 @@ abstract class AbstractGraphIndexFormat implements GraphIndexFormat {
      */
     protected static Set<FeatureId> allFeatures() {
         return EnumSet.of(FeatureId.INLINE_VECTORS, FeatureId.FUSED_PQ, FeatureId.NVQ_VECTORS,
-                FeatureId.SEPARATED_VECTORS, FeatureId.SEPARATED_NVQ);
+                FeatureId.SEPARATED_VECTORS, FeatureId.SEPARATED_NVQ, FeatureId.INLINE_BYTE_VECTORS);
     }
 
     /**
