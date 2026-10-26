@@ -1931,8 +1931,8 @@ HWY_FLATTEN float dot_product_i8(const int8_t *HWY_RESTRICT a, size_t aoffset,
     // Four independent accumulators hide the multi-cycle MADD latency.
     auto acc0 = hn::Zero(d32), acc1 = hn::Zero(d32);
     auto acc2 = hn::Zero(d32), acc3 = hn::Zero(d32);
-    auto dummy0 = hn::Zero(d32), dummy1 = hn::Zero(d32);
-    auto dummy2 = hn::Zero(d32), dummy3 = hn::Zero(d32);
+    auto acc0h = hn::Zero(d32), acc1h = hn::Zero(d32);
+    auto acc2h = hn::Zero(d32), acc3h = hn::Zero(d32);
     size_t i = 0;
     for (; i + 4 * lanes8 <= length; i += 4 * lanes8) {
         auto va0 = hn::LoadU(d8, a + i);
@@ -1945,23 +1945,28 @@ HWY_FLATTEN float dot_product_i8(const int8_t *HWY_RESTRICT a, size_t aoffset,
         auto vb3 = hn::LoadU(d8, b + i + 3*lanes8);
         
         // Promote to i16 and accumulate using ReorderWidenMulAccumulate (2 i16s -> 1 i32)
-        acc0 = hn::ReorderWidenMulAccumulate(d32, hn::PromoteLowerTo(d16, va0), hn::PromoteLowerTo(d16, vb0), acc0, dummy0);
-        acc0 = hn::ReorderWidenMulAccumulate(d32, hn::PromoteUpperTo(d16, va0), hn::PromoteUpperTo(d16, vb0), acc0, dummy0);
-        acc1 = hn::ReorderWidenMulAccumulate(d32, hn::PromoteLowerTo(d16, va1), hn::PromoteLowerTo(d16, vb1), acc1, dummy1);
-        acc1 = hn::ReorderWidenMulAccumulate(d32, hn::PromoteUpperTo(d16, va1), hn::PromoteUpperTo(d16, vb1), acc1, dummy1);
-        acc2 = hn::ReorderWidenMulAccumulate(d32, hn::PromoteLowerTo(d16, va2), hn::PromoteLowerTo(d16, vb2), acc2, dummy2);
-        acc2 = hn::ReorderWidenMulAccumulate(d32, hn::PromoteUpperTo(d16, va2), hn::PromoteUpperTo(d16, vb2), acc2, dummy2);
-        acc3 = hn::ReorderWidenMulAccumulate(d32, hn::PromoteLowerTo(d16, va3), hn::PromoteLowerTo(d16, vb3), acc3, dummy3);
-        acc3 = hn::ReorderWidenMulAccumulate(d32, hn::PromoteUpperTo(d16, va3), hn::PromoteUpperTo(d16, vb3), acc3, dummy3);
+        acc0 = hn::ReorderWidenMulAccumulate(d32, hn::PromoteLowerTo(d16, va0), hn::PromoteLowerTo(d16, vb0), acc0, acc0h);
+        acc0 = hn::ReorderWidenMulAccumulate(d32, hn::PromoteUpperTo(d16, va0), hn::PromoteUpperTo(d16, vb0), acc0, acc0h);
+        acc1 = hn::ReorderWidenMulAccumulate(d32, hn::PromoteLowerTo(d16, va1), hn::PromoteLowerTo(d16, vb1), acc1, acc1h);
+        acc1 = hn::ReorderWidenMulAccumulate(d32, hn::PromoteUpperTo(d16, va1), hn::PromoteUpperTo(d16, vb1), acc1, acc1h);
+        acc2 = hn::ReorderWidenMulAccumulate(d32, hn::PromoteLowerTo(d16, va2), hn::PromoteLowerTo(d16, vb2), acc2, acc2h);
+        acc2 = hn::ReorderWidenMulAccumulate(d32, hn::PromoteUpperTo(d16, va2), hn::PromoteUpperTo(d16, vb2), acc2, acc2h);
+        acc3 = hn::ReorderWidenMulAccumulate(d32, hn::PromoteLowerTo(d16, va3), hn::PromoteLowerTo(d16, vb3), acc3, acc3h);
+        acc3 = hn::ReorderWidenMulAccumulate(d32, hn::PromoteUpperTo(d16, va3), hn::PromoteUpperTo(d16, vb3), acc3, acc3h);
     }
-    auto acc = hn::Add(hn::Add(acc0, acc1), hn::Add(acc2, acc3));
-    auto dummy = hn::Zero(d32);
+    auto acc  = hn::Add(hn::Add(acc0,  acc1),  hn::Add(acc2,  acc3));
+    auto acch = hn::Add(hn::Add(acc0h, acc1h), hn::Add(acc2h, acc3h));
+    acc = hn::Add(acc, acch);
     
     for (; i + lanes8 <= length; i += lanes8) {
         auto va = hn::LoadU(d8, a + i);
         auto vb = hn::LoadU(d8, b + i);
-        acc = hn::ReorderWidenMulAccumulate(d32, hn::PromoteLowerTo(d16, va), hn::PromoteLowerTo(d16, vb), acc, dummy);
-        acc = hn::ReorderWidenMulAccumulate(d32, hn::PromoteUpperTo(d16, va), hn::PromoteUpperTo(d16, vb), acc, dummy);
+        auto dummy_hi = hn::Zero(d32);
+        acc = hn::ReorderWidenMulAccumulate(d32, hn::PromoteLowerTo(d16, va), hn::PromoteLowerTo(d16, vb), acc, dummy_hi);
+        acc = hn::Add(acc, dummy_hi);
+        dummy_hi = hn::Zero(d32);
+        acc = hn::ReorderWidenMulAccumulate(d32, hn::PromoteUpperTo(d16, va), hn::PromoteUpperTo(d16, vb), acc, dummy_hi);
+        acc = hn::Add(acc, dummy_hi);
     }
     int32_t result = hn::ReduceSum(d32, acc);
     for (; i < length; i++) result += (int32_t)a[i] * (int32_t)b[i];
@@ -2042,22 +2047,32 @@ HWY_FLATTEN float cosine_i8(const int8_t *HWY_RESTRICT a, size_t aoffset,
     const size_t lanes8 = hn::Lanes(d8);
 
     auto dot       = hn::Zero(d32);
+    auto doth      = hn::Zero(d32);
     auto normA     = hn::Zero(d32);
+    auto normAh    = hn::Zero(d32);
     auto normB     = hn::Zero(d32);
-    auto dummy_acc = hn::Zero(d32);
+    auto normBh    = hn::Zero(d32);
 
     size_t i = 0;
     for (; i + lanes8 <= length; i += lanes8) {
         auto va = hn::LoadU(d8, a + i);
         auto vb = hn::LoadU(d8, b + i);
+        auto va_lo = hn::PromoteLowerTo(d16, va);
+        auto va_hi = hn::PromoteUpperTo(d16, va);
+        auto vb_lo = hn::PromoteLowerTo(d16, vb);
+        auto vb_hi = hn::PromoteUpperTo(d16, vb);
         
-        dot   = hn::ReorderWidenMulAccumulate(d32, hn::PromoteLowerTo(d16, va), hn::PromoteLowerTo(d16, vb), dot, dummy_acc);
-        dot   = hn::ReorderWidenMulAccumulate(d32, hn::PromoteUpperTo(d16, va), hn::PromoteUpperTo(d16, vb), dot, dummy_acc);
-        normA = hn::ReorderWidenMulAccumulate(d32, hn::PromoteLowerTo(d16, va), hn::PromoteLowerTo(d16, va), normA, dummy_acc);
-        normA = hn::ReorderWidenMulAccumulate(d32, hn::PromoteUpperTo(d16, va), hn::PromoteUpperTo(d16, va), normA, dummy_acc);
-        normB = hn::ReorderWidenMulAccumulate(d32, hn::PromoteLowerTo(d16, vb), hn::PromoteLowerTo(d16, vb), normB, dummy_acc);
-        normB = hn::ReorderWidenMulAccumulate(d32, hn::PromoteUpperTo(d16, vb), hn::PromoteUpperTo(d16, vb), normB, dummy_acc);
+        dot   = hn::ReorderWidenMulAccumulate(d32, va_lo, vb_lo, dot, doth);
+        dot   = hn::ReorderWidenMulAccumulate(d32, va_hi, vb_hi, dot, doth);
+        normA = hn::ReorderWidenMulAccumulate(d32, va_lo, va_lo, normA, normAh);
+        normA = hn::ReorderWidenMulAccumulate(d32, va_hi, va_hi, normA, normAh);
+        normB = hn::ReorderWidenMulAccumulate(d32, vb_lo, vb_lo, normB, normBh);
+        normB = hn::ReorderWidenMulAccumulate(d32, vb_hi, vb_hi, normB, normBh);
     }
+    
+    dot   = hn::Add(dot, doth);
+    normA = hn::Add(normA, normAh);
+    normB = hn::Add(normB, normBh);
     
     int64_t dotResult   = (int64_t)hn::ReduceSum(d32, dot);
     int64_t normAResult = (int64_t)hn::ReduceSum(d32, normA);
