@@ -89,9 +89,9 @@ public class TestGraphIndexFormatFactory extends RandomizedTest {
         assertFalse(v2.usesFooter());
         assertEquals(EnumSet.of(FeatureId.INLINE_VECTORS), v2.getSupportedFeatures());
 
-        // versions 3-5 support every feature except FUSED_PQ; multi-layer arrives at v4,
+        // Versions 3-5 predate fused features; multi-layer arrives at v4,
         // footer-based metadata arrives at v5.
-        var nonFused = EnumSet.complementOf(EnumSet.of(FeatureId.FUSED_PQ));
+        var nonFused = EnumSet.complementOf(EnumSet.of(FeatureId.FUSED_PQ, FeatureId.FUSED_ASH));
         for (int version : new int[]{3, 4, 5}) {
             var format = GraphIndexFormatFactory.forVersion(version);
             assertEquals("version " + version + " supported features", nonFused, format.getSupportedFeatures());
@@ -104,7 +104,15 @@ public class TestGraphIndexFormatFactory extends RandomizedTest {
         assertTrue(v6.supportsMultiLayer());
         assertTrue(v6.usesFooter());
         assertTrue(v6.supportsFeature(FeatureId.FUSED_PQ));
-        assertEquals(EnumSet.allOf(FeatureId.class), v6.getSupportedFeatures());
+        assertFalse(v6.supportsFeature(FeatureId.FUSED_ASH));
+        assertEquals(EnumSet.complementOf(EnumSet.of(FeatureId.FUSED_ASH)), v6.getSupportedFeatures());
+
+        var v7 = GraphIndexFormatFactory.forVersion(7);
+        assertTrue(v7.supportsMultiLayer());
+        assertTrue(v7.usesFooter());
+        assertTrue(v7.supportsFeature(FeatureId.FUSED_PQ));
+        assertTrue(v7.supportsFeature(FeatureId.FUSED_ASH));
+        assertEquals(EnumSet.allOf(FeatureId.class), v7.getSupportedFeatures());
     }
 
     @Test

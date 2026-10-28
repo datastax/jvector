@@ -20,6 +20,8 @@ import io.github.jbellis.jvector.disk.IndexWriter;
 import io.github.jbellis.jvector.disk.RandomAccessReader;
 import io.github.jbellis.jvector.graph.disk.feature.Feature;
 import io.github.jbellis.jvector.graph.disk.feature.FeatureId;
+
+import java.util.Set;
 import io.github.jbellis.jvector.graph.disk.feature.FusedFeature;
 
 import java.io.IOException;
@@ -44,12 +46,12 @@ class GraphIndexFormatV6 extends GraphIndexFormatV5 {
 
     /** Creates the singleton format for version 6. */
     GraphIndexFormatV6() {
-        this(6);
+        this(6, allFeatures());
     }
 
     /** Allows later feature extensions to reuse the V6 record and hierarchy layout. */
-    protected GraphIndexFormatV6(int version) {
-        super(version, allFeatures());
+    protected GraphIndexFormatV6(int version, Set<FeatureId> supportedFeatures) {
+        super(version, supportedFeatures);
     }
 
     /** Places fused features last so non-fused inline features occupy a contiguous prefix. */
