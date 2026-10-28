@@ -42,6 +42,9 @@ package io.github.jbellis.jvector.quantization;
  * This is deliberately graph-neighborhood-oriented: it supports block sizes
  * {@code 8}, {@code 16}, and {@code 32} without copying the IVF-specific B32
  * addressing scheme.</p>
+ *
+ * <p>Block and neighborhood byte-size calculations use checked arithmetic. Shapes whose
+ * serialized storage cannot fit a Java array fail with {@link ArithmeticException}.</p>
  */
 public final class FusedASHLayout {
     private FusedASHLayout() {}
@@ -88,16 +91,16 @@ public final class FusedASHLayout {
             throw new IllegalArgumentException("quantizedDim must be > 0");
         }
         int groupDims = projectionDimsPerNibble(bitsPerDimension);
-        return (quantizedDim + groupDims - 1) / groupDims;
+        return (quantizedDim - 1) / groupDims + 1;
     }
 
     public static int canonicalCodeBytes(int quantizedDim, int bitsPerDimension) {
-        return (codeGroups(quantizedDim, bitsPerDimension) + 1) >>> 1;
+        return (codeGroups(quantizedDim, bitsPerDimension) - 1) / 2 + 1;
     }
 
     public static int blockBodyBytes(int quantizedDim, int bitsPerDimension, int blockSize) {
         validateBlockSize(blockSize);
-        return canonicalCodeBytes(quantizedDim, bitsPerDimension) * blockSize;
+        return Math.multiplyExact(canonicalCodeBytes(quantizedDim, bitsPerDimension), blockSize);
     }
 
     public static int blockHeaderBytes(int blockSize) {
@@ -106,7 +109,7 @@ public final class FusedASHLayout {
     }
 
     public static int blockBytes(int quantizedDim, int bitsPerDimension, int blockSize) {
-        return blockBodyBytes(quantizedDim, bitsPerDimension, blockSize) + blockHeaderBytes(blockSize);
+        return Math.addExact(blockBodyBytes(quantizedDim, bitsPerDimension, blockSize), blockHeaderBytes(blockSize));
     }
 
     public static int blocksPerNode(int maxDegree, int blockSize) {
@@ -114,15 +117,18 @@ public final class FusedASHLayout {
             throw new IllegalArgumentException("maxDegree must be > 0");
         }
         validateBlockSize(blockSize);
-        return (maxDegree + blockSize - 1) / blockSize;
+        return (maxDegree - 1) / blockSize + 1;
     }
 
     public static int featureSize(int maxDegree, int quantizedDim, int bitsPerDimension, int blockSize) {
-        return blocksPerNode(maxDegree, blockSize) * blockBytes(quantizedDim, bitsPerDimension, blockSize);
+        return Math.multiplyExact(blocksPerNode(maxDegree, blockSize), blockBytes(quantizedDim, bitsPerDimension, blockSize));
     }
 
     public static int blockOffset(int blockIndex, int quantizedDim, int bitsPerDimension, int blockSize) {
-        return blockIndex * blockBytes(quantizedDim, bitsPerDimension, blockSize);
+        if (blockIndex < 0) {
+            throw new IllegalArgumentException("blockIndex must be nonnegative");
+        }
+        return Math.multiplyExact(blockIndex, blockBytes(quantizedDim, bitsPerDimension, blockSize));
     }
 
     public static int scaleOffset(int blockOffset, int quantizedDim, int bitsPerDimension, int blockSize) {
@@ -229,6 +235,43 @@ public final class FusedASHLayout {
 
         writeLaneHeader(block, blockOffset, lane, quantizedDim, bitsPerDimension, blockSize,
                 vector.scale, vector.offset, vector.landmark);
+    }
+
+    /**
+     * Packs one canonical ASH vector into the graph's fused neighborhood representation.
+     *
+     * <p>The one-bit canonical scorer uses {@code A(q - mu)}, whereas fused scoring uses
+     * {@code Aq} for every bit width. Only one-bit offsets therefore need the adjustment
+     * {@code offset - scale * dot(A(mu), code)}. Two/four-bit offsets already contain it.
+     * Keeping this conversion here makes benchmark fixtures use the graph writer's exact bytes.</p>
+     *
+     * @param block destination containing a complete serialized block
+     * @param blockOffset byte offset of that block
+     * @param lane destination lane within the block
+     * @param vector canonical quantized vector, whose landmark belongs to {@code ash}
+     * @param ash compressor that owns the vector's projection and landmarks
+     * @param blockSize serialized block width: 8, 16, or 32
+     * @throws IllegalArgumentException if the landmark or block shape is invalid
+     */
+    public static void packForFused(byte[] block, int blockOffset, int lane,
+                                    AsymmetricHashing.QuantizedVector vector,
+                                    AsymmetricHashing ash, int blockSize) {
+        int landmark = vector.landmark & 0xFF;
+        if (landmark >= ash.landmarkCount) {
+            throw new IllegalArgumentException("Invalid ASH landmark: " + landmark);
+        }
+        packQuantizedVector(block, blockOffset, lane, vector,
+                ash.quantizedDim, ash.bitsPerDimension, blockSize);
+        if (ash.bitsPerDimension == 1) {
+            float landmarkDot = 0f;
+            for (int d = 0; d < ash.quantizedDim; d++) {
+                float projected = ash.landmarkProj[landmark][d];
+                boolean positive = ((vector.binaryVector[d >>> 6] >>> (d & 63)) & 1L) != 0;
+                landmarkDot += positive ? projected : -projected;
+            }
+            writeLaneHeader(block, blockOffset, lane, ash.quantizedDim, 1, blockSize,
+                    vector.scale, vector.offset - vector.scale * landmarkDot, vector.landmark);
+        }
     }
 
     public static void writeLaneHeader(

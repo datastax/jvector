@@ -210,7 +210,7 @@ public class FusedASH extends AbstractFeature implements FusedFeature {
                 blockSize);
 
         if (ash.bitsPerDimension == 1) {
-            packOneBitForFused(dest, blockOffset, lane, vector);
+            FusedASHLayout.packForFused(dest, blockOffset, lane, vector, ash, blockSize);
         } else {
             // For 2-bit and 4-bit ASH, the canonical vector already stores the
             // C++ projection-mode adjusted offset used by FusedASH scoring.
@@ -223,47 +223,6 @@ public class FusedASH extends AbstractFeature implements FusedFeature {
                     ash.bitsPerDimension,
                     blockSize);
         }
-    }
-
-    /**
-     * The regular 1-bit ASH vector keeps the legacy unadjusted offset, because
-     * its standalone scorer uses A(q - μ). FusedASH scores via Aq for every
-     * supported bit width, so we apply the projection-offset adjustment here.
-     */
-    private void packOneBitForFused(byte[] dest, int blockOffset, int lane, AsymmetricHashing.QuantizedVector vector) {
-        int groups = FusedASHLayout.codeGroups(ash.quantizedDim, ash.bitsPerDimension);
-        for (int group = 0; group < groups; group++) {
-            int nibble = FusedASHLayout.signNibbleFromWords(vector.binaryVector, group, ash.quantizedDim);
-            FusedASHLayout.setPackedNibble(dest, blockOffset, lane, group, blockSize, nibble);
-        }
-
-        int c = vector.landmark & 0xFF;
-        if (c >= ash.landmarkCount) {
-            throw new IllegalArgumentException("Invalid ASH landmark " + c + " for landmarkCount=" + ash.landmarkCount);
-        }
-
-        float landmarkDot = dotOneBitProjectionCode(ash.landmarkProj[c], vector.binaryVector, ash.quantizedDim);
-        float adjustedOffset = vector.offset - vector.scale * landmarkDot;
-
-        FusedASHLayout.writeLaneHeader(
-                dest,
-                blockOffset,
-                lane,
-                ash.quantizedDim,
-                ash.bitsPerDimension,
-                blockSize,
-                vector.scale,
-                adjustedOffset,
-                vector.landmark);
-    }
-
-    private static float dotOneBitProjectionCode(float[] projected, long[] signWords, int quantizedDim) {
-        float sum = 0f;
-        for (int j = 0; j < quantizedDim; j++) {
-            boolean positive = ((signWords[j >>> 6] >>> (j & 63)) & 1L) != 0L;
-            sum += positive ? projected[j] : -projected[j];
-        }
-        return sum;
     }
 
     private static void writeBytes(IndexWriter out, byte[] bytes, int length) throws IOException {

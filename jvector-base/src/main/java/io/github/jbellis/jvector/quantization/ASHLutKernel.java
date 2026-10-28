@@ -55,6 +55,11 @@ final class ASHLutKernel {
         else ASHLutScoring.score(codes, offset, groups, stride, lane, count, lut, out, outOffset);
     }
 
+    /** Whether the query requested accelerated execution; scalar selection must also disable native scoring. */
+    boolean isSimd() {
+        return simd;
+    }
+
     @Override
     public String toString() { return simd ? "SIMD ASH LUT (" + backend.getClass().getSimpleName() + ")" : "scalar ASH LUT"; }
 }

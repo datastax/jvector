@@ -33,6 +33,9 @@ import java.util.Objects;
  * existing fused-feature search API while avoiding one-neighbor-at-a-time decode work in the
  * hot graph-expansion loop.</p>
  *
+ * <p>Each decoder and its mutable scratch/cache are confined to one graph view/search thread.
+ * The underlying prepared neighborhood scorer may be shared only with separate scratch storage.</p>
+ *
  * <p>Scalar and SIMD execution share the same packed layout. The property
  * {@code jvector.ash.blockKernel=auto|scalar|simd} selects execution once per decoder;
  * forced SIMD fails at construction if the backend cannot provide it.</p>
@@ -67,8 +70,13 @@ public final class FusedASHDecoder implements ScoreFunction.ApproximateScoreFunc
      * typically by reading the FusedASH inline payload for {@code origin} into {@code dest}.
      */
     public interface PackedNeighborhoods {
+        /** Replaces the complete serialized payload for {@code origin} in caller-owned storage. */
         void readInto(int origin, byte[] dest);
+
+        /** Returns the scored capacity, including padding, of each neighborhood. */
         int maxDegree();
+
+        /** Returns the complete serialized byte count for the configured layout. */
         int featureSize();
     }
 
@@ -81,27 +89,35 @@ public final class FusedASHDecoder implements ScoreFunction.ApproximateScoreFunc
         AsymmetricHashing.QuantizedVector vector(FusedFeature.InlineSource source);
     }
 
-    private final AsymmetricHashing ash;
     private final PackedNeighborhoods packedNeighborhoods;
     private final Int2ObjectHashMap<FusedFeature.InlineSource> hierarchyCachedFeatures;
     private final InlineSourceAccessor inlineSourceAccessor;
     private final ASHScorer.ASHScoreFunction sourceScorer;
 
     private final int maxDegree;
-    private final int blockSize;
-    private final int blocksPerNode;
-    private final int quantizedDim;
-    private final int bitsPerDimension;
 
     private final byte[] neighborhoodScratch;
     private final float[] neighborScores;
 
-    private final float[] queryLut;
-    private final float[] dotQMuByLandmark;
-    private final ASHLutKernel kernel = new ASHLutKernel();
+    private final ASHNeighborhoodScorer neighborhoodScorer;
 
     private int origin = -1;
 
+    /**
+     * Creates a query-local decoder and shares one projection between L0 and upper-layer scoring.
+     *
+     * @param packedNeighborhoods source of complete fused payloads with a fixed layout
+     * @param ash compressor that encoded the graph's ASH features
+     * @param hierarchyCachedFeatures canonical features available for direct/upper-layer scoring
+     * @param inlineSourceAccessor reads a canonical ASH vector from a cached feature
+     * @param query original-dimensional query, normalized by the caller when appropriate
+     * @param reusableNeighborhoodBytes decoder-owned scratch, at least the complete feature size
+     * @param reusableScores decoder-owned scratch, at least the source's maximum degree
+     * @param blockSize serialized block width: 8, 16, or 32
+     * @param similarityFunction must be DOT_PRODUCT
+     * @throws IllegalArgumentException if dimensions, payload size, or scratch capacity disagree
+     * @throws UnsupportedOperationException for another similarity function
+     */
     public FusedASHDecoder(
             PackedNeighborhoods packedNeighborhoods,
             AsymmetricHashing ash,
@@ -118,7 +134,7 @@ public final class FusedASHDecoder implements ScoreFunction.ApproximateScoreFunc
         }
 
         this.packedNeighborhoods = Objects.requireNonNull(packedNeighborhoods, "packedNeighborhoods");
-        this.ash = Objects.requireNonNull(ash, "ash");
+        Objects.requireNonNull(ash, "ash");
         this.hierarchyCachedFeatures = Objects.requireNonNull(
                 hierarchyCachedFeatures,
                 "hierarchyCachedFeatures"
@@ -127,11 +143,10 @@ public final class FusedASHDecoder implements ScoreFunction.ApproximateScoreFunc
                 inlineSourceAccessor,
                 "inlineSourceAccessor"
         );
-        // Upper-layer source scoring and L0 block scoring use the same Aq and
-        // <q, landmark> values. Prepare them once, then build each scoring form.
-        var scorer = new ASHScorer(ash);
-        var preparedQuery = scorer.precomputeQuery(query);
-        this.sourceScorer = scorer.scoreFunctionFor(preparedQuery);
+        Objects.requireNonNull(query, "query");
+        if (query.length() != ash.originalDimension) {
+            throw new IllegalArgumentException("ASH query dimension must be " + ash.originalDimension);
+        }
 
         FusedASHLayout.validateBitsPerDimension(ash.bitsPerDimension);
         FusedASHLayout.validateBlockSize(blockSize);
@@ -141,10 +156,8 @@ public final class FusedASHDecoder implements ScoreFunction.ApproximateScoreFunc
             throw new IllegalArgumentException("maxDegree must be > 0");
         }
 
-        this.blockSize = blockSize;
-        this.blocksPerNode = FusedASHLayout.blocksPerNode(maxDegree, blockSize);
-        this.quantizedDim = ash.quantizedDim;
-        this.bitsPerDimension = ash.bitsPerDimension;
+        int quantizedDim = ash.quantizedDim;
+        int bitsPerDimension = ash.bitsPerDimension;
 
         int expectedFeatureSize = FusedASHLayout.featureSize(
                 maxDegree,
@@ -167,10 +180,13 @@ public final class FusedASHDecoder implements ScoreFunction.ApproximateScoreFunc
         this.neighborhoodScratch = reusableNeighborhoodBytes;
         this.neighborScores = reusableScores;
 
-        int groups = FusedASHLayout.codeGroups(quantizedDim, bitsPerDimension);
-        this.queryLut = new float[groups * 16];
-        this.dotQMuByLandmark = preparedQuery.dotQMuByLandmark;
-        FusedASHLayout.buildQueryLut(preparedQuery.qProj, quantizedDim, bitsPerDimension, queryLut);
+        // Upper-layer source scoring and L0 block scoring use the same Aq and
+        // <q, landmark> values. Prepare them once, then build each scoring form.
+        var scorer = new ASHScorer(ash);
+        var preparedQuery = scorer.precomputeQuery(query);
+        this.sourceScorer = scorer.scoreFunctionFor(preparedQuery);
+
+        this.neighborhoodScorer = new ASHNeighborhoodScorer(ash, preparedQuery, maxDegree, blockSize);
     }
 
     public static FusedASHDecoder newDecoder(
@@ -253,30 +269,13 @@ public final class FusedASHDecoder implements ScoreFunction.ApproximateScoreFunc
         return neighborScores[neighborIndex];
     }
 
+    /** Uses the same prepared scorer as the isolated benchmark; graph I/O stays in this decoder. */
     private void scoreNeighborhood() {
-        for (int block = 0; block < blocksPerNode; block++) {
-            int blockOffset = FusedASHLayout.blockOffset(block, quantizedDim, bitsPerDimension, blockSize);
-            int laneBase = block * blockSize;
-            int lanes = Math.min(blockSize, maxDegree - laneBase);
-
-            kernel.score(neighborhoodScratch, blockOffset,
-                    FusedASHLayout.codeGroups(quantizedDim, bitsPerDimension), blockSize,
-                    0, lanes, queryLut, neighborScores, laneBase);
-            for (int lane = 0; lane < lanes; lane++) {
-                int landmark = FusedASHLayout.readLandmark(neighborhoodScratch, blockOffset,
-                        lane, quantizedDim, bitsPerDimension, blockSize);
-                if (landmark >= dotQMuByLandmark.length) {
-                    throw new IllegalStateException("Invalid FusedASH landmark: " + landmark);
-                }
-                neighborScores[laneBase + lane] = ASHScorer.toSimilarity(FusedASHLayout.readScale(neighborhoodScratch,
-                        blockOffset, lane, quantizedDim, bitsPerDimension, blockSize)
-                        * neighborScores[laneBase + lane] + dotQMuByLandmark[landmark]
-                        + FusedASHLayout.readOffset(neighborhoodScratch, blockOffset,
-                        lane, quantizedDim, bitsPerDimension, blockSize));
-            }
-        }
+        neighborhoodScorer.score(neighborhoodScratch, neighborScores);
     }
 
     @Override
-    public String toString() { return "FusedASHDecoder[" + kernel + "]"; }
+    public String toString() {
+        return "FusedASHDecoder[" + neighborhoodScorer + "]";
+    }
 }
