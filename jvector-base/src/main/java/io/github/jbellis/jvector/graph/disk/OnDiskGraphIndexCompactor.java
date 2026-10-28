@@ -74,7 +74,7 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
     private final List<CompressedVectors> sourceCompressed;
     private List<? extends BitSet> liveNodes;
     private final List<Integer> numLiveNodesPerSource;
-    private List<OrdinalMapper> remappers;
+    private List<? extends OrdinalMapper> remappers;
     private final List<Integer> maxDegrees;
 
     private final int dimension;
@@ -110,7 +110,7 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
             : io.github.jbellis.jvector.util.work.ProgressLimiter.UNLIMITED;
     }
 
-    private final List<OrdinalMapper> effectiveRemappers;
+    private final List<? extends OrdinalMapper> effectiveRemappers;
 
     /**
      * Returns the ordinal remappers actually used by the last {@link #compact} call, in source order.
@@ -118,7 +118,7 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
      * reordering), so this returns the same list passed to the constructor.
      */
     @Experimental
-    public List<OrdinalMapper> effectiveRemappers() {
+    public List<? extends OrdinalMapper> effectiveRemappers() {
         return effectiveRemappers;
     }
     /**
@@ -129,7 +129,7 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
     public OnDiskGraphIndexCompactor(
             List<OnDiskGraphIndex> sources,
             List<? extends BitSet> liveNodes,
-            List<OrdinalMapper> remappers,
+            List<? extends OrdinalMapper> remappers,
             VectorSimilarityFunction similarityFunction,
             ExecutorService executor,
             int parallelism) {
@@ -151,7 +151,7 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
             List<OnDiskGraphIndex> sources,
             List<CompressedVectors> sourceCompressed,
             List<? extends BitSet> liveNodes,
-            List<OrdinalMapper> remappers,
+            List<? extends OrdinalMapper> remappers,
             VectorSimilarityFunction similarityFunction,
             ExecutorService executor,
             int parallelism) {
@@ -202,7 +202,7 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
             List<OnDiskGraphIndex> sources,
             List<CompressedVectors> sourceCompressed,
             List<? extends BitSet> liveNodes,
-            List<OrdinalMapper> remappers) {
+            List<? extends OrdinalMapper> remappers) {
         validateInputSizes(sources, liveNodes, remappers);
         validateLiveNodesBounds(sources, liveNodes);
         validateGraphConfiguration(sources);
@@ -254,7 +254,7 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
      */
     private void validateInputSizes(List<OnDiskGraphIndex> sources,
                                     List<? extends BitSet> liveNodes,
-                                    List<OrdinalMapper> remappers) {
+                                    List<? extends OrdinalMapper> remappers) {
         if (sources.size() < 2) {
             throw new IllegalArgumentException("Must have at least two sources");
         }

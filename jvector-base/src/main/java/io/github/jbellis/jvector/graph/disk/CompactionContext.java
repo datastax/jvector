@@ -35,7 +35,7 @@ public final class CompactionContext {
     /** Parallel to {@link #sources}; {@code null} when no non-fused sidecar input is supplied. */
     public final List<CompressedVectors> sourceCompressed;
     public final List<? extends BitSet> liveNodes;
-    public final List<OrdinalMapper> remappers;
+    public final List<? extends OrdinalMapper> remappers;
     public final int dimension;
     public final int maxOrdinal;
     public final ExecutorService executor;
@@ -45,7 +45,7 @@ public final class CompactionContext {
             List<OnDiskGraphIndex> sources,
             List<CompressedVectors> sourceCompressed,
             List<? extends BitSet> liveNodes,
-            List<OrdinalMapper> remappers,
+            List<? extends OrdinalMapper> remappers,
             int dimension,
             int maxOrdinal,
             ExecutorService executor,
