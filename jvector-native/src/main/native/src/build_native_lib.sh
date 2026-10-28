@@ -112,6 +112,12 @@ build_native() {
 
   rm -rf "${OUT_SO}"
 
+  # Older Meson versions only accept --wipe for an already configured build.
+  local setup_options=()
+  if [[ -f "${BUILD_DIR}/meson-private/coredata.dat" ]]; then
+    setup_options+=(--wipe)
+  fi
+
   if [ "${ARCH}" == "${HOST_ARCH}" ]; then
     # ---- Native build ------------------------------------------------------
     require_cmd g++ "sudo apt-get install -y g++"
@@ -123,7 +129,7 @@ build_native() {
     fi
 
     meson setup "${BUILD_DIR}" "${NATIVE_DIR}" \
-        --wipe \
+        "${setup_options[@]}" \
         --buildtype="${BUILDTYPE}"
   else
     # ---- Cross-compile build -----------------------------------------------
@@ -143,7 +149,7 @@ build_native() {
     require_cmd "${CROSS_TOOLCHAIN}" "${CROSS_INSTALL}"
 
     meson setup "${BUILD_DIR}" "${NATIVE_DIR}" \
-        --wipe \
+        "${setup_options[@]}" \
         --cross-file "${CROSS_FILE}" \
         --buildtype="${BUILDTYPE}"
   fi
