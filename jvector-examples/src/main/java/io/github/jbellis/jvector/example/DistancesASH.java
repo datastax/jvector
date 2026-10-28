@@ -100,8 +100,9 @@ public class DistancesASH {
                 blockSize == 0 ? "Single" : "Block", queryCount, checksum);
     }
 
-    private static int parseOptimizerFromProperty() {
-        String opt = System.getProperty("jvector.ash.optimizer", "random").trim().toLowerCase();
+    /** Shared by the original scan modes and reproducible neighborhood fixture creation. */
+    static int parseOptimizerFromProperty() {
+        String opt = System.getProperty("jvector.ash.optimizer", "random").trim().toLowerCase(java.util.Locale.ROOT);
 
         if ("random".equals(opt)) return AsymmetricHashing.RANDOM;
         if ("itq".equals(opt)) return AsymmetricHashing.ITQ;
@@ -1099,6 +1100,11 @@ public class DistancesASH {
     }
 
     public static void main(String[] args) throws IOException {
+        // Dispatch before the legacy argument modes: saved fixtures need no positional inputs.
+        if (Boolean.getBoolean("jvector.bench.neighborhood-scoring")) {
+            ASHNeighborhoodBenchmark.run(args);
+            return;
+        }
         if (args.length == 3) {
             testASHEncodings(args[0], args[1], args[2]);
             return;
