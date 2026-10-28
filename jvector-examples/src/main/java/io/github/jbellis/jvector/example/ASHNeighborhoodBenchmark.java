@@ -58,7 +58,7 @@ final class ASHNeighborhoodBenchmark {
         checkSetting("jvector.bench.blockSize", fixture.blockSize);
         boolean scaling = Boolean.getBoolean("jvector.bench.neighborhood-scaling");
         int threads = positive("jvector.bench.scoringThreads", 1);
-        if (!scaling && threads != 1)
+        if (!scaling && !Boolean.getBoolean("jvector.bench.recall") && threads != 1)
             throw new IllegalArgumentException("Multiple scoring threads require neighborhood-scaling=true");
         int queryIndex = Integer.parseInt(System.getProperty("jvector.bench.queryIndex", "0"));
         Objects.checkIndex(queryIndex, fixture.queries.size());
@@ -82,8 +82,8 @@ final class ASHNeighborhoodBenchmark {
                     "Native ASH comparison requested, but the library lacks the neighborhood kernel");
         }
         System.out.printf(Locale.ROOT,
-                "Neighborhood benchmark: java=%s, C=1, singleQuery=true, bits=%d, dimensions=%d, capacity=%d, blockSize=%d%n",
-                Runtime.version(), fixture.ash.bitsPerDimension,
+                "Neighborhood benchmark: java=%s, C=1, singleQuery=%s, bits=%d, dimensions=%d, capacity=%d, blockSize=%d%n",
+                Runtime.version(), !Boolean.getBoolean("jvector.bench.recall"), fixture.ash.bitsPerDimension,
                 fixture.ash.quantizedDim, fixture.capacity, fixture.blockSize);
         System.out.printf(Locale.ROOT,
                 "Fixture: sha256=%s, queries=%d, queryIndex=%d, baseVectors=%d, neighborhoods=%d, packedBytes=%d, access=%s%n",
@@ -92,6 +92,10 @@ final class ASHNeighborhoodBenchmark {
         System.out.printf("Backend: %s; %s%n", backend.getClass().getSimpleName(), backend.ashKernelDescription());
         var scorer = new ASHNeighborhoodScorer(fixture.ash, query, fixture.capacity, fixture.blockSize);
         System.out.println("Scorer: " + scorer);
+        if (Boolean.getBoolean("jvector.bench.recall")) {
+            ASHNeighborhoodRecall.run(fixture, threads);
+            return;
+        }
         ASHNeighborhoodValidator.validate(fixture);
         if (scaling) {
             runPipelinedScans(fixture, query, order, threads, passes, warmup, seconds);
