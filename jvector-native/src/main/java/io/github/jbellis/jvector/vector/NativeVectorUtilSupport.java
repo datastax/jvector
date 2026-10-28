@@ -103,7 +103,9 @@ class NativeVectorUtilSupport extends PanamaVectorUtilSupport
 
     @Override
     protected void intoVectorFloat(FloatVector vector, VectorFloat<?> v, int offset) {
-        vector.intoMemorySegment(((MemorySegmentVectorFloat) v).get(), v.offset(offset), ByteOrder.LITTLE_ENDIAN);
+        // MemorySegmentVectorFloat is heap-backed: use its array store intrinsic directly.
+        // This also avoids the intoMemorySegment compiler failure observed on JDK 22.
+        vector.intoArray(((MemorySegmentVectorFloat) v).array(), offset);
     }
 
     @Override
