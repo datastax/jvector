@@ -61,6 +61,7 @@ import io.github.jbellis.jvector.example.diagnostics.ASHScoreDebug;
 
 import io.github.jbellis.jvector.quantization.CompressedVectors;
 import io.github.jbellis.jvector.quantization.BQVectors;
+import io.github.jbellis.jvector.quantization.BinaryQuantization;
 import io.github.jbellis.jvector.quantization.NVQuantization;
 import io.github.jbellis.jvector.quantization.PQVectors;
 import io.github.jbellis.jvector.quantization.ProductQuantization;
@@ -414,7 +415,7 @@ public class Grid {
             buildQuantType = "PQ";
         } else if (buildCompressor instanceof AsymmetricHashing) {
             buildQuantType = "ASH";
-        } else if (buildCompressor instanceof io.github.jbellis.jvector.quantization.BinaryQuantization) {
+        } else if (buildCompressor instanceof BinaryQuantization) {
             buildQuantType = "BQ";
         } else if (buildCompressor instanceof NVQuantization) {
             buildQuantType = "NVQ";
@@ -424,7 +425,7 @@ public class Grid {
 
         // Validation for encoding time support (NVQ not supported)
         if (constructionMetrics != null && buildQuantType != null) {
-            if (!"PQ".equals(buildQuantType) && !"ASH".equals(buildQuantType) && !(buildCompressor instanceof io.github.jbellis.jvector.quantization.BinaryQuantization)) {
+            if (!"PQ".equals(buildQuantType) && !"ASH".equals(buildQuantType) && !"BQ".equals(buildQuantType)) {
                 throw new IllegalArgumentException("Encode timing only supported for PQ, ASH or BQ; got: " + buildQuantType);
             }
         }
@@ -536,7 +537,7 @@ public class Grid {
                     var vector = vv.get().getVector(node);
                     if (!deferFeatures) writeInlineStates(writers, inputSuppliers, node, vector);
                     if (allSymmetric) builder.addGraphNode(node, bsp.searchProviderFor(node));
-                else builder.addGraphNode(node, vector);
+                    else builder.addGraphNode(node, vector);
                 });
             }).join();
         }
