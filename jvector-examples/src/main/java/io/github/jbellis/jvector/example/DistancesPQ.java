@@ -42,7 +42,11 @@ public class DistancesPQ {
      *  - Same loaded query vectors
      *  - Same brute-force scan pattern
      *  - Configurable training and single-thread scoring executors
-     *  - Compression budget selected with jvector.pq.mFactor
+     *  - Compression budget selected with jvector.pq.subspaces (exact bytes), or jvector.pq.mFactor
+     *
+     * Set jvector.bench.recall and jvector.bench.recall-only for a complete ADC recall scan
+     * with normalized queries, deterministic ties, optional rankings and a saved PQ artifact.
+     * This mode omits the throughput loops; it does not measure scoring speed.
      *
      * Fast PQ path = PQDecoder (precomputedScoreFunctionFor).
      */
@@ -52,6 +56,11 @@ public class DistancesPQ {
         // ------------------------------------------------------------
         final boolean RUN_RECALL_CHECK =
                 Boolean.parseBoolean(System.getProperty("jvector.bench.recall", "false"));
+
+        final boolean recallOnly = Boolean.getBoolean("jvector.bench.recall-only");
+        if (recallOnly && !RUN_RECALL_CHECK) {
+            throw new IllegalArgumentException("recall-only requires jvector.bench.recall=true");
+        }
 
         final int RECALL_K =
                 Integer.getInteger("jvector.bench.recall.k", 10);
@@ -66,6 +75,15 @@ public class DistancesPQ {
         int maxQueries = Integer.getInteger("jvector.bench.maxQueries", allQueries.size());
         if (maxQueries <= 0) throw new IllegalArgumentException("maxQueries must be positive");
         final List<VectorFloat<?>> queries = allQueries.subList(0, Math.min(maxQueries, allQueries.size()));
+        if (vectors.isEmpty() || queries.isEmpty()) {
+            throw new IllegalArgumentException("Base and query vectors must be nonempty");
+        }
+        if (recallOnly) {
+            // Match the query-normalization policy used by the neighborhood recall benchmark.
+            for (VectorFloat<?> query : queries) {
+                VectorUtil.l2normalize(query);
+            }
+        }
         System.out.format("\t%d base and %d measured query vectors loaded%n", vectors.size(), queries.size());
 
         final List<List<Integer>> groundTruth;
@@ -113,33 +131,12 @@ public class DistancesPQ {
         // ------------------------------------------------------------
         // PQ parameters
         // ------------------------------------------------------------
-        // M is derived from the input dimension:
-        //
-        //   M = dimension / mFactor
-        //
-        // With K=256, each subspace code is one byte, so PQ stores M bytes
-        // per vector. Since the input is float32, the exact compression ratio is:
-        //
-        //   (dimension * 4 bytes) / M bytes = 4 * mFactor
-        //
-        // This requires dimension to be evenly divisible by mFactor.
+        // K=256 stores one byte per subspace. An explicit subspace count matches
+        // any byte budget up to the input dimension, including uneven partitions.
+        // The legacy mFactor option instead requires evenly divisible dimensions.
         int dimension = vectors.get(0).length();
 
-        final int mFactor = Integer.getInteger("jvector.pq.mFactor", 8);
-        if (mFactor <= 0) {
-            throw new IllegalArgumentException(
-                    "jvector.pq.mFactor must be positive; got " + mFactor
-            );
-        }
-        if (dimension % mFactor != 0) {
-            throw new IllegalArgumentException(
-                    "dimension must be evenly divisible by jvector.pq.mFactor: "
-                            + "dimension=" + dimension
-                            + ", mFactor=" + mFactor
-            );
-        }
-
-        final int M = dimension / mFactor;
+        final int M = subspaceCount(dimension);
         final int K = 256;                 // 1 byte per subspace
         final boolean globallyCenter = false;
         final float anisotropicThreshold = -1.0f;
@@ -151,7 +148,8 @@ public class DistancesPQ {
 
         System.out.println("\tPQ params:");
         System.out.println("\t  dimension = " + dimension);
-        System.out.println("\t  mFactor = " + mFactor);
+        System.out.println("\t  budget selection = " + (System.getProperty("jvector.pq.subspaces") == null
+                ? "dimension / mFactor" : "explicit subspaces (uneven partitions supported)"));
         System.out.println("\t  M = " + M + " subspaces");
         System.out.println("\t  K = " + K + " clusters");
         System.out.println("\t  Input size = " + inputBytesPerVector + " bytes/vector");
@@ -198,6 +196,16 @@ public class DistancesPQ {
                         + " vectors/sec"
         );
 
+
+        System.out.println("\tShared PQ compressor size = " + pq.compressorSize() + " bytes");
+        if (recallOnly) {
+            try {
+                PQRecallEvaluator.run(pqVecs, queries, groundTruth, RECALL_K, simdExecutor);
+            } finally {
+                simdExecutor.shutdown();
+            }
+            return;
+        }
 
         // ============================================================
         // [1] Accuracy (NOT timed)
@@ -437,6 +445,26 @@ public class DistancesPQ {
             System.out.println("\tdummyAccumulator = " + (float) (floatDummy));
             System.out.println("--");
         }
+    }
+
+    /** Resolve an exact byte budget, or retain the legacy evenly divisible mFactor setting. */
+    static int subspaceCount(int dimension) {
+        String exact = System.getProperty("jvector.pq.subspaces");
+        if (exact != null) {
+            if (System.getProperty("jvector.pq.mFactor") != null) {
+                throw new IllegalArgumentException("Set either jvector.pq.subspaces or jvector.pq.mFactor");
+            }
+            int count = Integer.parseInt(exact);
+            if (count < 1 || count > dimension) {
+                throw new IllegalArgumentException("PQ subspaces must be in [1, dimension]");
+            }
+            return count;
+        }
+        int factor = Integer.parseInt(System.getProperty("jvector.pq.mFactor", "8"));
+        if (factor < 1 || dimension % factor != 0) {
+            throw new IllegalArgumentException("dimension must be evenly divisible by positive jvector.pq.mFactor");
+        }
+        return dimension / factor;
     }
 
     // ------------------------------------------------------------------
