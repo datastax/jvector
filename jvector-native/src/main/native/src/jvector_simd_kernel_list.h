@@ -31,6 +31,14 @@
 #ifndef JVECTOR_SIMD_KERNEL_LIST_H
 #define JVECTOR_SIMD_KERNEL_LIST_H
 
+// ASH C=1 ABI contract:
+//   codes: ceil(capacity/B) complete blocks, each ceil(groups/2)*B + 5*B bytes.
+//   lut:   groups*16 read-only floats, out: capacity writable floats, no aliasing.
+//   groups/capacity are positive, B is 8/16/32. Inputs use FusedASHLayout bytes.
+//   Return 0 on success, 1 for a nonzero landmark, 2 for an invalid shape/pointer.
+//   Output may be partially written on error. No allocation, pointer retention,
+//   callbacks, or blocking are permitted: ordinary graph calls use critical FFM.
+
 // clang-format off
 #define JVECTOR_SIMD_KERNEL_LIST \
     /* Vector similarity */ \
@@ -60,6 +68,8 @@
     KERNEL_ENTRY(void, calculate_partial_sums_dot_f32, (const float *codebook, int codebookIndex, size_t size, int clusterCount, const float *query, int queryOffset, float *partialSums), (codebook, codebookIndex, size, clusterCount, query, queryOffset, partialSums)) \
     KERNEL_ENTRY(void, calculate_partial_sums_euclidean_f32, (const float *codebook, int codebookIndex, size_t size, int clusterCount, const float *query, int queryOffset, float *partialSums), (codebook, codebookIndex, size, clusterCount, query, queryOffset, partialSums)) \
     KERNEL_ENTRY(void, calculate_partial_sums_self_magnitude_f32, (const float *codebook, int codebookIndex, size_t size, int clusterCount, float *partialSums), (codebook, codebookIndex, size, clusterCount, partialSums)) \
+    /* Whole-neighborhood C=1 ASH, one downcall including headers and similarity. */ \
+    KERNEL_ENTRY(int, ash_score_neighborhood_c1_f32, (const unsigned char *codes, const float *lut, float landmarkDot, int groups, int blockSize, int capacity, float *out), (codes, lut, landmarkDot, groups, blockSize, capacity, out)) \
     /* NVQ kernels */ \
     KERNEL_ENTRY(void, nvq_quantize_8bit, (const float *vector, size_t length, float alpha, float x0, float minValue, float maxValue, unsigned char *destination), (vector, length, alpha, x0, minValue, maxValue, destination)) \
     KERNEL_ENTRY(float, nvq_loss, (const float *vector, size_t length, float alpha, float x0, float minValue, float maxValue, int nBits), (vector, length, alpha, x0, minValue, maxValue, nBits)) \
