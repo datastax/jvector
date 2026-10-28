@@ -101,6 +101,39 @@ public interface VectorUtilSupport {
     ASHLutScoring.score(codes, offset, groups, stride, lane, count, lut, out, outOffset);
   }
 
+  /**
+   * Whether this provider implements complete FusedASH neighborhood scoring for one landmark.
+   * Query factories use this capability independently of the standalone LUT primitive.
+   *
+   * @return {@code true} when {@link #ashScoreNeighborhood} is implemented
+   */
+  default boolean supportsAshNeighborhoodScoring() { return false; }
+
+  /**
+   * Scores one complete C=1 FusedASH neighborhood, including all serialized blocks and headers.
+   * The result is {@code max(0, (1 + rawDotProduct) / 2)}, matching graph DOT_PRODUCT similarity.
+   *
+   * <p>Inputs are read-only for the call; output storage must be distinct from {@code lut}.
+   * Calls may share immutable inputs across threads when their output arrays are separate.
+   * On failure, output contents are unspecified. Implementations validate sizes before native access.</p>
+   *
+   * @param codes complete packed neighborhood, with full serialized storage for its final block
+   * @param groups positive nibble group count, including a possible partial final group
+   * @param blockSize serialized block width: 8, 16, or 32
+   * @param capacity positive number of lanes to score, including graph padding
+   * @param lut query LUT with at least {@code 16 * groups} floats
+   * @param landmarkDot query dot product with the single landmark
+   * @param out receives {@code capacity} similarities; later elements are left unchanged
+   * @throws UnsupportedOperationException if this provider has no implementation
+   * @throws IllegalArgumentException for an invalid shape or aliased LUT/output
+   * @throws IndexOutOfBoundsException if an array is too small
+   * @throws IllegalStateException if a scored lane contains a nonzero landmark ID
+   */
+  default void ashScoreNeighborhood(byte[] codes, int groups, int blockSize, int capacity,
+                                    float[] lut, float landmarkDot, float[] out) {
+    throw new UnsupportedOperationException("Native ASH neighborhood scoring is unavailable");
+  }
+
   /** Calculates the dot product of the given float arrays. */
   float dotProduct(VectorFloat<?> a, VectorFloat<?> b);
 
@@ -422,7 +455,7 @@ public interface VectorUtilSupport {
 
   /**
    * Dot product between a matrix row and a dense vector.
-   * Used by ASH projection: y_i = <A_i, x>.
+   * Used by ASH projection: {@code y_i = <A_i, x>}.
    *
    * Contract: Arow.length == x.length.
    * Default is scalar; SIMD backends may override.
@@ -439,7 +472,7 @@ public interface VectorUtilSupport {
   /**
    * Computes maskedAdd for a single vector stored in packed *by-vector* form.
    * Returns:
-   *   maskedAdd = <tildeQ, b>
+   *   {@code maskedAdd = <tildeQ, b>}
    *
    * packedBits layout:
    *   packedBits[packedBase + w] is 64-bit word w for this vector.
@@ -484,7 +517,7 @@ public interface VectorUtilSupport {
   /**
    * Computes maskedAdd for a block slice of vectors stored in packed block-column-major form.
    * For each lane in [0, blockLen), writes:
-   *   outMaskedAdd[lane] = <tildeQ, b_lane>
+   *   {@code outMaskedAdd[lane] = <tildeQ, b_lane>}
    * packedBits layout:
    *   packedBits[blockWordBase + w*blockSize + laneIndex] is 64-bit word w for that lane.
    * Default implementation is scalar bit-walk with a register accumulator per lane.
