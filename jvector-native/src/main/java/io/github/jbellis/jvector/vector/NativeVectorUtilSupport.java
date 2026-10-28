@@ -92,6 +92,25 @@ class NativeVectorUtilSupport extends PanamaVectorUtilSupport
     }
 
     @Override
+    public boolean supportsAshNeighborhoodScoring() {
+        return NativeASHKernels.isAvailable();
+    }
+
+    @Override
+    public String ashKernelDescription() {
+        String neighborhood = supportsAshNeighborhoodScoring()
+                ? "Highway native, ISA=" + getActiveIsa()
+                : "unavailable; using Java LUT";
+        return super.ashKernelDescription() + "; C=1 whole-neighborhood=" + neighborhood;
+    }
+
+    @Override
+    public void ashScoreNeighborhood(byte[] codes, int groups, int blockSize, int capacity,
+                                     float[] lut, float landmarkDot, float[] out) {
+        NativeASHKernels.scoreNeighborhood(codes, groups, blockSize, capacity, lut, landmarkDot, out);
+    }
+
+    @Override
     protected FloatVector fromVectorFloat(VectorSpecies<Float> SPEC, VectorFloat<?> vector, int offset) {
         return FloatVector.fromMemorySegment(SPEC, ((MemorySegmentVectorFloat) vector).get(), vector.offset(offset), ByteOrder.LITTLE_ENDIAN);
     }
