@@ -98,6 +98,22 @@ class NativeVectorUtilSupport extends PanamaVectorUtilSupport
     }
 
     @Override
+    public float ashSymmetricDot(long[] aBits, byte[] aCodes, long[] bBits, byte[] bCodes,
+                                 int dimensions, int bits) {
+        return NativeASHSymmetricKernels.hasPairKernel()
+                ? NativeASHSymmetricKernels.dot(aBits, aCodes, bBits, bCodes, dimensions, bits)
+                : super.ashSymmetricDot(aBits, aCodes, bBits, bCodes, dimensions, bits);
+    }
+
+    @Override
+    public void ashSymmetricLutScore(byte[] codes, int groups, int stride, int lane, int count,
+                                     short[] lut, float[] out, int outOffset) {
+        if (NativeASHSymmetricKernels.hasLutKernel())
+            NativeASHSymmetricKernels.scoreLut(codes, groups, stride, lane, count, lut, out, outOffset);
+        else super.ashSymmetricLutScore(codes, groups, stride, lane, count, lut, out, outOffset);
+    }
+
+    @Override
     public boolean supportsAshNeighborhoodScoring() {
         return NativeASHKernels.isAvailable();
     }
@@ -108,7 +124,9 @@ class NativeVectorUtilSupport extends PanamaVectorUtilSupport
                 ? "Highway native, ISA=" + getActiveIsa()
                 : "unavailable; using Java LUT";
         return super.ashKernelDescription() + "; C=1 whole-neighborhood=" + neighborhood
-                + "; dense projection=" + (NativeASHProjection.isAvailable() ? "Highway" : "Java");
+                + "; dense projection=" + (NativeASHProjection.isAvailable() ? "Highway" : "Java")
+                + "; symmetric pair=" + (NativeASHSymmetricKernels.hasPairKernel() ? "Highway" : "Java")
+                + "; symmetric LUT=" + (NativeASHSymmetricKernels.hasLutKernel() ? "Highway" : "Java");
     }
 
     @Override
