@@ -1994,34 +1994,72 @@ public class AsymmetricHashing implements VectorCompressor<AsymmetricHashing.Qua
     }
 
     /**
-     * Uses LAPACK dgesvd but skips U and returns VT in flat column-major layout.
-     * Input X must be [rows x cols], flat column-major.
+     * Computes all right singular vectors with the divide-and-conquer LAPACK driver.
+     * Input X is [rows x cols] in column-major order; the returned VT is [cols x cols].
+     *
+     * <p>For tall matrices, overwrite the scratch input with the unused left singular
+     * vectors instead of allocating another rows-by-cols array. Wide matrices need
+     * the full VT, including its null-space basis, because the requested projection
+     * dimension can exceed the number of training rows.</p>
+     *
+     * <p>Check the singular-value energy before accepting the basis. A native backend
+     * can return success with an inaccurate decomposition; its status alone does not
+     * establish that the PCA input was decomposed correctly.</p>
      */
     private static double[] computeNativeVt(double[] xCol, int rows, int cols) {
-        double[] s = new double[Math.min(rows, cols)];
-        double[] vt = new double[cols * cols];
+        if (rows <= 0 || cols <= 0 || xCol.length != Math.multiplyExact(rows, cols)) {
+            throw new IllegalArgumentException("Invalid PCA matrix dimensions");
+        }
+        double inputEnergy = 0.0;
+        for (double value : xCol) {
+            if (!Double.isFinite(value)) {
+                throw new IllegalArgumentException("PCA training input contains a non-finite value");
+            }
+            inputEnergy += value * value;
+        }
+
+        int k = Math.min(rows, cols);
+        boolean tall = rows >= cols;
+        String job = tall ? "O" : "A";
+        int ldu = tall ? 1 : rows;
+        double[] u = new double[tall ? 1 : Math.multiplyExact(rows, rows)];
+        double[] s = new double[k];
+        double[] vt = new double[Math.multiplyExact(cols, cols)];
+        int[] iwork = new int[Math.multiplyExact(8, k)];
         intW info = new intW(0);
-
-        // Workspace query
-        double[] a = xCol.clone(); // dgesvd overwrites input
         double[] workQuery = new double[1];
-        LAPACK.getInstance().dgesvd("N", "A", rows, cols, a, rows, s, null, 1, vt, cols, workQuery, -1, info);
+        double[] a = xCol.clone(); // LAPACK overwrites its input; X is still needed by ITQ.
 
+        LAPACK.getInstance().dgesdd(job, rows, cols, a, rows, s, u, ldu,
+                vt, cols, workQuery, -1, iwork, info);
         if (info.val != 0) {
-            throw new RuntimeException("Native PCA SVD workspace query failed with info=" + info.val);
+            throw new IllegalStateException("PCA SVD workspace query failed with info=" + info.val);
         }
-
-        int lwork = (int) workQuery[0];
-        double[] work = new double[lwork];
-
-        // Actual call
+        if (!Double.isFinite(workQuery[0]) || workQuery[0] < 1 || workQuery[0] > Integer.MAX_VALUE) {
+            throw new IllegalStateException("Invalid PCA SVD workspace size: " + workQuery[0]);
+        }
+        double[] work = new double[(int) Math.ceil(workQuery[0])];
         a = xCol.clone();
-        LAPACK.getInstance().dgesvd("N", "A", rows, cols, a, rows, s, null, 1, vt, cols, work, lwork, info);
-
+        LAPACK.getInstance().dgesdd(job, rows, cols, a, rows, s, u, ldu,
+                vt, cols, work, work.length, iwork, info);
         if (info.val != 0) {
-            throw new RuntimeException("Native PCA SVD failed with info=" + info.val);
+            throw new IllegalStateException("PCA SVD failed with info=" + info.val);
         }
 
+        double singularEnergy = 0.0;
+        for (double value : s) {
+            if (!Double.isFinite(value) || value < 0.0) {
+                throw new IllegalStateException("PCA SVD returned an invalid singular value");
+            }
+            singularEnergy += value * value;
+        }
+        // Training residuals are normalized; allow accumulation roundoff while rejecting
+        // materially incorrect decompositions, including ones reported as successful.
+        double tolerance = 1e-8 * Math.max(1.0, inputEnergy);
+        if (!Double.isFinite(singularEnergy) || Math.abs(singularEnergy - inputEnergy) > tolerance) {
+            throw new IllegalStateException("PCA SVD failed its energy check: input=" + inputEnergy
+                    + ", singular values=" + singularEnergy);
+        }
         return vt;
     }
 
