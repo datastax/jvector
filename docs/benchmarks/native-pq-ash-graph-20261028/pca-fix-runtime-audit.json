@@ -1,0 +1,14 @@
+{
+  "22": {
+    "changed_runtime_files": [
+      "jvector-base/classes/io/github/jbellis/jvector/quantization/AsymmetricHashing.class"
+    ],
+    "all_other_runtime_files_identical": true
+  },
+  "25": {
+    "changed_runtime_files": [
+      "jvector-base/classes/io/github/jbellis/jvector/quantization/AsymmetricHashing.class"
+    ],
+    "all_other_runtime_files_identical": true
+  }
+}

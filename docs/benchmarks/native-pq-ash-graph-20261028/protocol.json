@@ -1,0 +1,141 @@
+{
+  "status": "complete",
+  "benchmark_entry_point": "io.github.jbellis.jvector.example.BenchYAML",
+  "algorithms": [
+    "PQ",
+    "ASH"
+  ],
+  "backend": "native Highway for both",
+  "source_before_integration": "c8d8de8a",
+  "fetched_main": "4f13ff42e93f2e7b16020de3aaeefe9372e0dd36",
+  "preparation": [
+    "Preserve a local pre-rebase backup ref; rebase ash-dev onto fetched main.",
+    "Resolve overlap between current ASH fused/native changes and main deferred writer/native batching changes.",
+    "Retain ASH format v7; use the same supported format for PQ.",
+    "Check actual native ASH whole-neighborhood dispatch and native PQ ADC through BenchYAML; forced provider alone does not establish ASH kernel capability.",
+    "Confirm deferred NVQ/fused complete-record serialization, 64 records per writer batch; preserve same behavior in both arms."
+  ],
+  "jdks": [
+    "Temurin 22.0.2+9",
+    "Temurin 25.0.2"
+  ],
+  "construction_physical_cores": 48,
+  "construction_cpu_affinity": "0-47",
+  "query_threads": [
+    1,
+    8
+  ],
+  "query_cpu_affinity": {
+    "1": "0",
+    "8": "0-7"
+  },
+  "launch_properties": {
+    "jvector.vectorization_provider": "native",
+    "jvector.ash.blockKernel": "simd",
+    "jvector.parallel_writer": "true",
+    "jvector.physical_core_count": "48",
+    "jvector.bench.queryThreads": "1 or 8"
+  },
+  "jvm_options": [
+    "--add-modules=jdk.incubator.vector",
+    "--enable-native-access=ALL-UNNAMED",
+    "-da",
+    "-Xms2g",
+    "-Xmx128g",
+    "-XX:ActiveProcessorCount=48"
+  ],
+  "native_isa_policy": "Normal Highway runtime dispatch; record actual ISA and confirm AVX-512 on this host. No production hardware special-casing.",
+  "graph": {
+    "outDegree": 32,
+    "efConstruction": 100,
+    "neighborOverflow": 1.2,
+    "addHierarchy": true,
+    "refineFinalGraph": true,
+    "fusedGraph": true,
+    "reranking": "NVQ",
+    "nvq_subvectors": 2,
+    "nvq_bits_per_dimension": 8,
+    "search_pruning": false,
+    "ash_adaptive_termination": "retain existing production policy; report its presence"
+  },
+  "quantizers": {
+    "ASH": {
+      "optimizer": "ITQ",
+      "landmarkCount": 1,
+      "projectedDimension": "D/2",
+      "bitsPerDimension": [
+        2,
+        4
+      ],
+      "training": "production PCA/ITQ defaults, min(N,20D), max25 iterations with early stopping"
+    },
+    "PQ": {
+      "K": 256,
+      "m": "exact matched bytes per vector",
+      "centerData": false,
+      "anisotropicThreshold": -1
+    }
+  },
+  "timing": {
+    "training": "Actual new quantizer training, including the learned ASH transform.",
+    "encoding": "Base-vector quantizer encoding, recorded separately.",
+    "graph_write": "Graph insertion/refinement plus deferred NVQ encoding and complete-record serialization; no NVQ encoding double counting.",
+    "total_process": "fresh construction plus one standard recall@10 accuracy pass at 1x overquery; includes JVM startup, dataset loading, construction, accuracy and teardown; no subtraction or estimate",
+    "cache_policy": "Each construction case uses a new empty isolated working directory. Verify both graph and compressor cache misses. Cache enabled solely to retain the new graph for subsequent queries."
+  },
+  "queries": {
+    "topK": 10,
+    "overquery": [
+      1,
+      2
+    ],
+    "rerankCandidates": [
+      10,
+      20
+    ],
+    "same_graph_across_thread_counts": true,
+    "all_dataset_queries": true,
+    "warmup_and_samples": "stock BenchYAML throughput policy; retain raw samples and CV"
+  },
+  "matrix": {
+    "datasets": 4,
+    "matched_budgets_per_dataset": 2,
+    "algorithms": 2,
+    "jdks": 2,
+    "fresh_graphs": 32,
+    "query_processes": 64,
+    "qps_cells": 128,
+    "distinct_graph_recall_cells": 64
+  },
+  "file_roles": {
+    "index-parameters": "Saved-graph query configurations (top10, 1x/2x).",
+    "build-parameters": "One standard recall@10 scenario with accuracy-only compute/display/log selection; provides existing construction CSV metrics without throughput warmup.",
+    "run-config.yml": "Existing construction metrics; separate accuracy-only build/validation and throughput/recall query selections.",
+    "dataset-catalog.yaml": "Exact already-cleaned inputs used in the full-scan study, copied into an isolated study catalog."
+  },
+  "precision_note": "Equal stored ASH/PQ code bytes, including 5-byte ASH header. Shared model bytes and NVQ/graph storage are not part of that code-budget definition; retain actual total index sizes.",
+  "rebase_status": "completed_and_validated_with_BenchYAML",
+  "source_after_rebase": "65bc5454a34e7245e969697f707713e490cee9d7",
+  "rebase_validation": "16 small-fixture BenchYAML checks on both JDKs; full benchmark not started; inclusive construction timing still pending",
+  "source": "507b74e7ef8a0e12fcfe402deb4bf758c65758d5",
+  "benchyaml_code_unchanged_from_rebase": true,
+  "construction_metrics": "existing BenchYAML construction.index_quant_time_s.* and construction.index_build_time_s; no new timer",
+  "total_process_scope": "fresh construction plus one standard recall@10 accuracy pass at 1x overquery; includes JVM startup, dataset loading, construction, accuracy and teardown; no subtraction or estimate",
+  "processes": {
+    "fresh_build_and_accuracy": 32,
+    "cached_query": 64
+  },
+  "measurement_instrumentation": "No JIT/class-load logging, profiling, or per-downcall tracing. Existing writer selection debug only.",
+  "case_repetitions": 1,
+  "pca_correction": {
+    "commit": "507b74e7ef8a0e12fcfe402deb4bf758c65758d5",
+    "superseded_successful_ash_cases": 9,
+    "retained_pq_cases": 9,
+    "source_of_retained_pq": "b44e25b71e3d9c5c7a2f164610b0fdbd099d91fa",
+    "all_non_ash_runtime_files_identical": true,
+    "numerical_validation": "energy and eigenvector residuals ~1e-14 on both JDKs; 4 tall/wide BenchYAML checks passed",
+    "new_ash_pca_driver": "LAPACK DGESDD, output energy validated",
+    "benchyaml_unchanged": true
+  },
+  "completed_at": "2026-10-29T03:47:13.800992+00:00"
+}
