@@ -32,6 +32,12 @@
 
 namespace hn = hwy::HWY_NAMESPACE;
 
+#include <algorithm>
+#include <cstring>
+
 namespace AVX3_DL {
+#define JVECTOR_ASH_PAIR_ONLY
+#include "ash_symmetric-inl.h"
+#undef JVECTOR_ASH_PAIR_ONLY
 
 } // namespace AVX3_DL

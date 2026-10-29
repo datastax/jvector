@@ -384,6 +384,7 @@ namespace JV_ISA {
 
 #include "ash_neighborhood-inl.h"
 #include "ash_projection-inl.h"
+#include "ash_symmetric-inl.h"
 
 HWY_FLATTEN float cosine_f32(
         const float *a, size_t aoffset, const float *b, size_t boffset, size_t length)

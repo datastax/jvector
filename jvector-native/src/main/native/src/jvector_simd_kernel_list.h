@@ -39,9 +39,13 @@
 //   Output may be partially written on error. No allocation, pointer retention,
 //   callbacks, or blocking are permitted: ordinary graph calls use critical FFM.
 
-// ASH projection ABI: positive rows/cols, borrowed contiguous row-major matrix,
-// query[cols], out[rows]; output must not alias either read-only input.
-// Callers validate buffer sizes; the kernel is a synchronous allocation-free leaf.
+// ASH preparation/symmetric ABI contracts (all pointers are borrowed synchronously):
+//   project: positive rows/cols, row-major matrix[rows*cols], query[cols], out[rows].
+//   pair: nonnegative dimensions, bits in {1,2,4}; binary uint64 words for bits=1,
+//         canonical little-endian packed bytes otherwise. Padding bits are ignored.
+//   LUT: nonnegative groups/count, positive stride, 0 <= lane <= lane+count <= stride;
+//        codes[ceil(groups/2)*stride], lut[groups*32] signed shorts, out[count].
+//   Writable outputs must not alias read-only inputs. Callers validate buffer sizes.
 
 // clang-format off
 #define JVECTOR_SIMD_KERNEL_LIST \
@@ -74,6 +78,8 @@
     KERNEL_ENTRY(void, calculate_partial_sums_self_magnitude_f32, (const float *codebook, int codebookIndex, size_t size, int clusterCount, float *partialSums), (codebook, codebookIndex, size, clusterCount, partialSums)) \
     /* ASH preparation and exact packed construction scoring; synchronous leaf calls. */ \
     KERNEL_ENTRY(void, ash_project_f32, (const float *matrix, const float *query, int rows, int cols, float *out), (matrix, query, rows, cols, out)) \
+    KERNEL_ENTRY(float, ash_symmetric_dot, (const void *a, const void *b, int dimensions, int bits), (a, b, dimensions, bits)) \
+    KERNEL_ENTRY(void, ash_symmetric_lut_i16, (const unsigned char *codes, const int16_t *lut, int groups, int stride, int lane, int count, float *out), (codes, lut, groups, stride, lane, count, out)) \
     /* Whole-neighborhood C=1 ASH, one downcall including headers and similarity. */ \
     KERNEL_ENTRY(int, ash_score_neighborhood_c1_f32, (const unsigned char *codes, const float *lut, float landmarkDot, int groups, int blockSize, int capacity, float *out), (codes, lut, landmarkDot, groups, blockSize, capacity, out)) \
     /* NVQ kernels */ \
