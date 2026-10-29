@@ -1,0 +1,98 @@
+[
+  {
+    "kind": "base",
+    "path": "/home/ted_willke/datasets-clean/mpnet-1m/wiki_mpnet_embeddings_base_999812.fvecs",
+    "bytes": 3075421712,
+    "width": 768,
+    "records": 999812,
+    "mtime_ns": 1779289837543238134
+  },
+  {
+    "kind": "query",
+    "path": "/home/ted_willke/datasets-clean/mpnet-1m/wiki_mpnet_embeddings_query_10000.fvecs",
+    "bytes": 30760000,
+    "width": 768,
+    "records": 10000,
+    "mtime_ns": 1779289837559238135
+  },
+  {
+    "kind": "gt",
+    "path": "/home/ted_willke/datasets-clean/mpnet-1m/wiki_mpnet_embeddings_gt_ip_100.ivecs",
+    "bytes": 4040000,
+    "width": 100,
+    "records": 10000,
+    "mtime_ns": 1779289837543238134
+  },
+  {
+    "kind": "base",
+    "path": "/home/ted_willke/datasets-clean/cohere-1m/cohere_wiki_en_flat_base_1m_norm.fvecs",
+    "bytes": 4100000000,
+    "width": 1024,
+    "records": 1000000,
+    "mtime_ns": 1778786535687938561
+  },
+  {
+    "kind": "query",
+    "path": "/home/ted_willke/datasets-clean/cohere-1m/cohere_wiki_en_flat_query_10k_norm.fvecs",
+    "bytes": 41000000,
+    "width": 1024,
+    "records": 10000,
+    "mtime_ns": 1778786535703938563
+  },
+  {
+    "kind": "gt",
+    "path": "/home/ted_willke/datasets-clean/cohere-1m/cohere_wiki_en_flat_gt_1m_ip_k100.ivecs",
+    "bytes": 4040000,
+    "width": 100,
+    "records": 10000,
+    "mtime_ns": 1778786533775938406
+  },
+  {
+    "kind": "base",
+    "path": "/home/ted_willke/datasets-clean/ada_002_1M_base_982790.fvecs",
+    "bytes": 6042192920,
+    "width": 1536,
+    "records": 982790,
+    "mtime_ns": 1775399354461867895
+  },
+  {
+    "kind": "query",
+    "path": "/home/ted_willke/datasets-clean/ada_002_1M_query_10000.fvecs",
+    "bytes": 61480000,
+    "width": 1536,
+    "records": 10000,
+    "mtime_ns": 1775399354529867849
+  },
+  {
+    "kind": "gt",
+    "path": "/home/ted_willke/datasets-clean/ada_002_1M_gt_ip_100.ivecs",
+    "bytes": 4040000,
+    "width": 100,
+    "records": 10000,
+    "mtime_ns": 1775399661489659318
+  },
+  {
+    "kind": "base",
+    "path": "/home/ted_willke/datasets-clean/openai-3072-1m/dbpedia_openai_3_large_3072_base_999000.fvecs",
+    "bytes": 12279708000,
+    "width": 3072,
+    "records": 999000,
+    "mtime_ns": 1779387195627505524
+  },
+  {
+    "kind": "query",
+    "path": "/home/ted_willke/datasets-clean/openai-3072-1m/dbpedia_openai_3_large_3072_query_1000.fvecs",
+    "bytes": 12292000,
+    "width": 3072,
+    "records": 1000,
+    "mtime_ns": 1779387195663505529
+  },
+  {
+    "kind": "gt",
+    "path": "/home/ted_willke/datasets-clean/openai-3072-1m/dbpedia_openai_3_large_3072_gt_ip_100.ivecs",
+    "bytes": 404000,
+    "width": 100,
+    "records": 1000,
+    "mtime_ns": 1779387338759522247
+  }
+]

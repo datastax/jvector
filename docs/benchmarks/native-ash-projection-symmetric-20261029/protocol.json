@@ -1,0 +1,45 @@
+{
+  "entry": "io.github.jbellis.jvector.example.BenchYAML",
+  "datasets": [
+    "MPNet 999812 base / 10000 queries, D768, ASH d384, 2 bits, 101 code bytes",
+    "OpenAI3072 999000 base / 1000 queries, D3072, ASH d1536, 4 bits, 773 code bytes"
+  ],
+  "jdks": [
+    "22.0.2+9",
+    "25.0.2"
+  ],
+  "query_threads": [
+    1,
+    8
+  ],
+  "construction_physical_cores": 48,
+  "query_affinity": {
+    "1": "0",
+    "8": "0-7"
+  },
+  "construction_affinity": "0-47",
+  "backend": "native provider in both arms; before uses Panama dense projection/symmetric helpers, after uses Highway for those operations",
+  "query_scope": "Same saved model and graph before/after; standard three random-query warmup passes, three measured samples over all supplied dataset queries; normal query preparation, graph traversal, fused neighborhood scoring and NVQ reranking included.",
+  "same_graph_cache_policy": "Existing unchanged saved graph/model caches, linked into isolated case directories. Original cold graph pages are loaded naturally by the standard harness; no manual cache conditioning.",
+  "construction_scope": "Four fresh after-implementation ASH builds, separate empty model/graph caches, production ITQ training, encoding, deferred parallel writes and NVQ reranking; existing BenchYAML phase timers.",
+  "total_process_scope": "Fresh build JVM wall time includes startup/loading, training/encoding, graph/write, one standard 1x recall pass, teardown. It is not build-only.",
+  "graph": {
+    "C": 1,
+    "M": 32,
+    "efConstruction": 100,
+    "overflow": 1.2,
+    "hierarchy": true,
+    "refinement": true,
+    "pruning": false,
+    "ash_adaptive_stopping": "existing policy",
+    "NVQ": "two 8-bit subvectors",
+    "deferred_writer_batch": 64
+  },
+  "caveats": [
+    "Focused implementation validation, not a repeat of the full four-dataset PQ/ASH comparison.",
+    "One saved graph per comparison and one fresh construction per case; no graph-build variance estimate.",
+    "Java still combines symmetric scales/offsets/landmark terms; encoding row projections and standalone asymmetric packed helpers are outside this port.",
+    "Pre-final implementation runs archived in superseded-development after the range-counter/critical-work review; unchanged completed baseline query runs retained.",
+    "SVE/SVE2 runtime validation is unavailable."
+  ]
+}

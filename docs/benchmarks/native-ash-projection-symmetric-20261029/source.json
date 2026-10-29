@@ -1,0 +1,16 @@
+{
+  "highway_commit": "16f5f5c768064d0bb52952888a14236bec75c104",
+  "active_highway_isa": "ACTIVE_HIGHWAY_ISA=avx3_spr",
+  "branch": "ash-dev",
+  "implementation_and_tests": "28e4c8c1c8f49db472a9d0e530c01d5dcbceb403",
+  "projection": "835bb81c002360fc885f704431d023abd372ef5e",
+  "symmetric": "d76c1fe80a90330dfa3845345585a5754a9e0739",
+  "baseline_repository_reference": "c0e8ab06ec7f26a96f53d7c7092205cc93d68788",
+  "baseline_runtime_source": "507b74e7ef8a0e12fcfe402deb4bf758c65758d5",
+  "benchyaml_unchanged": true,
+  "pushed": false,
+  "native_library_sha256": {
+    "22": "c187841b9124daf480606dd0ad709240fc8014cbcc306a03ebda46c1b22c227a",
+    "25": "c187841b9124daf480606dd0ad709240fc8014cbcc306a03ebda46c1b22c227a"
+  }
+}

@@ -1,0 +1,70 @@
+{
+  "jdk_isa_checks": [
+    {
+      "jdk": "22",
+      "isa": "auto",
+      "tests": 6,
+      "passed": true
+    },
+    {
+      "jdk": "22",
+      "isa": "avx3_dl",
+      "tests": 6,
+      "passed": true
+    },
+    {
+      "jdk": "22",
+      "isa": "avx3",
+      "tests": 6,
+      "passed": true
+    },
+    {
+      "jdk": "22",
+      "isa": "avx2",
+      "tests": 6,
+      "passed": true
+    },
+    {
+      "jdk": "22",
+      "isa": "sse42",
+      "tests": 6,
+      "passed": true
+    },
+    {
+      "jdk": "25",
+      "isa": "auto",
+      "tests": 6,
+      "passed": true
+    },
+    {
+      "jdk": "25",
+      "isa": "avx3_dl",
+      "tests": 6,
+      "passed": true
+    },
+    {
+      "jdk": "25",
+      "isa": "avx3",
+      "tests": 6,
+      "passed": true
+    },
+    {
+      "jdk": "25",
+      "isa": "avx2",
+      "tests": 6,
+      "passed": true
+    },
+    {
+      "jdk": "25",
+      "isa": "sse42",
+      "tests": 6,
+      "passed": true
+    }
+  ],
+  "total_targeted_tests": 60,
+  "highway_scalar_arithmetic_checks": 64,
+  "highway_scalar_scope": "new ASH projection and symmetric headers only",
+  "arm_neon_arithmetic_checks": 64,
+  "arm_neon_hardware": "Apple Silicon arm64; Apple Clang 17; independent double/decoder/int64 oracles",
+  "sve_sve2_runtime_verified": false
+}

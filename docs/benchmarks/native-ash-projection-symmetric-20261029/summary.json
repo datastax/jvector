@@ -1,0 +1,10 @@
+{
+  "query_comparisons": 16,
+  "geometric_mean_qps_ratio": 1.0747262914811682,
+  "min_qps_ratio": 0.9526232751377229,
+  "max_qps_ratio": 1.1653572102114633,
+  "qps_wins": 15,
+  "max_abs_recall_change_percentage_points": 0.0,
+  "max_cv_pct": 8.754005476832623,
+  "fresh_graph_builds": 4
+}

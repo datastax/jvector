@@ -1,0 +1,21 @@
+{
+  "scope": "Instrumented class overlay outside repository, accuracy-only BenchYAML on the saved OpenAI3072 graph; alternates native and Panama call order, thread CPU time, both methods consume the same prepared query; all 2000 pairs checked for agreement. Excluded from throughput tables.",
+  "results": [
+    {
+      "jdk": "22",
+      "calls": 2000,
+      "native_cpu_total_ns": 1261210914,
+      "java_cpu_total_ns": 1264127945,
+      "native_cpu_median_ns": 629106,
+      "java_cpu_median_ns": 625767
+    },
+    {
+      "jdk": "25",
+      "calls": 2000,
+      "native_cpu_total_ns": 1258410413,
+      "java_cpu_total_ns": 1277275700,
+      "native_cpu_median_ns": 628222,
+      "java_cpu_median_ns": 625737
+    }
+  ]
+}
