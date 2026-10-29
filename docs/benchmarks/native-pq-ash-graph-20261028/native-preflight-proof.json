@@ -1,0 +1,23 @@
+{
+  "22": {
+    "dispatch": [
+      "INFO: Highway ISA tier: avx3_spr, Env variable JVECTOR_MAX_ISA: (not set)"
+    ],
+    "native_calls": [
+      "<task_queued compile_id='5485' method='io.github.jbellis.jvector.vector.cnative.NativeSimdOps nvq_dot_product_8bit (Ljava/lang/foreign/MemorySegment;Ljava/lang/foreign/MemorySegment;JFFFF)F' bytes='101' count='512' iicount='512' level='3' stamp='28.291' comment='tiered' hot_count='512'/>",
+      "<task_queued compile_id='5526' method='io.github.jbellis.jvector.vector.NativeASHKernels scoreNeighborhood ([BIII[FF[F)V' bytes='246' count='511' iicount='511' level='3' stamp='28.314' comment='tiered' hot_count='511'/>",
+      "<task_queued compile_id='5698' method='io.github.jbellis.jvector.vector.cnative.NativeSimdOps nvq_dot_product_8bit (Ljava/lang/foreign/MemorySegment;Ljava/lang/foreign/MemorySegment;JFFFF)F' bytes='101' count='7680' iicount='7680' stamp='29.108' comment='tiered' hot_count='7680'/>"
+    ]
+  },
+  "25": {
+    "dispatch": [
+      "INFO: Highway ISA tier: avx3_spr, Env variable JVECTOR_MAX_ISA: (not set)"
+    ],
+    "native_calls": [
+      "<task_queued compile_id='5562' method='io.github.jbellis.jvector.vector.cnative.NativeSimdOps nvq_dot_product_8bit (Ljava/lang/foreign/MemorySegment;Ljava/lang/foreign/MemorySegment;JFFFF)F' bytes='101' count='256' iicount='256' level='3' stamp='33.738' comment='tiered' hot_count='256'/>",
+      "<task_queued compile_id='5591' method='io.github.jbellis.jvector.vector.NativeASHKernels scoreNeighborhood ([BIII[FF[F)V' bytes='246' count='383' iicount='383' level='3' stamp='33.755' comment='tiered' hot_count='383'/>",
+      "<task_queued compile_id='5779' method='io.github.jbellis.jvector.vector.cnative.NativeSimdOps nvq_dot_product_8bit (Ljava/lang/foreign/MemorySegment;Ljava/lang/foreign/MemorySegment;JFFFF)F' bytes='101' count='7424' iicount='7424' stamp='34.616' comment='tiered' hot_count='7424'/>",
+      "<task_queued compile_id='5807' method='io.github.jbellis.jvector.vector.NativeASHKernels scoreNeighborhood ([BIII[FF[F)V' bytes='246' count='8447' iicount='8447' stamp='34.626' comment='tiered' hot_count='8447'/>"
+    ]
+  }
+}

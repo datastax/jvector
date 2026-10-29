@@ -46,3 +46,7 @@ as superseded evidence and recollected after the fix. PQ does not use this PCA
 path; its completed measurements are retained after verifying that its runtime
 classes are unchanged. Earlier ITQ-trained full-scan ASH comparisons also warrant
 revalidation wherever they used the affected multi-threaded QR SVD backend.
+
+Existing saved models are not rewritten by this change. Retrain the ASH compressor
+and rebuild its graph/model caches to adopt the corrected PCA. The graph study
+uses fresh isolated caches for every corrected ASH construction case.

@@ -1,0 +1,22 @@
+{
+  "source": {
+    "head": "507b74e7ef8a0e12fcfe402deb4bf758c65758d5",
+    "branch": "ash-dev",
+    "main": "4f13ff42e93f2e7b16020de3aaeefe9372e0dd36",
+    "clean": true,
+    "benchyaml_changes": false,
+    "backup": "c8d8de8af52b39bc8d2f6947294ed1ec40b088c6",
+    "base_head": "b44e25b71e3d9c5c7a2f164610b0fdbd099d91fa",
+    "pca_fix": "507b74e7ef8a0e12fcfe402deb4bf758c65758d5",
+    "retained_pq_source": "b44e25b71e3d9c5c7a2f164610b0fdbd099d91fa",
+    "retained_pq_count": 9
+  },
+  "root": "/home/ted_willke/benchmark-runs/graph-pq-vs-trained-ash-native-jdk22-25-20261028",
+  "complete": true,
+  "cases": 32,
+  "fresh_builds": 32,
+  "cached_query_runs": 64,
+  "query_metric_cells": 128,
+  "benchyaml_unchanged": true,
+  "total_process_scope": "fresh construction plus one standard recall@10 accuracy pass at 1x overquery; includes JVM startup, dataset loading, construction, accuracy and teardown; no subtraction or estimate"
+}
