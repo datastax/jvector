@@ -123,34 +123,3 @@ BenchYAML and AutoBenchYAML default to parallel complete-record serialization
 selects the sequential path, which encodes FP/NVQ features during insertion.
 Dataset prefetching is a separate option and is not required. See
 [Deferred batch serialization](deferred-batch-writer.md) for activation and caller examples.
-
-
-### Construction-only measurements
-
-To measure a fresh index build without query warmup or evaluation, set
-`search.topKOverquery: {}` in its BenchYAML index configuration. The harness emits
-one construction-only `experiments.csv` row per evaluated index; search parameter
-and query metric fields are empty. Select construction metrics in `run-config.yml`:
-
-```yaml
-metrics:
-  construction: [index_build_time_s, index_construction_time_s, index_quant_time_s, index_file_size_mb]
-```
-
-`index_build_time_s` retains its graph insertion/cleanup/final-write scope.
-`index_quant_time_s` reports actual quantizer training and base encoding separately.
-`index_construction_time_s` measures one continuous wall interval from before build
-quantizer resolution through base encoding, provider/writer setup, graph building,
-final serialization and cache commit/reopen. It includes NVQ setup and deferred NVQ
-encoding; do not add these overlapping phases to the inclusive value. It excludes
-dataset loading, which precedes construction, and query evaluation, which follows it.
-If every graph is loaded from cache, graph/build construction timings remain blank.
-With a mixture of cached and fresh feature sets, the inclusive value covers the
-whole construction invocation, including its cache lookups and loads.
-
-Measure total build-process wall time externally around the build-only BenchYAML
-JVM to include JVM startup, dataset loading and teardown. Use a fresh isolated
-working directory (both graph and compressor caches empty) for each construction
-measurement. Retain that case directory for separate cached query runs so all
-query thread counts search the same newly constructed graph. BenchYAML prints the
-selected vector provider and ASH neighborhood capability/ISA at startup.

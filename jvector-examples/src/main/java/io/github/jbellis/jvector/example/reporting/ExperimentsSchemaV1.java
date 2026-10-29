@@ -87,26 +87,6 @@ public final class ExperimentsSchemaV1 {
                                                   int topK,
                                                   double overquery,
                                                   int rerankK) {
-        var fixed = constructionValues(run, datasetName, M, efConstruction, neighborOverflow,
-                addHierarchy, refineFinalGraph, featureSet, buildCompressorString);
-        fixed.put("search_compressor", csvEscape(searchCompressorString));
-        fixed.put("usePruning", Boolean.toString(usePruning));
-        fixed.put("topK", Integer.toString(topK));
-        fixed.put("overquery", Double.toString(overquery));
-        fixed.put("rerankK", Integer.toString(rerankK));
-        return fixed;
-    }
-
-    /** Fixed index parameters for a construction-only row; query fields remain empty. */
-    public static Map<String, String> constructionValues(RunContext run,
-                                                         String datasetName,
-                                                         int M,
-                                                         int efConstruction,
-                                                         float neighborOverflow,
-                                                         boolean addHierarchy,
-                                                         boolean refineFinalGraph,
-                                                         Set<FeatureId> featureSet,
-                                                         String buildCompressorString) {
         Map<String, String> fixed = new HashMap<>();
         fixed.put("schema_version", Integer.toString(run.schemaVersion()));
         fixed.put("run_id", run.runId());
@@ -121,6 +101,13 @@ public final class ExperimentsSchemaV1 {
         fixed.put("refineFinalGraph", Boolean.toString(refineFinalGraph));
         fixed.put("feature_set", featureSet == null ? "" : featureSet.toString());
         fixed.put("build_compressor", csvEscape(buildCompressorString));
+        fixed.put("search_compressor", csvEscape(searchCompressorString));
+
+        fixed.put("usePruning", Boolean.toString(usePruning));
+        fixed.put("topK", Integer.toString(topK));
+        fixed.put("overquery", Double.toString(overquery));
+        fixed.put("rerankK", Integer.toString(rerankK));
+
         return fixed;
     }
 }
