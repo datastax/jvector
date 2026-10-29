@@ -23,6 +23,7 @@ import io.github.jbellis.jvector.example.reporting.SearchReportingCatalog;
 import io.github.jbellis.jvector.example.yaml.DatasetCollection;
 import io.github.jbellis.jvector.example.yaml.MultiConfig;
 import io.github.jbellis.jvector.example.yaml.RunConfig;
+import io.github.jbellis.jvector.vector.VectorizationProvider;
 
 import java.io.IOException;
 import java.security.InvalidParameterException;
@@ -44,6 +45,9 @@ public class BenchYAML {
             throw new InvalidParameterException("argv[] is null, check your maven exec config");
         }
         Grid.configureWriterForBenchmark();
+        var provider = VectorizationProvider.getInstance();
+        System.out.printf("Vectorization provider: %s; %s%n", provider.getClass().getName(),
+                provider.getVectorUtilSupport().ashKernelDescription());
 
         String regex = Arrays.stream(args)
                 .filter(Objects::nonNull)

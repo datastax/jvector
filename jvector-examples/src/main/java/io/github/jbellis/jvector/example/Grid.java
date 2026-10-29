@@ -249,6 +249,11 @@ public class Grid {
             diagnostics.capturePrePhaseSnapshot("Graph Build");
             System.out.printf("%s: Dataset similarity function is %s%n", ds.getName(), ds.getSimilarityFunction());
 
+            // Include training, base encoding, provider/writer setup, graph construction,
+            // final serialization, cache commit and reopening. Dataset loading is process time.
+            long constructionStart = System.nanoTime();
+            boolean builtIndex = false;
+
             // Resolve build compressor (and label quant type) so we can record compute time
             VectorCompressor<?> buildCompressorObj = null;
             String buildQuantType = null;
@@ -267,6 +272,7 @@ public class Grid {
             Map<Set<FeatureId>, Long> indexFileSizes = new HashMap<>();
             if (buildCompressorObj == null) {
                 indexes = buildInMemory(featureSets, M, efConstruction, neighborOverflow, addHierarchy, refineFinalGraph, ds, workDirectory);
+                builtIndex = true;
             } else {
                 // If cache is disabled, we use the (tmp) workDirectory as the output
                 Path outputDir = cache.isEnabled() ? cache.cacheDir().toAbsolutePath() : workDirectory;
@@ -304,7 +310,13 @@ public class Grid {
                             ds, outputDir, buildCompressorObj, handles, constructionMetrics);
                     indexes.putAll(result.indexes);
                     indexFileSizes.putAll(result.fileSizes);
+                    builtIndex = true;
                 }
+            }
+
+            if (builtIndex) {
+                constructionMetrics.indexConstructionTimeS = (System.nanoTime() - constructionStart) / 1_000_000_000.0;
+                constructionMetrics.indexBuildTimeS = Grid.getIndexBuildTimeSeconds(ds.getName());
             }
 
             // Capture post-build memory and disk state
@@ -312,7 +324,6 @@ public class Grid {
 
             diagnostics.printDiskStatistics("Graph Index Build");
             System.out.printf("Index build time: %f seconds%n%n", Grid.getIndexBuildTimeSeconds(ds.getName()));
-            constructionMetrics.indexBuildTimeS = Grid.getIndexBuildTimeSeconds(ds.getName());
 
             try {
                 for (var cpSupplier : compressionGrid) {
@@ -870,6 +881,20 @@ public class Grid {
         // Fail-fast validations once per configuration
         consoleSel.validate(benchmarksToCompute);
         logSel.validate(benchmarksToCompute);
+
+        // An empty query grid is a construction-only experiment. Emit real construction
+        // metrics without manufacturing a query or including throughput warmup in process time.
+        if (topKGrid.isEmpty()) {
+            var results = new ArrayList<Metric>();
+            constructionMetrics.appendTo(results);
+            for (var metric : consoleSel.apply(results, consoleSel.resolveForTopK(0))) {
+                System.out.println(metric);
+            }
+            artifacts.logConstructionRow(cs.ds.getName(), M, efConstruction, neighborOverflow,
+                    addHierarchy, refineFinalGraph, featureSetForIndex, buildCompressorString,
+                    logSel.apply(results, logSel.resolveForTopK(0)));
+            return;
+        }
 
         // 2) Select benchmarks to run (compute spec)
         var benchmarks = setupBenchmarks(benchmarksToCompute);
@@ -1452,6 +1477,8 @@ public class Grid {
     static final class ConstructionMetrics {
         // null means “not applicable / not measured”
         public Double indexBuildTimeS;
+        /** End-to-end construction wall time; absent when every graph was loaded from cache. */
+        public Double indexConstructionTimeS;
         public Long indexFileSizeBytes;
 
         // Index-construction phase (single pass per run)
@@ -1478,6 +1505,10 @@ public class Grid {
 
         /** Adds construction + quant metrics as Metric entries (null => blank in CSV). */
         void appendTo(List<Metric> out) {
+            if (indexConstructionTimeS != null) {
+                out.add(Metric.of("construction.index_construction_time_s",
+                        "Inclusive construction time (s)", ".2f", indexConstructionTimeS));
+            }
             if (indexBuildTimeS != null) {
                 out.add(Metric.of("construction.index_build_time_s",
                         "Index build time (s)", ".2f", indexBuildTimeS));

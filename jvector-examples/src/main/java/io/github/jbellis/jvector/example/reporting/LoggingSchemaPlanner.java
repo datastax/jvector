@@ -59,6 +59,16 @@ public final class LoggingSchemaPlanner {
             expandPrefixes(union, resolved.prefixes(), allConfigs);
         }
 
+        // Construction-only runs have no topK contexts, but still need their selected columns.
+        if (allTopKs.isEmpty()) {
+            var resolved = ReportingSelectionResolver.resolve(runCfg.logging,
+                    SearchReportingCatalog.catalog(), ReportingSelectionResolver.Context.of("topK", "0"));
+            for (var key : resolved.keys()) {
+                if (key.startsWith("construction.")) union.add(key);
+            }
+            expandPrefixes(union, resolved.prefixes(), allConfigs);
+        }
+
         // 2) Emit keys in canonical order, only if present in union
         List<Integer> sortedTopKs = new ArrayList<>(allTopKs);
         Collections.sort(sortedTopKs);
@@ -95,6 +105,8 @@ public final class LoggingSchemaPlanner {
         addIfPresent(union, ordered, "search.disk.total_file_size_mb");
         addIfPresent(union, ordered, "search.disk.file_count");
         addIfPresent(union, ordered, "construction.index_build_time_s");
+        addIfPresent(union, ordered, "construction.index_construction_time_s");
+        addIfPresent(union, ordered, "construction.index_file_size_mb");
 
         // Defensive: append any remaining keys (should be none) in sorted order
         if (!union.isEmpty()) {
