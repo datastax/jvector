@@ -1,0 +1,1157 @@
+From 835bb81c002360fc885f704431d023abd372ef5e Mon Sep 17 00:00:00 2001
+From: Ted Willke <ted.willke@gmail.com>
+Date: Thu, 29 Oct 2026 06:16:25 +0000
+Subject: [PATCH 1/3] Project dense ASH queries with one Highway dispatch
+
+---
+ .../jvector/quantization/ASHScorer.java       |  14 +--
+ .../jvector/quantization/ASHVectors.java      |  15 +--
+ .../quantization/AsymmetricHashing.java       |  11 ++
+ .../jvector/vector/VectorUtilSupport.java     |  29 +++++
+ .../jvector/vector/NativeASHProjection.java   | 106 ++++++++++++++++++
+ .../vector/NativeVectorUtilSupport.java       |   9 +-
+ .../src/main/native/src/ash_projection-inl.h  |  71 ++++++++++++
+ .../native/src/jvector_simd_kernel_list.h     |   6 +
+ .../main/native/src/jvector_simd_kernels.cpp  |   1 +
+ 9 files changed, 237 insertions(+), 25 deletions(-)
+ create mode 100644 jvector-native/src/main/java/io/github/jbellis/jvector/vector/NativeASHProjection.java
+ create mode 100644 jvector-native/src/main/native/src/ash_projection-inl.h
+
+diff --git a/jvector-base/src/main/java/io/github/jbellis/jvector/quantization/ASHScorer.java b/jvector-base/src/main/java/io/github/jbellis/jvector/quantization/ASHScorer.java
+index aa322fe3..edadbf83 100644
+--- a/jvector-base/src/main/java/io/github/jbellis/jvector/quantization/ASHScorer.java
++++ b/jvector-base/src/main/java/io/github/jbellis/jvector/quantization/ASHScorer.java
+@@ -253,13 +253,6 @@ public final class ASHScorer {
+         final int D = ash.originalDimension;
+         final int C = ash.landmarkCount;
+ 
+-        final float[][] A = ash.stiefelTransform.AFloat; // [d][D]
+-
+-        final var vecUtil =
+-                io.github.jbellis.jvector.vector.VectorizationProvider
+-                        .getInstance()
+-                        .getVectorUtilSupport();
+-
+         // Materialize query once to avoid VectorFloat.get in inner loops.
+         final float[] qArr = new float[D];
+         for (int k = 0; k < D; k++) {
+@@ -269,12 +262,9 @@ public final class ASHScorer {
+         // Compute Aq once per query:
+         //   qProj[j] = <A[j], q>
+         final float[] qProj = new float[d];
++        ash.stiefelTransform.project(qArr, qProj);
+         float sumQProj = 0f;
+-        for (int j = 0; j < d; j++) {
+-            float v = vecUtil.ashDotRow(A[j], qArr);
+-            qProj[j] = v;
+-            sumQProj += v;
+-        }
++        for (float value : qProj) sumQProj += value;
+ 
+         // For each landmark c:
+         //   tildeQ_c   = Aq - Aμ_c       (1-bit and generic multibit paths)
+diff --git a/jvector-base/src/main/java/io/github/jbellis/jvector/quantization/ASHVectors.java b/jvector-base/src/main/java/io/github/jbellis/jvector/quantization/ASHVectors.java
+index dd9b4f61..af33082b 100644
+--- a/jvector-base/src/main/java/io/github/jbellis/jvector/quantization/ASHVectors.java
++++ b/jvector-base/src/main/java/io/github/jbellis/jvector/quantization/ASHVectors.java
+@@ -531,8 +531,7 @@ public class ASHVectors implements CompressedVectors {
+             float[] q = new float[ash.originalDimension];
+             for (int i = 0; i < q.length; i++) q[i] = query.get(i);
+             float[] projected = new float[d];
+-            VectorUtilSupport backend = VectorizationProvider.getInstance().getVectorUtilSupport();
+-            for (int i = 0; i < d; i++) projected[i] = backend.ashDotRow(ash.stiefelTransform.AFloat[i], q);
++            ash.stiefelTransform.project(q, projected);
+             lut = new float[Math.multiplyExact(groups, 16)];
+             FusedASHLayout.buildQueryLut(projected, d, ash.bitsPerDimension, lut);
+             dotQMu = new float[ash.landmarkCount];
+@@ -880,11 +879,6 @@ public class ASHVectors implements CompressedVectors {
+         final int D = ash.originalDimension;
+         final int C = ash.landmarkCount;
+ 
+-        final float[][] A = ash.stiefelTransform.AFloat;
+-
+-        final var vecUtil =
+-                VectorizationProvider.getInstance().getVectorUtilSupport();
+-
+         // q materialized once
+         final float[] qArr = new float[D];
+         for (int i = 0; i < D; i++) {
+@@ -893,12 +887,9 @@ public class ASHVectors implements CompressedVectors {
+ 
+         // Aq
+         final float[] qProj = new float[d];
++        ash.stiefelTransform.project(qArr, qProj);
+         float sumQProj = 0f;
+-        for (int j = 0; j < d; j++) {
+-            float v = vecUtil.ashDotRow(A[j], qArr);
+-            qProj[j] = v;
+-            sumQProj += v;
+-        }
++        for (float value : qProj) sumQProj += value;
+ 
+         final float[] tildeQPool = new float[C * d];
+         final float[] sumTildeQ = new float[C];
+diff --git a/jvector-base/src/main/java/io/github/jbellis/jvector/quantization/AsymmetricHashing.java b/jvector-base/src/main/java/io/github/jbellis/jvector/quantization/AsymmetricHashing.java
+index 0023edd0..baa5b76e 100644
+--- a/jvector-base/src/main/java/io/github/jbellis/jvector/quantization/AsymmetricHashing.java
++++ b/jvector-base/src/main/java/io/github/jbellis/jvector/quantization/AsymmetricHashing.java
+@@ -1285,6 +1285,14 @@ public class AsymmetricHashing implements VectorCompressor<AsymmetricHashing.Qua
+          */
+         public final float[][] AFloat;
+ 
++        // Prepared once per immutable model, including models loaded from disk.
++        private final io.github.jbellis.jvector.vector.VectorUtilSupport.AshProjection projection;
++
++        /** Projects one dense query using this model's prepared backend representation. */
++        public void project(float[] query, float[] out) {
++            projection.project(query, out);
++        }
++
+         /** Number of rows in A (quantizedDim = d). */
+         public final int rows;
+ 
+@@ -1319,6 +1327,8 @@ public class AsymmetricHashing implements VectorCompressor<AsymmetricHashing.Qua
+                     dst[j] = (float) src[j];
+                 }
+             }
++            this.projection = VectorizationProvider.getInstance().getVectorUtilSupport()
++                    .prepareAshProjection(AFloat);
+ 
+             // Hard invariants: these are programmer-contract checks, not user input checks.
+             if (AFloat.length != rows) {
+@@ -2518,6 +2528,7 @@ public class AsymmetricHashing implements VectorCompressor<AsymmetricHashing.Qua
+             // Materialized compute buffers (row-major)
+             bytes += estimateArray2DBytes(stiefelTransform.AData);
+             bytes += estimateArray2DBytes(stiefelTransform.AFloat);
++            bytes += stiefelTransform.projection.ramBytesUsed();
+         }
+ 
+         return bytes;
+diff --git a/jvector-base/src/main/java/io/github/jbellis/jvector/vector/VectorUtilSupport.java b/jvector-base/src/main/java/io/github/jbellis/jvector/vector/VectorUtilSupport.java
+index dfe188da..a403e4ac 100644
+--- a/jvector-base/src/main/java/io/github/jbellis/jvector/vector/VectorUtilSupport.java
++++ b/jvector-base/src/main/java/io/github/jbellis/jvector/vector/VectorUtilSupport.java
+@@ -453,6 +453,35 @@ public interface VectorUtilSupport {
+     return false;
+   }
+ 
++  /** Immutable provider-specific projection, safe to share between query threads. */
++  interface AshProjection {
++    /** Writes the full matrix-vector product; input and output must not alias. */
++    void project(float[] query, float[] out);
++
++    /** Additional backing storage, excluding the caller-owned matrix. */
++    default long ramBytesUsed() { return 0L; }
++  }
++
++  /**
++   * Prepares an immutable [projected dimension][original dimension] matrix once.
++   * The caller must not mutate its rows after preparation. Providers may cache a
++   * packed representation; each project call still prepares exactly one query.
++   */
++  default AshProjection prepareAshProjection(float[][] matrix) {
++    java.util.Objects.requireNonNull(matrix, "matrix");
++    if (matrix.length == 0 || matrix[0].length == 0)
++      throw new IllegalArgumentException("ASH projection dimensions must be positive");
++    int columns = matrix[0].length;
++    for (float[] row : matrix) {
++      if (row.length != columns) throw new IllegalArgumentException("Ragged ASH projection");
++    }
++    return (query, out) -> {
++      if (query.length != columns || out.length != matrix.length || query == out)
++        throw new IllegalArgumentException("ASH projection shape or aliasing mismatch");
++      for (int row = 0; row < matrix.length; row++) out[row] = ashDotRow(matrix[row], query);
++    };
++  }
++
+   /**
+    * Dot product between a matrix row and a dense vector.
+    * Used by ASH projection: {@code y_i = <A_i, x>}.
+diff --git a/jvector-native/src/main/java/io/github/jbellis/jvector/vector/NativeASHProjection.java b/jvector-native/src/main/java/io/github/jbellis/jvector/vector/NativeASHProjection.java
+new file mode 100644
+index 00000000..4503e82e
+--- /dev/null
++++ b/jvector-native/src/main/java/io/github/jbellis/jvector/vector/NativeASHProjection.java
+@@ -0,0 +1,106 @@
++/*
++ * Copyright DataStax, Inc.
++ *
++ * Licensed under the Apache License, Version 2.0 (the "License");
++ * you may not use this file except in compliance with the License.
++ * You may obtain a copy of the License at
++ *
++ * http://www.apache.org/licenses/LICENSE-2.0
++ *
++ * Unless required by applicable law or agreed to in writing, software
++ * distributed under the License is distributed on an "AS IS" BASIS,
++ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++ * See the License for the specific language governing permissions and
++ * limitations under the License.
++ */
++
++package io.github.jbellis.jvector.vector;
++
++import java.lang.foreign.Arena;
++import java.lang.foreign.FunctionDescriptor;
++import java.lang.foreign.Linker;
++import java.lang.foreign.MemorySegment;
++import java.lang.foreign.SymbolLookup;
++import java.lang.invoke.MethodHandle;
++import java.util.Objects;
++
++import static java.lang.foreign.ValueLayout.ADDRESS;
++import static java.lang.foreign.ValueLayout.JAVA_INT;
++
++/**
++ * Immutable native row-major matrix for one complete ASH query projection per downcall.
++ * The automatically managed arena lives with the model; it is not thread confined.
++ * Query/output buffers are local to each invocation, so projections may run concurrently.
++ * Large projections use ordinary FFM and copy only the small query and result, allowing
++ * safepoints during the dense multiply. Matrix storage is never copied per query.
++ */
++final class NativeASHProjection implements VectorUtilSupport.AshProjection {
++    private static final String SYMBOL = "ash_project_f32";
++    private static final boolean TRACE = Boolean.getBoolean("jextract.trace.downcalls");
++    // Conservative work bound for short, synchronous critical calls; not a timing claim.
++    private static final int MAX_CRITICAL_CELLS = 1 << 16;
++    private static final MemorySegment ADDRESS_OF_KERNEL = SymbolLookup.loaderLookup().find(SYMBOL).orElse(null);
++    private static final FunctionDescriptor DESCRIPTOR =
++            FunctionDescriptor.ofVoid(ADDRESS, ADDRESS, JAVA_INT, JAVA_INT, ADDRESS);
++    private static final MethodHandle CRITICAL = ADDRESS_OF_KERNEL == null ? null
++            : Linker.nativeLinker().downcallHandle(ADDRESS_OF_KERNEL, DESCRIPTOR, Linker.Option.critical(true));
++    private static final MethodHandle ORDINARY = ADDRESS_OF_KERNEL == null ? null
++            : Linker.nativeLinker().downcallHandle(ADDRESS_OF_KERNEL, DESCRIPTOR);
++
++    private final MemorySegment matrix;
++    private final int rows;
++    private final int columns;
++
++    static boolean isAvailable() { return ADDRESS_OF_KERNEL != null; }
++
++    NativeASHProjection(float[][] source) {
++        Objects.requireNonNull(source, "matrix");
++        if (!isAvailable()) throw new UnsupportedOperationException("Native library does not provide " + SYMBOL);
++        rows = source.length;
++        if (rows == 0 || source[0].length == 0)
++            throw new IllegalArgumentException("ASH projection dimensions must be positive");
++        columns = source[0].length;
++        for (float[] row : source) {
++            if (row.length != columns) throw new IllegalArgumentException("Ragged ASH projection");
++        }
++        long rowBytes = (long) columns * Float.BYTES;
++        matrix = Arena.ofAuto().allocate(Math.multiplyExact((long) rows, rowBytes), 64);
++        for (int row = 0; row < rows; row++)
++            MemorySegment.copy(MemorySegment.ofArray(source[row]), 0, matrix, row * rowBytes, rowBytes);
++    }
++
++    @Override
++    public long ramBytesUsed() { return matrix.byteSize(); }
++
++    @Override
++    public void project(float[] query, float[] out) {
++        Objects.requireNonNull(query, "query");
++        Objects.requireNonNull(out, "out");
++        if (query.length != columns || out.length != rows || query == out)
++            throw new IllegalArgumentException("ASH projection shape or aliasing mismatch");
++        if ((long) rows * columns <= MAX_CRITICAL_CELLS) {
++            invoke(CRITICAL, MemorySegment.ofArray(query), MemorySegment.ofArray(out));
++        } else {
++            try (Arena arena = Arena.ofConfined()) {
++                long queryBytes = (long) columns * Float.BYTES;
++                MemorySegment buffers = arena.allocate(queryBytes + (long) rows * Float.BYTES, 64);
++                MemorySegment nativeQuery = buffers.asSlice(0, queryBytes);
++                MemorySegment nativeOut = buffers.asSlice(queryBytes);
++                MemorySegment.copy(MemorySegment.ofArray(query), 0, nativeQuery, 0, queryBytes);
++                invoke(ORDINARY, nativeQuery, nativeOut);
++                MemorySegment.copy(nativeOut, 0, MemorySegment.ofArray(out), 0, (long) rows * Float.BYTES);
++            }
++        }
++    }
++
++    private void invoke(MethodHandle handle, MemorySegment query, MemorySegment out) {
++        if (TRACE) System.out.printf("%s(%d, %d)%n", SYMBOL, rows, columns);
++        try {
++            handle.invokeExact(matrix, query, rows, columns, out);
++        } catch (RuntimeException | Error error) {
++            throw error;
++        } catch (Throwable error) {
++            throw new AssertionError("Unexpected checked exception from " + SYMBOL, error);
++        }
++    }
++}
+diff --git a/jvector-native/src/main/java/io/github/jbellis/jvector/vector/NativeVectorUtilSupport.java b/jvector-native/src/main/java/io/github/jbellis/jvector/vector/NativeVectorUtilSupport.java
+index da754e64..d105d9b1 100644
+--- a/jvector-native/src/main/java/io/github/jbellis/jvector/vector/NativeVectorUtilSupport.java
++++ b/jvector-native/src/main/java/io/github/jbellis/jvector/vector/NativeVectorUtilSupport.java
+@@ -91,6 +91,12 @@ class NativeVectorUtilSupport extends PanamaVectorUtilSupport
+         return NativeNVQArithmetic.sub(a, aOffset, b, bOffset, length);
+     }
+ 
++    @Override
++    public AshProjection prepareAshProjection(float[][] matrix) {
++        return NativeASHProjection.isAvailable()
++                ? new NativeASHProjection(matrix) : super.prepareAshProjection(matrix);
++    }
++
+     @Override
+     public boolean supportsAshNeighborhoodScoring() {
+         return NativeASHKernels.isAvailable();
+@@ -101,7 +107,8 @@ class NativeVectorUtilSupport extends PanamaVectorUtilSupport
+         String neighborhood = supportsAshNeighborhoodScoring()
+                 ? "Highway native, ISA=" + getActiveIsa()
+                 : "unavailable; using Java LUT";
+-        return super.ashKernelDescription() + "; C=1 whole-neighborhood=" + neighborhood;
++        return super.ashKernelDescription() + "; C=1 whole-neighborhood=" + neighborhood
++                + "; dense projection=" + (NativeASHProjection.isAvailable() ? "Highway" : "Java");
+     }
+ 
+     @Override
+diff --git a/jvector-native/src/main/native/src/ash_projection-inl.h b/jvector-native/src/main/native/src/ash_projection-inl.h
+new file mode 100644
+index 00000000..51447f1f
+--- /dev/null
++++ b/jvector-native/src/main/native/src/ash_projection-inl.h
+@@ -0,0 +1,71 @@
++/*
++ * Copyright DataStax, Inc.
++ *
++ * Licensed under the Apache License, Version 2.0 (the "License");
++ * you may not use this file except in compliance with the License.
++ * You may obtain a copy of the License at
++ *
++ * http://www.apache.org/licenses/LICENSE-2.0
++ *
++ * Unless required by applicable law or agreed to in writing, software
++ * distributed under the License is distributed on an "AS IS" BASIS,
++ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++ * See the License for the specific language governing permissions and
++ * limitations under the License.
++ */
++
++#ifndef JVECTOR_ASH_PROJECTION_INL_H
++#define JVECTOR_ASH_PROJECTION_INL_H
++
++// Included within JV_ISA. The immutable matrix is contiguous row-major and is
++// prepared once per model. A whole query crosses FFM once; no allocation,
++// callback, synchronization or pointer retention occurs in this leaf kernel.
++void ash_project_f32(const float *HWY_RESTRICT matrix, const float *HWY_RESTRICT query,
++                     int rows, int cols, float *HWY_RESTRICT out) {
++    const hn::ScalableTag<float> d;
++    const size_t lanes = hn::Lanes(d);
++    const size_t columns = static_cast<size_t>(cols);
++    int row = 0;
++    // Four rows share each query load. Two chains per row hide FMA latency
++    // without changing the stored matrix or batching independent graph queries.
++    for (; rows - row >= 4; row += 4) {
++        const float *a = matrix + static_cast<size_t>(row) * columns;
++        auto s0 = hn::Zero(d), s1 = hn::Zero(d), s2 = hn::Zero(d), s3 = hn::Zero(d);
++        auto t0 = hn::Zero(d), t1 = hn::Zero(d), t2 = hn::Zero(d), t3 = hn::Zero(d);
++        size_t col = 0;
++        for (; col + 2 * lanes <= columns; col += 2 * lanes) {
++            const auto q0 = hn::LoadU(d, query + col);
++            const auto q1 = hn::LoadU(d, query + col + lanes);
++            s0 = hn::MulAdd(hn::LoadU(d, a + col), q0, s0);
++            s1 = hn::MulAdd(hn::LoadU(d, a + columns + col), q0, s1);
++            s2 = hn::MulAdd(hn::LoadU(d, a + 2 * columns + col), q0, s2);
++            s3 = hn::MulAdd(hn::LoadU(d, a + 3 * columns + col), q0, s3);
++            t0 = hn::MulAdd(hn::LoadU(d, a + col + lanes), q1, t0);
++            t1 = hn::MulAdd(hn::LoadU(d, a + columns + col + lanes), q1, t1);
++            t2 = hn::MulAdd(hn::LoadU(d, a + 2 * columns + col + lanes), q1, t2);
++            t3 = hn::MulAdd(hn::LoadU(d, a + 3 * columns + col + lanes), q1, t3);
++        }
++        s0 = hn::Add(s0, t0); s1 = hn::Add(s1, t1);
++        s2 = hn::Add(s2, t2); s3 = hn::Add(s3, t3);
++        for (; col < columns; col += lanes) {
++            const size_t n = std::min(lanes, columns - col);
++            const auto q = hn::LoadN(d, query + col, n);
++            s0 = hn::MulAdd(hn::LoadN(d, a + col, n), q, s0);
++            s1 = hn::MulAdd(hn::LoadN(d, a + columns + col, n), q, s1);
++            s2 = hn::MulAdd(hn::LoadN(d, a + 2 * columns + col, n), q, s2);
++            s3 = hn::MulAdd(hn::LoadN(d, a + 3 * columns + col, n), q, s3);
++        }
++        out[row] = hn::ReduceSum(d, s0); out[row + 1] = hn::ReduceSum(d, s1);
++        out[row + 2] = hn::ReduceSum(d, s2); out[row + 3] = hn::ReduceSum(d, s3);
++    }
++    for (; row < rows; ++row) {
++        const float *a = matrix + static_cast<size_t>(row) * columns;
++        auto sum = hn::Zero(d);
++        for (size_t col = 0; col < columns; col += lanes) {
++            const size_t n = std::min(lanes, columns - col);
++            sum = hn::MulAdd(hn::LoadN(d, a + col, n), hn::LoadN(d, query + col, n), sum);
++        }
++        out[row] = hn::ReduceSum(d, sum);
++    }
++}
++#endif
+diff --git a/jvector-native/src/main/native/src/jvector_simd_kernel_list.h b/jvector-native/src/main/native/src/jvector_simd_kernel_list.h
+index 31babe84..e8cb3455 100644
+--- a/jvector-native/src/main/native/src/jvector_simd_kernel_list.h
++++ b/jvector-native/src/main/native/src/jvector_simd_kernel_list.h
+@@ -39,6 +39,10 @@
+ //   Output may be partially written on error. No allocation, pointer retention,
+ //   callbacks, or blocking are permitted: ordinary graph calls use critical FFM.
+ 
++// ASH projection ABI: positive rows/cols, borrowed contiguous row-major matrix,
++// query[cols], out[rows]; output must not alias either read-only input.
++// Callers validate buffer sizes; the kernel is a synchronous allocation-free leaf.
++
+ // clang-format off
+ #define JVECTOR_SIMD_KERNEL_LIST \
+     /* Vector similarity */ \
+@@ -68,6 +72,8 @@
+     KERNEL_ENTRY(void, calculate_partial_sums_dot_f32, (const float *codebook, int codebookIndex, size_t size, int clusterCount, const float *query, int queryOffset, float *partialSums), (codebook, codebookIndex, size, clusterCount, query, queryOffset, partialSums)) \
+     KERNEL_ENTRY(void, calculate_partial_sums_euclidean_f32, (const float *codebook, int codebookIndex, size_t size, int clusterCount, const float *query, int queryOffset, float *partialSums), (codebook, codebookIndex, size, clusterCount, query, queryOffset, partialSums)) \
+     KERNEL_ENTRY(void, calculate_partial_sums_self_magnitude_f32, (const float *codebook, int codebookIndex, size_t size, int clusterCount, float *partialSums), (codebook, codebookIndex, size, clusterCount, partialSums)) \
++    /* ASH preparation and exact packed construction scoring; synchronous leaf calls. */ \
++    KERNEL_ENTRY(void, ash_project_f32, (const float *matrix, const float *query, int rows, int cols, float *out), (matrix, query, rows, cols, out)) \
+     /* Whole-neighborhood C=1 ASH, one downcall including headers and similarity. */ \
+     KERNEL_ENTRY(int, ash_score_neighborhood_c1_f32, (const unsigned char *codes, const float *lut, float landmarkDot, int groups, int blockSize, int capacity, float *out), (codes, lut, landmarkDot, groups, blockSize, capacity, out)) \
+     /* NVQ kernels */ \
+diff --git a/jvector-native/src/main/native/src/jvector_simd_kernels.cpp b/jvector-native/src/main/native/src/jvector_simd_kernels.cpp
+index 1ba0908a..1f52c670 100644
+--- a/jvector-native/src/main/native/src/jvector_simd_kernels.cpp
++++ b/jvector-native/src/main/native/src/jvector_simd_kernels.cpp
+@@ -383,6 +383,7 @@ HWY_INLINE float L2SquareDistance(const float *a,
+ namespace JV_ISA {
+ 
+ #include "ash_neighborhood-inl.h"
++#include "ash_projection-inl.h"
+ 
+ HWY_FLATTEN float cosine_f32(
+         const float *a, size_t aoffset, const float *b, size_t boffset, size_t length)
+-- 
+2.39.5
+
+
+From d76c1fe80a90330dfa3845345585a5754a9e0739 Mon Sep 17 00:00:00 2001
+From: Ted Willke <ted.willke@gmail.com>
+Date: Thu, 29 Oct 2026 06:16:25 +0000
+Subject: [PATCH 2/3] Score symmetric ASH construction codes with Highway
+
+---
+ .../vector/NativeASHSymmetricKernels.java     | 135 +++++++++++++++
+ .../vector/NativeVectorUtilSupport.java       |  20 ++-
+ .../src/main/native/src/ash_symmetric-inl.h   | 161 ++++++++++++++++++
+ .../native/src/jvector_avx3_dl_kernels.cpp    |   6 +
+ .../src/main/native/src/jvector_simd.cpp      |   3 +-
+ .../native/src/jvector_simd_kernel_list.h     |  12 +-
+ .../main/native/src/jvector_simd_kernels.cpp  |   1 +
+ 7 files changed, 333 insertions(+), 5 deletions(-)
+ create mode 100644 jvector-native/src/main/java/io/github/jbellis/jvector/vector/NativeASHSymmetricKernels.java
+ create mode 100644 jvector-native/src/main/native/src/ash_symmetric-inl.h
+
+diff --git a/jvector-native/src/main/java/io/github/jbellis/jvector/vector/NativeASHSymmetricKernels.java b/jvector-native/src/main/java/io/github/jbellis/jvector/vector/NativeASHSymmetricKernels.java
+new file mode 100644
+index 00000000..5f10f759
+--- /dev/null
++++ b/jvector-native/src/main/java/io/github/jbellis/jvector/vector/NativeASHSymmetricKernels.java
+@@ -0,0 +1,135 @@
++/*
++ * Copyright DataStax, Inc.
++ *
++ * Licensed under the Apache License, Version 2.0 (the "License");
++ * you may not use this file except in compliance with the License.
++ * You may obtain a copy of the License at
++ *
++ * http://www.apache.org/licenses/LICENSE-2.0
++ *
++ * Unless required by applicable law or agreed to in writing, software
++ * distributed under the License is distributed on an "AS IS" BASIS,
++ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++ * See the License for the specific language governing permissions and
++ * limitations under the License.
++ */
++
++package io.github.jbellis.jvector.vector;
++
++import java.lang.foreign.Arena;
++import java.lang.foreign.FunctionDescriptor;
++import java.lang.foreign.Linker;
++import java.lang.foreign.MemorySegment;
++import java.lang.foreign.SymbolLookup;
++import java.lang.invoke.MethodHandle;
++import java.util.Objects;
++
++import static java.lang.foreign.ValueLayout.ADDRESS;
++import static java.lang.foreign.ValueLayout.JAVA_FLOAT;
++import static java.lang.foreign.ValueLayout.JAVA_INT;
++
++/**
++ * Checked optional Highway bindings for exact symmetric ASH integer arithmetic.
++ * Graph pair comparisons use one bounded critical call. Complete interleaved
++ * ranges use one LUT call; larger legal inputs use ordinary FFM with temporary
++ * native buffers. Neither kernel allocates, retains pointers, blocks or calls Java.
++ * Missing symbols preserve the provider's existing Java implementations.
++ */
++final class NativeASHSymmetricKernels {
++    private static final int MAX_CRITICAL_WORK = 1 << 16;
++    private static final boolean TRACE = Boolean.getBoolean("jextract.trace.downcalls");
++    private static final Binding PAIR = new Binding("ash_symmetric_dot",
++            FunctionDescriptor.of(JAVA_FLOAT, ADDRESS, ADDRESS, JAVA_INT, JAVA_INT));
++    private static final Binding LUT = new Binding("ash_symmetric_lut_i16",
++            FunctionDescriptor.ofVoid(ADDRESS, ADDRESS, JAVA_INT, JAVA_INT, JAVA_INT, JAVA_INT, ADDRESS));
++
++    private NativeASHSymmetricKernels() {}
++
++    static boolean hasPairKernel() { return PAIR.available(); }
++    static boolean hasLutKernel() { return LUT.available(); }
++
++    static float dot(long[] aBits, byte[] aCodes, long[] bBits, byte[] bCodes, int dimensions, int bits) {
++        if (dimensions < 0 || (bits != 1 && bits != 2 && bits != 4))
++            throw new IllegalArgumentException("Symmetric ASH requires nonnegative dimensions and bits in {1,2,4}");
++        if (!PAIR.available()) throw new UnsupportedOperationException("Native symmetric pair kernel unavailable");
++        MemorySegment a, b;
++        long bytes;
++        if (bits == 1) {
++            long words = (dimensions + 63L) / 64;
++            if (words > aBits.length || words > bBits.length) throw new IndexOutOfBoundsException("ASH bit arrays");
++            a = MemorySegment.ofArray(aBits); b = MemorySegment.ofArray(bBits); bytes = words * Long.BYTES;
++        } else {
++            bytes = ((long) dimensions * bits + 7) / 8;
++            if (bytes > aCodes.length || bytes > bCodes.length) throw new IndexOutOfBoundsException("ASH code arrays");
++            a = MemorySegment.ofArray(aCodes); b = MemorySegment.ofArray(bCodes);
++        }
++        if (dimensions <= MAX_CRITICAL_WORK) return invokePair(PAIR.critical, a, b, dimensions, bits);
++        try (Arena arena = Arena.ofConfined()) {
++            MemorySegment na = arena.allocate(bytes, Long.BYTES), nb = arena.allocate(bytes, Long.BYTES);
++            MemorySegment.copy(a, 0, na, 0, bytes); MemorySegment.copy(b, 0, nb, 0, bytes);
++            return invokePair(PAIR.ordinary, na, nb, dimensions, bits);
++        }
++    }
++
++    static void scoreLut(byte[] codes, int groups, int stride, int lane, int count,
++                         short[] lut, float[] out, int outOffset) {
++        Objects.requireNonNull(codes, "codes"); Objects.requireNonNull(lut, "lut"); Objects.requireNonNull(out, "out");
++        if (!LUT.available()) throw new UnsupportedOperationException("Native symmetric LUT kernel unavailable");
++        if (groups < 0 || stride <= 0) throw new IllegalArgumentException("ASH groups/stride");
++        Objects.checkFromIndexSize(lane, count, stride);
++        Objects.checkFromIndexSize(outOffset, count, out.length);
++        long codeBytes = ((groups + 1L) / 2) * stride, lutBytes = (long) groups * 32 * Short.BYTES;
++        if (codeBytes > codes.length || lutBytes / Short.BYTES > lut.length)
++            throw new IndexOutOfBoundsException("ASH LUT/code arrays");
++        if (count == 0) return;
++        MemorySegment source = MemorySegment.ofArray(codes), table = MemorySegment.ofArray(lut);
++        MemorySegment result = MemorySegment.ofArray(out).asSlice((long) outOffset * Float.BYTES);
++        // Charge padded SIMD lanes as well as active lanes (native width is capped at 16).
++        long vectorSlots = ((count + 15L) / 16) * 16;
++        if ((long) groups * vectorSlots <= MAX_CRITICAL_WORK) {
++            invokeLut(LUT.critical, source, table, groups, stride, lane, count, result);
++        } else {
++            try (Arena arena = Arena.ofConfined()) {
++                MemorySegment nc = arena.allocate(Math.max(1, codeBytes));
++                MemorySegment nl = arena.allocate(Math.max(Short.BYTES, lutBytes), Short.BYTES);
++                MemorySegment no = arena.allocate((long) count * Float.BYTES, Float.BYTES);
++                MemorySegment.copy(source, 0, nc, 0, codeBytes); MemorySegment.copy(table, 0, nl, 0, lutBytes);
++                invokeLut(LUT.ordinary, nc, nl, groups, stride, lane, count, no);
++                MemorySegment.copy(no, 0, result, 0, (long) count * Float.BYTES);
++            }
++        }
++    }
++
++    private static float invokePair(MethodHandle handle, MemorySegment a, MemorySegment b, int dimensions, int bits) {
++        if (TRACE) System.out.printf("%s(%d, %d)%n", PAIR.symbol, dimensions, bits);
++        try {
++            return (float) handle.invokeExact(a, b, dimensions, bits);
++        } catch (RuntimeException | Error error) { throw error;
++        } catch (Throwable error) { throw new AssertionError("Unexpected exception from " + PAIR.symbol, error); }
++    }
++
++    private static void invokeLut(MethodHandle handle, MemorySegment codes, MemorySegment lut,
++                                   int groups, int stride, int lane, int count, MemorySegment out) {
++        if (TRACE) System.out.printf("%s(%d, %d)%n", LUT.symbol, groups, count);
++        try {
++            handle.invokeExact(codes, lut, groups, stride, lane, count, out);
++        } catch (RuntimeException | Error error) { throw error;
++        } catch (Throwable error) { throw new AssertionError("Unexpected exception from " + LUT.symbol, error); }
++    }
++
++    private static final class Binding {
++        final String symbol;
++        final MethodHandle critical;
++        final MethodHandle ordinary;
++
++        Binding(String symbol, FunctionDescriptor descriptor) {
++            this.symbol = symbol;
++            MemorySegment address = SymbolLookup.loaderLookup().find(symbol).orElse(null);
++            critical = address == null ? null : Linker.nativeLinker().downcallHandle(
++                    address, descriptor, Linker.Option.critical(true));
++            ordinary = address == null ? null : Linker.nativeLinker().downcallHandle(address, descriptor);
++        }
++
++        boolean available() { return critical != null; }
++    }
++}
+diff --git a/jvector-native/src/main/java/io/github/jbellis/jvector/vector/NativeVectorUtilSupport.java b/jvector-native/src/main/java/io/github/jbellis/jvector/vector/NativeVectorUtilSupport.java
+index d105d9b1..b02b063e 100644
+--- a/jvector-native/src/main/java/io/github/jbellis/jvector/vector/NativeVectorUtilSupport.java
++++ b/jvector-native/src/main/java/io/github/jbellis/jvector/vector/NativeVectorUtilSupport.java
+@@ -97,6 +97,22 @@ class NativeVectorUtilSupport extends PanamaVectorUtilSupport
+                 ? new NativeASHProjection(matrix) : super.prepareAshProjection(matrix);
+     }
+ 
++    @Override
++    public float ashSymmetricDot(long[] aBits, byte[] aCodes, long[] bBits, byte[] bCodes,
++                                 int dimensions, int bits) {
++        return NativeASHSymmetricKernels.hasPairKernel()
++                ? NativeASHSymmetricKernels.dot(aBits, aCodes, bBits, bCodes, dimensions, bits)
++                : super.ashSymmetricDot(aBits, aCodes, bBits, bCodes, dimensions, bits);
++    }
++
++    @Override
++    public void ashSymmetricLutScore(byte[] codes, int groups, int stride, int lane, int count,
++                                     short[] lut, float[] out, int outOffset) {
++        if (NativeASHSymmetricKernels.hasLutKernel())
++            NativeASHSymmetricKernels.scoreLut(codes, groups, stride, lane, count, lut, out, outOffset);
++        else super.ashSymmetricLutScore(codes, groups, stride, lane, count, lut, out, outOffset);
++    }
++
+     @Override
+     public boolean supportsAshNeighborhoodScoring() {
+         return NativeASHKernels.isAvailable();
+@@ -108,7 +124,9 @@ class NativeVectorUtilSupport extends PanamaVectorUtilSupport
+                 ? "Highway native, ISA=" + getActiveIsa()
+                 : "unavailable; using Java LUT";
+         return super.ashKernelDescription() + "; C=1 whole-neighborhood=" + neighborhood
+-                + "; dense projection=" + (NativeASHProjection.isAvailable() ? "Highway" : "Java");
++                + "; dense projection=" + (NativeASHProjection.isAvailable() ? "Highway" : "Java")
++                + "; symmetric pair=" + (NativeASHSymmetricKernels.hasPairKernel() ? "Highway" : "Java")
++                + "; symmetric LUT=" + (NativeASHSymmetricKernels.hasLutKernel() ? "Highway" : "Java");
+     }
+ 
+     @Override
+diff --git a/jvector-native/src/main/native/src/ash_symmetric-inl.h b/jvector-native/src/main/native/src/ash_symmetric-inl.h
+new file mode 100644
+index 00000000..c43f0fea
+--- /dev/null
++++ b/jvector-native/src/main/native/src/ash_symmetric-inl.h
+@@ -0,0 +1,161 @@
++/*
++ * Copyright DataStax, Inc.
++ *
++ * Licensed under the Apache License, Version 2.0 (the "License");
++ * you may not use this file except in compliance with the License.
++ * You may obtain a copy of the License at
++ *
++ * http://www.apache.org/licenses/LICENSE-2.0
++ *
++ * Unless required by applicable law or agreed to in writing, software
++ * distributed under the License is distributed on an "AS IS" BASIS,
++ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++ * See the License for the specific language governing permissions and
++ * limitations under the License.
++ */
++
++#ifndef JVECTOR_ASH_SYMMETRIC_INL_H
++#define JVECTOR_ASH_SYMMETRIC_INL_H
++
++// Included within JV_ISA. All sizes/pointers are checked by the Java binding.
++// Products of doubled signed-magnitude components are exact integers; divide
++// by four only once, after accumulation. Padding bits never contribute.
++namespace {
++HWY_INLINE int AshDoubledComponent(const uint8_t *code, int j, int bits) {
++    const int perByte = 8 / bits;
++    const int field = code[j / perByte] >> ((j % perByte) * bits);
++    const int sign = 1 << (bits - 1);
++    const int magnitude = 2 * (field & (sign - 1)) + 1;
++    return (field & sign) ? magnitude : -magnitude;
++}
++
++HWY_INLINE float AshBinaryPair(const uint64_t *a, const uint64_t *b, int dimensions) {
++    const hn::ScalableTag<uint64_t> d;
++    const size_t lanes = hn::Lanes(d), words = static_cast<size_t>(dimensions) / 64;
++    auto counts = hn::Zero(d);
++    // Integer lanes can hold all mismatches even at the maximum Java dimension.
++    for (size_t word = 0; word < words; word += lanes) {
++        const size_t n = std::min(lanes, words - word);
++        const auto diff = hn::Xor(hn::LoadN(d, a + word, n), hn::LoadN(d, b + word, n));
++        counts = hn::Add(counts, hn::PopulationCount(diff));
++    }
++    uint64_t mismatches = hn::ReduceSum(d, counts);
++    const int tail = dimensions & 63;
++    if (tail) mismatches += hwy::PopCount((a[words] ^ b[words]) & ((uint64_t{1} << tail) - 1));
++    return static_cast<float>(dimensions) - 2.0f * static_cast<float>(mismatches);
++}
++
++HWY_INLINE float AshTwoBitPair(const uint8_t *a, const uint8_t *b, int dimensions) {
++#if HWY_TARGET == HWY_SCALAR
++    int64_t total = 0;
++    for (int j = 0; j < dimensions; ++j)
++        total += AshDoubledComponent(a, j, 2) * AshDoubledComponent(b, j, 2);
++    return static_cast<float>(total) * 0.25f;
++#else
++    const hn::ScalableTag<uint64_t> d;
++    const auto slots = hn::Set(d, uint64_t{0x5555555555555555});
++    const size_t lanes = hn::Lanes(d), words = static_cast<size_t>(dimensions) / 32;
++    const hn::RebindToSigned<decltype(d)> di;
++    auto deltas = hn::Zero(di);
++    for (size_t word = 0; word < words; word += lanes) {
++        const size_t n = std::min(lanes, words - word);
++        // Canonical codes are little-endian packed fields. LoadU/LoadN permit
++        // byte alignment on all supported little-endian production targets.
++        const auto av = hn::LoadN(d, reinterpret_cast<const uint64_t *>(a) + word, n);
++        const auto bv = hn::LoadN(d, reinterpret_cast<const uint64_t *>(b) + word, n);
++        const auto neg = hn::And(hn::ShiftRight<1>(hn::Xor(av, bv)), slots);
++        const auto ma = hn::And(av, slots), mb = hn::And(bv, slots), both = hn::And(ma, mb);
++        // sign*(1+2*ma)*(1+2*mb), evaluated with weighted popcounts.
++        // Keep partial sums in registers; one horizontal reduction per pair.
++        auto delta = hn::ShiftLeft<1>(hn::Sub(
++                hn::Add(hn::PopulationCount(ma), hn::PopulationCount(mb)), hn::PopulationCount(neg)));
++        delta = hn::Sub(delta, hn::ShiftLeft<2>(hn::Add(
++                hn::PopulationCount(hn::And(ma, neg)), hn::PopulationCount(hn::And(mb, neg)))));
++        delta = hn::Add(delta, hn::ShiftLeft<2>(hn::PopulationCount(both)));
++        delta = hn::Sub(delta, hn::ShiftLeft<3>(hn::PopulationCount(hn::And(both, neg))));
++        deltas = hn::Add(deltas, hn::BitCast(di, delta));
++    }
++    int64_t total = static_cast<int64_t>(words) * 32 + hn::ReduceSum(di, deltas);
++    for (int j = static_cast<int>(words * 32); j < dimensions; ++j)
++        total += AshDoubledComponent(a, j, 2) * AshDoubledComponent(b, j, 2);
++    return static_cast<float>(total) * 0.25f;
++#endif
++}
++
++HWY_INLINE float AshFourBitPair(const uint8_t *a, const uint8_t *b, int dimensions) {
++    int64_t total = 0;
++    int j = 0;
++#if HWY_TARGET != HWY_SCALAR
++    const hn::ScalableTag<int32_t> di;
++    const hn::Repartition<uint8_t, decltype(di)> db;
++    const hn::RebindToSigned<decltype(db)> ds;
++    const size_t bytes = static_cast<size_t>(dimensions) / 2, lanes = hn::Lanes(db);
++    size_t offset = 0;
++    for (; offset + lanes <= bytes; offset += lanes) {
++        const auto av = hn::LoadU(db, a + offset), bv = hn::LoadU(db, b + offset);
++        auto sum = hn::Zero(di);
++        for (int shift = 0; shift < 8; shift += 4) {
++            const auto ax = hn::ShiftRightSame(av, shift), bx = hn::ShiftRightSame(bv, shift);
++            const auto am = hn::Add(hn::ShiftLeft<1>(hn::And(ax, hn::Set(db, 7))), hn::Set(db, 1));
++            const auto bm = hn::BitCast(ds, hn::Add(hn::ShiftLeft<1>(hn::And(bx, hn::Set(db, 7))), hn::Set(db, 1)));
++            const auto sameSign = hn::Eq(hn::And(hn::Xor(ax, bx), hn::Set(db, 8)), hn::Zero(db));
++            const auto signedB = hn::IfThenElse(hn::RebindMask(ds, sameSign), bm, hn::Neg(bm));
++            // VNNI when supported; Highway supplies widening multiply otherwise.
++            sum = hn::SumOfMulQuadAccumulate(di, am, signedB, sum);
++        }
++        total += hn::ReduceSum(di, sum);
++    }
++    j = static_cast<int>(2 * offset);
++#endif
++    for (; j < dimensions; ++j) total += AshDoubledComponent(a, j, 4) * AshDoubledComponent(b, j, 4);
++    return static_cast<float>(total) * 0.25f;
++}
++} // namespace
++
++float ash_symmetric_dot(const void *a, const void *b, int dimensions, int bits) {
++    if (bits == 1) return AshBinaryPair(static_cast<const uint64_t *>(a), static_cast<const uint64_t *>(b), dimensions);
++    if (bits == 2) return AshTwoBitPair(static_cast<const uint8_t *>(a), static_cast<const uint8_t *>(b), dimensions);
++    return AshFourBitPair(static_cast<const uint8_t *>(a), static_cast<const uint8_t *>(b), dimensions);
++}
++
++#ifndef JVECTOR_ASH_PAIR_ONLY
++// Exact signed-short LUTs, unlike the IVF scan's approximate uint8 LUTs. Widen
++// before accumulation. At most 8192 groups enter an int32 subtotal, then spill
++// into int64 lane totals so arbitrary short entries and long codes cannot wrap.
++void ash_symmetric_lut_i16(const uint8_t *HWY_RESTRICT codes, const int16_t *HWY_RESTRICT lut,
++                           int groups, int stride, int lane, int count, float *HWY_RESTRICT out) {
++    const hn::CappedTag<int32_t, 16> d;
++    const hn::Rebind<uint8_t, decltype(d)> db;
++    const hn::Rebind<int16_t, decltype(d)> ds;
++    const int lanes = static_cast<int>(hn::Lanes(d));
++    for (size_t base = 0; base < static_cast<size_t>(count); base += lanes) {
++        const int active = static_cast<int>(std::min(static_cast<size_t>(lanes), static_cast<size_t>(count) - base));
++        int64_t totals[16] = {};
++        for (int first = 0; first < groups;) {
++            const int end = first + std::min(8192, groups - first);
++            auto sum = hn::Zero(d);
++            for (int g = first; g < end; ++g) {
++                auto packed = hn::PromoteTo(d, hn::LoadN(db, codes + static_cast<size_t>(g / 2) * stride + lane + base, active));
++                const auto indices = hn::And(hn::ShiftRightSame(packed, 4 * (g & 1)), hn::Set(d, 15));
++#if !HWY_HAVE_SCALABLE
++                if constexpr (hn::MaxLanes(d) == 16) {
++                    const auto table = hn::PromoteTo(d, hn::LoadU(ds, lut + static_cast<size_t>(g) * 32));
++                    sum = hn::Add(sum, hn::TableLookupLanes(table, hn::IndicesFromVec(d, indices)));
++                } else
++#endif
++                {
++                    int32_t table[16];
++                    for (int i = 0; i < 16; ++i) table[i] = lut[static_cast<size_t>(g) * 32 + i];
++                    sum = hn::Add(sum, hn::GatherIndex(d, table, indices));
++                }
++            }
++            int32_t partial[16];
++            hn::StoreU(sum, d, partial);
++            for (int i = 0; i < active; ++i) totals[i] += partial[i];
++            first = end;
++        }
++        for (int i = 0; i < active; ++i) out[base + i] = static_cast<float>(totals[i]) * 0.25f;
++    }
++}
++#endif
++#endif
+diff --git a/jvector-native/src/main/native/src/jvector_avx3_dl_kernels.cpp b/jvector-native/src/main/native/src/jvector_avx3_dl_kernels.cpp
+index ae8ab73b..95f61317 100644
+--- a/jvector-native/src/main/native/src/jvector_avx3_dl_kernels.cpp
++++ b/jvector-native/src/main/native/src/jvector_avx3_dl_kernels.cpp
+@@ -32,6 +32,12 @@
+ 
+ namespace hn = hwy::HWY_NAMESPACE;
+ 
++#include <algorithm>
++#include <cstring>
++
+ namespace AVX3_DL {
++#define JVECTOR_ASH_PAIR_ONLY
++#include "ash_symmetric-inl.h"
++#undef JVECTOR_ASH_PAIR_ONLY
+ 
+ } // namespace AVX3_DL
+diff --git a/jvector-native/src/main/native/src/jvector_simd.cpp b/jvector-native/src/main/native/src/jvector_simd.cpp
+index ec69d5cf..34bc2ecc 100644
+--- a/jvector-native/src/main/native/src/jvector_simd.cpp
++++ b/jvector-native/src/main/native/src/jvector_simd.cpp
+@@ -107,11 +107,12 @@ static const KernelVTable AVX3_vtable = {
+ };
+ #undef KERNEL_ENTRY
+ 
+-// AVX3_DL (Ice Lake) inherits all slots from AVX3 unchanged for now.
++// AVX3_DL inherits AVX3 and uses native popcount/byte-dot for ASH pairs.
+ // To override a slot: t.kernel_name = AVX3_DL::kernel_name;
+ // The implementation must exist in jvector_avx3_dl_kernels.cpp.
+ static const KernelVTable AVX3_DL_vtable = []() {
+     KernelVTable t = AVX3_vtable;
++    t.ash_symmetric_dot = AVX3_DL::ash_symmetric_dot;
+     return t;
+ }();
+ 
+diff --git a/jvector-native/src/main/native/src/jvector_simd_kernel_list.h b/jvector-native/src/main/native/src/jvector_simd_kernel_list.h
+index e8cb3455..cf0e23ed 100644
+--- a/jvector-native/src/main/native/src/jvector_simd_kernel_list.h
++++ b/jvector-native/src/main/native/src/jvector_simd_kernel_list.h
+@@ -39,9 +39,13 @@
+ //   Output may be partially written on error. No allocation, pointer retention,
+ //   callbacks, or blocking are permitted: ordinary graph calls use critical FFM.
+ 
+-// ASH projection ABI: positive rows/cols, borrowed contiguous row-major matrix,
+-// query[cols], out[rows]; output must not alias either read-only input.
+-// Callers validate buffer sizes; the kernel is a synchronous allocation-free leaf.
++// ASH preparation/symmetric ABI contracts (all pointers are borrowed synchronously):
++//   project: positive rows/cols, row-major matrix[rows*cols], query[cols], out[rows].
++//   pair: nonnegative dimensions, bits in {1,2,4}; binary uint64 words for bits=1,
++//         canonical little-endian packed bytes otherwise. Padding bits are ignored.
++//   LUT: nonnegative groups/count, positive stride, 0 <= lane <= lane+count <= stride;
++//        codes[ceil(groups/2)*stride], lut[groups*32] signed shorts, out[count].
++//   Writable outputs must not alias read-only inputs. Callers validate buffer sizes.
+ 
+ // clang-format off
+ #define JVECTOR_SIMD_KERNEL_LIST \
+@@ -74,6 +78,8 @@
+     KERNEL_ENTRY(void, calculate_partial_sums_self_magnitude_f32, (const float *codebook, int codebookIndex, size_t size, int clusterCount, float *partialSums), (codebook, codebookIndex, size, clusterCount, partialSums)) \
+     /* ASH preparation and exact packed construction scoring; synchronous leaf calls. */ \
+     KERNEL_ENTRY(void, ash_project_f32, (const float *matrix, const float *query, int rows, int cols, float *out), (matrix, query, rows, cols, out)) \
++    KERNEL_ENTRY(float, ash_symmetric_dot, (const void *a, const void *b, int dimensions, int bits), (a, b, dimensions, bits)) \
++    KERNEL_ENTRY(void, ash_symmetric_lut_i16, (const unsigned char *codes, const int16_t *lut, int groups, int stride, int lane, int count, float *out), (codes, lut, groups, stride, lane, count, out)) \
+     /* Whole-neighborhood C=1 ASH, one downcall including headers and similarity. */ \
+     KERNEL_ENTRY(int, ash_score_neighborhood_c1_f32, (const unsigned char *codes, const float *lut, float landmarkDot, int groups, int blockSize, int capacity, float *out), (codes, lut, landmarkDot, groups, blockSize, capacity, out)) \
+     /* NVQ kernels */ \
+diff --git a/jvector-native/src/main/native/src/jvector_simd_kernels.cpp b/jvector-native/src/main/native/src/jvector_simd_kernels.cpp
+index 1f52c670..d2a38e2a 100644
+--- a/jvector-native/src/main/native/src/jvector_simd_kernels.cpp
++++ b/jvector-native/src/main/native/src/jvector_simd_kernels.cpp
+@@ -384,6 +384,7 @@ namespace JV_ISA {
+ 
+ #include "ash_neighborhood-inl.h"
+ #include "ash_projection-inl.h"
++#include "ash_symmetric-inl.h"
+ 
+ HWY_FLATTEN float cosine_f32(
+         const float *a, size_t aoffset, const float *b, size_t boffset, size_t length)
+-- 
+2.39.5
+
+
+From 28e4c8c1c8f49db472a9d0e530c01d5dcbceb403 Mon Sep 17 00:00:00 2001
+From: Ted Willke <ted.willke@gmail.com>
+Date: Thu, 29 Oct 2026 06:17:17 +0000
+Subject: [PATCH 3/3] Cover native ASH preparation, exact scoring and
+ compatibility
+
+---
+ docs/native-ash-preparation.md                |  83 +++++++++++
+ .../vector/NativeASHCompatibilityTest.java    |  17 +++
+ .../vector/NativeASHPreparationTest.java      | 141 ++++++++++++++++++
+ 3 files changed, 241 insertions(+)
+ create mode 100644 docs/native-ash-preparation.md
+ create mode 100644 jvector-native/src/test/java/io/github/jbellis/jvector/vector/NativeASHPreparationTest.java
+
+diff --git a/docs/native-ash-preparation.md b/docs/native-ash-preparation.md
+new file mode 100644
+index 00000000..7bcba1f0
+--- /dev/null
++++ b/docs/native-ash-preparation.md
+@@ -0,0 +1,83 @@
++# Native ASH projection and symmetric construction scoring
++
++ASH models prepare an immutable provider-specific projection when their Stiefel
++transform is constructed or loaded. The default implementation keeps the
++existing row-dot implementation, including Panama SIMD. The native provider
++copies the row-major float matrix once into automatically managed shared native
++memory. The extra matrix storage is included in `ramBytesUsed()` and is released
++when its model is no longer reachable. It is not serialized; the model and graph
++formats are unchanged.
++
++`ash_project_f32` computes the entire matrix-vector product in one Highway
++dispatch. Four rows share query loads, with independent FMA chains and masked
++tails. Every graph query still pays for its own projection. There is no batch of
++unrelated queries, BLAS thread pool, per-row FFM call, or per-query matrix copy.
++Small bounded products use a synchronous critical downcall with heap query and
++output arrays. Larger products use an ordinary downcall with temporary native
++query/output buffers so the JVM can reach safepoints during the dense multiply.
++The matrix is shared read-only; temporary storage is invocation-local.
++
++`ash_symmetric_dot` evaluates encoded pairs used by graph construction: 1-bit
++XOR/popcount; 2-bit weighted popcounts over packed sign/magnitude fields; 4-bit
++unsigned-magnitude by signed-magnitude byte dot products. Integer accumulation
++precedes a single factor of one quarter for 2/4-bit codes. Tail padding is ignored.
++The Ice Lake vtable selects the same Highway source compiled with native
++population-count and VNNI support, and Sapphire Rapids inherits that slot.
++AVX-512 without those instructions, AVX2, scalar and ARM retain the portable
++Highway implementations. The Java scorer still combines scales, centered
++offsets, landmark terms and the existing similarity conversion.
++
++`ash_symmetric_lut_i16` handles byte-interleaved ranges in one call, retaining
++the existing exact signed-short LUT. It uses 32-bit partial sums and bounded
++chunks accumulated into 64-bit totals, rather than letting a short or integer
++sum overflow. The graph builder's pair-oriented API uses the pair kernel;
++callers of `ASHSymmetricScorer.blockScorerFor` use the native LUT kernel. Existing
++C>1 formulas and the graph-neighborhood scorer are unchanged. The graph study
++uses C=1 throughout.
++
++All three symbols are optional and looked up independently. Loading an older
++compatible library preserves Java projection and symmetric implementations.
++Java validates shapes, array bounds and output aliasing before passing pointers
++to native code. Native kernels do not allocate, retain pointers or call Java.
++Scorer diagnostics identify whether each operation is Highway or Java.
++
++## Reference implementation review
++
++Reviewed IVF ASH Fastscan at commit
++[`56d78d0ff3aaaa61a02b94c6f49a97789706a717`](https://github.com/tlwillke/ivf-ash-fastscan/tree/56d78d0ff3aaaa61a02b94c6f49a97789706a717).
++Its [`AshProjectionModel::transform_residual_batch`](https://github.com/tlwillke/ivf-ash-fastscan/blob/56d78d0ff3aaaa61a02b94c6f49a97789706a717/ash_transform.cpp#L727)
++uses a contiguous input-major projection and BLAS matrix multiplication. Its
++[`compute_lut_uint8`](https://github.com/tlwillke/ivf-ash-fastscan/blob/56d78d0ff3aaaa61a02b94c6f49a97789706a717/ash_query.cpp#L347)
++path batches projections before building query-local LUTs. The
++[`AVX-512 scan`](https://github.com/tlwillke/ivf-ash-fastscan/blob/56d78d0ff3aaaa61a02b94c6f49a97789706a717/ash_fastscan_avx512.cpp)
++uses packed nibbles, byte shuffles and independent integer accumulators.
++
++The transferable principles here are preparing contiguous immutable weights,
++amortizing native dispatch over a complete operation, reusing query loads, and
++accumulating compact codes without materializing decoded vectors. This port
++implements a single-query Highway matrix-vector operation because graph query
++latency must include preparation for each query. The IVF implementation does
++not provide a graph-construction symmetric scorer. Its quantized uint8 query
++LUTs are not substituted for the graph's existing exact symmetric integer LUTs.
++The kernels in this change are independent implementations of these operations.
++
++## Validation and measurement
++
++Targeted regression checks compare projection with a double-precision oracle,
++packed pair dots with an independent decoder, and integer LUT ranges with
++64-bit scalar accumulation. They cover dirty tail bits, irregular dimensions,
++both FFM modes, concurrent projections, bounds/alias rejection and absent native
++symbols. Both JDK 22 and JDK 25 are checked with normal dispatch and the existing
++AVX3_DL, AVX3, AVX2 and SSE/scalar ISA caps. The generic kernel translation unit
++also compiles for ARM NEON on Apple Silicon. SVE/SVE2 execution is not validated
++on this host.
++
++Performance collection uses unchanged standard BenchYAML, existing inclusive
++timers, normal query preparation, deferred writes and NVQ reranking. Before and
++after query runs load the same saved model and graph, retain stock warmup and
++samples, and use 1 or 8 scoring threads pinned to physical cores. Traced small
++BenchYAML preflights confirm actual native calls; tracing is disabled for all
++performance measurements. Separate fresh full-data builds verify construction.
++The focused cases are MPNet at the 2-bit ASH budget and OpenAI3072 at the 4-bit
++ASH budget on both JDKs. They are not a replacement for the earlier full PQ/ASH
++matrix. Full results and measurement scope accompany the saved report.
+diff --git a/jvector-native/src/test/java/io/github/jbellis/jvector/vector/NativeASHCompatibilityTest.java b/jvector-native/src/test/java/io/github/jbellis/jvector/vector/NativeASHCompatibilityTest.java
+index 74ff784c..d41713f9 100644
+--- a/jvector-native/src/test/java/io/github/jbellis/jvector/vector/NativeASHCompatibilityTest.java
++++ b/jvector-native/src/test/java/io/github/jbellis/jvector/vector/NativeASHCompatibilityTest.java
+@@ -33,6 +33,9 @@ class NativeASHCompatibilityTest {
+         assumeTrue(arch.equals("amd64") || arch.equals("x86_64"));
+         assumeTrue(LibraryLoader.loadJvector(), "Native jvector library not available");
+         assertTrue(new NativeVectorUtilSupport().supportsAshNeighborhoodScoring());
++        assertTrue(NativeASHProjection.isAvailable());
++        assertTrue(NativeASHSymmetricKernels.hasPairKernel());
++        assertTrue(NativeASHSymmetricKernels.hasLutKernel());
+     }
+ 
+     @Test
+@@ -67,6 +70,20 @@ class NativeASHCompatibilityTest {
+             if (backend.supportsAshNeighborhoodScoring()) {
+                 throw new AssertionError("ASH symbol unexpectedly available without a loaded native library");
+             }
++            if (NativeASHProjection.isAvailable() || NativeASHSymmetricKernels.hasPairKernel()
++                    || NativeASHSymmetricKernels.hasLutKernel()) {
++                throw new AssertionError("New ASH symbols unexpectedly available");
++            }
++            float[] projected = new float[2];
++            backend.prepareAshProjection(new float[][]{{1,2,3},{4,5,6}})
++                    .project(new float[]{2,3,4}, projected);
++            if (projected[0] != 20f || projected[1] != 47f)
++                throw new AssertionError("Java projection fallback failed");
++            if (backend.ashSymmetricDot(null,new byte[]{0},null,new byte[]{0},2,4) != .5f)
++                throw new AssertionError("Java symmetric pair fallback failed");
++            float[] symmetric = new float[1];
++            backend.ashSymmetricLutScore(new byte[1],1,1,0,1,new short[32],symmetric,0);
++            if (symmetric[0] != 0f) throw new AssertionError("Java symmetric LUT fallback failed");
+             float[] lut = new float[16];
+             java.util.Arrays.fill(lut, .25f);
+             float[] out = new float[8];
+diff --git a/jvector-native/src/test/java/io/github/jbellis/jvector/vector/NativeASHPreparationTest.java b/jvector-native/src/test/java/io/github/jbellis/jvector/vector/NativeASHPreparationTest.java
+new file mode 100644
+index 00000000..c27a6d95
+--- /dev/null
++++ b/jvector-native/src/test/java/io/github/jbellis/jvector/vector/NativeASHPreparationTest.java
+@@ -0,0 +1,141 @@
++/*
++ * Copyright DataStax, Inc.
++ *
++ * Licensed under the Apache License, Version 2.0 (the "License");
++ * you may not use this file except in compliance with the License.
++ * You may obtain a copy of the License at
++ *
++ * http://www.apache.org/licenses/LICENSE-2.0
++ *
++ * Unless required by applicable law or agreed to in writing, software
++ * distributed under the License is distributed on an "AS IS" BASIS,
++ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++ * See the License for the specific language governing permissions and
++ * limitations under the License.
++ */
++
++package io.github.jbellis.jvector.vector;
++
++import io.github.jbellis.jvector.vector.cnative.LibraryLoader;
++import org.junit.jupiter.api.BeforeAll;
++import org.junit.jupiter.api.Test;
++
++import java.util.ArrayList;
++import java.util.Arrays;
++import java.util.Random;
++import java.util.concurrent.Executors;
++
++import static org.junit.jupiter.api.Assertions.*;
++import static org.junit.jupiter.api.Assumptions.assumeTrue;
++
++/** Independent arithmetic oracles cover vector tails, both FFM modes and shared-model use. */
++class NativeASHPreparationTest {
++    @BeforeAll
++    static void loadLibrary() {
++        assumeTrue(LibraryLoader.loadJvector(), "Native library unavailable");
++        assertTrue(NativeASHProjection.isAvailable());
++        assertTrue(NativeASHSymmetricKernels.hasPairKernel());
++        assertTrue(NativeASHSymmetricKernels.hasLutKernel());
++    }
++
++    @Test
++    void projectionMatchesDoubleOracleAndIsThreadSafe() throws Exception {
++        Random random = new Random(93124);
++        for (int[] shape : new int[][]{{1,1},{3,7},{4,15},{5,17},{17,31},{33,129},{257,513},{1536,3072}}) {
++            int rows = shape[0], columns = shape[1];
++            float[][] matrix = new float[rows][columns];
++            float[] query = new float[columns];
++            for (float[] row : matrix) for (int j = 0; j < columns; j++) row[j] = random.nextFloat() - .5f;
++            for (int j = 0; j < columns; j++) query[j] = random.nextFloat() - .5f;
++            var projection = new NativeASHProjection(matrix);
++            assertEquals((long) rows * columns * Float.BYTES, projection.ramBytesUsed());
++            float[] expected = new float[rows];
++            double[] magnitude = new double[rows];
++            for (int i = 0; i < rows; i++) {
++                double sum = 0;
++                for (int j = 0; j < columns; j++) {
++                    double product = (double) matrix[i][j] * query[j];
++                    sum += product; magnitude[i] += Math.abs(product);
++                }
++                expected[i] = (float) sum;
++            }
++            float[] original = query.clone();
++            try (var workers = Executors.newFixedThreadPool(4)) {
++                var tasks = new ArrayList<java.util.concurrent.Callable<Void>>();
++                for (int repeat = 0; repeat < 8; repeat++) tasks.add(() -> {
++                    float[] out = new float[rows];
++                    projection.project(query, out);
++                    for (int i = 0; i < rows; i++) assertEquals(expected[i], out[i], 2e-6 * magnitude[i] + 1e-7);
++                    return null;
++                });
++                for (var result : workers.invokeAll(tasks)) result.get();
++            }
++            assertArrayEquals(original, query);
++        }
++    }
++
++    @Test
++    void packedPairsMatchIndependentDecoderIncludingDirtyPadding() {
++        Random random = new Random(55191);
++        for (int bits : new int[]{1,2,4}) {
++            for (int dimensions : new int[]{0,1,2,3,7,15,16,17,31,32,33,63,64,65,127,128,129,257,384,512,768,1536,65537}) {
++                long[] aBits = new long[(dimensions + 63) / 64], bBits = aBits.clone();
++                byte[] a = new byte[(dimensions * bits + 7) / 8], b = a.clone();
++                for (int i = 0; i < aBits.length; i++) { aBits[i] = random.nextLong(); bBits[i] = random.nextLong(); }
++                random.nextBytes(a); random.nextBytes(b);
++                long total = 0;
++                for (int j = 0; j < dimensions; j++) {
++                    if (bits == 1) total += (((aBits[j/64] ^ bBits[j/64]) >>> (j%64)) & 1) == 0 ? 1 : -1;
++                    else total += (long) doubled(a,j,bits) * doubled(b,j,bits);
++                }
++                float expected = bits == 1 ? (float) total : total * .25f;
++                assertEquals(expected, NativeASHSymmetricKernels.dot(aBits,a,bBits,b,dimensions,bits), 0f);
++                assertEquals(expected, NativeASHSymmetricKernels.dot(bBits,b,aBits,a,dimensions,bits), 0f);
++            }
++        }
++    }
++
++    private static int doubled(byte[] codes, int j, int bits) {
++        int field = (codes[j * bits / 8] >>> (j * bits % 8)) & ((1 << bits) - 1);
++        int sign = 1 << (bits - 1), magnitude = 2 * (field & (sign - 1)) + 1;
++        return (field & sign) == 0 ? -magnitude : magnitude;
++    }
++
++    @Test
++    void integerLutHandlesOffsetsTailsAndOverflow() {
++        Random random = new Random(1021);
++        int stride = 37, lane = 3;
++        for (int groups : new int[]{0,1,2,31,63,64,65,257,4097,65539}) {
++            byte[] codes = new byte[((groups+1)/2)*stride]; random.nextBytes(codes);
++            short[] lut = new short[groups*32];
++            for (int g = 0; g < groups; g++) for (int i = 0; i < 16; i++) {
++                short value = groups == 65539 ? Short.MAX_VALUE : (short) random.nextInt();
++                lut[g*32+i] = lut[g*32+i+16] = value;
++            }
++            for (int count : new int[]{0,1,7,16,17,32,34}) {
++                float[] out = new float[count+2]; Arrays.fill(out, Float.NaN);
++                NativeASHSymmetricKernels.scoreLut(codes,groups,stride,lane,count,lut,out,1);
++                assertTrue(Float.isNaN(out[0])); assertTrue(Float.isNaN(out[count+1]));
++                for (int i = 0; i < count; i++) {
++                    long sum = 0;
++                    for (int g = 0; g < groups; g++) sum += lut[g*32+((codes[(g/2)*stride+lane+i] >>> (4*(g%2))) & 15)];
++                    assertEquals(sum*.25f,out[i+1],0f);
++                }
++            }
++        }
++    }
++
++    @Test
++    void rejectsUnsafeInputsBeforeNativeCall() {
++        var projection = new NativeASHProjection(new float[][]{{1,2},{3,4}});
++        float[] alias = {1,2};
++        assertThrows(IllegalArgumentException.class, () -> projection.project(alias,alias));
++        assertThrows(IllegalArgumentException.class, () -> projection.project(new float[1],new float[2]));
++        assertThrows(IllegalArgumentException.class, () -> new NativeASHProjection(new float[][]{{1},{2,3}}));
++        assertThrows(IndexOutOfBoundsException.class, () -> NativeASHSymmetricKernels.dot(null,new byte[1],null,new byte[1],9,2));
++        assertThrows(IllegalArgumentException.class, () -> NativeASHSymmetricKernels.dot(null,null,null,null,-1,2));
++        assertThrows(IllegalArgumentException.class, () -> NativeASHSymmetricKernels.dot(null,null,null,null,1,3));
++        assertThrows(IndexOutOfBoundsException.class, () -> NativeASHSymmetricKernels.scoreLut(new byte[8],1,8,7,2,new short[32],new float[2],0));
++        assertThrows(IndexOutOfBoundsException.class, () -> NativeASHSymmetricKernels.scoreLut(new byte[8],1,8,0,8,new short[31],new float[8],0));
++    }
++}
+-- 
+2.39.5
+

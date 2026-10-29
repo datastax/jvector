@@ -1,0 +1,26 @@
+[
+  {
+    "log": "preflight-jdk22-2bit.log",
+    "project_calls": 128,
+    "symmetric_pair_calls": 243289,
+    "neighborhood_calls": 1139
+  },
+  {
+    "log": "preflight-jdk22-4bit.log",
+    "project_calls": 128,
+    "symmetric_pair_calls": 224915,
+    "neighborhood_calls": 1143
+  },
+  {
+    "log": "preflight-jdk25-2bit.log",
+    "project_calls": 128,
+    "symmetric_pair_calls": 256359,
+    "neighborhood_calls": 1130
+  },
+  {
+    "log": "preflight-jdk25-4bit.log",
+    "project_calls": 128,
+    "symmetric_pair_calls": 237446,
+    "neighborhood_calls": 1122
+  }
+]
