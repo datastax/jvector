@@ -1285,6 +1285,14 @@ public class AsymmetricHashing implements VectorCompressor<AsymmetricHashing.Qua
          */
         public final float[][] AFloat;
 
+        // Prepared once per immutable model, including models loaded from disk.
+        private final io.github.jbellis.jvector.vector.VectorUtilSupport.AshProjection projection;
+
+        /** Projects one dense query using this model's prepared backend representation. */
+        public void project(float[] query, float[] out) {
+            projection.project(query, out);
+        }
+
         /** Number of rows in A (quantizedDim = d). */
         public final int rows;
 
@@ -1319,6 +1327,8 @@ public class AsymmetricHashing implements VectorCompressor<AsymmetricHashing.Qua
                     dst[j] = (float) src[j];
                 }
             }
+            this.projection = VectorizationProvider.getInstance().getVectorUtilSupport()
+                    .prepareAshProjection(AFloat);
 
             // Hard invariants: these are programmer-contract checks, not user input checks.
             if (AFloat.length != rows) {
@@ -2518,6 +2528,7 @@ public class AsymmetricHashing implements VectorCompressor<AsymmetricHashing.Qua
             // Materialized compute buffers (row-major)
             bytes += estimateArray2DBytes(stiefelTransform.AData);
             bytes += estimateArray2DBytes(stiefelTransform.AFloat);
+            bytes += stiefelTransform.projection.ramBytesUsed();
         }
 
         return bytes;

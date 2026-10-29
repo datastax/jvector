@@ -453,6 +453,35 @@ public interface VectorUtilSupport {
     return false;
   }
 
+  /** Immutable provider-specific projection, safe to share between query threads. */
+  interface AshProjection {
+    /** Writes the full matrix-vector product; input and output must not alias. */
+    void project(float[] query, float[] out);
+
+    /** Additional backing storage, excluding the caller-owned matrix. */
+    default long ramBytesUsed() { return 0L; }
+  }
+
+  /**
+   * Prepares an immutable [projected dimension][original dimension] matrix once.
+   * The caller must not mutate its rows after preparation. Providers may cache a
+   * packed representation; each project call still prepares exactly one query.
+   */
+  default AshProjection prepareAshProjection(float[][] matrix) {
+    java.util.Objects.requireNonNull(matrix, "matrix");
+    if (matrix.length == 0 || matrix[0].length == 0)
+      throw new IllegalArgumentException("ASH projection dimensions must be positive");
+    int columns = matrix[0].length;
+    for (float[] row : matrix) {
+      if (row.length != columns) throw new IllegalArgumentException("Ragged ASH projection");
+    }
+    return (query, out) -> {
+      if (query.length != columns || out.length != matrix.length || query == out)
+        throw new IllegalArgumentException("ASH projection shape or aliasing mismatch");
+      for (int row = 0; row < matrix.length; row++) out[row] = ashDotRow(matrix[row], query);
+    };
+  }
+
   /**
    * Dot product between a matrix row and a dense vector.
    * Used by ASH projection: {@code y_i = <A_i, x>}.
