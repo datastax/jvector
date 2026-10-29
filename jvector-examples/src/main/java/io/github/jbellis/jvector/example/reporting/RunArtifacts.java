@@ -226,29 +226,6 @@ public final class RunArtifacts {
         }
     }
 
-    /**
-     * Append the construction measurement for an empty query grid. Search parameter and
-     * benchmark columns are left blank so downstream readers can distinguish build-only rows.
-     */
-    public void logConstructionRow(String datasetName,
-                                   int M,
-                                   int efConstruction,
-                                   float neighborOverflow,
-                                   boolean addHierarchy,
-                                   boolean refineFinalGraph,
-                                   Set<FeatureId> featureSet,
-                                   String buildCompressorString,
-                                   List<Metric> outputs) {
-        if (experimentsWriter == null || run == null) return;
-        var fixed = ExperimentsSchemaV1.constructionValues(run, datasetName, M, efConstruction,
-                neighborOverflow, addHierarchy, refineFinalGraph, featureSet, buildCompressorString);
-        try {
-            experimentsWriter.appendRow(fixed, outputs);
-        } catch (IOException e) {
-            throw new UncheckedIOException("Failed to append construction row", e);
-        }
-    }
-
     public RunContext run() { return run; }
     public DatasetInfoWriter datasetInfoWriter() { return datasetInfoWriter; }
     public ExperimentsCsvWriter experimentsWriter() { return experimentsWriter; }
