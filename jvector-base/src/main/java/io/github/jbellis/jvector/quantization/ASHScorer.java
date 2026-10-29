@@ -253,13 +253,6 @@ public final class ASHScorer {
         final int D = ash.originalDimension;
         final int C = ash.landmarkCount;
 
-        final float[][] A = ash.stiefelTransform.AFloat; // [d][D]
-
-        final var vecUtil =
-                io.github.jbellis.jvector.vector.VectorizationProvider
-                        .getInstance()
-                        .getVectorUtilSupport();
-
         // Materialize query once to avoid VectorFloat.get in inner loops.
         final float[] qArr = new float[D];
         for (int k = 0; k < D; k++) {
@@ -269,12 +262,9 @@ public final class ASHScorer {
         // Compute Aq once per query:
         //   qProj[j] = <A[j], q>
         final float[] qProj = new float[d];
+        ash.stiefelTransform.project(qArr, qProj);
         float sumQProj = 0f;
-        for (int j = 0; j < d; j++) {
-            float v = vecUtil.ashDotRow(A[j], qArr);
-            qProj[j] = v;
-            sumQProj += v;
-        }
+        for (float value : qProj) sumQProj += value;
 
         // For each landmark c:
         //   tildeQ_c   = Aq - Aμ_c       (1-bit and generic multibit paths)

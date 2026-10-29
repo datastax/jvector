@@ -92,6 +92,12 @@ class NativeVectorUtilSupport extends PanamaVectorUtilSupport
     }
 
     @Override
+    public AshProjection prepareAshProjection(float[][] matrix) {
+        return NativeASHProjection.isAvailable()
+                ? new NativeASHProjection(matrix) : super.prepareAshProjection(matrix);
+    }
+
+    @Override
     public boolean supportsAshNeighborhoodScoring() {
         return NativeASHKernels.isAvailable();
     }
@@ -101,7 +107,8 @@ class NativeVectorUtilSupport extends PanamaVectorUtilSupport
         String neighborhood = supportsAshNeighborhoodScoring()
                 ? "Highway native, ISA=" + getActiveIsa()
                 : "unavailable; using Java LUT";
-        return super.ashKernelDescription() + "; C=1 whole-neighborhood=" + neighborhood;
+        return super.ashKernelDescription() + "; C=1 whole-neighborhood=" + neighborhood
+                + "; dense projection=" + (NativeASHProjection.isAvailable() ? "Highway" : "Java");
     }
 
     @Override

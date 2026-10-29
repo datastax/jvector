@@ -531,8 +531,7 @@ public class ASHVectors implements CompressedVectors {
             float[] q = new float[ash.originalDimension];
             for (int i = 0; i < q.length; i++) q[i] = query.get(i);
             float[] projected = new float[d];
-            VectorUtilSupport backend = VectorizationProvider.getInstance().getVectorUtilSupport();
-            for (int i = 0; i < d; i++) projected[i] = backend.ashDotRow(ash.stiefelTransform.AFloat[i], q);
+            ash.stiefelTransform.project(q, projected);
             lut = new float[Math.multiplyExact(groups, 16)];
             FusedASHLayout.buildQueryLut(projected, d, ash.bitsPerDimension, lut);
             dotQMu = new float[ash.landmarkCount];
@@ -880,11 +879,6 @@ public class ASHVectors implements CompressedVectors {
         final int D = ash.originalDimension;
         final int C = ash.landmarkCount;
 
-        final float[][] A = ash.stiefelTransform.AFloat;
-
-        final var vecUtil =
-                VectorizationProvider.getInstance().getVectorUtilSupport();
-
         // q materialized once
         final float[] qArr = new float[D];
         for (int i = 0; i < D; i++) {
@@ -893,12 +887,9 @@ public class ASHVectors implements CompressedVectors {
 
         // Aq
         final float[] qProj = new float[d];
+        ash.stiefelTransform.project(qArr, qProj);
         float sumQProj = 0f;
-        for (int j = 0; j < d; j++) {
-            float v = vecUtil.ashDotRow(A[j], qArr);
-            qProj[j] = v;
-            sumQProj += v;
-        }
+        for (float value : qProj) sumQProj += value;
 
         final float[] tildeQPool = new float[C * d];
         final float[] sumTildeQ = new float[C];
