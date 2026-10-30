@@ -118,6 +118,27 @@ public class OnDiskGraphIndex implements ImmutableGraphIndex, AutoCloseable, Acc
         inMemoryFeatures = new AtomicReference<>(null);
     }
 
+    /**
+     * A second handle on {@code other}'s graph: same reader, header and layout, and the same lazily
+     * loaded upper layers, so neither handle loads them twice. Used by {@link ExternalVectorsGraphIndex}.
+     */
+    OnDiskGraphIndex(OnDiskGraphIndex other)
+    {
+        this.readerSupplier = other.readerSupplier;
+        this.version = other.version;
+        this.format = other.format;
+        this.layerInfo = other.layerInfo;
+        this.dimension = other.dimension;
+        this.entryNode = other.entryNode;
+        this.idUpperBound = other.idUpperBound;
+        this.features = other.features;
+        this.neighborsOffset = other.neighborsOffset;
+        this.inlineOffsets = other.inlineOffsets;
+        this.inlineBlockSize = other.inlineBlockSize;
+        this.inMemoryNeighbors = other.inMemoryNeighbors;
+        this.inMemoryFeatures = other.inMemoryFeatures;
+    }
+
     private List<Int2ObjectHashMap<int[]>> getInMemoryLayers(RandomAccessReader in) throws IOException {
         return inMemoryNeighbors.updateAndGet(current -> {
             if (current != null) {

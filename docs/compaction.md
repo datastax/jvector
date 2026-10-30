@@ -37,7 +37,17 @@ List<OrdinalMapper> mapping = compactor.ordinalMappers();
 
 ### Output ordinals
 
-The compactor assigns the output ordinals; the caller does not choose them. Live nodes are numbered `0 .. live - 1`, sources in ascending-size order, and within a source by the region of the merged hierarchy each node descends to, so nodes that are close in vector space get adjacent ordinals: records are written sequentially, every cell's members are contiguous (the cell join below relies on this), and consecutive nodes explore the same neighbourhood of every target. Callers that keep external references to nodes (a row id to ordinal table, for instance) translate them through `ordinalMappers()` after `compact` returns.
+By default the compactor assigns the output ordinals. Live nodes are numbered `0 .. live - 1`, sources in ascending-size order, and within a source by the region of the merged hierarchy each node descends to, so nodes that are close in vector space get adjacent ordinals: records are written sequentially, every cell's members are contiguous (the cell join below relies on this), and consecutive nodes explore the same neighbourhood of every target. Callers that keep external references to nodes (a row id to ordinal table, for instance) translate them through `ordinalMappers()` after `compact` returns.
+
+A caller whose own structures need another order (ordinals ascending by an external id, say) can choose the output ordinals instead, rather than rewrite the graph afterwards:
+
+```java
+// outputOrdinals.get(s)[i] is the output ordinal of node i of source s; the live nodes of all the
+// sources take every ordinal 0 .. live - 1 exactly once, and what a deleted node is given is not read
+compactor.withOutputOrdinals(outputOrdinals).compact(outputPath);
+```
+
+The merge is unchanged: it still runs on its own ordinals, and only what is written is renumbered, in the records, the neighbour lists, the upper layers, the entry node and the compressed sidecar; `ordinalMappers()` then reports the caller's ordinals. The level-0 records come out of the merge in its own order, so they are placed through a mapping of the level-0 section rather than written in sequence. For an output streamed to an `IndexWriter` that section is assembled in the work directory first and then copied out in order, which needs as much more space there as the level-0 records take.
 
 ### Handling Deleted Nodes
 
@@ -52,6 +62,41 @@ for (int i = 0; i < source.size(); i++) {
     }
 }
 ```
+
+### Vectors supplied by the caller
+
+By default the compactor reads every vector from the sources' `INLINE_VECTORS` feature. A caller that already stores its vectors elsewhere can write its graphs topology-only, with `InlineVectors` of dimension 0, and supply the vectors at compaction time instead, one `RandomAccessVectorValues` per source, indexed by that source's own ordinals:
+
+```java
+List<RandomAccessVectorValues> vectors = List.of(vectors0, vectors1, vectors2);
+
+var compactor = new OnDiskGraphIndexCompactor(
+    sources, vectors, /* sourceCompressed= */ null, liveNodes,
+    VectorSimilarityFunction.COSINE,
+    /* executor= */ null
+);
+compactor.compact(Path.of("compacted.index"));
+```
+
+Every vector the compaction reads then comes from the caller: the merge store, PQ retraining, and the cross-source searches. The graphs supply only topology and their other features, such as `FUSED_PQ`, and a compressed sidecar works as usual with `compact(graphPath, compressedPath)`. The output stores what the sources stored: a topology-only merge writes a topology-only output, and when the sources do store vectors, the supplied ones replace them in the merge and in the output.
+
+Each `RandomAccessVectorValues` spans its source's `getIdUpperBound()` ordinals but is only asked for the live ones, so a store that has already let go of its deleted vectors can supply them. The cross-source searches still walk through deleted nodes and score them to find their way, so a deleted node is scored by a live node of its neighbourhood: its first live neighbour, else a live neighbour of one of its neighbours, else any live node of its source. On random 64-dimensional data with a third of the nodes deleted this costs about 0.4 points of recall@10 against the deleted vectors themselves; sources with `FUSED_PQ` traverse on their codes and never score a deleted node at all. All of them share one dimension, which must equal the stored one when the sources store vectors. They are read concurrently from the compaction pool, each thread through its own instance from `threadLocalSupplier()`. Topology-only sources without supplied vectors are rejected.
+
+### Writing to a caller-provided output
+
+`compact(Path)` writes a local file, and uses it as working space too: the merge store and the code caches live in scratch sections past the end of the graph until it truncates them, and the spill files sit next to it. A caller that keeps its graphs in its own storage (pages of a database file, a checksummed segment) can instead hand the compactor an `IndexWriter` and a work directory:
+
+```java
+try (IndexWriter out = openMyOutput()) {
+    compactor.compact(out, Path.of("/tmp/compaction"));
+}
+// read it back from where it started
+OnDiskGraphIndex compacted = OnDiskGraphIndex.load(myReaderSupplier, startPosition);
+```
+
+The graph is written strictly sequentially, starting at the writer's current position, and is the same graph `compact(Path)` writes; only the footer's pointer to the header copy differs, since it is an absolute offset in the output. Level-0 records are computed in parallel batches that finish out of order, so a batch that finishes early waits in memory for the ones before it; the output ordinals follow the processing order, so what waits is bounded by the batches in flight. The scratch sections go to a file in the work directory and the spill files next to it; both are deleted before `compact` returns, whether it succeeds or fails, and they need about as much space as the merged graph. The output is left open for the caller.
+
+With a compressed sidecar, `compact(graphOutput, compressedOutput, workDirectory)` writes the merged compressed vectors to the second `IndexWriter` the same way.
 
 ## Algorithm
 
