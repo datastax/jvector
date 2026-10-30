@@ -183,6 +183,15 @@ public final class PreEncodedCodeCache implements AutoCloseable {
         }
     }
 
+    /** Writes the code at {@code ordinal} from {@code src}, {@link #codeSize()} bytes from {@code offset}. */
+    public void put(int ordinal, byte[] src, int offset) {
+        int chunk = ordinal / codesPerChunk;
+        int inChunk = ordinal - chunk * codesPerChunk;
+        ByteBuffer buf = viewsPerThread.get()[chunk];
+        buf.position(inChunk * codeSize);
+        buf.put(src, offset, codeSize);
+    }
+
     /** Reads the code at {@code ordinal} as little-endian floats straight from the mapping. */
     public void getFloats(int ordinal, float[] dst, int count) {
         int chunk = ordinal / codesPerChunk;
