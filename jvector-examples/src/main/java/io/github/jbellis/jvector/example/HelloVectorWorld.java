@@ -45,18 +45,6 @@ public class HelloVectorWorld {
         artifacts.registerDataset(datasetName, ds);
 
         // Run
-        Grid.runAll(ds,
-                config.construction.useSavedIndexIfExists,
-                config.construction.outDegree,
-                config.construction.efConstruction,
-                config.construction.neighborOverflow,
-                config.construction.addHierarchy,
-                config.construction.refineFinalGraph,
-                config.construction.getFeatureSets(),
-                config.construction.getCompressorParameters(),
-                config.search.getCompressorParameters(),
-                config.search.topKOverquery,
-                config.search.useSearchPruning,
-                artifacts);
+        Grid.run(ds, GridSpec.fromConfig(config), artifacts);
     }
 }

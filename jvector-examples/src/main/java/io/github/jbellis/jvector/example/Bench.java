@@ -21,6 +21,7 @@ import io.github.jbellis.jvector.example.util.CompressorParameters.PQParameters;
 import io.github.jbellis.jvector.example.benchmarks.datasets.DataSet;
 import io.github.jbellis.jvector.example.benchmarks.datasets.DataSets;
 import io.github.jbellis.jvector.example.yaml.DatasetCollection;
+import io.github.jbellis.jvector.example.reporting.RunArtifacts;
 import io.github.jbellis.jvector.graph.disk.feature.FeatureId;
 import io.github.jbellis.jvector.vector.VectorSimilarityFunction;
 
@@ -94,7 +95,22 @@ public class Bench {
             DataSet ds = DataSets.loadDataSet(datasetName).orElseThrow(
                     () -> new RuntimeException("Dataset " + datasetName + " not found")
             ).getDataSet();
-            Grid.runAll(ds, enableIndexCache, mGrid, efConstructionGrid, neighborOverflowGrid, addHierarchyGrid, refineFinalGraphGrid, featureSets, buildCompression, compressionGrid, topKGrid, usePruningGrid);
+            var spec = GridSpec.builder()
+                    .sweep("addHierarchy", addHierarchyGrid, BuildConfig.Builder::addHierarchy)
+                    .sweep("refineFinalGraph", refineFinalGraphGrid, BuildConfig.Builder::refineFinalGraph)
+                    .sweep("M", mGrid, BuildConfig.Builder::M)
+                    .sweep("neighborOverflow", neighborOverflowGrid, BuildConfig.Builder::neighborOverflow)
+                    .sweep("efConstruction", efConstructionGrid, BuildConfig.Builder::efConstruction)
+                    .sweep("buildCompressor", buildCompression, BuildConfig.Builder::buildCompressor)
+                    .featureSets(featureSets)
+                    .search(SearchConfig.builder()
+                            .searchCompressors(compressionGrid)
+                            .topKGrid(topKGrid)
+                            .usePruningGrid(usePruningGrid)
+                            .build())
+                    .enableIndexCache(enableIndexCache)
+                    .build();
+            Grid.run(ds, spec, RunArtifacts.disabled());
         }
     }
 }
