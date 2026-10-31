@@ -824,3 +824,90 @@ When changing the native interface:
    including `jvector_supports_abi`, where the inspection tools are available.
    Export inspection complements the runtime tests; it does not establish ABI
    support by itself.
+
+
+## ASH FP16 query projection
+
+ASH encoding and training retain the Highway FP32 projection. Query scoring
+lazily prepares a separate immutable FP16 representation of the same trained
+matrix. Incoming query operands are converted to FP16; accumulation and output
+are strictly FP32. The serialized model and graph format do not change.
+
+The runtime property `jvector.ash.queryProjection` selects the query arithmetic:
+
+| Value | Behavior |
+|-------|----------|
+| `auto` (default) | Prefer optimized native FP16; use the original FP32 projection if the optional library, CPU/model kernel or operand range is unsupported. |
+| `fp32` | Keep the original provider's FP32 projection. |
+| `fp16` | Require native FP16; report unsupported configurations or operands explicitly. |
+
+The setting is read when each model's query projection is first prepared. Set it
+before searching; changing it does not mutate an already prepared model. Other
+providers retain their original projection in automatic mode. Explicit FP16
+requires the native provider. Input shape/aliasing errors, allocation failures
+and execution errors are reported rather than silently converted to fallback.
+In automatic mode an individual query outside the finite FP16 range uses FP32.
+Strict FP16 accepts only finite matrix/query values with magnitude at most
+65504. Underflow and rounding follow IEEE binary16 arithmetic. Reduced operand
+precision can change scores and rankings slightly; compare recall for the target
+workload when selecting a precision.
+
+### Optional build and package
+
+The existing Highway library has no new dependency. To include the separate
+FP16 library, build with JDK 22 and:
+
+```bash
+mvn -pl jvector-native -am package -Dnative.onednn=true
+```
+
+For a direct native build, the third script argument enables the component:
+
+```bash
+bash src/build_native_lib.sh release false true
+```
+
+The optional build requires CMake in addition to the native prerequisites. Meson
+fetches the exact oneDNN revision pinned in `subprojects/onednn.wrap`; an offline
+build can populate `subprojects/onednn` with that revision beforehand. oneDNN is
+built with the sequential CPU runtime, no GPU support, and only inference
+matrix-multiplication/reorder primitives. Its dispatcher selects supported CPU
+instructions at runtime; the build does not use `-march=native`.
+
+oneDNN is statically linked into `libjvector_ash_fp16-<arch>.so`. Maven packages
+this library and the upstream license/third-party notices beside the Highway
+resource. The existing architecture-aware loader first tries the system library
+path, then extracts the matching classpath resource. No external `libdnnl` or
+benchmark-specific path is required. Omitting `-Dnative.onednn=true` leaves FP16
+out of the package and removes stale optional resources from previous builds.
+The optional component follows the native module's Linux platform support;
+cross-compilation still requires the corresponding target toolchain.
+
+### Ownership, parallelism and tests
+
+Each model owns its immutable prepared FP16 weights and a single-query execution
+plan. Java automatic arenas release the native context when it becomes
+unreachable. Each calling thread reuses its conversion, staging and scratch
+buffers; neither thread-local cache retains the model or weights. Calls use
+ordinary FFM downcalls. oneDNN starts no search workers or nested thread pool.
+Concurrent callers use the same immutable model with separate workspaces.
+
+The native-module Java tests retain FP32 coverage and check FP16 against an
+independent rounded-operand oracle, irregular and large dimensions, numeric
+boundaries, input guards, model switching, concurrent platform/virtual threads,
+query-only precision and loading without the optional library. On a machine
+known to support FP16, require execution rather than capability skips with:
+
+```bash
+mvn -pl jvector-native -am test -Dnative.onednn=true -Djvector.test.requireFp16=true
+```
+
+With Google Test installed, Meson also builds `test_ash_fp16`; run it with
+`meson test -C <build-directory> --suite ash_fp16 --print-errorlogs`.
+
+For performance validation, use the standard BenchYAML query path on identical
+saved graphs for `fp32` and `auto`/`fp16`. Include normal query preparation in
+its timers and compare recall@10 as well as QPS. Control CPU affinity and NUMA
+memory placement consistently across runs; otherwise projection locality can
+obscure the precision comparison. Do not include compilation or another active
+benchmark in the query measurement interval.
