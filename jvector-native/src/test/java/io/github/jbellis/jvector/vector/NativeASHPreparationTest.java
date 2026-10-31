@@ -126,7 +126,20 @@ class NativeASHPreparationTest {
     }
 
     @Test
+    void defaultQueryViewPreservesProvidersWithoutReducedPrecision() {
+        VectorUtilSupport.AshProjection original = (query, out) -> out[0] = query[0];
+        assertSame(original, original.forQueryScoring());
+        float[] out = new float[1];
+        original.forQueryScoring().project(new float[]{.1234567f}, out);
+        assertEquals(.1234567f, out[0]);
+    }
+
+    @Test
     void rejectsUnsafeInputsBeforeNativeCall() {
+        assertThrows(NullPointerException.class, () -> new NativeASHProjection(null));
+        assertThrows(NullPointerException.class, () -> new NativeASHProjection(new float[][]{null}));
+        assertThrows(IllegalArgumentException.class, () -> new NativeASHProjection(new float[0][]));
+        assertThrows(IllegalArgumentException.class, () -> new NativeASHProjection(new float[][]{new float[0]}));
         var projection = new NativeASHProjection(new float[][]{{1,2},{3,4}});
         float[] alias = {1,2};
         assertThrows(IllegalArgumentException.class, () -> projection.project(alias,alias));
