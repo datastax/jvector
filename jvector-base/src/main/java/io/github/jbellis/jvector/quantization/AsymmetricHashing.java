@@ -780,16 +780,12 @@ public class AsymmetricHashing implements VectorCompressor<AsymmetricHashing.Qua
         private static final ThreadLocal<Workspace> WORKSPACE = ThreadLocal.withInitial(Workspace::new);
 
         private static final class Workspace {
-            float[] x;
-            float[] muArr;
             float[] xhat;
             float[] proj;
             double[] absNorm;
 
             void ensureCapacity(int originalDim, int quantizedDim) {
-                if (x == null || x.length != originalDim) {
-                    x = new float[originalDim];
-                    muArr = new float[originalDim];
+                if (xhat == null || xhat.length != originalDim) {
                     xhat = new float[originalDim];
                 }
                 if (proj == null || proj.length != quantizedDim) {
@@ -809,37 +805,21 @@ public class AsymmetricHashing implements VectorCompressor<AsymmetricHashing.Qua
                                   long[] outSignWords,
                                   byte[] outExtraBits) {
 
-            final float[][] A = stiefel.AFloat;
-            final int originalDim = stiefel.cols;
-
-            // Get workspace for this thread and ensure correct sizing.
             Workspace ws = WORKSPACE.get();
-            ws.ensureCapacity(originalDim, quantizedDim);
+            ws.ensureCapacity(stiefel.cols, quantizedDim);
+            normalizeResidual(vector, mu, residualNorm, ws.xhat);
+            // Encoding always uses the original FP32 projection, independently
+            // of the model's query-only FP16 view.
+            stiefel.project(ws.xhat, ws.proj);
+            return quantizeProjected(ws.proj, bitsPerDimension, outSignWords,
+                    outExtraBits, ws.absNorm);
+        }
 
-            // Alias for readability (no new allocations).
-            final float[] x = ws.x;
-            final float[] muArr = ws.muArr;
-            final float[] xhat = ws.xhat;
-
-            final var vecUtil =
-                    io.github.jbellis.jvector.vector.VectorizationProvider
-                            .getInstance()
-                            .getVectorUtilSupport();
-
-            // Copy vector and mean once into workspace.
-            for (int d = 0; d < originalDim; d++) {
-                x[d] = vector.get(d);
-                muArr[d] = mu.get(d);
-            }
-
-            // ASH paper, Eq. 6, normalization.
-            final float invNorm = (residualNorm > 0f) ? (1.0f / residualNorm) : 0.0f;
-
-            // Compute normalized residual x̂.
-            for (int d = 0; d < originalDim; d++) {
-                xhat[d] = (x[d] - muArr[d]) * invNorm;
-            }
-
+        /** Shared code generation for singleton and bulk projections. */
+        private static float quantizeProjected(float[] proj, int bitsPerDimension,
+                                               long[] outSignWords, byte[] outExtraBits,
+                                               double[] absNorm) {
+            final int quantizedDim = proj.length;
             if (bitsPerDimension == 1) {
                 // Binarize directly from per-row projection.
                 final int words = QuantizedVector.wordsForDims(quantizedDim);
@@ -850,7 +830,7 @@ public class AsymmetricHashing implements VectorCompressor<AsymmetricHashing.Qua
 
                     for (int j = 0; j < rem; j++) {
                         int bitIndex = base + j;
-                        float acc = vecUtil.ashDotRow(A[bitIndex], xhat);
+                        float acc = proj[bitIndex];
                         if (acc > 0.0f) {
                             bits |= (1L << j);
                         }
@@ -863,13 +843,9 @@ public class AsymmetricHashing implements VectorCompressor<AsymmetricHashing.Qua
 
             final int exBits = bitsPerDimension - 1;
             final int maxCode = (1 << exBits) - 1;
-            final float[] proj = ws.proj;
-            final double[] absNorm = ws.absNorm;
-
             double projNorm2 = 0.0;
             for (int j = 0; j < quantizedDim; j++) {
-                float acc = vecUtil.ashDotRow(A[j], xhat);
-                proj[j] = acc;
+                float acc = proj[j];
                 projNorm2 += (double) acc * (double) acc;
                 if (!usesFastScanProjectionCode(bitsPerDimension) && acc >= 0.0f) {
                     QuantizedVector.setBit(outSignWords, j);
@@ -1313,6 +1289,11 @@ public class AsymmetricHashing implements VectorCompressor<AsymmetricHashing.Qua
             projection.project(query, out);
         }
 
+        /** Projects base vectors in FP32; query precision selection does not apply. */
+        public void projectBatch(float[][] vectors, float[][] out, int count) {
+            projection.projectBatch(vectors, out, count);
+        }
+
         /** Number of rows in A (quantizedDim = d). */
         public final int rows;
 
@@ -1404,58 +1385,97 @@ public class AsymmetricHashing implements VectorCompressor<AsymmetricHashing.Qua
     }
 
 
+    // An internal working-set bound, not a projection API limit. Each task owns
+    // at most this many normalized vectors and projected results, reused until
+    // its range is complete. Native code supplies the SIMD/cache micro-tiling.
+    private static final int ENCODING_BATCH_SIZE = 32;
+
     /**
-     * Encodes all vectors using ASH, honoring the caller-provided ForkJoinPool.
+     * Encodes all base vectors in bounded FP32 projection batches. The supplied
+     * pool controls parallelism; native calls execute on the calling worker.
+     * Missing vectors retain the existing all-zero encoded representation.
      */
     @Override
     public ASHVectors encodeAll(RandomAccessVectorValues ravv, ForkJoinPool simdExecutor) {
+        Objects.requireNonNull(ravv, "ravv");
+        Objects.requireNonNull(simdExecutor, "simdExecutor");
+        if (ravv.dimension() != originalDimension)
+            throw new IllegalArgumentException("ASH encoding vector dimension mismatch");
         final int n = ravv.size();
-
-        // The caller controls parallelism; we derive a bounded number of tasks
-        // directly from the executor rather than using parallel streams.
         final int parallelism = Math.max(1, simdExecutor.getParallelism());
-
-        // Each task processes a contiguous range of ordinals.
-        final int chunkSize = (n + parallelism - 1) / parallelism;
-
+        final int chunkSize = (int) (((long) n + parallelism - 1) / parallelism);
         final QuantizedVector[] out = new QuantizedVector[n];
         final var ravvSupplier = ravv.threadLocalSupplier();
-
         var tasks = new java.util.ArrayList<java.util.concurrent.ForkJoinTask<?>>(parallelism);
-
-        for (int t = 0; t < parallelism; t++) {
-            final int start = t * chunkSize;
-            final int end = Math.min(n, start + chunkSize);
-            if (start >= end) {
-                break;
+        Throwable failure = null;
+        try {
+            for (int start = 0; start < n;) {
+                final int first = start;
+                final int end = (int) Math.min((long) n, (long) first + chunkSize);
+                tasks.add(simdExecutor.submit(() -> encodeRange(ravvSupplier.get(), out, first, end)));
+                start = end;
             }
-
-            tasks.add(simdExecutor.submit(() -> {
-                // Each task uses its own thread-local RAVV view.
-                var localRavv = ravvSupplier.get();
-
-                for (int i = start; i < end; i++) {
-                    VectorFloat<?> v = localRavv.getVector(i);
-
-                    // Contract: missing vectors are encoded as zero vectors.
-                    if (v != null) {
-                        out[i] = encode(v);
-                    } else {
-                        out[i] = QuantizedVector.createEmpty(quantizedDim, bitsPerDimension);
-                    }
-                }
-            }));
+        } catch (RuntimeException | Error error) {
+            failure = error;
         }
-
-        // Join establishes a happens-before relationship, ensuring safe publication
-        // of all writes to the output array.
+        // Await every submitted task, including when the pool rejected a later
+        // submission. The caller may close its source when this method exits.
         for (var task : tasks) {
-            task.join();
+            try { task.join(); }
+            catch (RuntimeException | Error error) {
+                if (failure == null) failure = error;
+                else if (failure != error) failure.addSuppressed(error);
+            }
         }
-
+        if (failure instanceof Error) throw (Error) failure;
+        if (failure != null) throw (RuntimeException) failure;
         return new ASHVectors(this, out);
     }
 
+    private void encodeRange(RandomAccessVectorValues source, QuantizedVector[] out, int start, int end) {
+        int capacity = Math.min(ENCODING_BATCH_SIZE, end - start);
+        float[][] inputs = new float[capacity][originalDimension];
+        float[][] projected = new float[capacity][quantizedDim];
+        float[] residualNorms = new float[capacity];
+        int[] ordinals = new int[capacity];
+        double[] absNorm = new double[quantizedDim];
+        int count = 0;
+        for (int i = start; i < end; i++) {
+            VectorFloat<?> vector = source.getVector(i);
+            QuantizedVector dest = QuantizedVector.createEmpty(quantizedDim, bitsPerDimension);
+            out[i] = dest;
+            if (vector == null) continue;
+            float residualNorm = prepareEncoding(vector, dest);
+            normalizeResidual(vector, landmarks[dest.landmark & 0xFF], residualNorm, inputs[count]);
+            residualNorms[count] = residualNorm;
+            ordinals[count] = i;
+            if (++count == capacity) {
+                encodeBatch(inputs, projected, residualNorms, ordinals, count, absNorm, out);
+                count = 0;
+            }
+        }
+        if (count != 0) encodeBatch(inputs, projected, residualNorms, ordinals, count, absNorm, out);
+    }
+
+    private void encodeBatch(float[][] inputs, float[][] projected, float[] residualNorms,
+                             int[] ordinals, int count, double[] absNorm, QuantizedVector[] out) {
+        stiefelTransform.projectBatch(inputs, projected, count);
+        for (int i = 0; i < count; i++) {
+            QuantizedVector dest = out[ordinals[i]];
+            float codeNorm = RandomBinaryQuantizer.quantizeProjected(projected[i], bitsPerDimension,
+                    dest.binaryVector, dest.extraBits, absNorm);
+            finishEncoding(dest, residualNorms[i], codeNorm);
+        }
+    }
+
+    private static void normalizeResidual(VectorFloat<?> vector, VectorFloat<?> mean,
+                                          float residualNorm, float[] normalized) {
+        if (vector.length() != normalized.length || mean.length() != normalized.length)
+            throw new IllegalArgumentException("ASH encoding vector dimension mismatch");
+        float invNorm = residualNorm > 0f ? 1f / residualNorm : 0f;
+        for (int d = 0; d < normalized.length; d++)
+            normalized[d] = (vector.get(d) - mean.get(d)) * invNorm;
+    }
 
     /**
      * Encodes the input vector using ASH.
@@ -1470,6 +1490,20 @@ public class AsymmetricHashing implements VectorCompressor<AsymmetricHashing.Qua
 
     @Override
     public void encodeTo(VectorFloat<?> vector, QuantizedVector dest) {
+        float residualNorm = prepareEncoding(vector, dest);
+        float codeNorm = quantizeVector(vector, residualNorm, dest.landmark, dest);
+        finishEncoding(dest, residualNorm, codeNorm);
+    }
+
+    /** Sets landmark and raw offset; returns the residual norm needed by both paths. */
+    private float prepareEncoding(VectorFloat<?> vector, QuantizedVector dest) {
+        Objects.requireNonNull(vector, "vector");
+        Objects.requireNonNull(dest, "dest");
+        if (vector.length() != originalDimension)
+            throw new IllegalArgumentException("ASH encoding vector dimension mismatch");
+        if (dest.binaryVector == null || dest.binaryVector.length < QuantizedVector.signWordsForDims(quantizedDim, bitsPerDimension)
+                || dest.extraBits == null || dest.extraBits.length < QuantizedVector.bodyBytesForDims(quantizedDim, bitsPerDimension))
+            throw new IllegalArgumentException("ASH encoding destination too short");
         // Landmark assignment: nearest centroid by L2 distance.
         byte landmark = 0;
         float bestDist = Float.POSITIVE_INFINITY;
@@ -1498,11 +1532,15 @@ public class AsymmetricHashing implements VectorCompressor<AsymmetricHashing.Qua
         // adjusted after quantization for C++-style fast-scan projection codes.
         dest.offset = rawOffset;
         dest.landmark = landmark;
+        assert Float.isFinite(rawOffset) : "offset is not finite";
 
-        // Body: sign bits, generic sign+extra bits, or fast-scan projection code.
-        // The returned code norm is sqrt(d) for 1-bit ASH and
-        // sqrt(sum_j (q_j + 0.5)^2) for multibit ASH.
-        float codeNorm = quantizeVector(vector, residualNorm, landmark, dest);
+        return residualNorm;
+    }
+
+    /** Applies the existing code-dependent header adjustment and FP16 storage rounding. */
+    private void finishEncoding(QuantizedVector dest, float residualNorm, float codeNorm) {
+        final int c = dest.landmark & 0xFF;
+        final float rawOffset = dest.offset;
         final float scale = codeNorm > 0f ? residualNorm / codeNorm : 0f;
 
         float finalOffset = rawOffset;
