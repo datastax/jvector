@@ -68,4 +68,88 @@ void ash_project_f32(const float *HWY_RESTRICT matrix, const float *HWY_RESTRICT
         out[row] = hn::ReduceSum(d, sum);
     }
 }
+
+// A packed matrix consists of 32-output tiles. Within each tile the original
+// dimensions are contiguous rows of up to 32 weights (no tail padding). The
+// caller prepares this once; each tile is reused across the whole input batch.
+// All operands, FMA accumulators and results are FP32.
+template <bool FourQueries, bool TwoVectors>
+HWY_INLINE void ash_project_batch_tile(const float* HWY_RESTRICT weights,
+                                      const float* HWY_RESTRICT inputs,
+                                      int rows, int cols, size_t width, size_t firstLane,
+                                      size_t n0, size_t n1,
+                                      float* HWY_RESTRICT out) {
+    const hn::CappedTag<float, 16> d;
+    const size_t lanes = hn::Lanes(d);
+    const size_t columns = static_cast<size_t>(cols);
+    const size_t stride = static_cast<size_t>(rows);
+    auto s0 = hn::Zero(d), s1 = hn::Zero(d), s2 = hn::Zero(d), s3 = hn::Zero(d);
+    auto t0 = hn::Zero(d), t1 = hn::Zero(d), t2 = hn::Zero(d), t3 = hn::Zero(d);
+    for (size_t col = 0; col < columns; ++col) {
+        const float* w = weights + col * width + firstLane;
+        const auto a0 = hn::LoadN(d, w, n0);
+        const auto q0 = hn::Set(d, inputs[col]);
+        s0 = hn::MulAdd(a0, q0, s0);
+        if constexpr (TwoVectors) {
+            const auto a1 = hn::LoadN(d, w + lanes, n1);
+            t0 = hn::MulAdd(a1, q0, t0);
+            if constexpr (FourQueries) {
+                t1 = hn::MulAdd(a1, hn::Set(d, inputs[columns + col]), t1);
+                t2 = hn::MulAdd(a1, hn::Set(d, inputs[2 * columns + col]), t2);
+                t3 = hn::MulAdd(a1, hn::Set(d, inputs[3 * columns + col]), t3);
+            }
+        }
+        if constexpr (FourQueries) {
+            s1 = hn::MulAdd(a0, hn::Set(d, inputs[columns + col]), s1);
+            s2 = hn::MulAdd(a0, hn::Set(d, inputs[2 * columns + col]), s2);
+            s3 = hn::MulAdd(a0, hn::Set(d, inputs[3 * columns + col]), s3);
+        }
+    }
+    hn::StoreN(s0, d, out, n0);
+    if constexpr (TwoVectors) hn::StoreN(t0, d, out + lanes, n1);
+    if constexpr (FourQueries) {
+        hn::StoreN(s1, d, out + stride, n0);
+        hn::StoreN(s2, d, out + 2 * stride, n0);
+        hn::StoreN(s3, d, out + 3 * stride, n0);
+        if constexpr (TwoVectors) {
+            hn::StoreN(t1, d, out + stride + lanes, n1);
+            hn::StoreN(t2, d, out + 2 * stride + lanes, n1);
+            hn::StoreN(t3, d, out + 3 * stride + lanes, n1);
+        }
+    }
+}
+
+void ash_project_batch_f32(const float* HWY_RESTRICT matrix,
+                           const float* HWY_RESTRICT inputs,
+                           int rows, int cols, int count,
+                           float* HWY_RESTRICT out) {
+    const hn::CappedTag<float, 16> d;
+    const size_t lanes = hn::Lanes(d);
+    for (size_t row = 0; row < static_cast<size_t>(rows); row += 32) {
+        const size_t tileRows = std::min(size_t{32}, static_cast<size_t>(rows) - row);
+        const float* weights = matrix + row * static_cast<size_t>(cols);
+        for (size_t offset = 0; offset < tileRows; offset += 2 * lanes) {
+            const size_t n0 = std::min(lanes, tileRows - offset);
+            const size_t n1 = tileRows - offset > lanes
+                    ? std::min(lanes, tileRows - offset - lanes) : 0;
+            int b = 0;
+            for (; count - b >= 4; b += 4) {
+                const float* x = inputs + static_cast<size_t>(b) * cols;
+                float* y = out + static_cast<size_t>(b) * rows + row + offset;
+                if (n1 != 0)
+                    ash_project_batch_tile<true, true>(weights, x, rows, cols, tileRows, offset, n0, n1, y);
+                else
+                    ash_project_batch_tile<true, false>(weights, x, rows, cols, tileRows, offset, n0, n1, y);
+            }
+            for (; b < count; ++b) {
+                const float* x = inputs + static_cast<size_t>(b) * cols;
+                float* y = out + static_cast<size_t>(b) * rows + row + offset;
+                if (n1 != 0)
+                    ash_project_batch_tile<false, true>(weights, x, rows, cols, tileRows, offset, n0, n1, y);
+                else
+                    ash_project_batch_tile<false, false>(weights, x, rows, cols, tileRows, offset, n0, n1, y);
+            }
+        }
+    }
+}
 #endif
