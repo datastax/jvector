@@ -458,6 +458,24 @@ public interface VectorUtilSupport {
     /** Writes the full matrix-vector product; input and output must not alias. */
     void project(float[] query, float[] out);
 
+    /**
+     * Returns an immutable view for query scoring, which may use lower operand
+     * precision. Encoding/training must continue to use this original object.
+     * The caller caches the returned view for the model's lifetime. Providers
+     * without a query-specific representation return this same object.
+     */
+    default AshProjection forQueryScoring() {
+      String mode = System.getProperty("jvector.ash.queryProjection", "auto");
+      switch (mode) {
+        case "auto":
+        case "fp32": return this;
+        case "fp16": throw new UnsupportedOperationException(
+                "This provider does not support FP16 ASH query projection");
+        default: throw new IllegalArgumentException(
+                "jvector.ash.queryProjection must be auto, fp32 or fp16: " + mode);
+      }
+    }
+
     /** Additional backing storage, excluding the caller-owned matrix. */
     default long ramBytesUsed() { return 0L; }
   }

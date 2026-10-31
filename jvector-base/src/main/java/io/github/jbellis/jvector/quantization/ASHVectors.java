@@ -531,7 +531,7 @@ public class ASHVectors implements CompressedVectors {
             float[] q = new float[ash.originalDimension];
             for (int i = 0; i < q.length; i++) q[i] = query.get(i);
             float[] projected = new float[d];
-            ash.stiefelTransform.project(q, projected);
+            ash.stiefelTransform.projectQuery(q, projected);
             lut = new float[Math.multiplyExact(groups, 16)];
             FusedASHLayout.buildQueryLut(projected, d, ash.bitsPerDimension, lut);
             dotQMu = new float[ash.landmarkCount];
@@ -887,7 +887,7 @@ public class ASHVectors implements CompressedVectors {
 
         // Aq
         final float[] qProj = new float[d];
-        ash.stiefelTransform.project(qArr, qProj);
+        ash.stiefelTransform.projectQuery(qArr, qProj);
         float sumQProj = 0f;
         for (float value : qProj) sumQProj += value;
 

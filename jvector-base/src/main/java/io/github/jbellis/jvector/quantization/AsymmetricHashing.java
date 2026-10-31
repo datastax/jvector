@@ -1288,7 +1288,27 @@ public class AsymmetricHashing implements VectorCompressor<AsymmetricHashing.Qua
         // Prepared once per immutable model, including models loaded from disk.
         private final io.github.jbellis.jvector.vector.VectorUtilSupport.AshProjection projection;
 
-        /** Projects one dense query using this model's prepared backend representation. */
+        // Prepared only when this model is used for queries. Encoding-only work
+        // must not allocate an extra matrix or change its arithmetic precision.
+        private volatile io.github.jbellis.jvector.vector.VectorUtilSupport.AshProjection queryProjection;
+
+        /** Projects a search query; encoding and training continue through project(). */
+        public void projectQuery(float[] query, float[] out) {
+            queryProjection().project(query, out);
+        }
+
+        private io.github.jbellis.jvector.vector.VectorUtilSupport.AshProjection queryProjection() {
+            var ready = queryProjection;
+            if (ready == null) {
+                synchronized (this) {
+                    ready = queryProjection;
+                    if (ready == null) queryProjection = ready = projection.forQueryScoring();
+                }
+            }
+            return ready;
+        }
+
+        /** Projects one vector with the original FP32 representation, including encoding/training. */
         public void project(float[] query, float[] out) {
             projection.project(query, out);
         }
@@ -2529,6 +2549,9 @@ public class AsymmetricHashing implements VectorCompressor<AsymmetricHashing.Qua
             bytes += estimateArray2DBytes(stiefelTransform.AData);
             bytes += estimateArray2DBytes(stiefelTransform.AFloat);
             bytes += stiefelTransform.projection.ramBytesUsed();
+            var queryProjection = stiefelTransform.queryProjection;
+            if (queryProjection != null && queryProjection != stiefelTransform.projection)
+                bytes += queryProjection.ramBytesUsed();
         }
 
         return bytes;

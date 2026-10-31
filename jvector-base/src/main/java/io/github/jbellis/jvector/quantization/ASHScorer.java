@@ -262,7 +262,7 @@ public final class ASHScorer {
         // Compute Aq once per query:
         //   qProj[j] = <A[j], q>
         final float[] qProj = new float[d];
-        ash.stiefelTransform.project(qArr, qProj);
+        ash.stiefelTransform.projectQuery(qArr, qProj);
         float sumQProj = 0f;
         for (float value : qProj) sumQProj += value;
 

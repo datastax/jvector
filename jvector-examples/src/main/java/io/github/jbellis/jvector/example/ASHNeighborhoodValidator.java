@@ -22,8 +22,9 @@ import io.github.jbellis.jvector.quantization.FusedASHLayout;
 import java.util.Locale;
 
 /**
- * Untimed decoded-component oracle, independent of the scoring LUT and native implementation.
- * It projects in double precision and checks the same serialized headers consumed by the graph.
+ * Untimed decoded-component oracle, independent of the scoring LUT and block-scoring implementation.
+ * It uses the model's selected query precision and checks the serialized graph headers.
+ * Projection arithmetic is covered separately by the provider's FP32 and FP16 oracle tests.
  * The tolerance permits FP32 reduction-order differences, without introducing LUT quantization.
  */
 final class ASHNeighborhoodValidator {
@@ -35,14 +36,16 @@ final class ASHNeighborhoodValidator {
                 ASHNeighborhoodBenchmark.positive("jvector.bench.validationNeighborhoods", 1024));
         for (var query : fixture.queries) {
             var scorer = new ASHNeighborhoodScorer(fixture.ash, query, fixture.capacity, fixture.blockSize);
-            // Double-precision, decoded-component oracle independent of the nibble LUT kernel.
-            double[] projected = new double[fixture.ash.quantizedDim];
+            // Share the query precision, then independently decode and accumulate
+            // components in double precision instead of using the nibble LUT kernel.
+            float[] input = new float[query.length()];
             double dotMu = 0;
-            for (int d = 0; d < query.length(); d++) {
-                dotMu += (double) query.get(d) * fixture.ash.landmarks[0].get(d);
-                for (int j = 0; j < projected.length; j++)
-                    projected[j] += (double) query.get(d) * fixture.ash.stiefelTransform.AFloat[j][d];
+            for (int d = 0; d < input.length; d++) {
+                input[d] = query.get(d);
+                dotMu += (double) input[d] * fixture.ash.landmarks[0].get(d);
             }
+            float[] projected = new float[fixture.ash.quantizedDim];
+            fixture.ash.stiefelTransform.projectQuery(input, projected);
             float[] scores = new float[fixture.capacity];
             for (int n = 0; n < neighborhoods; n++) {
                 int index = (int) ((long) n * fixture.neighborhoods.length / neighborhoods);
@@ -58,7 +61,7 @@ final class ASHNeighborhoodValidator {
                         int nibble =
                                 FusedASHLayout.getPackedNibble(packed, offset, lane, d / perNibble, fixture.blockSize);
                         int field = nibble >>> ((d % perNibble) * bits) & ((1 << bits) - 1);
-                        dot += projected[d] * FusedASHLayout.decodeProjectionComponent(field, bits);
+                        dot += (double) projected[d] * FusedASHLayout.decodeProjectionComponent(field, bits);
                     }
                     float expected = ASHScorer.toSimilarity((float) (FusedASHLayout.readScale(packed, offset, lane,
                                                                              projected.length, bits, fixture.blockSize)

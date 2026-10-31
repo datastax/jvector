@@ -30,7 +30,7 @@ import static java.lang.foreign.ValueLayout.JAVA_INT;
 /**
  * Immutable native row-major matrix for one complete ASH query projection per downcall.
  * The automatically managed arena lives with the model; it is not thread confined.
- * Query/output buffers are local to each invocation, so projections may run concurrently.
+ * Native query/output staging is reused per calling thread, so projections may run concurrently.
  * Large projections use ordinary FFM and copy only the small query and result, allowing
  * safepoints during the dense multiply. Matrix storage is never copied per query.
  */
@@ -47,6 +47,31 @@ final class NativeASHProjection implements VectorUtilSupport.AshProjection {
     private static final MethodHandle ORDINARY = ADDRESS_OF_KERNEL == null ? null
             : Linker.nativeLinker().downcallHandle(ADDRESS_OF_KERNEL, DESCRIPTOR);
 
+    // Calling-thread storage is shared across models and FP32/FP16 views. It
+    // holds no model reference, grows only when necessary and dies with the thread.
+    private static final ThreadLocal<Buffers> BUFFERS = ThreadLocal.withInitial(Buffers::new);
+
+    static final class Buffers {
+        MemorySegment input = MemorySegment.NULL, output = MemorySegment.NULL;
+        // Allocated only by the FP16 view; carries errors without native thread affinity.
+        MemorySegment status = MemorySegment.NULL;
+
+        void ensure(long inputBytes, long outputBytes) {
+            if (input.byteSize() >= inputBytes && output.byteSize() >= outputBytes) return;
+            long inCapacity = Math.addExact(Math.max(inputBytes, input.byteSize()), 63) & ~63L;
+            long outCapacity = Math.addExact(Math.max(outputBytes, output.byteSize()), 63) & ~63L;
+            MemorySegment storage = Arena.ofAuto().allocate(Math.addExact(inCapacity, outCapacity), 64);
+            input = storage.asSlice(0, inCapacity);
+            output = storage.asSlice(inCapacity, outCapacity);
+        }
+    }
+
+    static Buffers buffers(long inputBytes, long outputBytes) {
+        Buffers buffers = BUFFERS.get();
+        buffers.ensure(inputBytes, outputBytes);
+        return buffers;
+    }
+
     private final MemorySegment matrix;
     private final int rows;
     private final int columns;
@@ -57,11 +82,11 @@ final class NativeASHProjection implements VectorUtilSupport.AshProjection {
         Objects.requireNonNull(source, "matrix");
         if (!isAvailable()) throw new UnsupportedOperationException("Native library does not provide " + SYMBOL);
         rows = source.length;
-        if (rows == 0 || source[0].length == 0)
+        if (rows == 0 || Objects.requireNonNull(source[0], "matrix row").length == 0)
             throw new IllegalArgumentException("ASH projection dimensions must be positive");
         columns = source[0].length;
         for (float[] row : source) {
-            if (row.length != columns) throw new IllegalArgumentException("Ragged ASH projection");
+            if (Objects.requireNonNull(row, "matrix row").length != columns) throw new IllegalArgumentException("Ragged ASH projection");
         }
         long rowBytes = (long) columns * Float.BYTES;
         matrix = Arena.ofAuto().allocate(Math.multiplyExact((long) rows, rowBytes), 64);
@@ -81,15 +106,25 @@ final class NativeASHProjection implements VectorUtilSupport.AshProjection {
         if ((long) rows * columns <= MAX_CRITICAL_CELLS) {
             invoke(CRITICAL, MemorySegment.ofArray(query), MemorySegment.ofArray(out));
         } else {
-            try (Arena arena = Arena.ofConfined()) {
-                long queryBytes = (long) columns * Float.BYTES;
-                MemorySegment buffers = arena.allocate(queryBytes + (long) rows * Float.BYTES, 64);
-                MemorySegment nativeQuery = buffers.asSlice(0, queryBytes);
-                MemorySegment nativeOut = buffers.asSlice(queryBytes);
-                MemorySegment.copy(MemorySegment.ofArray(query), 0, nativeQuery, 0, queryBytes);
-                invoke(ORDINARY, nativeQuery, nativeOut);
-                MemorySegment.copy(nativeOut, 0, MemorySegment.ofArray(out), 0, (long) rows * Float.BYTES);
-            }
+            long queryBytes = (long) columns * Float.BYTES;
+            long outputBytes = (long) rows * Float.BYTES;
+            Buffers buffers = buffers(queryBytes, outputBytes);
+            MemorySegment.copy(MemorySegment.ofArray(query), 0, buffers.input, 0, queryBytes);
+            invoke(ORDINARY, buffers.input, buffers.output);
+            MemorySegment.copy(buffers.output, 0, MemorySegment.ofArray(out), 0, outputBytes);
+        }
+    }
+
+    /** Query-only selection; the original FP32 matrix and encoding path are retained. */
+    @Override
+    public VectorUtilSupport.AshProjection forQueryScoring() {
+        String mode = System.getProperty("jvector.ash.queryProjection", "auto");
+        switch (mode) {
+            case "fp32": return this;
+            case "auto": return NativeASHFP16Projection.prepare(matrix, rows, columns, this, false);
+            case "fp16": return NativeASHFP16Projection.prepare(matrix, rows, columns, this, true);
+            default: throw new IllegalArgumentException(
+                    "jvector.ash.queryProjection must be auto, fp32 or fp16: " + mode);
         }
     }
 

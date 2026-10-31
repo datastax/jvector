@@ -39,12 +39,16 @@ public class LibraryLoader {
      * current CPU architecture, or {@code null} when the architecture is not supported.
      */
     static String resourceNameForArch() {
+        return resourceNameForArch("jvector");
+    }
+
+    static String resourceNameForArch(String library) {
         String arch = System.getProperty("os.arch", "");
         if (arch.equals("aarch64") || arch.equals("arm64")) {
-            return "/libjvector-aarch64.so";
+            return "/lib" + library + "-aarch64.so";
         }
         if (arch.equals("amd64") || arch.equals("x86_64")) {
-            return "/libjvector-x86_64.so";
+            return "/lib" + library + "-x86_64.so";
         }
         return null;
     }
@@ -55,9 +59,14 @@ public class LibraryLoader {
     /// Returns `false` when the library is unavailable, native access is denied to this module
     /// (`IllegalCallerException`, e.g. with `--illegal-native-access=deny`), or a security policy
     /// blocks loading (`SecurityException`). The bundled copy isn't retried after access denial.
-    public static boolean loadJvector() {
+    public static boolean loadJvector() { return loadLibrary("jvector"); }
+
+    /** Loads the optional, self-contained ASH FP16 library without changing Highway availability. */
+    public static boolean loadAshFp16() { return loadLibrary("jvector_ash_fp16"); }
+
+    private static boolean loadLibrary(String library) {
         try {
-            System.loadLibrary("jvector");
+            System.loadLibrary(library);
             return true;
         } catch (UnsatisfiedLinkError e) {
             // ignore
@@ -67,7 +76,7 @@ public class LibraryLoader {
         try {
             // reinventing the wheel instead of picking up deps, so we'll just use the classloader to load the library
             // as a resource and then copy it to a tmp directory and load it from there
-            String resourceName = resourceNameForArch();
+            String resourceName = resourceNameForArch(library);
             if (resourceName == null) {
                 return false; // unsupported architecture
             }

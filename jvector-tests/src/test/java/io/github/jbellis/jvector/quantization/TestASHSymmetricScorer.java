@@ -117,6 +117,19 @@ public class TestASHSymmetricScorer {
     }
 
     @Test public void appendixBMatchesDecodedReconstructionAndHeaderRoundTrip() throws Exception {
+        String previous = System.getProperty("jvector.ash.queryProjection");
+        try {
+            // This identity reconstructs with the original FP32 matrix. Its
+            // asymmetric side must use that same arithmetic, not rounded operands.
+            System.setProperty("jvector.ash.queryProjection", "fp32");
+            checkAppendixBReconstruction();
+        } finally {
+            if (previous == null) System.clearProperty("jvector.ash.queryProjection");
+            else System.setProperty("jvector.ash.queryProjection", previous);
+        }
+    }
+
+    private void checkAppendixBReconstruction() throws Exception {
         var input = inputs(25, 40);
         var values = MockVectorValues.fromValues(input);
         for (int bits = 1; bits <= 9; bits++) {
