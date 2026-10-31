@@ -54,6 +54,14 @@ printf "BUILDTYPE=%s\n" "${BUILDTYPE}"
 CROSSARCH="${2:-false}"
 printf "CROSSARCH=%s\n" "${CROSSARCH}"
 
+# Optional FP16 query library; it never changes libjvector's dependencies.
+ONEDNN="${3:-false}"
+case "${ONEDNN}" in
+  true) ONEDNN_FEATURE=enabled ;;
+  false) ONEDNN_FEATURE=disabled ;;
+  *) echo "ERROR: oneDNN flag must be true or false."; exit 1 ;;
+esac
+
 mkdir -p "${RESOURCES_DIR}"
 # target/meson-build/ is under target/, which IS cleaned by mvn clean.
 # src/main/resources/ is intentionally NOT written to any more.
@@ -130,7 +138,7 @@ build_native() {
 
     meson setup "${BUILD_DIR}" "${NATIVE_DIR}" \
         "${setup_options[@]}" \
-        --buildtype="${BUILDTYPE}"
+        --buildtype="${BUILDTYPE}" -Donednn="${ONEDNN_FEATURE}"
   else
     # ---- Cross-compile build -----------------------------------------------
     # Only x86_64 <-> aarch64 is supported.
@@ -151,7 +159,7 @@ build_native() {
     meson setup "${BUILD_DIR}" "${NATIVE_DIR}" \
         "${setup_options[@]}" \
         --cross-file "${CROSS_FILE}" \
-        --buildtype="${BUILDTYPE}"
+        --buildtype="${BUILDTYPE}" -Donednn="${ONEDNN_FEATURE}"
   fi
 
   meson compile -C "${BUILD_DIR}"
@@ -164,6 +172,17 @@ build_native() {
   fi
   cp "${SOFILE}" "${OUT_SO}"
   printf "Built: %s\n" "${OUT_SO}"
+
+  local FP16_OUT="${RESOURCES_DIR}/libjvector_ash_fp16-${ARCH}.so"
+  if [ "${ONEDNN}" == "true" ]; then
+    cp "${BUILD_DIR}/libjvector_ash_fp16.so" "${FP16_OUT}"
+    # License texts travel with the optional static dependency in either jar.
+    cp "${NATIVE_DIR}/subprojects/onednn/LICENSE" "${RESOURCES_DIR}/oneDNN-LICENSE.txt"
+    cp "${NATIVE_DIR}/subprojects/onednn/THIRD-PARTY-PROGRAMS" "${RESOURCES_DIR}/oneDNN-THIRD-PARTY.txt"
+  else
+    # A later build without the add-on must not package a stale enabled build.
+    rm -f "${FP16_OUT}"
+  fi
 }
 
 # ---------------------------------------------------------------------------
@@ -176,6 +195,15 @@ elif [ "${HOST_ARCH}" == "aarch64" ]; then
 else
   echo "ERROR: Unsupported host architecture '${HOST_ARCH}'. Supported: x86_64, aarch64."
   exit 1
+fi
+
+if [ "${ONEDNN}" == "false" ]; then
+  # Maven copies resources without removing old files from target/classes.
+  # Remove only this optional component from both resource locations.
+  for resource_dir in "${RESOURCES_DIR}" "${MODULE_ROOT}/target/classes"; do
+    rm -f "${resource_dir}"/libjvector_ash_fp16-*.so \
+          "${resource_dir}/oneDNN-LICENSE.txt" "${resource_dir}/oneDNN-THIRD-PARTY.txt"
+  done
 fi
 
 # Always build the native arch.
