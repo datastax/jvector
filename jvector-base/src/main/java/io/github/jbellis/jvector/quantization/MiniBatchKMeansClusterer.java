@@ -93,7 +93,7 @@ public class MiniBatchKMeansClusterer {
 
     /**
      * Performs clustering.
-     * @param unweightedIterations If small (< 100), interpreted as EPOCHS (full passes).
+     * @param unweightedIterations If small ({@code < 100}), interpreted as EPOCHS (full passes).
      * If large, interpreted as TOTAL BATCH UPDATES.
      * @param anisotropicIterations Number of full-batch anisotropic refinement steps.
      */
