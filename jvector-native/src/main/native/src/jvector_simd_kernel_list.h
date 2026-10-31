@@ -41,6 +41,9 @@
 
 // ASH preparation/symmetric ABI contracts (all pointers are borrowed synchronously):
 //   project: positive rows/cols, row-major matrix[rows*cols], query[cols], out[rows].
+//   batch: nonnegative count; input[count*cols] and out[count*rows] are row-major.
+//          Matrix is tiled in output groups of 32, each [cols][tileRows]; the
+//          last tile is not padded. FP32, no batch-size cap or internal threads.
 //   pair: nonnegative dimensions, bits in {1,2,4}; binary uint64 words for bits=1,
 //         canonical little-endian packed bytes otherwise. Padding bits are ignored.
 //   LUT: nonnegative groups/count, positive stride, 0 <= lane <= lane+count <= stride;
@@ -78,6 +81,7 @@
     KERNEL_ENTRY(void, calculate_partial_sums_self_magnitude_f32, (const float *codebook, int codebookIndex, size_t size, int clusterCount, float *partialSums), (codebook, codebookIndex, size, clusterCount, partialSums)) \
     /* ASH preparation and exact packed construction scoring; synchronous leaf calls. */ \
     KERNEL_ENTRY(void, ash_project_f32, (const float *matrix, const float *query, int rows, int cols, float *out), (matrix, query, rows, cols, out)) \
+    KERNEL_ENTRY(void, ash_project_batch_f32, (const float *matrix, const float *inputs, int rows, int cols, int count, float *out), (matrix, inputs, rows, cols, count, out)) \
     KERNEL_ENTRY(float, ash_symmetric_dot, (const void *a, const void *b, int dimensions, int bits), (a, b, dimensions, bits)) \
     KERNEL_ENTRY(void, ash_symmetric_lut_i16, (const unsigned char *codes, const int16_t *lut, int groups, int stride, int lane, int count, float *out), (codes, lut, groups, stride, lane, count, out)) \
     /* Whole-neighborhood C=1 ASH, one downcall including headers and similarity. */ \

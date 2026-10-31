@@ -459,6 +459,47 @@ public interface VectorUtilSupport {
     void project(float[] query, float[] out);
 
     /**
+     * Projects the first {@code count} vectors, each stored in its own row.
+     * All input rows must have the model's original dimension and output rows
+     * its projected dimension. Output rows must be distinct and must not alias
+     * any input row. Rows beyond count are ignored; count zero is a no-op.
+     * Providers may batch the multiply; the default retains their single-vector
+     * arithmetic without allocating temporary arrays.
+     */
+    default void projectBatch(float[][] inputs, float[][] outputs, int count) {
+      validateBatch(inputs, outputs, count);
+      for (int i = 0; i < count; i++) project(inputs[i], outputs[i]);
+    }
+
+    /** Validates a batch before any output is changed. */
+    static void validateBatch(float[][] inputs, float[][] outputs, int count) {
+      java.util.Objects.requireNonNull(inputs, "inputs");
+      java.util.Objects.requireNonNull(outputs, "outputs");
+      if (count < 0 || count > inputs.length || count > outputs.length)
+        throw new IllegalArgumentException("Invalid ASH projection batch count: " + count);
+      for (int i = 0; i < count; i++) {
+        java.util.Objects.requireNonNull(inputs[i], "input row");
+        java.util.Objects.requireNonNull(outputs[i], "output row");
+        if (inputs[i].length != inputs[0].length || outputs[i].length != outputs[0].length)
+          throw new IllegalArgumentException("Ragged ASH projection batch");
+      }
+      if (count <= 32) {
+        // The normal encoding batch needs no temporary collection. For larger
+        // API requests use linear validation rather than an unbounded scan.
+        for (int i = 0; i < count; i++)
+          for (int j = 0; j < count; j++)
+            if (outputs[i] == inputs[j] || (j < i && outputs[i] == outputs[j]))
+              throw new IllegalArgumentException("Aliased ASH projection batch");
+      } else {
+        var used = new java.util.IdentityHashMap<float[], Boolean>(count);
+        for (int i = 0; i < count; i++) used.put(inputs[i], Boolean.TRUE);
+        for (int i = 0; i < count; i++)
+          if (used.put(outputs[i], Boolean.TRUE) != null)
+            throw new IllegalArgumentException("Aliased ASH projection batch");
+      }
+    }
+
+    /**
      * Returns an immutable view for query scoring, which may use lower operand
      * precision. Encoding/training must continue to use this original object.
      * The caller caches the returned view for the model's lifetime. Providers

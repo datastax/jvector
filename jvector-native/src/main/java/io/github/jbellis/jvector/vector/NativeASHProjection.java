@@ -26,9 +26,10 @@ import java.util.Objects;
 
 import static java.lang.foreign.ValueLayout.ADDRESS;
 import static java.lang.foreign.ValueLayout.JAVA_INT;
+import static java.lang.foreign.ValueLayout.JAVA_FLOAT;
 
 /**
- * Immutable native row-major matrix for one complete ASH query projection per downcall.
+ * Immutable native FP32 matrix for single-vector and bulk ASH projection.
  * The automatically managed arena lives with the model; it is not thread confined.
  * Native query/output staging is reused per calling thread, so projections may run concurrently.
  * Large projections use ordinary FFM and copy only the small query and result, allowing
@@ -46,6 +47,12 @@ final class NativeASHProjection implements VectorUtilSupport.AshProjection {
             : Linker.nativeLinker().downcallHandle(ADDRESS_OF_KERNEL, DESCRIPTOR, Linker.Option.critical(true));
     private static final MethodHandle ORDINARY = ADDRESS_OF_KERNEL == null ? null
             : Linker.nativeLinker().downcallHandle(ADDRESS_OF_KERNEL, DESCRIPTOR);
+    // Packing width is an ABI layout constant, not a limit on the batch size.
+    private static final int PACKED_ROWS = 32;
+    private static final MethodHandle BATCH = SymbolLookup.loaderLookup().find("ash_project_batch_f32")
+            .map(symbol -> Linker.nativeLinker().downcallHandle(symbol,
+                    FunctionDescriptor.ofVoid(ADDRESS, ADDRESS, JAVA_INT, JAVA_INT, JAVA_INT, ADDRESS)))
+            .orElse(null);
 
     // Calling-thread storage is shared across models and FP32/FP16 views. It
     // holds no model reference, grows only when necessary and dies with the thread.
@@ -73,6 +80,9 @@ final class NativeASHProjection implements VectorUtilSupport.AshProjection {
     }
 
     private final MemorySegment matrix;
+    // Allocated only for bulk encoding, shared by all encoding workers. Queries
+    // continue to use the original matrix and do not pay for this extra backing.
+    private volatile MemorySegment batchMatrix;
     private final int rows;
     private final int columns;
 
@@ -95,7 +105,69 @@ final class NativeASHProjection implements VectorUtilSupport.AshProjection {
     }
 
     @Override
-    public long ramBytesUsed() { return matrix.byteSize(); }
+    public long ramBytesUsed() {
+        MemorySegment packed = batchMatrix;
+        return matrix.byteSize() + (packed == null ? 0 : packed.byteSize());
+    }
+
+    private MemorySegment batchMatrix() {
+        MemorySegment ready = batchMatrix;
+        if (ready == null) {
+            synchronized (this) {
+                ready = batchMatrix;
+                if (ready == null) {
+                    ready = Arena.ofAuto().allocate(matrix.byteSize(), 64);
+                    float[] tile = new float[Math.multiplyExact(columns, Math.min(rows, PACKED_ROWS))];
+                    for (long firstRow = 0; firstRow < rows; firstRow += PACKED_ROWS) {
+                        int width = (int) Math.min(PACKED_ROWS, rows - firstRow);
+                        for (int col = 0; col < columns; col++) {
+                            for (int lane = 0; lane < width; lane++) {
+                                long row = firstRow + lane;
+                                tile[col * width + lane] = matrix.getAtIndex(JAVA_FLOAT, row * columns + col);
+                            }
+                        }
+                        MemorySegment.copy(MemorySegment.ofArray(tile), 0, ready,
+                                firstRow * columns * Float.BYTES, (long) width * columns * Float.BYTES);
+                    }
+                    batchMatrix = ready;
+                }
+            }
+        }
+        return ready;
+    }
+
+    @Override
+    public void projectBatch(float[][] inputs, float[][] outputs, int count) {
+        VectorUtilSupport.AshProjection.validateBatch(inputs, outputs, count);
+        if (count == 0) return;
+        if (inputs[0].length != columns || outputs[0].length != rows)
+            throw new IllegalArgumentException("ASH projection batch shape mismatch");
+        if (BATCH == null) {
+            // Compatibility with an older native library; Panama providers use
+            // the same default batch contract with their own FP32 projection.
+            VectorUtilSupport.AshProjection.super.projectBatch(inputs, outputs, count);
+            return;
+        }
+        long inputRowBytes = (long) columns * Float.BYTES;
+        long outputRowBytes = (long) rows * Float.BYTES;
+        Buffers buffers = buffers(Math.multiplyExact(count, inputRowBytes),
+                Math.multiplyExact(count, outputRowBytes));
+        for (int i = 0; i < count; i++)
+            MemorySegment.copy(MemorySegment.ofArray(inputs[i]), 0, buffers.input,
+                    i * inputRowBytes, inputRowBytes);
+        // Bulk work uses ordinary FFM so the JVM can reach safepoints. The
+        // matrix is packed once; input/output staging grows only when needed.
+        try {
+            BATCH.invokeExact(batchMatrix(), buffers.input, rows, columns, count, buffers.output);
+        } catch (RuntimeException | Error error) {
+            throw error;
+        } catch (Throwable error) {
+            throw new AssertionError("Unexpected checked exception from ash_project_batch_f32", error);
+        }
+        for (int i = 0; i < count; i++)
+            MemorySegment.copy(buffers.output, i * outputRowBytes,
+                    MemorySegment.ofArray(outputs[i]), 0, outputRowBytes);
+    }
 
     @Override
     public void project(float[] query, float[] out) {
