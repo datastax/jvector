@@ -384,7 +384,7 @@ public class DataSetPropertiesTest {
         var reader = DataSetMetadataReader.load();
         var props = reader.getProperties("ada002-100k");
         assertTrue(props.isPresent(), "ada002-100k should be in the production metadata file");
-        assertEquals(VectorSimilarityFunction.COSINE, props.get().similarityFunction().orElse(null));
+        assertEquals(VectorSimilarityFunction.DOT_PRODUCT, props.get().similarityFunction().orElse(null));
     }
 
     @Test
