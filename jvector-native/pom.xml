@@ -16,6 +16,8 @@
         <native.jextract.skip>true</native.jextract.skip>
         <!-- Set to true via -Dnative.crossarch to also cross-compile for the other arch -->
         <native.crossarch>false</native.crossarch>
+        <!-- Optional self-contained ASH FP16 query projection library. -->
+        <native.onednn>false</native.onednn>
     </properties>
     <build>
         <!-- Pick up the .so files from target/meson-build/ so that mvn clean
@@ -27,10 +29,23 @@
                 <includes>
                     <include>libjvector-x86_64.so</include>
                     <include>libjvector-aarch64.so</include>
+                    <include>libjvector_ash_fp16-*.so</include>
+                    <include>oneDNN-LICENSE.txt</include>
+                    <include>oneDNN-THIRD-PARTY.txt</include>
                 </includes>
             </resource>
         </resources>
         <plugins>
+            <!-- Fetched upstream sources keep their own licenses, packaged below. -->
+            <plugin>
+                <groupId>org.apache.rat</groupId>
+                <artifactId>apache-rat-plugin</artifactId>
+                <configuration>
+                    <excludes>
+                        <exclude>src/main/native/subprojects/onednn/**</exclude>
+                    </excludes>
+                </configuration>
+            </plugin>
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-compiler-plugin</artifactId>
@@ -191,6 +206,7 @@
                                         <argument>build_native_lib.sh</argument>
                                         <argument>${native.buildtype}</argument>
                                         <argument>${native.crossarch}</argument>
+                                        <argument>${native.onednn}</argument>
                                     </arguments>
                                     <skip>false</skip>
                                     <workingDirectory>${project.basedir}/src/main/native/src/</workingDirectory>
