@@ -87,6 +87,46 @@ widths, multiple landmarks, zero residuals, destination reuse, source failure,
 and independence from the query precision setting. Existing model and graph
 formats are unchanged.
 
+## Training sample preparation
+
+For a single landmark (`C=1`), `AsymmetricHashing.initialize()` computes the mean,
+PCA inputs and ITQ training inputs from one uniform reservoir sample of
+`min(N, 20 * D)` vectors, where `D` is the original dimension. The sample size
+is independent of the projected dimension and encoded bit width. Selection uses
+the existing deterministic seed, 103, and selected ordinals are sorted before
+reading. Only selected source vectors are fetched, once each; encoding performs
+the full pass over the source vectors afterward.
+
+Each selected vector is copied into one reusable normalization buffer before
+another source read, so borrowed source storage is never retained or modified.
+ITQ retains normalized sample values in a flat FP32 array. The mean is accumulated
+in FP64 and stored as the existing FP32 landmark. Centered residuals are normalized
+in FP64 and copied in bounded tiles directly into the column-major training
+matrix, avoiding an array of per-vector objects and a second full-size FP64
+matrix conversion. PCA, the ITQ loop, and final projection construction retain
+their existing FP64 arithmetic and BLAS/LAPACK backend. The
+[PCA validation contract](ash-pca-native-svd.md) is unchanged.
+
+The `RANDOM` optimizer estimates its single landmark from the same deterministic
+sample, using an independent sampler so the Gaussian projection's existing random
+sequence is preserved. Multi-landmark training retains its clustering and full
+input-materialization path.
+
+Empty sources, invalid dimensions/configurations, and training matrices that
+cannot fit a Java array are rejected before gathering vectors. Selected inputs
+must be non-null, have the declared dimension, and have a finite norm under the
+provider's FP32 normalization. Non-finite values and FP32 norm overflow are
+rejected with the offending ordinal. Zero and small-norm vectors retain the
+existing normalization behavior. Source read failures propagate to the caller.
+Training validates selected vectors only; it does not fetch unsampled vectors
+for validation. Allocation failures are not swallowed or retried with a different
+training sample.
+
+Saved model and graph formats are unchanged. Loading an existing model preserves
+its stored landmark and projection. Retrain the compressor and rebuild its graph
+cache to adopt sampled-mean training; the new mean is used consistently by
+encoding and scoring.
+
 ## Reference implementation review
 
 Reviewed IVF ASH Fastscan at commit
