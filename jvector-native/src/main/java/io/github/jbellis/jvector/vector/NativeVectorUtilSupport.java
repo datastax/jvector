@@ -94,7 +94,7 @@ class NativeVectorUtilSupport extends PanamaVectorUtilSupport
     @Override
     public AshProjection prepareAshProjection(float[][] matrix) {
         return NativeASHProjection.isAvailable()
-                ? new NativeASHProjection(matrix) : super.prepareAshProjection(matrix);
+                ? NativeASHFP32BatchProjection.prepare(new NativeASHProjection(matrix)) : super.prepareAshProjection(matrix);
     }
 
     @Override

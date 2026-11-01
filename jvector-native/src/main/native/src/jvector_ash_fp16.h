@@ -57,6 +57,13 @@ JV_ASH_FP16_EXPORT uint64_t jvector_ash_fp16_bytes(const void* context);
 JV_ASH_FP16_EXPORT int jvector_ash_fp16_project(void* context, const float* input,
                                               float* output, jvector_ash_fp16_result* result);
 
+/* FP32 bulk projection, using the same sequential oneDNN package.
+ * Matrix is row-major [rows][columns], input [count][columns], output [count][rows].
+ * Java validates nonaliasing storage and lengths. Returns 0 success, 1 allocation
+ * failure, 2 invalid arguments, 3 unsupported, or 5 runtime failure. */
+JV_ASH_FP16_EXPORT int jvector_ash_fp32_project_batch(const float* matrix,
+        const float* input, int rows, int columns, int count, float* output);
+
 #ifdef __cplusplus
 }
 #endif

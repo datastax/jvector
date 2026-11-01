@@ -63,6 +63,18 @@ class NativeASHProjectionTest {
     }
 
     @Test
+    void providerRetainsHighwayWhenOptionalFp32IsUnavailable() {
+        var projection = new NativeVectorUtilSupport().prepareAshProjection(new float[][]{{1,2},{3,4}});
+        if (Boolean.getBoolean("jvector.test.requireFp32OneDnn"))
+            assertInstanceOf(NativeASHFP32BatchProjection.class, projection);
+        if (Boolean.getBoolean("jvector.test.requireFp32Absent"))
+            assertInstanceOf(NativeASHProjection.class, projection);
+        float[][] outputs = new float[1][2];
+        projection.projectBatch(new float[][]{{2,3}}, outputs, 1);
+        assertArrayEquals(new float[]{8,18}, outputs[0]);
+    }
+
+    @Test
     void nativeAndPanamaMatchDoubleOracleAcrossBatchAndSimdTails() {
         Random random = new Random(829104);
         for (int[] shape : new int[][]{{1,1}, {3,7}, {17,31}, {33,65}, {384,768}, {1536,3072}}) {
