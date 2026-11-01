@@ -54,7 +54,7 @@ printf "BUILDTYPE=%s\n" "${BUILDTYPE}"
 CROSSARCH="${2:-false}"
 printf "CROSSARCH=%s\n" "${CROSSARCH}"
 
-# Optional FP16 query library; it never changes libjvector's dependencies.
+# oneDNN add-on for FP32 encoding batches and FP16 queries; libjvector stays independent.
 ONEDNN="${3:-false}"
 case "${ONEDNN}" in
   true) ONEDNN_FEATURE=enabled ;;
