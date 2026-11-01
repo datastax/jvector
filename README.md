@@ -128,6 +128,22 @@ git clone --recurse-submodules <repo-url>
 
 ### Building native libraries
 
+**For ASH on JDK 22 or newer, oneDNN is the recommended native installation.**
+It is automatically preferred for FP32 base-vector batch projection and FP16
+query projection on supported CPUs. Highway FP32 remains the portable fallback.
+Install CMake 3.13+ in addition to the C++ compiler, Meson, and Ninja, then build
+from the repository root:
+
+```bash
+mvn -pl jvector-native -am package -Dnative.onednn=true
+```
+
+Meson fetches the pinned oneDNN source and Maven packages its statically linked
+add-on with the native JAR. Deploy that JAR with the native provider; no separate
+oneDNN runtime installation or per-machine library symlinks are required.
+See the [oneDNN installation and fallback details](./jvector-native/src/main/native/README.md#recommended-onednn-build-and-package).
+
+
 The native SIMD library (`libjvector.so`) is built with [Meson](https://mesonbuild.com/) + [Ninja](https://ninja-build.org/)
 and requires **g++ 11+**. Supported platforms: **Linux x86-64** (SSE4.2, AVX2, AVX-512) and **Linux AArch64** (NEON, SVE, SVE2).
 The entry-point script is `jvector-native/src/main/native/src/build_native_lib.sh`. Run it from that directory.

@@ -166,3 +166,66 @@ the actual dispatched C++ kernels and require the new batch symbol.
 Fresh graph recall was also recorded, but these independent parallel graph
 builds do not isolate an encoding-only recall effect. Model and graph formats,
 query FP16 arithmetic, and scoring kernels were not changed by this extension.
+
+## Preferred oneDNN FP32 encoding projection (November 1, 2026)
+
+The native provider automatically prefers the existing sequential oneDNN add-on
+for FP32 `projectBatch()` when its new entry point is available. It executes row-major
+SGEMM as `[B,D] * transpose([d,D]) -> [B,d]`, with FP32 inputs, weights and outputs.
+The adapter shares the immutable Highway matrix, avoiding a second packed model
+copy, and reuses the existing calling-thread native input/output buffers. Its
+batch API accepts arbitrary positive counts; no eight-vector cap or padding
+controls were introduced. The library's existing `encodeAll()` bound remains 32.
+The sequential-runtime build assertion prevents nested oneDNN thread pools.
+
+Single-vector `encode()` retains Highway FP32 projection. The wrapper delegates
+query precision selection to the same original projection: FP16 queries remain
+FP16 in automatic/required modes, with their existing FP32 fallback. Database
+encoding never converts to FP16. Java code selection and landmark correction
+remain unchanged. The slower experimental native quantizer was archived outside
+the production tree after repeated MPNet 2-bit regressions; it is not packaged.
+
+The optional library retains its existing package/resource name for compatibility.
+Both FP32 and FP16 loaders validate ABI 1, handle missing/denied/unsupported
+libraries, and retain Highway when optional support is absent. An older add-on
+with ABI 1 but without the FP32 symbol also keeps Highway. Unsupported oneDNN
+FP32 execution falls back to Highway batch projection; invalid arguments,
+allocation failures and unexpected runtime errors propagate. FP16 additionally
+checks representable range, and explicit `fp16` selection requires support.
+No production selection flag, benchmark-specific path or BenchYAML change was
+added. The existing `-Dnative.onednn=true` build packages both operations.
+
+BLAS kernels can use different FP32 reduction orders for different batch shapes.
+The 9-bit reconstruction check therefore uses its existing per-component code
+step error bound for worker/batch comparisons as well as singleton comparisons;
+sign bits, offsets and the full 1/2/3/4-bit code/header checks remain exact in
+those tests. Separate tests compare oneDNN output to a double-precision oracle,
+cover FP32 values outside FP16 precision/range, caller aliasing and invalid
+shapes, batch tails/counts above 32, immutable model copies and concurrent model
+switching. A direct ABI test requires successful oneDNN SGEMM, preventing a
+Highway fallback from passing as a oneDNN test.
+
+### Repeated BenchYAML measurements
+
+Each case used three alternating matched control/candidate pairs with JDK 22,
+CPUs 0-47 and NUMA interleave across nodes 0 and 1. Both variants include the same
+backing-array residual-normalization improvement and Java code generator. Both
+use C=1, ITQ, D/2, deferred parallel writing and NVQ reranking. Each process builds
+fresh model/index caches; input/output copies, library/JIT first use and scratch
+allocation are included in BenchYAML's existing `encoding_time_s` field. These
+are `encodeAll()` times, not standalone `encode()` or query-throughput results.
+
+| Case | Highway median (range), s | oneDNN median (range), s | Ratio of medians |
+| --- | ---: | ---: | ---: |
+| mpnet-1m, 2-bit | 0.665 (0.622-0.665) | 0.589 (0.550-0.604) | 1.13x |
+| openai-3072-1m, 4-bit | 4.055 (3.996-4.092) | 3.926 (3.913-3.955) | 1.03x |
+
+oneDNN was faster in each of the three matched pairs for both datasets. The
+OpenAI3072 gain is modest; these measurements do not establish improvements for
+all other datasets, code widths or hardware. Median graph recall@10 was 81.901%
+versus 81.844% for MPNet and 79.280% versus 79.310% for OpenAI3072. Independent
+parallel graph rebuilds vary and do not isolate an encoding-only recall effect.
+Training and graph-write timers/recall for every run are retained in the raw
+CSVs; they are not manually added to inclusive harness timers. Original CSVs,
+commands, class/source snapshots and live placement observations are preserved
+under `benchmark-runs/ash-quantization-20261101` on the development server.
