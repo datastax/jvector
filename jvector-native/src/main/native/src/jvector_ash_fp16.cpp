@@ -25,9 +25,9 @@
 #include <new>
 #include <stdexcept>
 
-// Search callers own parallelism. This library must never start a nested pool.
+// Calling workers own parallelism. This library must never start a nested pool.
 static_assert(DNNL_CPU_RUNTIME == DNNL_RUNTIME_SEQ,
-              "ASH FP16 requires the sequential oneDNN CPU runtime");
+              "ASH projection requires the sequential oneDNN CPU runtime");
 
 static_assert(offsetof(jvector_ash_fp16_result, message) == sizeof(int32_t));
 static_assert(sizeof(jvector_ash_fp16_result) == sizeof(int32_t) + 256);
@@ -195,4 +195,27 @@ int jvector_ash_fp16_project(void* pointer, const float* input, float* output,
     catch (...) { return set_error(result, JV_ASH_FP16_ERROR, "Unknown projection execution failure"); }
 }
 
+}
+
+// Row-major FP32 GEMM. This API performs no reduced-precision conversion and
+// uses the package's sequential runtime, leaving parallelism with encodeAll.
+extern "C" int jvector_ash_fp32_project_batch(const float* matrix,
+        const float* input, int rows, int columns, int count, float* output) {
+    if (!matrix || !input || !output || rows <= 0 || columns <= 0 || count <= 0) return 2;
+    try {
+        const auto status = dnnl_sgemm('N', 'T', count, rows, columns,
+                1.0f, input, columns, matrix, columns, 0.0f, output, rows);
+        // Keep the add-on's small ABI independent of oneDNN enum extensions.
+        switch (status) {
+            case dnnl_success: return 0;
+            case dnnl_out_of_memory: return 1;
+            case dnnl_invalid_arguments: return 2;
+            case dnnl_unimplemented: return 3;
+            default: return 5;
+        }
+    } catch (const std::bad_alloc&) {
+        return 1;
+    } catch (...) {
+        return 5;
+    }
 }

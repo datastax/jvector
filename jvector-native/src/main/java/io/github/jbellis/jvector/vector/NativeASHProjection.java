@@ -110,6 +110,10 @@ final class NativeASHProjection implements VectorUtilSupport.AshProjection {
         return matrix.byteSize() + (packed == null ? 0 : packed.byteSize());
     }
 
+    int rows() { return rows; }
+    int columns() { return columns; }
+    MemorySegment matrix() { return matrix; }
+
     private MemorySegment batchMatrix() {
         MemorySegment ready = batchMatrix;
         if (ready == null) {
