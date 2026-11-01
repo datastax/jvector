@@ -24,6 +24,7 @@ import io.github.jbellis.jvector.graph.disk.OnDiskGraphIndex;
 import io.github.jbellis.jvector.util.Accountable;
 import io.github.jbellis.jvector.util.RamUsageEstimator;
 import io.github.jbellis.jvector.vector.VectorUtil;
+import io.github.jbellis.jvector.vector.VectorUtilSupport;
 import io.github.jbellis.jvector.vector.VectorizationProvider;
 import io.github.jbellis.jvector.vector.types.ByteSequence;
 import io.github.jbellis.jvector.vector.types.FloatArray;
@@ -61,6 +62,12 @@ public class AsymmetricHashing implements VectorCompressor<AsymmetricHashing.Qua
      */
     private static final int ITQ_TRAINING_FACTOR = 20;
 
+    /** Shared by sample selection and the existing random projection initialization. */
+    private static final long TRAINING_SEED = 103;
+
+    /** Bounds transpose scratch while keeping writes to the training matrix contiguous. */
+    private static final int TRAINING_TRANSPOSE_TILE_ROWS = 32;
+
     /** Final setting TBD. */
     private static final int TRAINING_ITERS = 25;
 
@@ -76,6 +83,8 @@ public class AsymmetricHashing implements VectorCompressor<AsymmetricHashing.Qua
 
     private static final VectorTypeSupport vectorTypeSupport =
             VectorizationProvider.getInstance().getVectorTypeSupport();
+    private static final VectorUtilSupport vectorUtilSupport =
+            VectorizationProvider.getInstance().getVectorUtilSupport();
 
     // ---------------------------------------------------------------------
     // Index-wide immutable state
@@ -257,11 +266,20 @@ public class AsymmetricHashing implements VectorCompressor<AsymmetricHashing.Qua
     /**
      * Initialize ASH index-wide parameters.
      *
+     * <p>With one landmark, the mean and learned projection use the same
+     * deterministic sample of {@code min(ravv.size(), 20 * ravv.dimension())}
+     * vectors. Training fetches each sampled vector once and leaves the full
+     * dataset pass to encoding. The sample size uses the original dimension,
+     * independently of the projected dimension and stored bit width.</p>
+     *
      * @param ravv the vectors to quantize
      * @param optimizer the optimizer to use
      * @param encodedBits the number of bits used to encode vector, including the header
      * @param landmarkCount number of landmarks
      * @param bitsPerDimension number of stored bits per projected dimension
+     * @throws IllegalArgumentException if the configuration is invalid, the source
+     *         is empty, or a sampled vector has an invalid dimension or non-finite norm
+     * @throws NullPointerException if the source or a sampled vector is null
      */
     public static AsymmetricHashing initialize(RandomAccessVectorValues ravv,
                                                int optimizer,
@@ -275,9 +293,19 @@ public class AsymmetricHashing implements VectorCompressor<AsymmetricHashing.Qua
                     "landmarkCount must be in [1,256], got " + landmarkCount);
         }
 
-        var ravvCopy = ravv.threadLocalSupplier().get();
-        int originalDim = ravvCopy.getVector(0).length();
+        Objects.requireNonNull(ravv, "ravv");
+        if (ravv.size() <= 0) {
+            throw new IllegalArgumentException("ASH training requires at least one vector");
+        }
+        if (optimizer != RANDOM && optimizer != ITQ) {
+            throw new IllegalArgumentException("Unknown optimizer " + optimizer);
+        }
+        int originalDim = ravv.dimension();
+        if (originalDim <= 0) {
+            throw new IllegalArgumentException("ASH training requires a positive vector dimension");
+        }
         final int quantizedDim = validateEncodedBits(encodedBits, HEADER_BITS, originalDim, bitsPerDimension);
+        var ravvCopy = ravv.threadLocalSupplier().get();
 
         System.out.println(
                 "\tASH initialized with landmarkCount=" + landmarkCount +
@@ -285,83 +313,43 @@ public class AsymmetricHashing implements VectorCompressor<AsymmetricHashing.Qua
                         ", bitsPerDimension=" + bitsPerDimension
         );
 
-        // NOTE: points are treated as read-only by KMeansPlusPlusClusterer.
-        // Materialize and L2-normalize points
-        VectorFloat<?>[] points = new VectorFloat<?>[ravvCopy.size()];
-        for (int i = 0; i < ravvCopy.size(); i++) {
-            VectorFloat<?> v = ravvCopy.getVector(i).copy(); // copy to avoid mutating original source
-            float norm = (float) Math.sqrt(VectorUtil.dotProduct(v, v));
-            if (norm > 1e-10f) {
-                VectorUtil.scale(v, 1.0f / norm);
-            }
-            points[i] = v;
-        }
-
+        // C=1 uses the same sample for its mean and learned projection.
+        // Sample selection preserves ITQ's existing RNG sequence.
+        final Random rng = new Random(TRAINING_SEED);
         VectorFloat<?>[] landmarks;
+        TrainingData trainingData = null;
         if (landmarkCount == 1) {
-            double[] muAccumulator = new double[originalDim];
-
-            // Accumulate in double precision
-            for (int i = 0; i < points.length; i++) {
-                VectorFloat<?> p = points[i];
-                for (int d = 0; d < originalDim; d++) {
-                    muAccumulator[d] += p.get(d);
-                }
-            }
-
-            // Scale and materialize back into a float vector
-            VectorFloat<?> mu0 = vectorTypeSupport.createFloatVector(originalDim);
-            double invN = 1.0 / points.length;
-            for (int d = 0; d < originalDim; d++) {
-                mu0.set(d, (float) (muAccumulator[d] * invN));
-            }
-
-            landmarks = new VectorFloat<?>[] { mu0 };
+            SingleLandmarkTraining prepared = prepareSingleLandmarkTraining(
+                    ravvCopy, originalDim, rng, optimizer == ITQ);
+            landmarks = new VectorFloat<?>[]{prepared.landmark};
+            trainingData = prepared.trainingData;
         } else {
+            // Multi-landmark clustering still needs its materialized input.
+            VectorFloat<?>[] points = new VectorFloat<?>[ravvCopy.size()];
+            for (int i = 0; i < points.length; i++) {
+                VectorFloat<?> v = ravvCopy.getVector(i).copy();
+                float norm = (float) Math.sqrt(VectorUtil.dotProduct(v, v));
+                if (norm > 1e-10f) VectorUtil.scale(v, 1.0f / norm);
+                points[i] = v;
+            }
             long kmStart = System.nanoTime();
-
-            // KMeans++ in JVector returns centroids packed as one big vector [C * D]
             MiniBatchKMeansClusterer km = new MiniBatchKMeansClusterer(points, landmarkCount, 1024);
             VectorFloat<?> packed = km.cluster(/*unweightedIterations*/ 20, /*anisotropicIterations*/ 0);
-
             long kmEnd = System.nanoTime();
-
-            System.out.printf(
-                    "\tKMeans++ (C=%d, N=%d, D=%d) took %.3f seconds%n",
-                    landmarkCount,
-                    points.length,
-                    originalDim,
-                    (kmEnd - kmStart) / 1e9
-            );
-
+            System.out.printf("\tKMeans++ (C=%d, N=%d, D=%d) took %.3f seconds%n",
+                    landmarkCount, points.length, originalDim, (kmEnd - kmStart) / 1e9);
             landmarks = new VectorFloat<?>[landmarkCount];
             for (int c = 0; c < landmarkCount; c++) {
                 VectorFloat<?> mu = vectorTypeSupport.createFloatVector(originalDim);
                 mu.copyFrom(packed, c * originalDim, 0, originalDim);
                 landmarks[c] = mu;
             }
+            if (optimizer == ITQ) trainingData = prepareTrainingData(points, landmarks, originalDim, rng);
         }
 
-        // Keep determinism consistent within ASH.  TODO explore more robust random initialization
-        final Random rng = new Random(103);
-
-        StiefelTransform stiefelTransform;
-        if (optimizer == RANDOM) {
-            stiefelTransform = runWithoutTraining(originalDim, quantizedDim, rng);
-        } else if (optimizer == ITQ) {
-            // Build training inputs from a random sample of points.
-            TrainingData td = prepareTrainingData(points, landmarks, originalDim, rng);
-
-            stiefelTransform = runItqTrainer(
-                    td.xTrainNorm,
-                    quantizedDim,
-                    bitsPerDimension,
-                    rng,
-                    TRAINING_ITERS
-            );
-        } else {
-            throw new IllegalArgumentException("Unknown optimizer " + optimizer);
-        }
+        StiefelTransform stiefelTransform = optimizer == RANDOM
+                ? runWithoutTraining(originalDim, quantizedDim, rng)
+                : runItqTrainer(trainingData, quantizedDim, bitsPerDimension, rng, TRAINING_ITERS);
 
         LandmarkProjections lp =
                 computeLandmarkProjections(
@@ -634,7 +622,7 @@ public class AsymmetricHashing implements VectorCompressor<AsymmetricHashing.Qua
                     + " for landmarkCount=" + landmarkCount);
         }
 
-        // Landmark-specific mean (C=1 → landmarks[0] == dataset mean)
+        // Landmark-specific mean (C=1 → landmarks[0] is the sampled mean)
         final VectorFloat<?> mu = landmarks[landmark & 0xFF];
 
         return QuantizedVector.quantizeTo(
@@ -1576,18 +1564,150 @@ public class AsymmetricHashing implements VectorCompressor<AsymmetricHashing.Qua
     // Training of projection matrix
     // ---------------------------------------------------------------------
 
-    /**
-     * Training inputs derived from a random sample of the dataset:
-     * xTrainNorm holds normalized centered residuals.
-     *
-     * NOTE: Vectors are read as floats; training matrices are accumulated/stored in double precision.
-     */
+    /** Sampled, normalized residuals in the column-major layout consumed by LAPACK. */
     private static final class TrainingData {
-        final double[][] xTrainNorm; // [N_train][D]
+        final double[] xCol;
+        final int rows;
+        final int columns;
 
-        TrainingData(double[][] xTrainNorm) {
-            this.xTrainNorm = xTrainNorm;
+        TrainingData(double[] xCol, int rows, int columns) {
+            this.xCol = xCol;
+            this.rows = rows;
+            this.columns = columns;
         }
+
+        TrainingData(double[][] rows) {
+            this(serializeColumnMajor(rows), rows.length, rows[0].length);
+        }
+    }
+
+    private static final class SingleLandmarkTraining {
+        final VectorFloat<?> landmark;
+        final TrainingData trainingData;
+
+        SingleLandmarkTraining(VectorFloat<?> landmark, TrainingData trainingData) {
+            this.landmark = landmark;
+            this.trainingData = trainingData;
+        }
+    }
+
+    private static int trainingSampleSize(int count, int dimensions) {
+        return (int) Math.min((long) count, Math.max(1L, (long) dimensions * ITQ_TRAINING_FACTOR));
+    }
+
+    /**
+     * Computes the C=1 landmark and ITQ inputs from the same deterministic
+     * sample. Only sampled source vectors are read; normalized sample values
+     * are retained until the mean is known. One reusable vector protects
+     * borrowed source storage. Double sums follow sorted ordinal order, and
+     * normalization retains the provider's FP32 dot/scale operations.
+     */
+    private static SingleLandmarkTraining prepareSingleLandmarkTraining(
+            RandomAccessVectorValues source, int dimensions, Random rng, boolean learn) {
+        final int count = source.size();
+        if (count <= 0 || dimensions <= 0) {
+            throw new IllegalArgumentException("ASH training requires positive size and dimension");
+        }
+        final int sampleSize = trainingSampleSize(count, dimensions);
+        // Validate the flat-array representation before allocating ordinal or
+        // normalization buffers.
+        long sampleElements = (long) sampleSize * dimensions;
+        if (learn && sampleElements > Integer.MAX_VALUE) {
+            throw new IllegalArgumentException("ASH training sample exceeds the Java array size limit: "
+                    + sampleSize + " rows x " + dimensions + " dimensions");
+        }
+        // The existing PCA driver also requires a full D-by-D right basis,
+        // including null-space directions when the training matrix is wide.
+        if (learn && (long) dimensions * dimensions > Integer.MAX_VALUE) {
+            throw new IllegalArgumentException("ASH PCA basis exceeds the Java array size limit: "
+                    + dimensions + " x " + dimensions);
+        }
+        // RANDOM projections keep their existing Gaussian RNG sequence. ITQ
+        // consumes exactly the same reservoir-sampling draws as before.
+        final Random sampleRandom = learn ? rng : new Random(TRAINING_SEED);
+        final int[] ordinals = reservoirSampleOrdinals(count, sampleSize, sampleRandom);
+        Arrays.sort(ordinals);
+        final float[] sample = learn ? new float[(int) sampleElements] : null;
+        final double[] accumulator = new double[dimensions];
+        final VectorFloat<?> normalized = vectorTypeSupport.createFloatVector(dimensions);
+        final float[] values = normalized instanceof FloatArray ? ((FloatArray) normalized).array() : null;
+        for (int row = 0; row < sampleSize; row++) {
+            int ordinal = ordinals[row];
+            VectorFloat<?> input = source.getVector(ordinal);
+            if (input == null) {
+                throw new NullPointerException("Null ASH training vector at ordinal " + ordinal);
+            }
+            if (input.length() != dimensions) {
+                throw new IllegalArgumentException("ASH training vector at ordinal " + ordinal
+                        + " has dimension " + input.length() + "; expected " + dimensions);
+            }
+            normalized.copyFrom(input, 0, 0, dimensions);
+            // Dimensions are already checked. Call the provider directly so invalid
+            // norms reach argument validation even when VectorUtil assertions are enabled.
+            float norm = (float) Math.sqrt(vectorUtilSupport.dotProduct(normalized, normalized));
+            if (!Float.isFinite(norm)) {
+                throw new IllegalArgumentException("ASH training vector at ordinal " + ordinal
+                        + " has a non-finite FP32 L2 norm");
+            }
+            if (norm > 1e-10f) {
+                VectorUtil.scale(normalized, 1.0f / norm);
+            }
+            if (values != null) {
+                for (int d = 0; d < dimensions; d++) accumulator[d] += values[d];
+            } else {
+                for (int d = 0; d < dimensions; d++) accumulator[d] += normalized.get(d);
+            }
+            if (learn) {
+                int offset = row * dimensions;
+                if (values != null) {
+                    System.arraycopy(values, 0, sample, offset, dimensions);
+                } else {
+                    for (int d = 0; d < dimensions; d++) sample[offset + d] = normalized.get(d);
+                }
+            }
+        }
+        VectorFloat<?> mean = vectorTypeSupport.createFloatVector(dimensions);
+        double invCount = 1.0 / sampleSize;
+        for (int d = 0; d < dimensions; d++) mean.set(d, (float) (accumulator[d] * invCount));
+        if (!learn) return new SingleLandmarkTraining(mean, null);
+        return new SingleLandmarkTraining(mean, centerTrainingSample(sample, sampleSize, dimensions, mean));
+    }
+
+    /**
+     * Centers/normalizes contiguous sample rows in FP64, then writes small tiles
+     * into the final column-major matrix. No full-size double row matrix or
+     * strided, element-at-a-time whole-matrix conversion is needed. Tile width
+     * bounds scratch only; it does not change arithmetic or sample boundaries.
+     */
+    private static TrainingData centerTrainingSample(float[] sample, int rows, int dimensions,
+                                                     VectorFloat<?> mean) {
+        final int tileRows = Math.min(TRAINING_TRANSPOSE_TILE_ROWS, rows);
+        double[] tile = new double[Math.multiplyExact(tileRows, dimensions)];
+        double[] columnMajor = new double[Math.multiplyExact(rows, dimensions)];
+        float[] center = new float[dimensions];
+        for (int d = 0; d < dimensions; d++) center[d] = mean.get(d);
+        for (int first = 0; first < rows; first += tileRows) {
+            int rowsInTile = Math.min(tileRows, rows - first);
+            for (int row = 0; row < rowsInTile; row++) {
+                int sampleOffset = (first + row) * dimensions;
+                int tileOffset = row * dimensions;
+                double norm2 = 0.0;
+                for (int d = 0; d < dimensions; d++) {
+                    double value = (double) sample[sampleOffset + d] - (double) center[d];
+                    tile[tileOffset + d] = value;
+                    norm2 += value * value;
+                }
+                double inverse = 1.0 / Math.max(Math.sqrt(norm2), 1e-20);
+                for (int d = 0; d < dimensions; d++) tile[tileOffset + d] *= inverse;
+            }
+            for (int d = 0; d < dimensions; d++) {
+                int columnOffset = d * rows + first;
+                for (int row = 0; row < rowsInTile; row++) {
+                    columnMajor[columnOffset + row] = tile[row * dimensions + d];
+                }
+            }
+        }
+        return new TrainingData(columnMajor, rows, dimensions);
     }
 
     /**
@@ -1608,8 +1728,7 @@ public class AsymmetricHashing implements VectorCompressor<AsymmetricHashing.Qua
     ) {
         final int N = points.length;
 
-        long learnedCap = Math.max(1L, (long) originalDim * ITQ_TRAINING_FACTOR);
-        final int nTrain = (int) Math.min((long) N, learnedCap);
+        final int nTrain = trainingSampleSize(N, originalDim);
 
         final int[] sample = reservoirSampleOrdinals(N, nTrain, rng);
         Arrays.sort(sample); // deterministic order for reproducibility
@@ -1693,7 +1812,7 @@ public class AsymmetricHashing implements VectorCompressor<AsymmetricHashing.Qua
      *  - W = P @ R
      */
     private static StiefelTransform runItqTrainer(
-            double[][] xHdNorm,       // [N][D] normalized residuals
+            TrainingData trainingData, // [N x D] normalized residuals, column-major
             int latentDim,            // projected dimensions, d
             int bitsPerDimension,
             Random rng,
@@ -1703,8 +1822,8 @@ public class AsymmetricHashing implements VectorCompressor<AsymmetricHashing.Qua
 
         validateBitsPerDimension(bitsPerDimension);
 
-        final int N = xHdNorm.length;
-        final int D = xHdNorm[0].length;
+        final int N = trainingData.rows;
+        final int D = trainingData.columns;
         final int d = latentDim;
 
         if (d <= 0 || d > D) {
@@ -1712,7 +1831,7 @@ public class AsymmetricHashing implements VectorCompressor<AsymmetricHashing.Qua
         }
 
         // X is [N x D], flat column-major for BLAS/LAPACK.
-        double[] xCol = serializeColumnMajor(xHdNorm);
+        double[] xCol = trainingData.xCol;
 
         // PCA basis P = V[:, :d] from SVD(X), matching the Python reference.
         logProgress("\t[stage] Starting Native SVD for PCA...");
