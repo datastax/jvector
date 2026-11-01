@@ -26,6 +26,7 @@ import io.github.jbellis.jvector.util.RamUsageEstimator;
 import io.github.jbellis.jvector.vector.VectorUtil;
 import io.github.jbellis.jvector.vector.VectorizationProvider;
 import io.github.jbellis.jvector.vector.types.ByteSequence;
+import io.github.jbellis.jvector.vector.types.FloatArray;
 import io.github.jbellis.jvector.vector.types.VectorFloat;
 import io.github.jbellis.jvector.vector.types.VectorTypeSupport;
 
@@ -1473,8 +1474,19 @@ public class AsymmetricHashing implements VectorCompressor<AsymmetricHashing.Qua
         if (vector.length() != normalized.length || mean.length() != normalized.length)
             throw new IllegalArgumentException("ASH encoding vector dimension mismatch");
         float invNorm = residualNorm > 0f ? 1f / residualNorm : 0f;
-        for (int d = 0; d < normalized.length; d++)
-            normalized[d] = (vector.get(d) - mean.get(d)) * invNorm;
+        if (vector instanceof FloatArray
+                && mean instanceof FloatArray) {
+            // Resolve heap backing once, including MemorySegment views. The
+            // simple array loop avoids per-component virtual/scope checks and
+            // permits JVM SIMD without changing the FP32 operation order.
+            float[] values = ((FloatArray) vector).array();
+            float[] center = ((FloatArray) mean).array();
+            for (int d = 0; d < normalized.length; d++)
+                normalized[d] = (values[d] - center[d]) * invNorm;
+        } else {
+            for (int d = 0; d < normalized.length; d++)
+                normalized[d] = (vector.get(d) - mean.get(d)) * invNorm;
+        }
     }
 
     /**

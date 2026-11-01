@@ -21,6 +21,7 @@ import io.github.jbellis.jvector.vector.VectorizationProvider;
 import io.github.jbellis.jvector.vector.types.VectorFloat;
 import org.junit.Test;
 
+import java.lang.reflect.Proxy;
 import java.util.Random;
 import java.util.concurrent.ForkJoinPool;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -204,4 +205,40 @@ public class TestASHBatchEncoding {
             assertEquals("No source worker may outlive encodeAll failure", 64, otherRangeReads.get());
         } finally { pool.shutdown(); }
     }
+
+    @Test
+    public void backingArrayNormalizationMatchesOpaqueVectorsBitForBit() throws Exception {
+        var types = VectorizationProvider.getInstance().getVectorTypeSupport();
+        var normalize = AsymmetricHashing.class.getDeclaredMethod("normalizeResidual",
+                VectorFloat.class,
+                VectorFloat.class, float.class, float[].class);
+        normalize.setAccessible(true);
+        Random random = new Random(81231);
+        for (int dimensions : new int[]{0,1,15,16,17,31,32,33,768,3072}) {
+            var vector = types.createFloatVector(dimensions);
+            var mean = types.createFloatVector(dimensions);
+            for (int j = 0; j < dimensions; j++) {
+                vector.set(j, j % 7 == 0 ? -0.0f : random.nextFloat() - .5f);
+                mean.set(j, j % 7 == 0 ? 0.0f : random.nextFloat() - .5f);
+            }
+            var opaqueVector = (VectorFloat<?>) Proxy.newProxyInstance(
+                    getClass().getClassLoader(), new Class<?>[]{VectorFloat.class},
+                    (proxy, method, args) -> method.invoke(vector, args));
+            var opaqueMean = (VectorFloat<?>) Proxy.newProxyInstance(
+                    getClass().getClassLoader(), new Class<?>[]{VectorFloat.class},
+                    (proxy, method, args) -> method.invoke(mean, args));
+            for (float residualNorm : new float[]{0f,1f,3f,Float.MAX_VALUE}) {
+                float[] expected = new float[dimensions];
+                normalize.invoke(null, opaqueVector, opaqueMean, residualNorm, expected);
+                for (var x : new VectorFloat<?>[]{vector, opaqueVector})
+                    for (var mu : new VectorFloat<?>[]{mean, opaqueMean}) {
+                        float[] actual = new float[dimensions];
+                        normalize.invoke(null, x, mu, residualNorm, actual);
+                        for (int j = 0; j < dimensions; j++)
+                            assertEquals(Float.floatToRawIntBits(expected[j]), Float.floatToRawIntBits(actual[j]));
+                    }
+            }
+        }
+    }
+
 }
