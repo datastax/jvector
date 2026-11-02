@@ -103,9 +103,10 @@ ITQ retains normalized sample values in a flat FP32 array. The mean is accumulat
 in FP64 and stored as the existing FP32 landmark. Centered residuals are normalized
 in FP64 and copied in bounded tiles directly into the column-major training
 matrix, avoiding an array of per-vector objects and a second full-size FP64
-matrix conversion. PCA, the ITQ loop, and final projection construction retain
-their existing FP64 arithmetic and BLAS/LAPACK backend. The
-[PCA validation contract](ash-pca-native-svd.md) is unchanged.
+matrix conversion. Preparation retains bounded serial transpose tiles.
+The existing BLAS/LAPACK backend is retained. PCA uses checked
+FP64 covariance eigendecomposition, with guarded direct SVD fallback, as described
+in the [PCA validation contract](ash-pca-native-svd.md).
 
 The `RANDOM` optimizer estimates its single landmark from the same deterministic
 sample, using an independent sampler so the Gaussian projection's existing random
@@ -270,7 +271,7 @@ CSVs; they are not manually added to inclusive harness timers. Original CSVs,
 commands, class/source snapshots and live placement observations are preserved
 under `benchmark-runs/ash-quantization-20261101` on the development server.
 
-## FP64 ITQ training workspaces
+## ITQ training workspaces
 
 ITQ keeps the residual and PCA-reduced inputs in column-major FP64 arrays for
 BLAS/LAPACK. Its iterative projection writes contiguous training vectors directly:
@@ -280,20 +281,35 @@ row in place; the unquantized result is not needed by the update or loss. A seco
 DGEMM consumes this layout to overwrite the existing update matrix with
 `Xld^T * Xenc`. No explicit transpose pass or second `[N,d]` output is required.
 
-Each trainer owns an `ASHOrthogonalizer` with one thin-DGESDD workspace. It queries
-the required workspace once, copies only the input for each destructive SVD, and
-reuses the singular vectors, values, output and native work arrays. The direction
-encoder similarly retains scratch for its logical workers across iterations.
-Workers operate on disjoint rows; neither workspace is shared between trainers.
-The existing scaling-event buffers remain thread-local. Parallel task submission
+Each trainer owns an `ASHFloatOrthogonalizer` with one thin-SGESDD workspace for
+repeated polar steps. It rounds the small update matrix to FP32 into reusable
+scratch, decomposes it, multiplies `U * VT` with SGEMM, and widens the rotation into
+the trainer's FP64 buffer. Its workspace is queried once; singular vectors,
+values and native work arrays are reused. The destroyed SVD input also holds
+the polar product, avoiding another output array.
+
+After the last update, the trainer computes a fresh FP64 polar factor with
+`ASHOrthogonalizer` before forming the final projection. This preserves the
+final transform's orthogonality contract. Random projection initialization also
+retains FP64. Both implementations use the existing portable BLAS/LAPACK provider;
+there is no new native dependency, vendor selection or precision control.
+
+The direction encoder retains scratch for its logical workers across iterations.
+Workers operate on disjoint rows in the shared physical-core executor, without
+the previous fixed 16-worker cap. Each trainer owns its direction and polar
+workspaces; scaling-event buffers remain thread-local. Parallel task submission
 still occurs each iteration; this is not an allocation-free training API.
 
-PCA retains its original FP64 DGESDD algorithm, complete right-singular-vector
-basis, wide-matrix handling and spectral-energy check. Its workspace query uses
-the read-only input directly; only the actual destructive decomposition needs a
-copy. The ITQ norms, update, polar decomposition, loss, random initialization and
-stopping criterion remain FP64. The scaling-factor search retains its existing
-FP32 arithmetic. The 1-bit sign rule and 2–9-bit direction quantization are
+PCA forms the upper triangle of `X^T X` with FP64 DSYRK and obtains eigenvectors
+with DSYEVD. Spectral energy, retained-tail conditioning, the cutoff gap and
+selected eigenpair residuals are checked before accepting the result. Uncertain
+or underdetermined inputs use the guarded FP64 DGESDD fallback, including its
+complete null-space basis for wide matrices. No full left-singular-vector matrix
+is computed in the common covariance path.
+
+Large ITQ projection/update products, norms, update storage, loss and the stopping
+criterion remain FP64. The scaling-factor search retains its existing FP32
+arithmetic and event ordering. The 1-bit sign rule and 2–9-bit direction quantization are
 unchanged; tests compare the new in-place encoder to the former column-major
 algorithm bit for bit on identical projected inputs.
 
