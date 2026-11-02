@@ -22,6 +22,7 @@ import io.github.jbellis.jvector.disk.RandomAccessReader;
 import io.github.jbellis.jvector.graph.RandomAccessVectorValues;
 import io.github.jbellis.jvector.graph.disk.OnDiskGraphIndex;
 import io.github.jbellis.jvector.util.Accountable;
+import io.github.jbellis.jvector.util.PhysicalCoreExecutor;
 import io.github.jbellis.jvector.util.RamUsageEstimator;
 import io.github.jbellis.jvector.vector.VectorUtil;
 import io.github.jbellis.jvector.vector.VectorUtilSupport;
@@ -1849,7 +1850,10 @@ public class AsymmetricHashing implements VectorCompressor<AsymmetricHashing.Qua
 
         logProgress("\t[stage] ITQ training iterations started...");
         long startTime = System.nanoTime();
-        ASHOrthogonalizer orthogonalizer = new ASHOrthogonalizer(d, d);
+        // Repeated polar steps need FP32 accuracy; the accumulated update,
+        // projection products and loss retain FP64. Final W uses a FP64 polar
+        // factor so the stored transform keeps its orthogonality contract.
+        ASHFloatOrthogonalizer orthogonalizer = new ASHFloatOrthogonalizer(d, d);
         double[] rCol = new double[Math.multiplyExact(d, d)];
         TrainingDirectionEncoder encoder = new TrainingDirectionEncoder(N, d, bitsPerDimension);
 
@@ -1873,8 +1877,9 @@ public class AsymmetricHashing implements VectorCompressor<AsymmetricHashing.Qua
             recentLosses[epoch % 3] = loss.loss;
         }
 
-        // Final polar step after the last update, using the same workspace.
-        orthogonalizer.orthogonalize(mCol, rCol);
+        // Recompute from the final update, in FP64, rather than retaining the
+        // previous epoch's rotation or widening a FP32 polar factor.
+        new ASHOrthogonalizer(d, d).orthogonalize(mCol, rCol);
 
         double loopTime = (System.nanoTime() - startTime) / 1e9;
         logProgress("\t[stage] ITQ training completed in " + loopTime + " seconds.");
@@ -2323,7 +2328,7 @@ public class AsymmetricHashing implements VectorCompressor<AsymmetricHashing.Qua
             this.elements = rows * dims;
             this.bits = bits;
             int count = bits == 1 ? 0
-                    : Math.min(rows, Math.min(16, Runtime.getRuntime().availableProcessors()));
+                    : Math.min(rows, PhysicalCoreExecutor.getPhysicalCoreCount());
             workers = new DirectionScratch[count];
             for (int i = 0; i < count; i++) workers[i] = new DirectionScratch(dims);
         }
@@ -2341,37 +2346,48 @@ public class AsymmetricHashing implements VectorCompressor<AsymmetricHashing.Qua
                 return;
             }
             int maxCode = (1 << (bits - 1)) - 1;
-            IntStream.range(0, workers.length).parallel().forEach(worker -> {
-                double[] absNorm = workers[worker].absNorm;
-                double[] mag = workers[worker].mag;
-                int first = (int) ((long) worker * rows / workers.length);
-                int end = (int) ((long) (worker + 1) * rows / workers.length);
-                for (int r = first; r < end; r++) {
-                    int offset = r * dims;
-                    double norm2 = 0.0;
-                    for (int j = 0; j < dims; j++) {
-                        double value = vectors[offset + j];
-                        norm2 += value * value;
-                    }
-                    double inverse = 1.0 / Math.sqrt(Math.max(norm2, 1e-20));
-                    for (int j = 0; j < dims; j++) {
-                        absNorm[j] = Math.abs(vectors[offset + j]) * inverse;
-                    }
-                    double scale = computeOptimalScalingFactor(absNorm, dims, bits);
-                    double encodedNorm2 = 0.0;
-                    for (int j = 0; j < dims; j++) {
-                        int q = Math.min((int) (scale * absNorm[j] + K_EPS), maxCode);
-                        double magnitude = q + 0.5;
-                        mag[j] = magnitude;
-                        encodedNorm2 += magnitude * magnitude;
-                    }
-                    double encodedInverse = 1.0 / Math.sqrt(Math.max(encodedNorm2, 1e-20));
-                    for (int j = 0; j < dims; j++) {
-                        double signed = vectors[offset + j] < 0.0 ? -mag[j] : mag[j];
-                        vectors[offset + j] = signed * encodedInverse;
-                    }
+            if (workers.length == 1) {
+                encodeRows(vectors, workers[0], 0, rows, maxCode);
+            } else {
+                // Share the library's bounded physical-core pool. A trainer's
+                // logical workers own their scratch and disjoint output rows.
+                PhysicalCoreExecutor.instance().execute(() ->
+                        IntStream.range(0, workers.length).parallel().forEach(worker -> {
+                            int first = (int) ((long) worker * rows / workers.length);
+                            int end = (int) ((long) (worker + 1) * rows / workers.length);
+                            encodeRows(vectors, workers[worker], first, end, maxCode);
+                        }));
+            }
+        }
+
+        private void encodeRows(double[] vectors, DirectionScratch scratch, int first, int end, int maxCode) {
+            double[] absNorm = scratch.absNorm;
+            double[] mag = scratch.mag;
+            for (int r = first; r < end; r++) {
+                int offset = r * dims;
+                double norm2 = 0.0;
+                for (int j = 0; j < dims; j++) {
+                    double value = vectors[offset + j];
+                    norm2 += value * value;
                 }
-            });
+                double inverse = 1.0 / Math.sqrt(Math.max(norm2, 1e-20));
+                for (int j = 0; j < dims; j++) {
+                    absNorm[j] = Math.abs(vectors[offset + j]) * inverse;
+                }
+                double scale = computeOptimalScalingFactor(absNorm, dims, bits);
+                double encodedNorm2 = 0.0;
+                for (int j = 0; j < dims; j++) {
+                    int q = Math.min((int) (scale * absNorm[j] + K_EPS), maxCode);
+                    double magnitude = q + 0.5;
+                    mag[j] = magnitude;
+                    encodedNorm2 += magnitude * magnitude;
+                }
+                double encodedInverse = 1.0 / Math.sqrt(Math.max(encodedNorm2, 1e-20));
+                for (int j = 0; j < dims; j++) {
+                    double signed = vectors[offset + j] < 0.0 ? -mag[j] : mag[j];
+                    vectors[offset + j] = signed * encodedInverse;
+                }
+            }
         }
     }
 

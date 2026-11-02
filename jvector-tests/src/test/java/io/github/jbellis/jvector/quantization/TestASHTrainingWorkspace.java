@@ -25,6 +25,7 @@ import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
 import java.util.Arrays;
 import java.util.Random;
+import java.util.concurrent.CompletableFuture;
 import java.util.stream.IntStream;
 
 import static org.junit.Assert.*;
@@ -73,7 +74,7 @@ public class TestASHTrainingWorkspace {
     public void contiguousQuantizationMatchesPreviousColumnMajorAlgorithmBitForBit() throws Exception {
         Random random = new Random(103);
         for (int bits = 1; bits <= 9; bits++) {
-            for (int[] shape : new int[][] {{1, 1}, {3, 5}, {17, 9}, {35, 32}}) {
+            for (int[] shape : new int[][] {{1, 1}, {3, 5}, {17, 9}, {35, 32}, {97, 17}}) {
                 int rows = shape[0], dims = shape[1];
                 Object encoder = encoder(rows, dims, bits);
                 for (int repeat = 0; repeat < 3; repeat++) {
@@ -93,6 +94,33 @@ public class TestASHTrainingWorkspace {
                 }
             }
         }
+    }
+
+    @Test
+    public void independentTrainersCanQuantizeConcurrently() {
+        CompletableFuture<?>[] jobs = IntStream.range(0, 4).mapToObj(index ->
+                CompletableFuture.runAsync(() -> {
+                    try {
+                        int rows = 97 + index, dims = 17 + index, bits = 2 + index;
+                        Object encoder = encoder(rows, dims, bits);
+                        Random random = new Random(108 + index);
+                        for (int repeat = 0; repeat < 3; repeat++) {
+                            double[] actual = randomArray(rows * dims, random);
+                            double[] columns = new double[actual.length];
+                            for (int r = 0; r < rows; r++) for (int d = 0; d < dims; d++)
+                                columns[r + d * rows] = actual[r * dims + d];
+                            double[] expected = new double[actual.length];
+                            referenceColumnMajor(columns, rows, dims, bits, expected);
+                            encode(encoder, actual);
+                            for (int r = 0; r < rows; r++) for (int d = 0; d < dims; d++)
+                                assertEquals(Double.doubleToLongBits(expected[r + d * rows]),
+                                        Double.doubleToLongBits(actual[r * dims + d]));
+                        }
+                    } catch (Exception failure) {
+                        throw new AssertionError(failure);
+                    }
+                })).toArray(CompletableFuture<?>[]::new);
+        CompletableFuture.allOf(jobs).join();
     }
 
     @Test
