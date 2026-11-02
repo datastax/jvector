@@ -68,8 +68,12 @@ if [ ! -f "${HIGHWAY_DIR}/hwy/highway.h" ]; then
   exit 1
 fi
 
-# Desired minimum GCC version
+# Desired minimum GCC version: the x86_64 build targets Sapphire Rapids, and Highway's
+# HWY_AVX3_SPR target needs GCC 12 or newer (third_party/highway/hwy/detect_targets.h)
 MIN_GCC_VERSION=11
+if [ "$(uname -m)" == "x86_64" ]; then
+  MIN_GCC_VERSION=12
+fi
 
 # Ensures $1 (a command) is available. If not and AUTO_INSTALL_DEPS=true, runs
 # the Ubuntu apt/pip install given in $2; otherwise prints $2 as a hint and exits.
@@ -114,11 +118,13 @@ build_native() {
 
   if [ "${ARCH}" == "${HOST_ARCH}" ]; then
     # ---- Native build ------------------------------------------------------
-    require_cmd g++ "sudo apt-get install -y g++"
+    # meson compiles with $CXX when it is set, so check that compiler
+    CXX_CMD="${CXX:-g++}"
+    require_cmd "${CXX_CMD}" "sudo apt-get install -y g++"
 
-    CURRENT_GPP_VERSION=$(g++ -dumpversion)
+    CURRENT_GPP_VERSION=$(${CXX_CMD} -dumpfullversion -dumpversion)
     if [ "$(printf '%s\n' "$MIN_GCC_VERSION" "$CURRENT_GPP_VERSION" | sort -V | head -n1)" != "$MIN_GCC_VERSION" ]; then
-      echo "WARNING: g++ version $CURRENT_GPP_VERSION is too old. Please upgrade to g++ $MIN_GCC_VERSION or newer."
+      echo "ERROR: ${CXX_CMD} version $CURRENT_GPP_VERSION is too old. Please upgrade to g++ $MIN_GCC_VERSION or newer, or set CXX to one."
       exit 1
     fi
 
