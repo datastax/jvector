@@ -1845,22 +1845,25 @@ public class AsymmetricHashing implements VectorCompressor<AsymmetricHashing.Qua
         // Initial random update matrix M, shape [d x d].
         double[] mCol = gaussianMatrix(d, d, rng);
 
-        double[] rCol = null;
-        double[] xtrCol = new double[N * d];
-        double[] xencCol = new double[N * d];
+        // Each projected vector is contiguous. Quantization replaces it in place:
+        // the loss uses the update matrix, so unquantized rows need not be retained.
+        double[] projectedRows = new double[Math.multiplyExact(N, d)];
 
         logProgress("\t[stage] ITQ training iterations started...");
         long startTime = System.nanoTime();
+        ASHOrthogonalizer orthogonalizer = new ASHOrthogonalizer(d, d);
+        double[] rCol = new double[Math.multiplyExact(d, d)];
+        TrainingDirectionEncoder encoder = new TrainingDirectionEncoder(N, d, bitsPerDimension);
 
         double[] recentLosses = new double[3];
         for (int epoch = 0; epoch < nTrainingIterations; epoch++) {
-            rCol = orthogonalize(mCol, d, d);
+            orthogonalizer.orthogonalize(mCol, rCol);
 
-            multiplyInto(xldCol, N, d, rCol, d, xtrCol);
-            encodeTrainingDirections(xtrCol, N, d, bitsPerDimension, xencCol);
+            projectTrainingRows(xldCol, N, d, rCol, projectedRows);
+            encoder.encodeInPlace(projectedRows);
 
-            // ITQ update: M = Xld^T @ Xenc.
-            mCol = nativeMultiplyTransposedA(xldCol, N, d, xencCol, d);
+            // ITQ update: M = Xld^T @ Xenc. Reuse the initial Gaussian buffer.
+            updateTrainingMatrix(xldCol, N, d, projectedRows, mCol);
 
             // C++-style cheap loss: trace(R^T M) / N.
             ProjectionTrainingLoss loss = computeTrainingLossFromUpdateMatrix(rCol, mCol, N);
@@ -1872,8 +1875,8 @@ public class AsymmetricHashing implements VectorCompressor<AsymmetricHashing.Qua
             recentLosses[epoch % 3] = loss.loss;
         }
 
-        // Final polar step after the last update.
-        rCol = orthogonalize(mCol, d, d);
+        // Final polar step after the last update, using the same workspace.
+        orthogonalizer.orthogonalize(mCol, rCol);
 
         double loopTime = (System.nanoTime() - startTime) / 1e9;
         logProgress("\t[stage] ITQ training completed in " + loopTime + " seconds.");
@@ -2169,27 +2172,46 @@ public class AsymmetricHashing implements VectorCompressor<AsymmetricHashing.Qua
         return cCol;
     }
 
-    /** Native DGEMM for flat column-major matrices: C = A^T @ B. */
-    private static double[] nativeMultiplyTransposedA(
-            double[] aCol,
-            int rowsA,
-            int colsA,
-            double[] bCol,
-            int colsB
-    ) {
-        double[] cCol = new double[colsA * colsB];
+    /**
+     * Produces contiguous projected vectors without a separate transpose pass.
+     * Xld is [rows x dims] column-major; output rows are its product with R,
+     * stored as [dims x rows] column-major: output = R^T * Xld^T.
+     */
+    private static void projectTrainingRows(double[] xldCol, int rows, int dims,
+                                            double[] rCol, double[] outRows) {
+        checkTrainingProduct(xldCol, rows, dims, rCol, outRows);
+        if (outRows == xldCol || outRows == rCol) {
+            throw new IllegalArgumentException("ITQ projection output must not alias an input");
+        }
+        BLAS.getInstance().dgemm("T", "T", dims, rows, dims, 1.0,
+                rCol, dims, xldCol, rows, 0.0, outRows, dims);
+    }
 
-        BLAS.getInstance().dgemm(
-                "T", "N",
-                colsA, colsB, rowsA,
-                1.0,
-                aCol, rowsA,
-                bCol, rowsA,
-                0.0,
-                cCol, colsA
-        );
+    /**
+     * Recomputes M = Xld^T * Xenc into an existing square matrix. Encoded rows
+     * are viewed as [dims x rows] column-major, hence the second transpose.
+     */
+    private static void updateTrainingMatrix(double[] xldCol, int rows, int dims,
+                                             double[] encodedRows, double[] mCol) {
+        checkTrainingProduct(xldCol, rows, dims, mCol, encodedRows);
+        if (mCol == xldCol || mCol == encodedRows) {
+            throw new IllegalArgumentException("ITQ update output must not alias an input");
+        }
+        BLAS.getInstance().dgemm("T", "T", dims, dims, rows, 1.0,
+                xldCol, rows, encodedRows, dims, 0.0, mCol, dims);
+    }
 
-        return cCol;
+    private static void checkTrainingProduct(double[] xldCol, int rows, int dims,
+                                              double[] square, double[] rowMajor) {
+        Objects.requireNonNull(xldCol, "xldCol");
+        Objects.requireNonNull(square, "square");
+        Objects.requireNonNull(rowMajor, "rowMajor");
+        if (rows <= 0 || dims <= 0 || (long) rows * dims > Integer.MAX_VALUE
+                || (long) dims * dims > Integer.MAX_VALUE
+                || xldCol.length != rows * dims || rowMajor.length != rows * dims
+                || square.length != dims * dims) {
+            throw new IllegalArgumentException("Invalid ITQ matrix dimensions");
+        }
     }
 
     /**
@@ -2227,9 +2249,8 @@ public class AsymmetricHashing implements VectorCompressor<AsymmetricHashing.Qua
         int[] iwork = new int[Math.multiplyExact(8, k)];
         intW info = new intW(0);
         double[] workQuery = new double[1];
-        double[] a = xCol.clone(); // LAPACK overwrites its input; X is still needed by ITQ.
-
-        LAPACK.getInstance().dgesdd(job, rows, cols, a, rows, s, u, ldu,
+        // LAPACK's workspace query does not modify input matrix values.
+        LAPACK.getInstance().dgesdd(job, rows, cols, xCol, rows, s, u, ldu,
                 vt, cols, workQuery, -1, iwork, info);
         if (info.val != 0) {
             throw new IllegalStateException("PCA SVD workspace query failed with info=" + info.val);
@@ -2238,7 +2259,7 @@ public class AsymmetricHashing implements VectorCompressor<AsymmetricHashing.Qua
             throw new IllegalStateException("Invalid PCA SVD workspace size: " + workQuery[0]);
         }
         double[] work = new double[(int) Math.ceil(workQuery[0])];
-        a = xCol.clone();
+        double[] a = xCol.clone(); // The actual decomposition overwrites its input.
         LAPACK.getInstance().dgesdd(job, rows, cols, a, rows, s, u, ldu,
                 vt, cols, work, work.length, iwork, info);
         if (info.val != 0) {
@@ -2339,158 +2360,97 @@ public class AsymmetricHashing implements VectorCompressor<AsymmetricHashing.Qua
         }
     }
 
-    /**
-     * Native DGEMM into caller-provided output: C = A @ B.
-     */
-    private static void multiplyInto(
-            double[] aCol,
-            int m,
-            int k,
-            double[] bCol,
-            int n,
-            double[] cCol
-    ) {
-        if (cCol.length < m * n) {
-            throw new IllegalArgumentException("Output matrix too small");
-        }
-
-        BLAS.getInstance().dgemm(
-                "N", "N",
-                m, n, k,
-                1.0,
-                aCol, m,
-                bCol, k,
-                0.0,
-                cCol, m
-        );
-    }
-
-    /**
-     * Orthogonalizes a flat column-major matrix using thin SVD and returns U @ VT
-     * in flat column-major layout.
-     */
+    /** Single-use convenience path for random projection initialization. */
     private static double[] orthogonalize(double[] mCol, int rows, int cols) {
-        int k = Math.min(rows, cols);
-
-        double[] u = new double[rows * k];
-        double[] vt = new double[k * cols];
-        double[] s = new double[k];
-        intW info = new intW(0);
-        int[] iwork = new int[8 * k];
-
-        // Workspace query
-        double[] a = mCol.clone(); // dgesvd overwrites input
-        double[] workQuery = new double[1];
-        LAPACK.getInstance().dgesdd(
-                "S",
-                rows, cols,
-                a, rows,
-                s,
-                u, rows,
-                vt, k,
-                workQuery, -1, iwork,
-                info
-        );
-
-        if (info.val != 0) {
-            throw new RuntimeException("LAPACK dgesdd workspace query failed with info=" + info.val);
-        }
-
-        int lwork = (int) workQuery[0];
-        double[] work = new double[lwork];
-
-        // Actual call
-        a = mCol.clone();
-        LAPACK.getInstance().dgesdd(
-                "S",
-                rows, cols,
-                a, rows,
-                s,
-                u, rows,
-                vt, k,
-                work, lwork, iwork,
-                info
-        );
-
-        if (info.val != 0) {
-            throw new RuntimeException("LAPACK dgesdd failed with info=" + info.val);
-        }
-
-        return nativeMultiply(u, rows, k, vt, cols);
+        ASHOrthogonalizer workspace = new ASHOrthogonalizer(rows, cols);
+        double[] result = new double[Math.multiplyExact(rows, cols)];
+        workspace.orthogonalize(mCol, result);
+        return result;
     }
 
     /**
-     * Encodes projected training directions.
-     *
-     * Input and output are [rows x dims] column-major.
-     *
-     * bitsPerDimension == 1:
-     *   y_j = sign(x_j) / sqrt(d)
-     *
-     * bitsPerDimension > 1:
-     *   y_j uses signed multibit magnitudes and is normalized to unit length.
+     * Quantizes contiguous training vectors in place, retaining the existing
+     * FP64 norms and FP32 scaling-factor search. Scratch belongs to logical
+     * workers and is reused across epochs, regardless of which pool threads
+     * execute them. One encoder belongs to one trainer and is not thread-safe.
      */
-    private static void encodeTrainingDirections(
-            double[] xCol,
-            int rows,
-            int dims,
-            int bitsPerDimension,
-            double[] outCol
-    ) {
-        if (outCol.length < rows * dims) {
-            throw new IllegalArgumentException("Output matrix too small");
+    private static final class TrainingDirectionEncoder {
+        private final int rows;
+        private final int dims;
+        private final int elements;
+        private final int bits;
+        private final DirectionScratch[] workers;
+
+        TrainingDirectionEncoder(int rows, int dims, int bits) {
+            validateBitsPerDimension(bits);
+            if (rows <= 0 || dims <= 0 || (long) rows * dims > Integer.MAX_VALUE) {
+                throw new IllegalArgumentException("Invalid ITQ direction dimensions");
+            }
+            this.rows = rows;
+            this.dims = dims;
+            this.elements = rows * dims;
+            this.bits = bits;
+            int count = bits == 1 ? 0
+                    : Math.min(rows, Math.min(16, Runtime.getRuntime().availableProcessors()));
+            workers = new DirectionScratch[count];
+            for (int i = 0; i < count; i++) workers[i] = new DirectionScratch(dims);
         }
 
-        if (bitsPerDimension <= 1) {
-            final double invSqrtD = 1.0 / Math.sqrt(dims);
-            final int size = rows * dims;
-
-            for (int i = 0; i < size; i++) {
-                outCol[i] = xCol[i] >= 0.0 ? invSqrtD : -invSqrtD;
+        void encodeInPlace(double[] vectors) {
+            Objects.requireNonNull(vectors, "vectors");
+            if (vectors.length != elements) {
+                throw new IllegalArgumentException("Invalid ITQ direction buffer length");
             }
-            return;
+            if (bits == 1) {
+                double inverse = 1.0 / Math.sqrt(dims);
+                for (int i = 0; i < elements; i++) {
+                    vectors[i] = vectors[i] >= 0.0 ? inverse : -inverse;
+                }
+                return;
+            }
+            int maxCode = (1 << (bits - 1)) - 1;
+            IntStream.range(0, workers.length).parallel().forEach(worker -> {
+                double[] absNorm = workers[worker].absNorm;
+                double[] mag = workers[worker].mag;
+                int first = (int) ((long) worker * rows / workers.length);
+                int end = (int) ((long) (worker + 1) * rows / workers.length);
+                for (int r = first; r < end; r++) {
+                    int offset = r * dims;
+                    double norm2 = 0.0;
+                    for (int j = 0; j < dims; j++) {
+                        double value = vectors[offset + j];
+                        norm2 += value * value;
+                    }
+                    double inverse = 1.0 / Math.sqrt(Math.max(norm2, 1e-20));
+                    for (int j = 0; j < dims; j++) {
+                        absNorm[j] = Math.abs(vectors[offset + j]) * inverse;
+                    }
+                    double scale = computeOptimalScalingFactor(absNorm, dims, bits);
+                    double encodedNorm2 = 0.0;
+                    for (int j = 0; j < dims; j++) {
+                        int q = Math.min((int) (scale * absNorm[j] + K_EPS), maxCode);
+                        double magnitude = q + 0.5;
+                        mag[j] = magnitude;
+                        encodedNorm2 += magnitude * magnitude;
+                    }
+                    double encodedInverse = 1.0 / Math.sqrt(Math.max(encodedNorm2, 1e-20));
+                    for (int j = 0; j < dims; j++) {
+                        double signed = vectors[offset + j] < 0.0 ? -mag[j] : mag[j];
+                        vectors[offset + j] = signed * encodedInverse;
+                    }
+                }
+            });
         }
+    }
 
-        final int excessBits = bitsPerDimension - 1;
-        final int maxCode = (1 << excessBits) - 1;
+    private static final class DirectionScratch {
+        final double[] absNorm;
+        final double[] mag;
 
-        // Each task owns a contiguous range of training rows and its scratch arrays.
-        // computeOptimalScalingFactor already keeps its event buffers thread-local.
-        final int workers = Math.min(rows, Math.min(16, Runtime.getRuntime().availableProcessors()));
-        IntStream.range(0, workers).parallel().forEach(worker -> {
-            double[] absNorm = new double[dims];
-            double[] mag = new double[dims];
-            int start = worker * rows / workers;
-            int end = (worker + 1) * rows / workers;
-
-            for (int r = start; r < end; r++) {
-                double norm2 = 0.0;
-                for (int j = 0; j < dims; j++) {
-                    double v = xCol[r + j * rows];
-                    norm2 += v * v;
-                }
-
-                double invNorm = 1.0 / Math.sqrt(Math.max(norm2, 1e-20));
-                for (int j = 0; j < dims; j++) {
-                    absNorm[j] = Math.abs(xCol[r + j * rows]) * invNorm;
-                }
-
-                double t = computeOptimalScalingFactor(absNorm, dims, bitsPerDimension);
-                double encodedNorm2 = 0.0;
-                for (int j = 0; j < dims; j++) {
-                    int q = Math.min((int) (t * absNorm[j] + K_EPS), maxCode);
-                    double m = q + 0.5;
-                    mag[j] = m;
-                    encodedNorm2 += m * m;
-                }
-
-                double encodedInvNorm = 1.0 / Math.sqrt(Math.max(encodedNorm2, 1e-20));
-                for (int j = 0; j < dims; j++) {
-                    double signed = xCol[r + j * rows] < 0.0 ? -mag[j] : mag[j];
-                    outCol[r + j * rows] = signed * encodedInvNorm;
-                }
-            }
-        });
+        DirectionScratch(int dims) {
+            absNorm = new double[dims];
+            mag = new double[dims];
+        }
     }
 
     private static void writeStiefelTransform(IndexWriter out, StiefelTransform st) throws IOException {
