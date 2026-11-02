@@ -16,6 +16,8 @@
 
 package io.github.jbellis.jvector.example;
 
+import io.github.jbellis.jvector.example.benchmarks.datasets.DataSet;
+import io.github.jbellis.jvector.example.util.CompressorParameters;
 import io.github.jbellis.jvector.example.yaml.MultiConfig;
 import io.github.jbellis.jvector.graph.disk.feature.FeatureId;
 
@@ -24,6 +26,7 @@ import java.util.List;
 import java.util.Objects;
 import java.util.Set;
 import java.util.function.BiConsumer;
+import java.util.function.Function;
 
 /**
  * Everything {@link Grid} runs for one dataset: the construction sweep, the feature sets written for each
@@ -31,7 +34,7 @@ import java.util.function.BiConsumer;
  *
  * <p>The construction sweep is the cartesian product of its {@link SweepDimension}s, with the first
  * dimension outermost. To sweep a new construction parameter, add it to {@link BuildConfig} and add one
- * {@code sweep(...)} line to {@link #fromConfig}.</p>
+ * {@code sweep(...)} line to {@link #fromGrids}.</p>
  */
 public final class GridSpec {
     final List<SweepDimension<?>> buildSweep;
@@ -50,22 +53,46 @@ public final class GridSpec {
     public static GridSpec fromConfig(MultiConfig config) {
         var construction = config.construction;
         var search = config.search;
-        return builder()
-                // Order sets the output order: the first dimension varies slowest.
-                .sweep("addHierarchy", construction.addHierarchy, BuildConfig.Builder::addHierarchy)
-                .sweep("refineFinalGraph", construction.refineFinalGraph, BuildConfig.Builder::refineFinalGraph)
-                .sweep("outDegree", construction.outDegree, BuildConfig.Builder::M)
-                .sweep("neighborOverflow", construction.neighborOverflow, BuildConfig.Builder::neighborOverflow)
-                .sweep("efConstruction", construction.efConstruction, BuildConfig.Builder::efConstruction)
-                .sweep("construction.compression", construction.getCompressorParameters(), BuildConfig.Builder::buildCompressor)
-                .featureSets(construction.getFeatureSets())
-                .search(SearchConfig.builder()
+        return fromGrids(construction.addHierarchy,
+                construction.refineFinalGraph,
+                construction.outDegree,
+                construction.neighborOverflow,
+                construction.efConstruction,
+                construction.getCompressorParameters(),
+                construction.getFeatureSets(),
+                SearchConfig.builder()
                         .searchCompressors(search.getCompressorParameters())
                         .topKGrid(search.topKOverquery)
                         .usePruningGrid(search.useSearchPruning)
-                        .build())
-                .enableIndexCache(Objects.requireNonNull(construction.useSavedIndexIfExists,
-                        "construction.useSavedIndexIfExists must be set"))
+                        .build(),
+                Objects.requireNonNull(construction.useSavedIndexIfExists,
+                        "construction.useSavedIndexIfExists must be set"));
+    }
+
+    /**
+     * The sweep over the given construction grids. This is the one place that sets the construction
+     * sweep order; arguments are listed in that order, the first varying slowest.
+     */
+    static GridSpec fromGrids(List<Boolean> addHierarchyGrid,
+                              List<Boolean> refineFinalGraphGrid,
+                              List<Integer> mGrid,
+                              List<Float> neighborOverflowGrid,
+                              List<Integer> efConstructionGrid,
+                              List<Function<DataSet, CompressorParameters>> buildCompressors,
+                              List<? extends Set<FeatureId>> featureSets,
+                              SearchConfig search,
+                              boolean enableIndexCache) {
+        // Dimension names are the YAML field names, so error messages point at the config to fix.
+        return builder()
+                .sweep("addHierarchy", addHierarchyGrid, BuildConfig.Builder::addHierarchy)
+                .sweep("refineFinalGraph", refineFinalGraphGrid, BuildConfig.Builder::refineFinalGraph)
+                .sweep("outDegree", mGrid, BuildConfig.Builder::M)
+                .sweep("neighborOverflow", neighborOverflowGrid, BuildConfig.Builder::neighborOverflow)
+                .sweep("efConstruction", efConstructionGrid, BuildConfig.Builder::efConstruction)
+                .sweep("construction.compression", buildCompressors, BuildConfig.Builder::buildCompressor)
+                .featureSets(featureSets)
+                .search(search)
+                .enableIndexCache(enableIndexCache)
                 .build();
     }
 

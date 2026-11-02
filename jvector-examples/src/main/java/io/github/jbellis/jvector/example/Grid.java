@@ -73,7 +73,11 @@ public class Grid {
 
     /**
      * Get the index build time for a dataset
+     *
+     * @deprecated Returns the most recent build for the dataset, which is not the current build config's
+     * when its indexes came from the index cache. Grid no longer reads it.
      */
+    @Deprecated
     public static Double getIndexBuildTimeSeconds(String datasetName) {
         return indexBuildTimes.get(datasetName);
     }
@@ -245,8 +249,11 @@ public class Grid {
                     ? new InMemoryBuild(workDirectory)
                     : new CompressedOnDiskBuild(cache, workDirectory, buildCompressorObj, constructionMetrics);
             var built = strategy.build(featureSets, build, ds);
-            if (built.buildTimeS != null) {
-                indexBuildTimes.put(ds.getName(), built.buildTimeS);
+            // Null when every index came from the index cache. Read it from here, not the per-dataset map,
+            // which still holds the previous build config's time in that case.
+            Double indexBuildTimeS = built.buildTimeS;
+            if (indexBuildTimeS != null) {
+                indexBuildTimes.put(ds.getName(), indexBuildTimeS);
             }
             var indexes = inConfiguredOrder(built.indexes, featureSets);
             var indexFileSizes = built.fileSizes;
@@ -256,8 +263,12 @@ public class Grid {
             var buildSnapshot = diagnostics.getLatestSystemSnapshot();
 
             diagnostics.printDiskStatistics("Graph Index Build");
-            System.out.printf("Index build time: %f seconds%n%n", Grid.getIndexBuildTimeSeconds(ds.getName()));
-            constructionMetrics.indexBuildTimeS = Grid.getIndexBuildTimeSeconds(ds.getName());
+            if (indexBuildTimeS != null) {
+                System.out.printf("Index build time: %f seconds%n%n", indexBuildTimeS);
+            } else {
+                System.out.printf("Index build time: not measured, all indexes loaded from the index cache%n%n");
+            }
+            constructionMetrics.indexBuildTimeS = indexBuildTimeS;
 
             try {
                 for (var cpSupplier : search.searchCompressors) {
@@ -298,7 +309,7 @@ public class Grid {
                         var ctx = new SearchContext(ds, build, search, features, featureSetForIndex,
                                 buildCompressorString, cpSupplier,
                                 (cv == null) ? "None" : String.valueOf(cv.getCompressor()),
-                                Grid.getIndexBuildTimeSeconds(ds.getName()), indexFileSizes.get(features), buildSnapshot);
+                                indexBuildTimeS, indexFileSizes.get(features), buildSnapshot);
 
                         try (var cs = new ConfiguredSystem(ds, index, cv, featureSetForIndex)) {
                             testConfiguration(cs, ctx, constructionMetrics, workDirectory, benchmarks, listeners);
@@ -307,15 +318,21 @@ public class Grid {
                         }
                     });
                 }
-                for (var index : indexes.values()) {
-                    index.close();
-                }
 
                 // Log final diagnostics summary
                 if (diagnostic_level > 0) {
                     diagnostics.logSummary();
                 }
             } finally {
+                // Close before deleting: a failed search must not leave files open or mapped.
+                for (var index : indexes.values()) {
+                    try {
+                        index.close();
+                    } catch (Exception e) {
+                        // Log and move on; don't let a close-fail mask a real exception
+                        System.err.println("Cleanup Failed: Could not close index -> " + e.getMessage());
+                    }
+                }
                 // Clean up the tmp files for this run
                 for (int n = 0; n < featureSets.size(); n++) {
                     Path p = workDirectory.resolve("graph" + n);
@@ -358,7 +375,7 @@ public class Grid {
     }
 
     // avoid recomputing the compressor repeatedly (this is a relatively small memory footprint)
-    static final Map<String, VectorCompressor<?>> cachedCompressors = new IdentityHashMap<>();
+    static final Map<String, VectorCompressor<?>> cachedCompressors = new HashMap<>();
 
     /**
      * The built indexes in the order their feature sets were configured, so output order is the same on
@@ -510,21 +527,14 @@ public class Grid {
             List<Function<DataSet, CompressorParameters>> compressionGrid,
             Map<Integer, List<Double>> topKGrid,
             List<Boolean> usePruningGrid) throws IOException {
-        var spec = GridSpec.builder()
-                .sweep("addHierarchy", addHierarchyGrid, BuildConfig.Builder::addHierarchy)
-                .sweep("refineFinalGraph", refineFinalGraphGrid, BuildConfig.Builder::refineFinalGraph)
-                .sweep("M", mGrid, BuildConfig.Builder::M)
-                .sweep("neighborOverflow", neighborOverflowGrid, BuildConfig.Builder::neighborOverflow)
-                .sweep("efConstruction", efConstructionGrid, BuildConfig.Builder::efConstruction)
-                .sweep("buildCompressor", buildCompressors, BuildConfig.Builder::buildCompressor)
-                .featureSets(featureSets)
-                .search(SearchConfig.builder()
+        var spec = GridSpec.fromGrids(addHierarchyGrid, refineFinalGraphGrid, mGrid, neighborOverflowGrid,
+                efConstructionGrid, buildCompressors, featureSets,
+                SearchConfig.builder()
                         .searchCompressors(compressionGrid)
                         .topKGrid(topKGrid)
                         .usePruningGrid(usePruningGrid)
-                        .build())
-                .enableIndexCache(enableIndexCache)
-                .build();
+                        .build(),
+                enableIndexCache);
         return runAndCollectResults(ds, spec);
     }
 

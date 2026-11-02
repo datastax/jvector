@@ -95,21 +95,14 @@ public class Bench {
             DataSet ds = DataSets.loadDataSet(datasetName).orElseThrow(
                     () -> new RuntimeException("Dataset " + datasetName + " not found")
             ).getDataSet();
-            var spec = GridSpec.builder()
-                    .sweep("addHierarchy", addHierarchyGrid, BuildConfig.Builder::addHierarchy)
-                    .sweep("refineFinalGraph", refineFinalGraphGrid, BuildConfig.Builder::refineFinalGraph)
-                    .sweep("M", mGrid, BuildConfig.Builder::M)
-                    .sweep("neighborOverflow", neighborOverflowGrid, BuildConfig.Builder::neighborOverflow)
-                    .sweep("efConstruction", efConstructionGrid, BuildConfig.Builder::efConstruction)
-                    .sweep("buildCompressor", buildCompression, BuildConfig.Builder::buildCompressor)
-                    .featureSets(featureSets)
-                    .search(SearchConfig.builder()
+            var spec = GridSpec.fromGrids(addHierarchyGrid, refineFinalGraphGrid, mGrid, neighborOverflowGrid,
+                    efConstructionGrid, buildCompression, featureSets,
+                    SearchConfig.builder()
                             .searchCompressors(compressionGrid)
                             .topKGrid(topKGrid)
                             .usePruningGrid(usePruningGrid)
-                            .build())
-                    .enableIndexCache(enableIndexCache)
-                    .build();
+                            .build(),
+                    enableIndexCache);
             Grid.run(ds, spec, RunArtifacts.disabled());
         }
     }

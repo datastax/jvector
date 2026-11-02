@@ -58,16 +58,8 @@ public class TestGridSpec {
         Function<DataSet, CompressorParameters> bq = ds -> new CompressorParameters.BQParameters();
         List<Function<DataSet, CompressorParameters>> compressors = List.of(none, bq);
 
-        var spec = GridSpec.builder()
-                .sweep("addHierarchy", hierarchy, BuildConfig.Builder::addHierarchy)
-                .sweep("refineFinalGraph", refine, BuildConfig.Builder::refineFinalGraph)
-                .sweep("M", ms, BuildConfig.Builder::M)
-                .sweep("neighborOverflow", overflow, BuildConfig.Builder::neighborOverflow)
-                .sweep("efConstruction", efs, BuildConfig.Builder::efConstruction)
-                .sweep("buildCompressor", compressors, BuildConfig.Builder::buildCompressor)
-                .featureSets(List.of(EnumSet.of(FeatureId.INLINE_VECTORS)))
-                .search(search())
-                .build();
+        var spec = GridSpec.fromGrids(hierarchy, refine, ms, overflow, efs, compressors,
+                List.of(EnumSet.of(FeatureId.INLINE_VECTORS)), search(), false);
 
         // The loop nest Grid.runAll used before sweep dimensions.
         List<String> expected = new ArrayList<>();
