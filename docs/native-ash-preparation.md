@@ -269,3 +269,35 @@ Training and graph-write timers/recall for every run are retained in the raw
 CSVs; they are not manually added to inclusive harness timers. Original CSVs,
 commands, class/source snapshots and live placement observations are preserved
 under `benchmark-runs/ash-quantization-20261101` on the development server.
+
+## FP64 ITQ training workspaces
+
+ITQ keeps the residual and PCA-reduced inputs in column-major FP64 arrays for
+BLAS/LAPACK. Its iterative projection writes contiguous training vectors directly:
+`(Xld * R)^T = R^T * Xld^T`, evaluated by one DGEMM. The result is viewed as
+row-major `[N,d]` by the direction encoder. Quantization replaces each projected
+row in place; the unquantized result is not needed by the update or loss. A second
+DGEMM consumes this layout to overwrite the existing update matrix with
+`Xld^T * Xenc`. No explicit transpose pass or second `[N,d]` output is required.
+
+Each trainer owns an `ASHOrthogonalizer` with one thin-DGESDD workspace. It queries
+the required workspace once, copies only the input for each destructive SVD, and
+reuses the singular vectors, values, output and native work arrays. The direction
+encoder similarly retains scratch for its logical workers across iterations.
+Workers operate on disjoint rows; neither workspace is shared between trainers.
+The existing scaling-event buffers remain thread-local. Parallel task submission
+still occurs each iteration; this is not an allocation-free training API.
+
+PCA retains its original FP64 DGESDD algorithm, complete right-singular-vector
+basis, wide-matrix handling and spectral-energy check. Its workspace query uses
+the read-only input directly; only the actual destructive decomposition needs a
+copy. The ITQ norms, update, polar decomposition, loss, random initialization and
+stopping criterion remain FP64. The scaling-factor search retains its existing
+FP32 arithmetic. The 1-bit sign rule and 2–9-bit direction quantization are
+unchanged; tests compare the new in-place encoder to the former column-major
+algorithm bit for bit on identical projected inputs.
+
+Different DGEMM orientations can change reduction order, so retraining need not
+produce a byte-identical matrix. Model serialization, database encoding and query
+projection precision are unchanged. Existing saved models remain compatible.
+This structural change does not select a different BLAS/LAPACK backend.
