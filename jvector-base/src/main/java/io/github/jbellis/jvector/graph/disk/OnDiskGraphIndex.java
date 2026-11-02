@@ -415,7 +415,7 @@ public class OnDiskGraphIndex implements ImmutableGraphIndex, AutoCloseable, Acc
         Int2ObjectHashMap<FusedFeature.InlineSource> inMemoryFeaturesLocal  = inMemoryFeatures.get();
         long inMemoryFeaturesBytes = 0;
         if (inMemoryFeaturesLocal != null) {
-            inMemoryFeaturesBytes = inMemoryFeaturesLocal.values().stream().mapToLong(is -> Integer.BYTES * is.ramBytesUsed()).sum();
+            inMemoryFeaturesBytes = inMemoryFeaturesLocal.values().stream().mapToLong(FusedFeature.InlineSource::ramBytesUsed).sum();
         }
         inMemoryFeaturesBytes += RamUsageEstimator.NUM_BYTES_OBJECT_REF;
 
