@@ -1802,7 +1802,7 @@ public class AsymmetricHashing implements VectorCompressor<AsymmetricHashing.Qua
      * ITQ / learned projection trainer.
      *
      * Mirrors the current learned_projection path:
-     *  - PCA basis P from SVD(X), matching the Python reference
+     *  - PCA basis P from checked FP64 covariance PCA, with direct SVD fallback
      *  - Xld = X @ P
      *  - iterative Procrustes:
      *      R = polar(M)
@@ -1833,11 +1833,9 @@ public class AsymmetricHashing implements VectorCompressor<AsymmetricHashing.Qua
         // X is [N x D], flat column-major for BLAS/LAPACK.
         double[] xCol = trainingData.xCol;
 
-        // PCA basis P = V[:, :d] from SVD(X), matching the Python reference.
-        logProgress("\t[stage] Starting Native SVD for PCA...");
-        double[] vtCol = computeNativeVt(xCol, N, D);    // [D x D], column-major
-        double[] pCol = extractPcaBasis(vtCol, D, d);    // [D x d], column-major
-        logProgress("\t[stage] Completed Native SVD for PCA...");
+        logProgress("\t[stage] Starting native PCA...");
+        double[] pCol = computePcaBasis(xCol, N, D, d);
+        logProgress("\t[stage] Completed native PCA...");
 
         // Xld = X @ P, shape [N x d].
         double[] xldCol = nativeMultiply(xCol, N, D, pCol, d);
@@ -2283,81 +2281,15 @@ public class AsymmetricHashing implements VectorCompressor<AsymmetricHashing.Qua
         return vt;
     }
 
-    /**
-     * PCA basis from eig(X^T X).
-     *
-     * Input X is [rows x cols] in column-major layout.
-     * Returns P = top right singular vectors of X, shape [cols x latentDim],
-     * also column-major.
-     */
-    private static double[] pcaProjectionFromCovariance(
-            double[] xCol,
-            int rows,
-            int cols,
-            int latentDim
-    ) {
-        double[] covCol = new double[cols * cols];
-
-        // cov = X^T @ X, shape [cols x cols].
-        BLAS.getInstance().dgemm(
-                "T", "N",
-                cols, cols, rows,
-                1.0,
-                xCol, rows,
-                xCol, rows,
-                0.0,
-                covCol, cols
-        );
-
-        symmetricEigenvectorsInPlace(covCol, cols);
-
-        // LAPACK dsyev returns eigenvalues ascending and eigenvectors by columns.
-        // Select the largest latentDim eigenvectors.
-        double[] pCol = new double[cols * latentDim];
-        for (int col = 0; col < latentDim; col++) {
-            int eigCol = cols - 1 - col;
-            System.arraycopy(covCol, eigCol * cols, pCol, col * cols, cols);
+    /** Prefer checked covariance PCA; preserve direct SVD for uncertain subspaces. */
+    private static double[] computePcaBasis(double[] xCol, int rows, int dims, int latent) {
+        double[] basis = ASHCovariancePCA.projection(xCol, rows, dims, latent);
+        if (basis != null) {
+            logProgress("\t[stage] PCA used FP64 covariance eigendecomposition");
+            return basis;
         }
-
-        return pCol;
-    }
-
-    /**
-     * Overwrites a symmetric column-major matrix with eigenvectors by column.
-     */
-    private static void symmetricEigenvectorsInPlace(double[] aCol, int dim) {
-        double[] evals = new double[dim];
-        intW info = new intW(0);
-
-        double[] workQuery = new double[1];
-        LAPACK.getInstance().dsyev(
-                "V", "U",
-                dim,
-                aCol, dim,
-                evals,
-                workQuery, -1,
-                info
-        );
-
-        if (info.val != 0) {
-            throw new RuntimeException("LAPACK dsyev workspace query failed with info=" + info.val);
-        }
-
-        int lwork = Math.max(1, (int) workQuery[0]);
-        double[] work = new double[lwork];
-
-        LAPACK.getInstance().dsyev(
-                "V", "U",
-                dim,
-                aCol, dim,
-                evals,
-                work, lwork,
-                info
-        );
-
-        if (info.val != 0) {
-            throw new RuntimeException("LAPACK dsyev failed with info=" + info.val);
-        }
+        logProgress("\t[stage] PCA used guarded direct SVD");
+        return extractPcaBasis(computeNativeVt(xCol, rows, dims), dims, latent);
     }
 
     /** Single-use convenience path for random projection initialization. */
