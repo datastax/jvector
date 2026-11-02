@@ -33,6 +33,8 @@ class NativeASHCompatibilityTest {
         assumeTrue(arch.equals("amd64") || arch.equals("x86_64"));
         assumeTrue(LibraryLoader.loadJvector(), "Native jvector library not available");
         assertTrue(new NativeVectorUtilSupport().supportsAshNeighborhoodScoring());
+        assertTrue(new NativeVectorUtilSupport().supportsAshCanonicalLutScoring());
+        assertTrue(NativeASHKernels.isFourBitDotAvailable());
         assertTrue(NativeASHProjection.isAvailable());
         assertTrue(NativeASHSymmetricKernels.hasPairKernel());
         assertTrue(NativeASHSymmetricKernels.hasLutKernel());
@@ -67,10 +69,10 @@ class NativeASHCompatibilityTest {
     public static final class MissingSymbolProbe {
         public static void main(String[] args) {
             var backend = new NativeVectorUtilSupport();
-            if (backend.supportsAshNeighborhoodScoring()) {
+            if (backend.supportsAshNeighborhoodScoring() || backend.supportsAshCanonicalLutScoring()) {
                 throw new AssertionError("ASH symbol unexpectedly available without a loaded native library");
             }
-            if (NativeASHProjection.isAvailable() || NativeASHSymmetricKernels.hasPairKernel()
+            if (NativeASHKernels.isFourBitDotAvailable() || NativeASHProjection.isAvailable() || NativeASHSymmetricKernels.hasPairKernel()
                     || NativeASHSymmetricKernels.hasLutKernel()) {
                 throw new AssertionError("New ASH symbols unexpectedly available");
             }
@@ -81,6 +83,8 @@ class NativeASHCompatibilityTest {
                 throw new AssertionError("Java projection fallback failed");
             if (backend.ashSymmetricDot(null,new byte[]{0},null,new byte[]{0},2,4) != .5f)
                 throw new AssertionError("Java symmetric pair fallback failed");
+            if (backend.ashProjectionDot(new float[]{2, 4}, new byte[]{(byte) 0x88}, 2, 4) != 3f)
+                throw new AssertionError("Java 4-bit projection-code fallback failed");
             float[] symmetric = new float[1];
             backend.ashSymmetricLutScore(new byte[1],1,1,0,1,new short[32],symmetric,0);
             if (symmetric[0] != 0f) throw new AssertionError("Java symmetric LUT fallback failed");
@@ -98,6 +102,12 @@ class NativeASHCompatibilityTest {
                 throw new AssertionError("Unavailable native kernel accepted a call");
             } catch (UnsupportedOperationException expected) {
                 // Capability is optional, and direct calls report its absence clearly.
+            }
+            try {
+                backend.ashCanonicalLutDot(new byte[1], 1, lut);
+                throw new AssertionError("Unavailable canonical native kernel accepted a call");
+            } catch (UnsupportedOperationException expected) {
+                // Fused scorers select their existing projection-code fallback instead.
             }
             System.out.println("MISSING_ASH_FALLBACK_OK");
         }

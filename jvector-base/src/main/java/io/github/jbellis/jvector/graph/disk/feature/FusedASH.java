@@ -37,6 +37,7 @@ import java.io.IOException;
 import java.io.UncheckedIOException;
 import java.util.Arrays;
 import java.util.function.IntFunction;
+import java.util.function.Supplier;
 
 /**
  * Fuses ASH-encoded neighbors into an {@link OnDiskGraphIndex} for block-oriented
@@ -58,8 +59,7 @@ public class FusedASH extends AbstractFeature implements FusedFeature {
     private final AsymmetricHashing ash;
     private final int featureSize;
 
-    private final ThreadLocal<byte[]> reusableNeighborhoodBytes;
-    private final ThreadLocal<float[]> reusableScores;
+    private final Supplier<FusedASHDecoder.QueryScratch> queryScratchFactory;
     private final ThreadLocal<byte[]> writeScratch;
     private final ThreadLocal<AsymmetricHashing.QuantizedVector[]> packingRefs;
 
@@ -86,8 +86,7 @@ public class FusedASH extends AbstractFeature implements FusedFeature {
                 ash.bitsPerDimension,
                 blockSize);
 
-        this.reusableNeighborhoodBytes = ThreadLocal.withInitial(() -> new byte[featureSize]);
-        this.reusableScores = ThreadLocal.withInitial(() -> new float[maxDegree]);
+        this.queryScratchFactory = () -> new FusedASHDecoder.QueryScratch(ash, maxDegree, blockSize);
         this.writeScratch = ThreadLocal.withInitial(() -> new byte[featureSize]);
         this.packingRefs = ThreadLocal.withInitial(() -> new AsymmetricHashing.QuantizedVector[maxDegree]);
     }
@@ -244,8 +243,7 @@ public class FusedASH extends AbstractFeature implements FusedFeature {
                 hierarchyCachedFeatures,
                 source -> ((FusedASHInlineSource) source).getVector(),
                 queryVector,
-                reusableNeighborhoodBytes.get(),
-                reusableScores.get(),
+                view.getOrCreateFeatureScratch(id(), FusedASHDecoder.QueryScratch.class, queryScratchFactory),
                 blockSize,
                 vsf);
     }

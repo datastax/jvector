@@ -42,6 +42,38 @@ Java validates shapes, array bounds and output aliasing before passing pointers
 to native code. Native kernels do not allocate, retain pointers or call Java.
 Scorer diagnostics identify whether each operation is Highway or Java.
 
+## Direct-node scoring and query scratch
+
+Fused 2-bit direct-node scoring uses `ash_canonical_lut_dot_f32` and reuses the
+neighborhood scorer's FP32 nibble LUT. One lookup combines two projected
+coordinates. For 4-bit codes each nibble represents only one coordinate, so its
+LUT is 16 times larger than the projected query. The preferred native
+`ash_projection_dot_4bit_f32` instead decodes packed nibbles in registers,
+loads contiguous query coordinates and performs one final SIMD reduction. This
+also supplies the native provider's existing 4-bit projection-code dot API.
+Neither operation materializes decoded vectors. Java applies the existing
+scale, landmark correction, offset and graph similarity conversion.
+
+Normal codes use one bounded synchronous native call per direct node with heap
+access, no native copy and no output array. Unusually large legal codes use an
+ordinary call with native staging so the JVM can reach safepoints. Both symbols
+are optional independently: older native libraries and other providers retain
+the previous projection-code scorer. Forced scalar scoring remains an
+independent reference. The 4-bit choice follows the representation's working
+set and does not depend on dataset names, dimensions or benchmark settings.
+
+Each on-disk graph view lazily owns its ASH input, projection, landmark terms,
+LUT, neighborhood bytes and output arrays. Subsequent queries refill this storage.
+Projection codes skip the generic centered-query arrays and sums, which their
+scoring formula does not consume. Query projection precision and model/index
+formats are unchanged. Separate views have independent scratch even on the same
+thread. A view is confined to one active search, including any `resume()` calls;
+starting another query invalidates the previous decoder, whose scoring methods
+then throw `IllegalStateException` instead of reading overwritten query data.
+Public standalone scorers retain independent prepared state and can be retained
+across subsequent queries. The reusable path still allocates small scorer objects;
+it does not claim an allocation-free search API.
+
 ## Base-vector encoding
 
 `encode()` and `encodeTo()` normalize the centered residual, project it through

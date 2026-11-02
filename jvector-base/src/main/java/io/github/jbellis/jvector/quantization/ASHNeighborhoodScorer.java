@@ -30,7 +30,7 @@ import java.util.Objects;
  * conversion to the graph's nonnegative DOT_PRODUCT similarity. The graph decoder and isolated
  * benchmark share this implementation.</p>
  *
- * <p>Prepared state is immutable. Instances may be shared across threads with independent output
+ * <p>Publicly constructed prepared state is independently owned and immutable. Such instances may be shared across threads with independent output
  * arrays and immutable packed inputs. Scalar/Panama execution supports all model landmarks;
  * a capable native provider handles C=1 with one call per entire neighborhood.</p>
  */
@@ -74,6 +74,12 @@ public final class ASHNeighborhoodScorer {
 
     /** Reuses preparation already shared with upper-layer scoring in {@link FusedASHDecoder}. */
     ASHNeighborhoodScorer(AsymmetricHashing ash, ASHScorer.QueryPrecompute query, int maxDegree, int blockSize) {
+        this(ash, query, maxDegree, blockSize, null);
+    }
+
+    /** Borrows a view-owned LUT; its owner prevents use after the next query. */
+    ASHNeighborhoodScorer(AsymmetricHashing ash, ASHScorer.QueryPrecompute query,
+                          int maxDegree, int blockSize, float[] reusableLut) {
         FusedASHLayout.validateBitsPerDimension(ash.bitsPerDimension);
         FusedASHLayout.validateBlockSize(blockSize);
         this.maxDegree = maxDegree;
@@ -84,7 +90,11 @@ public final class ASHNeighborhoodScorer {
         this.blocks = FusedASHLayout.blocksPerNode(maxDegree, blockSize);
         this.featureSize = FusedASHLayout.featureSize(maxDegree, dimensions, bits, blockSize);
         this.dotQMu = query.dotQMuByLandmark;
-        this.lut = new float[Math.multiplyExact(groups, 16)];
+        int lutSize = Math.multiplyExact(groups, 16);
+        if (reusableLut != null && reusableLut.length != lutSize) {
+            throw new IllegalArgumentException("LUT size does not match the ASH model");
+        }
+        this.lut = reusableLut == null ? new float[lutSize] : reusableLut;
         FusedASHLayout.buildQueryLut(query.qProj, dimensions, bits, lut);
         var backend = VectorizationProvider.getInstance().getVectorUtilSupport();
         this.neighborhoodBackend =
@@ -132,4 +142,7 @@ public final class ASHNeighborhoodScorer {
         Object implementation = neighborhoodBackend == null ? kernel : "native Highway whole-neighborhood FFM";
         return "ASHNeighborhoodScorer[" + implementation + ", blockSize=" + blockSize + ", capacity=" + maxDegree + "]";
     }
+
+    /** Query-lifetime table shared with canonical direct-node scoring. */
+    float[] queryLut() { return lut; }
 }

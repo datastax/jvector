@@ -46,11 +46,13 @@ import java.io.IOException;
 import java.io.UncheckedIOException;
 import java.nio.file.Path;
 import java.util.EnumMap;
+import java.util.Objects;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Consumer;
+import java.util.function.Supplier;
 import java.util.stream.Collectors;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -488,6 +490,28 @@ public class OnDiskGraphIndex implements ImmutableGraphIndex, AutoCloseable, Acc
         protected final RandomAccessReader reader;
         private final int[] neighbors;
         private int nodeDegree;
+        private EnumMap<FeatureId, Object> featureScratch;
+
+        /**
+         * Returns scratch confined to this view, allocating it on first use only.
+         * Views and their scratch are not thread safe. A feature may reuse its scratch
+         * for the next query only after the current query (including resume) is finished.
+         * The feature owns any invalidation needed for previously returned scorers.
+         */
+        public <T> T getOrCreateFeatureScratch(FeatureId id, Class<T> type, Supplier<? extends T> factory) {
+            Objects.requireNonNull(id, "id");
+            Objects.requireNonNull(type, "type");
+            Objects.requireNonNull(factory, "factory");
+            if (!features.containsKey(id)) {
+                throw new IllegalArgumentException("Feature is not present in this graph: " + id);
+            }
+            Object scratch = featureScratch == null ? null : featureScratch.get(id);
+            if (scratch != null) return type.cast(scratch);
+            T created = type.cast(Objects.requireNonNull(factory.get(), "feature scratch"));
+            if (featureScratch == null) featureScratch = new EnumMap<>(FeatureId.class);
+            featureScratch.put(id, created);
+            return created;
+        }
 
         public View(RandomAccessReader reader) {
             this.reader = reader;
@@ -698,6 +722,7 @@ public class OnDiskGraphIndex implements ImmutableGraphIndex, AutoCloseable, Acc
 
         @Override
         public void close() throws IOException {
+            featureScratch = null;
             reader.close();
         }
 
