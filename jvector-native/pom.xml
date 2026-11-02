@@ -16,8 +16,8 @@
         <native.jextract.skip>true</native.jextract.skip>
         <!-- Set to true via -Dnative.crossarch to also cross-compile for the other arch -->
         <native.crossarch>false</native.crossarch>
-        <!-- Optional self-contained ASH FP16 query projection library. -->
-        <native.onednn>false</native.onednn>
+        <!-- Preferred self-contained ASH FP32 encoding / FP16 query projection. -->
+        <native.onednn>true</native.onednn>
     </properties>
     <build>
         <!-- Pick up the .so files from target/meson-build/ so that mvn clean
