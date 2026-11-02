@@ -1,4 +1,23 @@
-# ASH PCA SVD correctness
+# ASH PCA correctness
+
+PCA first computes FP64 covariance with DSYRK and its eigendecomposition with
+DSYEVD. This avoids computing and discarding a full tall left-singular-vector
+matrix. The input is read-only. Finite values, covariance trace, eigenvalue energy,
+the retained tail, the retained/discarded spectral gap and selected eigenpair
+residuals are validated before the leading directions are accepted.
+
+Covariance squares the condition number. A retained eigenvalue or cutoff gap
+at the scale of accumulated FP64 error causes fallback to direct DGESDD. Zero
+energy, wide input and eigenvalue nonconvergence also use direct SVD. Its full
+right basis preserves null-space completion for underdetermined training.
+Invalid input, invalid native arguments and invalid workspace sizes are reported;
+allocation failures are not swallowed. Models and graph formats are unchanged.
+
+Tests compare subspace projectors with an independent direct SVD, including
+repeated eigenvalues inside the retained subspace, ties at its boundary,
+ill-conditioned and rank-deficient matrices, wide inputs and input preservation.
+
+## Historical DGESVD correctness issue
 
 During the native PQ/ASH graph comparison, JDK 25 MPNet ASH training failed in
 native PCA with `DGESVD info=767`. The identical frozen-runtime retry failed too.
@@ -26,8 +45,8 @@ selection issue or non-finite training input. They do not establish an upstream
 vendor root-cause patch. Positive DGESVD status denotes QR nonconvergence; see
 [the LAPACK contract](https://www.netlib.org/lapack/explore-html/d1/d7f/group__gesvd_gac6bd5d4e645049e49bb70691180abf07.html).
 
-ASH PCA now uses the portable divide-and-conquer DGESDD driver, already used by
-its ITQ orthogonalization. Tall matrices overwrite the scratch input with the
+The initial fix selected the portable divide-and-conquer DGESDD driver, already
+used by ITQ orthogonalization and retained as the direct-SVD fallback. Tall matrices overwrite the scratch input with the
 unused left vectors. Wide matrices request full right vectors so projections can
 include null-space directions when training has fewer rows than dimensions.
 Finite input, workspace size and singular-value energy are validated before
@@ -39,7 +58,7 @@ both JDKs with 64-by-768 and 1,024-by-768 training sets, native ASH, deferred wr
 and NVQ reranking. All four cases passed, including serial/concurrent result
 checks. Added regression sources cover principal axes, wide null-space completion
 and non-finite input; they compile for CI. Unit tests were not separately executed
-for this study.
+for that initial study; the current regression suite executes the PCA checks.
 
 All graph measurements made with the earlier ASH PCA implementation are retained
 as superseded evidence and recollected after the fix. PQ does not use this PCA
