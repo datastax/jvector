@@ -14,5 +14,5 @@
 # limitations under the License.
 #
 
-option('onednn', type: 'feature', value: 'disabled',
-       description: 'Build optional single-query ASH FP16 support with sequential oneDNN')
+option('onednn', type: 'feature', value: 'enabled',
+       description: 'Build ASH FP32 encoding and FP16 query projection with sequential oneDNN')

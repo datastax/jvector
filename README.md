@@ -128,19 +128,20 @@ git clone --recurse-submodules <repo-url>
 
 ### Building native libraries
 
-**For ASH on JDK 22 or newer, oneDNN is the recommended native installation.**
+**Native builds include oneDNN by default for ASH on JDK 22 or newer.**
 It is automatically preferred for FP32 base-vector batch projection and FP16
 query projection on supported CPUs. Highway FP32 remains the portable fallback.
 Install CMake 3.13+ in addition to the C++ compiler, Meson, and Ninja, then build
 from the repository root:
 
 ```bash
-mvn -pl jvector-native -am package -Dnative.onednn=true
+mvn -pl jvector-native -am package
 ```
 
 Meson fetches the pinned oneDNN source and Maven packages its statically linked
 add-on with the native JAR. Deploy that JAR with the native provider; no separate
 oneDNN runtime installation or per-machine library symlinks are required.
+Use `-Dnative.onednn=false` to build a Highway-only package with FP32 fallback.
 See the [oneDNN installation and fallback details](./jvector-native/src/main/native/README.md#recommended-onednn-build-and-package).
 
 

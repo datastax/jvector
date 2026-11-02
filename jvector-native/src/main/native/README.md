@@ -93,12 +93,12 @@ Parameters (all optional):
 |-----------|---------|-------------|
 | `buildtype` | `release` | `release`, `debug`, or `debugoptimized` |
 | `crossarch` | `false` | Set to `true` to also cross-compile for the other arch |
-| `onednn` | `false` | **Recommended for ASH:** set to `true` to bundle FP32 batch and FP16 query projection support |
+| `onednn` | `true` | Bundle FP32 batch and FP16 query projection support; set to `false` for Highway-only builds |
 
-For the recommended ASH build, pass all three arguments:
+The default ASH build includes oneDNN:
 
 ```bash
-bash src/build_native_lib.sh release false true
+bash src/build_native_lib.sh release
 ```
 
 The script:
@@ -176,11 +176,11 @@ select the correct ISA variant list (x86 tiers vs AArch64 tiers) automatically.
 From the project root, the recommended ASH build includes oneDNN:
 
 ```bash
-mvn -pl jvector-native -am package -Dnative.onednn=true
+mvn -pl jvector-native -am package
 ```
 
-It requires the CMake prerequisite above. The commands below build Highway
-without oneDNN unless `-Dnative.onednn=true` is appended.
+It requires the CMake prerequisite above. The commands below include oneDNN by
+default; append `-Dnative.onednn=false` for a Highway-only package.
 
 **Native arch only — release (default):**
 ```bash
@@ -855,7 +855,8 @@ When changing the native interface:
 
 ## ASH FP16 query projection
 
-ASH encoding and training retain the Highway FP32 projection. Query scoring
+ASH base-vector encoding retains FP32; batch projection prefers oneDNN and
+single-vector projection uses Highway. Training uses the BLAS/LAPACK provider. Query scoring
 lazily prepares a separate immutable FP16 representation of the same trained
 matrix. Incoming query operands are converted to FP16; accumulation and output
 are strictly FP32. The serialized model and graph format do not change.
@@ -881,20 +882,21 @@ workload when selecting a precision.
 
 ### Recommended oneDNN build and package
 
-For ASH, build and deploy the oneDNN add-on with JDK 22 or newer. It is
+Native Maven and direct-script builds include oneDNN by default on the supported
+Linux platforms. Use JDK 22 or newer. It is
 **automatically preferred** for FP32 encoding batches and supported FP16 queries;
 there is no additional runtime opt-in. Highway stays independent and supplies
 FP32 fallback when the add-on or the requested operation is unavailable:
 
 
 ```bash
-mvn -pl jvector-native -am package -Dnative.onednn=true
+mvn -pl jvector-native -am package
 ```
 
-For a direct native build, the third script argument enables the component:
+For a direct native build, oneDNN is enabled without an additional argument:
 
 ```bash
-bash src/build_native_lib.sh release false true
+bash src/build_native_lib.sh release
 ```
 
 The recommended oneDNN build requires CMake 3.13+ in addition to the native prerequisites. Meson
@@ -909,8 +911,9 @@ this library and the upstream license/third-party notices beside the Highway
 resource. The existing architecture-aware loader first tries the system library
 path, then extracts the matching classpath resource. No external `libdnnl` or
 benchmark-specific path is required. The resource keeps its existing FP16 name
-for binary compatibility but supplies both FP32 and FP16 projection. Omitting
-`-Dnative.onednn=true` leaves oneDNN projection out of the package and removes
+for binary compatibility but supplies both FP32 and FP16 projection. Passing
+`-Dnative.onednn=false` (or `false` as the script's third argument) leaves oneDNN
+projection out of the package and removes
 stale add-on resources from previous builds; Highway FP32 is then used.
 The optional component follows the native module's Linux platform support;
 cross-compilation still requires the corresponding target toolchain.

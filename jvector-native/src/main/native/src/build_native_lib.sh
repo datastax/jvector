@@ -55,7 +55,7 @@ CROSSARCH="${2:-false}"
 printf "CROSSARCH=%s\n" "${CROSSARCH}"
 
 # oneDNN add-on for FP32 encoding batches and FP16 queries; libjvector stays independent.
-ONEDNN="${3:-false}"
+ONEDNN="${3:-true}"
 case "${ONEDNN}" in
   true) ONEDNN_FEATURE=enabled ;;
   false) ONEDNN_FEATURE=disabled ;;
@@ -100,6 +100,9 @@ require_cmd() {
 
 require_cmd meson  "sudo apt-get install -y meson"
 require_cmd ninja  "sudo apt-get install -y ninja-build"
+if [[ "${ONEDNN}" == "true" ]]; then
+  require_cmd cmake "sudo apt-get install -y cmake"
+fi
 
 # ---------------------------------------------------------------------------
 # Detect the host CPU architecture.
