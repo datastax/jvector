@@ -119,6 +119,24 @@ class NativeVectorUtilSupport extends PanamaVectorUtilSupport
     }
 
     @Override
+    public float ashProjectionDot(float[] query, byte[] code, int dimensions, int bitsPerDimension) {
+        if (bitsPerDimension == 4 && NativeASHKernels.isFourBitDotAvailable()) {
+            return NativeASHKernels.dotFourBit(query, code, dimensions);
+        }
+        return super.ashProjectionDot(query, code, dimensions, bitsPerDimension);
+    }
+
+    @Override
+    public boolean supportsAshCanonicalLutScoring() {
+        return NativeASHKernels.isCanonicalLutAvailable();
+    }
+
+    @Override
+    public float ashCanonicalLutDot(byte[] code, int groups, float[] lut) {
+        return NativeASHKernels.dotCanonical(code, groups, lut);
+    }
+
+    @Override
     public String ashKernelDescription() {
         String neighborhood = supportsAshNeighborhoodScoring()
                 ? "Highway native, ISA=" + getActiveIsa()

@@ -119,6 +119,22 @@ public final class ASHScorer {
         return genericMultibitDotProductScoreFunction(qp);
     }
 
+    /** Reuses a fused scorer's table for direct nodes when the backend supports it. */
+    ASHScoreFunction scoreFunctionFor(QueryPrecompute qp, float[] lut) {
+        var mode = ASHVectors.AshSingleKernel.fromProperty();
+        var backend = VectorizationProvider.getInstance().getVectorUtilSupport();
+        // Two coordinates share each 2-bit LUT entry. Four-bit codes instead
+        // use the backend's contiguous projection dot, avoiding a 16x larger table.
+        if (ash.bitsPerDimension == 2
+                && mode != ASHVectors.AshSingleKernel.SCALAR
+                && backend.supportsAshCanonicalLutScoring()) {
+            int groups = FusedASHLayout.codeGroups(qp.d, ash.bitsPerDimension);
+            return v -> v.scale * backend.ashCanonicalLutDot(v.extraBits, groups, lut)
+                    + qp.dotQMuByLandmark[v.landmark & 255] + v.offset;
+        }
+        return scoreFunctionFor(qp);
+    }
+
     /** Prepared encoded-query state; uses the same arithmetic as the raw-query scorer. */
     ASHScoreFunction scoreFunctionFor(QueryPrecompute qp, boolean simd) {
         if (ash.bitsPerDimension == 1) return oneBitDotProductScoreFunction(qp);
@@ -247,45 +263,54 @@ public final class ASHScorer {
         };
     }
 
-    /** Prepares the projection and landmark terms shared by source and fused scorers. */
+    private static final float[] EMPTY = new float[0];
+
+    /** Allocates only the preparation terms used by this model's scoring formula. */
+    QueryPrecompute newQueryPrecompute() {
+        int d = ash.quantizedDim;
+        int c = ash.landmarkCount;
+        boolean generic = !AsymmetricHashing.usesFastScanProjectionCode(ash.bitsPerDimension);
+        return new QueryPrecompute(d, c, new float[d],
+                generic ? new float[Math.multiplyExact(c, d)] : EMPTY,
+                generic ? new float[c] : EMPTY, new float[c]);
+    }
+
+    /** Independently owned preparation for retained standalone scorers. */
     QueryPrecompute precomputeQuery(VectorFloat<?> query) {
-        final int d = ash.quantizedDim;
-        final int D = ash.originalDimension;
-        final int C = ash.landmarkCount;
+        validateQuery(query);
+        QueryPrecompute prepared = newQueryPrecompute();
+        prepareQuery(query, new float[ash.originalDimension], prepared);
+        return prepared;
+    }
 
-        // Materialize query once to avoid VectorFloat.get in inner loops.
-        final float[] qArr = new float[D];
-        for (int k = 0; k < D; k++) {
-            qArr[k] = query.get(k);
+    void validateQuery(VectorFloat<?> query) {
+        java.util.Objects.requireNonNull(query, "query");
+        if (query.length() != ash.originalDimension) {
+            throw new IllegalArgumentException("ASH query dimension must be " + ash.originalDimension);
         }
+    }
 
-        // Compute Aq once per query:
-        //   qProj[j] = <A[j], q>
-        final float[] qProj = new float[d];
-        ash.stiefelTransform.projectQuery(qArr, qProj);
+    /** Refills model-owned scratch; callers must enforce its query lifetime. */
+    void prepareQuery(VectorFloat<?> query, float[] input, QueryPrecompute prepared) {
+        validateQuery(query);
+        // Scratch is constructed with this model and never resized on the hot path.
+        for (int k = 0; k < input.length; k++) input[k] = query.get(k);
+        ash.stiefelTransform.projectQuery(input, prepared.qProj);
+        for (int c = 0; c < ash.landmarkCount; c++) {
+            prepared.dotQMuByLandmark[c] = VectorUtil.dotProduct(query, ash.landmarks[c]);
+        }
+        // Projection codes already include landmark adjustment in their stored offset.
+        // Neither their direct scorer nor their LUT needs the generic centered vectors.
+        if (AsymmetricHashing.usesFastScanProjectionCode(ash.bitsPerDimension)) return;
         float sumQProj = 0f;
-        for (float value : qProj) sumQProj += value;
-
-        // For each landmark c:
-        //   tildeQ_c   = Aq - Aμ_c       (1-bit and generic multibit paths)
-        //   sumTildeQc = sum(Aq) - sum(Aμ_c)
-        //   dotQMu_c   = <q, μ_c>        (all paths)
-        final float[] tildeQPool = new float[C * d];
-        final float[] sumTildeQByLandmark = new float[C];
-        final float[] dotQMuByLandmark = new float[C];
-
-        for (int c = 0; c < C; c++) {
-            dotQMuByLandmark[c] = VectorUtil.dotProduct(query, ash.landmarks[c]);
-            sumTildeQByLandmark[c] = sumQProj - ash.landmarkProjSum[c];
-
-            final int base = c * d;
-            final float[] muProj = ash.landmarkProj[c]; // [d]
-            for (int j = 0; j < d; j++) {
-                tildeQPool[base + j] = qProj[j] - muProj[j];
+        for (float value : prepared.qProj) sumQProj += value;
+        for (int c = 0; c < ash.landmarkCount; c++) {
+            prepared.sumTildeQByLandmark[c] = sumQProj - ash.landmarkProjSum[c];
+            int base = c * ash.quantizedDim;
+            for (int j = 0; j < ash.quantizedDim; j++) {
+                prepared.tildeQPool[base + j] = prepared.qProj[j] - ash.landmarkProj[c][j];
             }
         }
-
-        return new QueryPrecompute(d, C, qProj, tildeQPool, sumTildeQByLandmark, dotQMuByLandmark);
     }
 
     static final class QueryPrecompute {

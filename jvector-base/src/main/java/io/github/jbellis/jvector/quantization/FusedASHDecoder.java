@@ -34,7 +34,8 @@ import java.util.Objects;
  * hot graph-expansion loop.</p>
  *
  * <p>Each decoder and its mutable scratch/cache are confined to one graph view/search thread.
- * The underlying prepared neighborhood scorer may be shared only with separate scratch storage.</p>
+ * A decoder borrowing view-owned query scratch is invalidated by the next query on that view.
+ * Standalone constructors own independent preparation state.</p>
  *
  * <p>Scalar and SIMD execution share the same packed layout. The property
  * {@code jvector.ash.blockKernel=auto|scalar|simd} selects execution once per decoder;
@@ -89,6 +90,38 @@ public final class FusedASHDecoder implements ScoreFunction.ApproximateScoreFunc
         AsymmetricHashing.QuantizedVector vector(FusedFeature.InlineSource source);
     }
 
+    /**
+     * Reusable preparation and scoring arrays for one graph view and one ASH model.
+     * Starting a new query invalidates that view's previous decoder; use a separate
+     * view for overlapping searches. Standalone constructors retain independent state.
+     */
+    public static final class QueryScratch {
+        private final AsymmetricHashing ash;
+        private final ASHScorer scorer;
+        private final ASHScorer.QueryPrecompute prepared;
+        private final float[] input;
+        private final float[] lut;
+        private final byte[] neighborhoodBytes;
+        private final float[] scores;
+        private final int blockSize;
+        private long generation;
+
+        public QueryScratch(AsymmetricHashing ash, int maxDegree, int blockSize) {
+            this.ash = Objects.requireNonNull(ash, "ash");
+            int size = FusedASHLayout.featureSize(maxDegree, ash.quantizedDim, ash.bitsPerDimension, blockSize);
+            this.blockSize = blockSize;
+            this.scorer = new ASHScorer(ash);
+            this.prepared = scorer.newQueryPrecompute();
+            this.input = new float[ash.originalDimension];
+            this.lut = new float[Math.multiplyExact(FusedASHLayout.codeGroups(ash.quantizedDim, ash.bitsPerDimension), 16)];
+            this.neighborhoodBytes = new byte[size];
+            this.scores = new float[maxDegree];
+        }
+    }
+
+    private final QueryScratch queryScratch;
+    private final long generation;
+
     private final PackedNeighborhoods packedNeighborhoods;
     private final Int2ObjectHashMap<FusedFeature.InlineSource> hierarchyCachedFeatures;
     private final InlineSourceAccessor inlineSourceAccessor;
@@ -128,6 +161,17 @@ public final class FusedASHDecoder implements ScoreFunction.ApproximateScoreFunc
             float[] reusableScores,
             int blockSize,
             VectorSimilarityFunction similarityFunction) {
+
+        this(packedNeighborhoods, ash, hierarchyCachedFeatures, inlineSourceAccessor, query,
+                reusableNeighborhoodBytes, reusableScores, blockSize, similarityFunction, null);
+    }
+
+    private FusedASHDecoder(
+            PackedNeighborhoods packedNeighborhoods, AsymmetricHashing ash,
+            Int2ObjectHashMap<FusedFeature.InlineSource> hierarchyCachedFeatures,
+            InlineSourceAccessor inlineSourceAccessor, VectorFloat<?> query,
+            byte[] reusableNeighborhoodBytes, float[] reusableScores, int blockSize,
+            VectorSimilarityFunction similarityFunction, QueryScratch scratch) {
 
         if (similarityFunction != VectorSimilarityFunction.DOT_PRODUCT) {
             throw new UnsupportedOperationException("FusedASH supports DOT_PRODUCT only");
@@ -182,11 +226,26 @@ public final class FusedASHDecoder implements ScoreFunction.ApproximateScoreFunc
 
         // Upper-layer source scoring and L0 block scoring use the same Aq and
         // <q, landmark> values. Prepare them once, then build each scoring form.
-        var scorer = new ASHScorer(ash);
-        var preparedQuery = scorer.precomputeQuery(query);
-        this.sourceScorer = scorer.scoreFunctionFor(preparedQuery);
-
-        this.neighborhoodScorer = new ASHNeighborhoodScorer(ash, preparedQuery, maxDegree, blockSize);
+        if (scratch != null && (scratch.ash != ash || scratch.blockSize != blockSize
+                || scratch.scores.length != maxDegree)) {
+            throw new IllegalArgumentException("Query scratch belongs to a different ASH model or graph layout");
+        }
+        this.queryScratch = scratch;
+        var scorer = scratch == null ? new ASHScorer(ash) : scratch.scorer;
+        ASHScorer.QueryPrecompute preparedQuery;
+        if (scratch == null) {
+            this.generation = 0;
+            preparedQuery = scorer.precomputeQuery(query);
+        } else {
+            // Invalidate before projection: failure must not leave a usable old decoder
+            // whose query buffers have been partially overwritten.
+            this.generation = ++scratch.generation;
+            preparedQuery = scratch.prepared;
+            scorer.prepareQuery(query, scratch.input, preparedQuery);
+        }
+        this.neighborhoodScorer = new ASHNeighborhoodScorer(ash, preparedQuery, maxDegree, blockSize,
+                scratch == null ? null : scratch.lut);
+        this.sourceScorer = scorer.scoreFunctionFor(preparedQuery, neighborhoodScorer.queryLut());
     }
 
     public static FusedASHDecoder newDecoder(
@@ -211,6 +270,23 @@ public final class FusedASHDecoder implements ScoreFunction.ApproximateScoreFunc
                 similarityFunction);
     }
 
+    /** Creates a query decoder using scratch owned by its graph view. */
+    public static FusedASHDecoder newDecoder(
+            PackedNeighborhoods neighborhoods, AsymmetricHashing ash,
+            Int2ObjectHashMap<FusedFeature.InlineSource> hierarchyFeatures,
+            InlineSourceAccessor sourceAccessor, VectorFloat<?> query, QueryScratch scratch,
+            int blockSize, VectorSimilarityFunction similarityFunction) {
+        Objects.requireNonNull(scratch, "scratch");
+        return new FusedASHDecoder(neighborhoods, ash, hierarchyFeatures, sourceAccessor, query,
+                scratch.neighborhoodBytes, scratch.scores, blockSize, similarityFunction, scratch);
+    }
+
+    private void checkQueryLifetime() {
+        if (queryScratch != null && generation != queryScratch.generation) {
+            throw new IllegalStateException("FusedASH decoder was invalidated by a new query on the same graph view");
+        }
+    }
+
     @Override
     public boolean supportsSimilarityToNeighbors() {
         return true;
@@ -218,6 +294,7 @@ public final class FusedASHDecoder implements ScoreFunction.ApproximateScoreFunc
 
     @Override
     public void enableSimilarityToNeighbors(int origin) {
+        checkQueryLifetime();
         if (this.origin == origin) {
             return;
         }
@@ -238,6 +315,7 @@ public final class FusedASHDecoder implements ScoreFunction.ApproximateScoreFunc
      */
     @Override
     public float similarityTo(int node2) {
+        checkQueryLifetime();
         FusedFeature.InlineSource source = hierarchyCachedFeatures.get(node2);
         if (source == null) {
             throw new IllegalStateException(
@@ -259,6 +337,7 @@ public final class FusedASHDecoder implements ScoreFunction.ApproximateScoreFunc
 
     @Override
     public float similarityToNeighbor(int origin, int neighborIndex) {
+        checkQueryLifetime();
         if (this.origin != origin) {
             throw new IllegalArgumentException(
                     "origin must be the same as the origin used to enable similarityToNeighbor");

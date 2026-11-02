@@ -84,6 +84,10 @@
     KERNEL_ENTRY(void, ash_project_batch_f32, (const float *matrix, const float *inputs, int rows, int cols, int count, float *out), (matrix, inputs, rows, cols, count, out)) \
     KERNEL_ENTRY(float, ash_symmetric_dot, (const void *a, const void *b, int dimensions, int bits), (a, b, dimensions, bits)) \
     KERNEL_ENTRY(void, ash_symmetric_lut_i16, (const unsigned char *codes, const int16_t *lut, int groups, int stride, int lane, int count, float *out), (codes, lut, groups, stride, lane, count, out)) \
+    /* Canonical ASH dot using the prepared query LUT. */ \
+    KERNEL_ENTRY(float, ash_canonical_lut_dot_f32, (const unsigned char *code, const float *lut, int groups), (code, lut, groups)) \
+    /* Contiguous canonical 4-bit dot; avoids the 16x larger query LUT. */ \
+    KERNEL_ENTRY(float, ash_projection_dot_4bit_f32, (const float *query, const unsigned char *code, int dimensions), (query, code, dimensions)) \
     /* Whole-neighborhood C=1 ASH, one downcall including headers and similarity. */ \
     KERNEL_ENTRY(int, ash_score_neighborhood_c1_f32, (const unsigned char *codes, const float *lut, float landmarkDot, int groups, int blockSize, int capacity, float *out), (codes, lut, landmarkDot, groups, blockSize, capacity, out)) \
     /* NVQ kernels */ \

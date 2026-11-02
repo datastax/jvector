@@ -73,6 +73,14 @@ public interface VectorUtilSupport {
   /** Whether canonical 2/4-bit projection codes have a single-vector SIMD kernel. */
   default boolean supportsAshProjectionScoring() { return false; }
 
+  /** Whether canonical ASH codes can use an already prepared nibble LUT in SIMD. */
+  default boolean supportsAshCanonicalLutScoring() { return false; }
+
+  /** Projection dot only; callers apply the vector's scale, offset and landmark term. */
+  default float ashCanonicalLutDot(byte[] code, int groups, float[] lut) {
+    return ASHLutScoring.dotCanonical(code, groups, lut);
+  }
+
   /** Dot product of a projected query with a canonical signed-magnitude 2/4-bit code. */
   default float ashProjectionDot(float[] query, byte[] code, int dimensions, int bitsPerDimension) {
     if (bitsPerDimension != 2 && bitsPerDimension != 4) {

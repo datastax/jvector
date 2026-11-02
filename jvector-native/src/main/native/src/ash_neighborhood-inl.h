@@ -116,6 +116,37 @@ HWY_INLINE int AshBlock32(D d, const unsigned char *codes, const float *lut, int
 
 } // namespace
 
+// Canonical vectors pack consecutive groups into low/high nibbles of each byte.
+// Gather from the same query LUT as the neighborhood kernel, without gathering
+// projected query coordinates or repeatedly decoding signed-magnitude components.
+float ash_canonical_lut_dot_f32(const unsigned char *HWY_RESTRICT code,
+                               const float *HWY_RESTRICT lut, int groups) {
+    if (code == nullptr || lut == nullptr || groups <= 0) return NAN;
+    const hn::CappedTag<float, 16> d;
+    const hn::Rebind<uint8_t, decltype(d)> db;
+    const hn::Rebind<int32_t, decltype(d)> di;
+    const auto offsets = hn::Mul(hn::Iota(di, 0), hn::Set(di, 32));
+    const auto mask = hn::Set(di, 15);
+    const size_t lanes = hn::Lanes(d);
+    const size_t pairs = static_cast<size_t>(groups) / 2;
+    auto low = hn::Zero(d), high = hn::Zero(d);
+    size_t i = 0;
+    for (; i + lanes <= pairs; i += lanes) {
+        const auto packed = hn::PromoteTo(di, hn::LoadU(db, code + i));
+        const auto lowIndex = hn::Add(offsets, hn::And(packed, mask));
+        const auto highIndex = hn::Add(offsets, hn::Add(hn::Set(di, 16), hn::ShiftRight<4>(packed)));
+        low = hn::Add(low, hn::GatherIndex(d, lut + i * 32, lowIndex));
+        high = hn::Add(high, hn::GatherIndex(d, lut + i * 32, highIndex));
+    }
+    float sum = hn::ReduceSum(d, hn::Add(low, high));
+    for (; i < pairs; i++) {
+        sum += lut[i * 32 + (code[i] & 15)];
+        sum += lut[i * 32 + 16 + (code[i] >> 4)];
+    }
+    if (groups & 1) sum += lut[pairs * 32 + (code[pairs] & 15)];
+    return sum;
+}
+
 // Synchronous, allocation-free leaf. Buffer sizes and non-aliasing are checked by
 // NativeASHKernels before FFM. The ordinary FFM path uses the same entry for larger
 // legal inputs. FP32 reductions may differ in order from the Java scalar oracle.
@@ -165,6 +196,45 @@ int ash_score_neighborhood_c1_f32(const unsigned char *HWY_RESTRICT codes, const
         }
     }
     return kAshSuccess;
+}
+
+// A 4-bit nibble represents one coordinate, so a full query LUT is 16 times
+// larger than the projection. Decode consecutive coordinates in registers and
+// keep the projection access contiguous instead of gathering a large table.
+float ash_projection_dot_4bit_f32(const float *HWY_RESTRICT query,
+                                  const unsigned char *HWY_RESTRICT code, int dimensions) {
+    if (query == nullptr || code == nullptr || dimensions < 0) return NAN;
+    const hn::CappedTag<float, 16> d;
+    const hn::Rebind<uint8_t, decltype(d)> db;
+    const hn::Rebind<uint32_t, decltype(d)> du;
+    const size_t lanes = hn::Lanes(d);
+    const size_t count = static_cast<size_t>(dimensions);
+    const auto magnitudeMask = hn::Set(du, 7);
+    const auto signMask = hn::Set(du, 8);
+    const auto half = hn::Set(d, 0.5f);
+    auto low = hn::Zero(d), high = hn::Zero(d);
+    size_t i = 0;
+    for (; i + 2 * lanes <= count; i += 2 * lanes) {
+        const auto packed = hn::PromoteTo(du, hn::LoadU(db, code + i / 2));
+        const auto hiCode = hn::ShiftRight<4>(packed);
+        auto loValue = hn::Add(hn::ConvertTo(d, hn::And(packed, magnitudeMask)), half);
+        auto hiValue = hn::Add(hn::ConvertTo(d, hn::And(hiCode, magnitudeMask)), half);
+        loValue = hn::IfThenElse(hn::RebindMask(d, hn::Eq(hn::And(packed, signMask), hn::Zero(du))),
+                                hn::Neg(loValue), loValue);
+        hiValue = hn::IfThenElse(hn::RebindMask(d, hn::Eq(hn::And(hiCode, signMask), hn::Zero(du))),
+                                hn::Neg(hiValue), hiValue);
+        hn::VFromD<decltype(d)> qLow, qHigh;
+        hn::LoadInterleaved2(d, query + i, qLow, qHigh);
+        low = hn::MulAdd(qLow, loValue, low);
+        high = hn::MulAdd(qHigh, hiValue, high);
+    }
+    float sum = hn::ReduceSum(d, hn::Add(low, high));
+    for (; i < count; i++) {
+        const unsigned field = (code[i / 2] >> ((i & 1) * 4)) & 15;
+        const float value = static_cast<float>(field & 7) + 0.5f;
+        sum += query[i] * ((field & 8) ? value : -value);
+    }
+    return sum;
 }
 
 #endif // JVECTOR_ASH_NEIGHBORHOOD_INL_H
