@@ -19,7 +19,6 @@ package io.github.jbellis.jvector.vector;
 import io.github.jbellis.jvector.util.RamUsageEstimator;
 import io.github.jbellis.jvector.vector.types.ByteSequence;
 
-import java.lang.foreign.MemoryLayout;
 import java.lang.foreign.MemorySegment;
 import java.lang.foreign.ValueLayout;
 import java.nio.Buffer;
@@ -29,6 +28,8 @@ import java.nio.ByteOrder;
  * ByteSequence implementation backed by an on-heap MemorySegment.
  */
 public class MemorySegmentByteSequence implements ByteSequence<MemorySegment> {
+    private static final long SHALLOW_BYTES = RamUsageEstimator.shallowSizeOfInstance(MemorySegmentByteSequence.class);
+
     private final MemorySegment segment;
     private final int length;
 
@@ -56,9 +57,11 @@ public class MemorySegmentByteSequence implements ByteSequence<MemorySegment> {
 
     @Override
     public long ramBytesUsed() {
-        int OH_BYTES = RamUsageEstimator.NUM_BYTES_OBJECT_HEADER;
-        int REF_BYTES = RamUsageEstimator.NUM_BYTES_OBJECT_REF;
-        return OH_BYTES + REF_BYTES + Integer.BYTES + MemoryLayout.sequenceLayout(length, ValueLayout.JAVA_BYTE).byteSize();
+        // All constructors create a heap byte-array segment. A slice retains the full array,
+        // not just its visible range. Its scope is a per-buffer keep-alive object.
+        byte[] backing = (byte[]) segment.heapBase().orElseThrow();
+        return SHALLOW_BYTES + RamUsageEstimator.shallowSizeOf(segment)
+                + RamUsageEstimator.shallowSizeOf(segment.scope()) + RamUsageEstimator.sizeOf(backing);
     }
 
     @Override
