@@ -32,6 +32,8 @@ import io.github.jbellis.jvector.graph.disk.feature.NVQ;
 import io.github.jbellis.jvector.graph.disk.feature.SeparatedFeature;
 import io.github.jbellis.jvector.graph.similarity.ScoreFunction;
 import io.github.jbellis.jvector.util.Accountable;
+import io.github.jbellis.jvector.util.ExplicitThreadLocal;
+import io.github.jbellis.jvector.quantization.VectorCompressor;
 import org.agrona.collections.Int2ObjectHashMap;
 import java.util.ArrayList;
 import io.github.jbellis.jvector.util.Bits;
@@ -398,30 +400,35 @@ public class OnDiskGraphIndex implements ImmutableGraphIndex, AutoCloseable, Acc
         }
     }
 
+    /**
+     * Retained shared graph heap, including metadata, cache containers at their allocated capacity,
+     * source buffers, and upper-layer adjacency arrays. Identity-based traversal counts shared
+     * backing storage once and includes collection views only when they have been allocated.
+     *
+     * <p>The caller owns the reader supplier; format/enum metadata is JVM-global. Compressors and
+     * per-worker scratch are accounted separately, consistently with the compressed-vector API.
+     * This measures resident heap, not mapped file pages. Caches must not be externally mutated
+     * while measuring. No scoring operations or cache allocations are performed by this method.
+     */
     @Override
     public long ramBytesUsed() {
-        List<Int2ObjectHashMap<int[]>> inMemoryNeighborsLocal = inMemoryNeighbors.get();
+        return RamUsageEstimator.sizeOfObjectGraph(this, this::ownsSharedHeapObject);
+    }
 
-        long inMemoryNeighborsBytes = RamUsageEstimator.NUM_BYTES_OBJECT_REF;
-        if (inMemoryNeighborsLocal != null) {
-            for (Int2ObjectHashMap<int[]> neighbors : inMemoryNeighborsLocal) {
-                if (neighbors != null) {
-                    inMemoryNeighborsBytes += neighbors.values().stream().mapToLong(is -> Integer.BYTES * (long) is.length).sum();
-                }
-                inMemoryNeighborsBytes += RamUsageEstimator.NUM_BYTES_OBJECT_REF;
-            }
+    private boolean ownsSharedHeapObject(Object object) {
+        if (object == readerSupplier || object == format || object instanceof Class<?>
+                || object instanceof Enum<?> || object instanceof VectorCompressor<?>
+                || object instanceof ThreadLocal<?> || object instanceof ExplicitThreadLocal<?>) {
+            return false;
         }
-
-        Int2ObjectHashMap<FusedFeature.InlineSource> inMemoryFeaturesLocal  = inMemoryFeatures.get();
-        long inMemoryFeaturesBytes = 0;
-        if (inMemoryFeaturesLocal != null) {
-            inMemoryFeaturesBytes = inMemoryFeaturesLocal.values().stream().mapToLong(FusedFeature.InlineSource::ramBytesUsed).sum();
+        // EnumMap's key universe is shared by every map of that enum class.
+        if (object.getClass().isArray() && object.getClass().getComponentType().isEnum()) {
+            return false;
         }
-        inMemoryFeaturesBytes += RamUsageEstimator.NUM_BYTES_OBJECT_REF;
-
-        return Long.BYTES + 6 * Integer.BYTES + RamUsageEstimator.NUM_BYTES_OBJECT_REF
-                + (long) 2 * RamUsageEstimator.NUM_BYTES_OBJECT_REF * FeatureId.values().length
-                + inMemoryNeighborsBytes + inMemoryFeaturesBytes;
+        if (object instanceof Integer && object == Integer.valueOf((Integer) object)) {
+            return false;
+        }
+        return true;
     }
 
     public void close() throws IOException {
