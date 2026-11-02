@@ -86,7 +86,7 @@ public abstract class CompressorParameters {
 
         @Override
         public String idStringFor(DataSet ds) {
-            return String.format("NVQ_%s_%d_%s", ds.getName(), nSubVectors);
+            return String.format("NVQ_%s_%d", ds.getName(), nSubVectors);
         }
 
         @Override
