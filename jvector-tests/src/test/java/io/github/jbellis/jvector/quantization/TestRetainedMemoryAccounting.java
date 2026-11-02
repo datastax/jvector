@@ -91,6 +91,9 @@ public class TestRetainedMemoryAccounting {
             for (int alignment : new int[]{8, 16}) {
                 for (String references : List.of("+", "-")) {
                     for (String classPointers : List.of("+", "-")) {
+                        // Before JDK-8241825 (JDK 15), disabling compressed oops also
+                        // disables compressed class pointers; this combination cannot be tested.
+                        if (Runtime.version().feature() < 15 && references.equals("-") && classPointers.equals("+")) continue;
                         layouts.add(List.of("-XX:" + references + "UseCompressedOops",
                                 "-XX:" + classPointers + "UseCompressedClassPointers",
                                 "-XX:ObjectAlignmentInBytes=" + alignment));

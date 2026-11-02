@@ -57,6 +57,9 @@ JDK 22 and twelve on JDK 25. It asserts that the requested settings are
 actually enabled. No production accounting formulas or `ramBytesUsed()` methods are
 used to derive expected footprints.
 
+Older HotSpot releases test only the reference/class-pointer combinations their VM
+can enable; JDK 11 verifies six layouts.
+
 Fixtures include code sizes through 768 bytes and alignment boundaries, empty and
 nonempty graphs, formats 2 through 6, hierarchy depths through 32, multiple node counts
 and degrees, and all supported fused-PQ reranking layouts. Cache views, clearing,
