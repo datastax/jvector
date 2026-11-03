@@ -349,3 +349,52 @@ Different DGEMM orientations can change reduction order, so retraining need not
 produce a byte-identical matrix. Model serialization, database encoding and query
 projection precision are unchanged. Existing saved models remain compatible.
 This structural change does not select a different BLAS/LAPACK backend.
+
+
+## Retained-memory accounting
+
+`AsymmetricHashing.ramBytesUsed()` counts the retained model: landmarks and
+auxiliary landmark arrays, the Stiefel matrices (including row/outer arrays),
+model objects, provider-owned native FP32 backing and its adapter/delegate objects,
+optional Highway batch backing,
+and a distinct FP16 query representation when initialized. Immutable Java sizes
+are cached during construction; reading the estimate does not scan matrices or
+create them. FP32 query selection and automatic FP16 fallback preserve the
+original projection view's identity, so shared FP32 backing is charged once.
+Dense row and block matrices use their corresponding storage layouts; other
+`RealMatrix` implementations retain a dense storage estimate without calling
+`getData()`, which could materialize a matrix copy.
+
+`ASHVectors.ramBytesUsed()` includes its compressor once, its reference array,
+per-vector objects and primitive arrays, cached scales/offsets/landmark IDs,
+and any retained packed or symmetric-scoring caches. It uses heap capacity and
+array/object layout estimates, not serialized code sizes. Vector totals are
+accumulated in the existing constructor pass. Packed-block totals are charged
+when a layout is successfully created and include a small conservative allowance
+for map bookkeeping. Polling the estimate is constant-time with respect to vector
+count, even after packed caches are created. Repeated ordinals sharing vector
+objects or backing arrays are conservatively charged per ordinal; no large
+identity map is allocated to deduplicate caller-owned aliases. The vectors and
+model arrays must remain immutable after construction, as required by scoring.
+
+Cached fused ASH sources report their owned source object and quantized vector,
+including its primitive arrays, without charging the shared compressor. Shared
+graph-cache bookkeeping is accounted by `OnDiskGraphIndex`, not by the ASH source.
+Callers such as Cassandra add the compressor or full compressed collection
+separately. This ownership split avoids charging the same model for every source.
+
+As with PQ, these retained model/collection estimates exclude worker-owned query
+buffers, native staging/oneDNN execution scratch, training temporaries and OS file
+cache. Search concurrency and training memory require separate budgeting. They
+are estimates of retained ownership, not an allocator reservation or a total
+process-RSS bound. VM/native-runtime bookkeeping is approximate. Formats,
+compression byte budgets and scoring arithmetic are unchanged.
+
+The accounting regression tests derive storage expectations from the allocated
+arrays and the running JVM's layout, rather than fixed dataset-specific byte
+totals. They cover code widths 1, 2, 3, 4 and 9, empty collections, padded capacities,
+multiple landmarks, lazy query/batch/symmetric representations, repeated and
+concurrent cache creation, and allocation-free polling. When ASH storage or cache
+ownership changes, update its allocation-site totals and the corresponding tests
+together. Shared JVM layout and graph bookkeeping remain centralized in their
+common implementations.

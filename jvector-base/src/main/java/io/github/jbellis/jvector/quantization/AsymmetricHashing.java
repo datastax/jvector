@@ -145,6 +145,9 @@ public class AsymmetricHashing implements VectorCompressor<AsymmetricHashing.Qua
     // Quantizer instances (cached)
     // ---------------------------------------------------------------------
 
+    // Immutable retained Java storage; native/query representations are charged lazily.
+    private final long heapBytes;
+
     private final BinaryQuantizer randomQuantizer = new RandomBinaryQuantizer();
     private final BinaryQuantizer itqQuantizer = new ItqBinaryQuantizer();
 
@@ -248,6 +251,17 @@ public class AsymmetricHashing implements VectorCompressor<AsymmetricHashing.Qua
             throw new IllegalArgumentException(
                     "quantizedDim (" + quantizedDim + ") exceeds original dimension (" + originalDimension + ")");
         }
+        long bytes = RamUsageEstimator.shallowSizeOfInstance(AsymmetricHashing.class)
+                + RamUsageEstimator.shallowSizeOf(landmarks)
+                + RamUsageEstimator.sizeOf(landmarkNormSq)
+                + estimateArray2DBytes(landmarkProj)
+                + RamUsageEstimator.sizeOf(landmarkProjSum)
+                + stiefelTransform.heapBytes
+                + RamUsageEstimator.shallowSizeOf(randomQuantizer)
+                + RamUsageEstimator.shallowSizeOf(itqQuantizer)
+                + RamUsageEstimator.shallowSizeOf(((ItqBinaryQuantizer) itqQuantizer).delegate);
+        for (VectorFloat<?> landmark : landmarks) bytes = Math.addExact(bytes, landmark.ramBytesUsed());
+        this.heapBytes = bytes;
     }
 
     /**
@@ -935,7 +949,15 @@ public class AsymmetricHashing implements VectorCompressor<AsymmetricHashing.Qua
     // Quantized vector (per-vector data)
     // ---------------------------------------------------------------------
 
-    public static class QuantizedVector {
+    public static class QuantizedVector implements Accountable {
+        private static final long SHALLOW_BYTES = RamUsageEstimator.shallowSizeOfInstance(QuantizedVector.class);
+
+        /** Owned heap storage, including empty arrays and their headers; not the disk size. */
+        @Override
+        public long ramBytesUsed() {
+            return SHALLOW_BYTES + RamUsageEstimator.shallowSizeOf(binaryVector) + RamUsageEstimator.shallowSizeOf(extraBits);
+        }
+
         // Decoded arithmetic values, rounded to binary16 by encoding/loading.
         // They are serialized as two bytes each, not as Java float32 fields.
         public float scale; // ||x_i - μ_i*||_2 / ||encoded body||_2
@@ -1257,6 +1279,8 @@ public class AsymmetricHashing implements VectorCompressor<AsymmetricHashing.Qua
         // Prepared only when this model is used for queries. Encoding-only work
         // must not allocate an extra matrix or change its arithmetic precision.
         private volatile io.github.jbellis.jvector.vector.VectorUtilSupport.AshProjection queryProjection;
+        private long queryProjectionHeapBytes;
+        private final long heapBytes;
 
         /** Projects a search query; encoding and training continue through project(). */
         public void projectQuery(float[] query, float[] out) {
@@ -1268,7 +1292,11 @@ public class AsymmetricHashing implements VectorCompressor<AsymmetricHashing.Qua
             if (ready == null) {
                 synchronized (this) {
                     ready = queryProjection;
-                    if (ready == null) queryProjection = ready = projection.forQueryScoring();
+                    if (ready == null) {
+                        ready = projection.forQueryScoring();
+                        queryProjectionHeapBytes = ready == projection ? 0 : RamUsageEstimator.shallowSizeOf(ready);
+                        queryProjection = ready; // Publish the representation and its heap charge together.
+                    }
                 }
             }
             return ready;
@@ -1334,6 +1362,9 @@ public class AsymmetricHashing implements VectorCompressor<AsymmetricHashing.Qua
             if (rows > 0 && AData[0].length != cols) {
                 throw new AssertionError("AData cols " + AData[0].length + " != originalDim " + cols);
             }
+            heapBytes = RamUsageEstimator.shallowSizeOfInstance(StiefelTransform.class)
+                    + estimateMatrixBytes(W) + estimateArray2DBytes(AData) + estimateArray2DBytes(AFloat)
+                    + RamUsageEstimator.shallowSizeOf(projection);
         }
     }
 
@@ -2608,56 +2639,65 @@ public class AsymmetricHashing implements VectorCompressor<AsymmetricHashing.Qua
         throw new UnsupportedOperationException("Reconstruction error not defined for ASH");
     }
 
+    /**
+     * Retained model storage, including provider-owned native weights and lazy query weights.
+     * Like PQ's compressor accounting, this excludes worker scratch and training temporaries.
+     * Immutable Java backing is measured once; querying this estimate does not scan matrices.
+     */
     @Override
     public long ramBytesUsed() {
-        long bytes = 0L;
+        long bytes = heapBytes + stiefelTransform.projection.ramBytesUsed();
+        var queryProjection = stiefelTransform.queryProjection;
+        if (queryProjection != null && queryProjection != stiefelTransform.projection) {
+            bytes += stiefelTransform.queryProjectionHeapBytes + queryProjection.ramBytesUsed();
+        }
+        return bytes;
+    }
 
-        if (landmarks != null) {
-            for (int i = 0; i < landmarks.length; i++) {
-                bytes += (landmarks[i] == null) ? 0L : landmarks[i].ramBytesUsed();
+    static long estimateArray2DBytes(double[][] a) {
+        if (a == null) return 0L;
+        long bytes = RamUsageEstimator.shallowSizeOf(a);
+        for (double[] row : a) bytes = Math.addExact(bytes, RamUsageEstimator.shallowSizeOf(row));
+        return bytes;
+    }
+
+    static long estimateArray2DBytes(float[][] a) {
+        if (a == null) return 0L;
+        long bytes = RamUsageEstimator.shallowSizeOf(a);
+        for (float[] row : a) bytes = Math.addExact(bytes, RamUsageEstimator.shallowSizeOf(row));
+        return bytes;
+    }
+
+    private static long estimateMatrixBytes(RealMatrix matrix) {
+        long bytes = RamUsageEstimator.shallowSizeOf(matrix);
+        if (matrix instanceof Array2DRowRealMatrix) {
+            return bytes + estimateArray2DBytes(((Array2DRowRealMatrix) matrix).getDataRef());
+        }
+        int rows = matrix.getRowDimension(), cols = matrix.getColumnDimension();
+        if (matrix instanceof org.apache.commons.math3.linear.BlockRealMatrix) {
+            int width = org.apache.commons.math3.linear.BlockRealMatrix.BLOCK_SIZE;
+            long blocks = ((rows - 1L) / width + 1) * ((cols - 1L) / width + 1);
+            bytes += RamUsageEstimator.alignObjectSize(RamUsageEstimator.NUM_BYTES_ARRAY_HEADER
+                    + blocks * RamUsageEstimator.NUM_BYTES_OBJECT_REF);
+            // Tail blocks have their own alignment padding; aggregating their
+            // payloads before alignment undercounts some 16-byte-aligned layouts.
+            for (long firstRow = 0; firstRow < rows; firstRow += width) {
+                long blockRows = Math.min(width, rows - firstRow);
+                for (long firstColumn = 0; firstColumn < cols; firstColumn += width) {
+                    long blockColumns = Math.min(width, cols - firstColumn);
+                    bytes = Math.addExact(bytes, RamUsageEstimator.alignObjectSize(
+                            RamUsageEstimator.NUM_BYTES_ARRAY_HEADER
+                                    + blockRows * blockColumns * Double.BYTES));
+                }
             }
+            return bytes;
         }
-
-        if (stiefelTransform != null) {
-            // Authoritative double-precision model
-            bytes += estimateMatrixBytes(stiefelTransform.W);
-
-            // Materialized compute buffers (row-major)
-            bytes += estimateArray2DBytes(stiefelTransform.AData);
-            bytes += estimateArray2DBytes(stiefelTransform.AFloat);
-            bytes += stiefelTransform.projection.ramBytesUsed();
-            var queryProjection = stiefelTransform.queryProjection;
-            if (queryProjection != null && queryProjection != stiefelTransform.projection)
-                bytes += queryProjection.ramBytesUsed();
-        }
-
-        return bytes;
-    }
-
-    private static long estimateArray2DBytes(double[][] a) {
-        if (a == null) return 0L;
-        long bytes = 0L;
-        for (double[] row : a) {
-            bytes += RamUsageEstimator.sizeOf(row);
-        }
-        return bytes;
-    }
-
-    private static long estimateArray2DBytes(float[][] a) {
-        if (a == null) return 0L;
-        long bytes = 0L;
-        for (float[] row : a) {
-            bytes += RamUsageEstimator.sizeOf(row);
-        }
-        return bytes;
-    }
-
-    private static long estimateMatrixBytes(RealMatrix m) {
-        if (m == null) return 0L;
-        int rows = m.getRowDimension();
-        int cols = m.getColumnDimension();
-        return (long) rows * cols * Double.BYTES
-                + (long) rows * Long.BYTES;
+        // Other RealMatrix implementations retain the existing dense estimate.
+        // Avoid getData(), which can allocate a full matrix copy just to measure it.
+        return bytes + RamUsageEstimator.alignObjectSize(RamUsageEstimator.NUM_BYTES_ARRAY_HEADER
+                + (long) rows * RamUsageEstimator.NUM_BYTES_OBJECT_REF)
+                + rows * RamUsageEstimator.alignObjectSize(RamUsageEstimator.NUM_BYTES_ARRAY_HEADER
+                + (long) cols * Double.BYTES);
     }
 
     // Exact, element-wise comparison of VectorFloat contents.
