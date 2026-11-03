@@ -90,6 +90,12 @@ public final class SearchReportingCatalog {
                         "total_file_size_mb", "search.disk.total_file_size_mb",
                         "file_count",         "search.disk.file_count"
                 ),
+                "execution", Map.of(
+                        "response_mean_ms", "search.execution.response_mean_ms",
+                        "response_p95_ms", "search.execution.response_p95_ms",
+                        "response_p99_ms", "search.execution.response_p99_ms",
+                        "mean_batch_size", "search.execution.mean_batch_size"
+                ),
                 "construction", Map.of(
                         "index_build_time_s","construction.index_build_time_s",
                         "index_quant_time_s","@prefix:construction.index_quant_time_s",

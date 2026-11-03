@@ -91,11 +91,15 @@ public class AccuracyBenchmark extends AbstractQueryBenchmark {
         int totalQueries = cs.getDataSet().getQueryVectors().size();
 
         // execute all queries in parallel and collect results
-        List<SearchResult> results = IntStream.range(0, totalQueries)
-                .parallel()
-                .mapToObj(i -> QueryExecutor.executeQuery(
-                        cs, topK, rerankK, usePruning, i))
-                .collect(Collectors.toList());
+        List<SearchResult> results;
+        try (QueuedQueryExecution queued = cs.usesQueuedExecution()
+                ? new QueuedQueryExecution(cs, topK, rerankK, usePruning) : null) {
+            results = queued == null ? IntStream.range(0, totalQueries).parallel()
+                    .mapToObj(i -> QueryExecutor.executeQuery(cs, topK, rerankK, usePruning, i))
+                    .collect(Collectors.toList())
+                    : java.util.Arrays.asList(queued.runPass(totalQueries,
+                            cs.getDataSet().getQueryVectors()::get, null, true).results);
+        }
 
         var list = new ArrayList<Metric>();
         if (computeRecall) {

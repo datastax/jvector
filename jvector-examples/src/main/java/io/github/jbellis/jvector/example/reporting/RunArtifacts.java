@@ -42,6 +42,23 @@ import java.util.Set;
  */
 public final class RunArtifacts {
 
+    private String queryExecutionMode = "direct";
+    private int queryBatchSize = 8;
+
+    public String queryExecutionMode() { return queryExecutionMode; }
+    public int queryBatchSize() { return queryBatchSize; }
+
+    private RunArtifacts withQueryExecution(RunConfig.QueryExecution settings) {
+        if (settings == null) return this;
+        if (!"direct".equals(settings.mode) && !"queued".equals(settings.mode))
+            throw new IllegalArgumentException("queryExecution.mode must be direct or queued");
+        if (settings.maxBatchSize <= 0)
+            throw new IllegalArgumentException("queryExecution.maxBatchSize must be positive");
+        queryExecutionMode = settings.mode;
+        queryBatchSize = settings.maxBatchSize;
+        return this;
+    }
+
     private final RunContext run;
     private final DatasetInfoWriter datasetInfoWriter;
     private final ExperimentsCsvWriter experimentsWriter;
@@ -124,7 +141,7 @@ public final class RunArtifacts {
                     metricsToDisplay,
                     benchmarksToLog,
                     metricsToLog
-            );
+            ).withQueryExecution(runCfg.queryExecution);
         }
 
         // Logging enabled => create run artifacts
@@ -148,7 +165,7 @@ public final class RunArtifacts {
                 metricsToDisplay,
                 benchmarksToLog,
                 metricsToLog
-        );
+        ).withQueryExecution(runCfg.queryExecution);
     }
 
     /** No-op artifacts instance for legacy callers (no sys_info/dataset_info/experiments output). */

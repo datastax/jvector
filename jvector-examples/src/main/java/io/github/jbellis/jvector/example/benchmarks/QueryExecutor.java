@@ -22,6 +22,15 @@ import io.github.jbellis.jvector.util.Bits;
 import io.github.jbellis.jvector.vector.types.VectorFloat;
 
 public class QueryExecutor {
+    /** Executes only traversal/reranking after a caller has prepared the query. */
+    public static SearchResult executePreparedQuery(ConfiguredSystem cs, int topK, int rerankK,
+            boolean usePruning, io.github.jbellis.jvector.graph.similarity.PreparedQuery prepared) {
+        var searcher = cs.getSearcher();
+        searcher.usePruning(usePruning);
+        var view = (io.github.jbellis.jvector.graph.ImmutableGraphIndex.ScoringView) searcher.getView();
+        return searcher.search(view.scoreProviderFor(prepared, true), topK, rerankK, 0.0f, 0.0f, Bits.ALL);
+    }
+
     /**
      * Executes the query at index i using the given parameters.
      *

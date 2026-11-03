@@ -854,6 +854,7 @@ public class Grid {
                                           ConstructionMetrics constructionMetrics,
                                           Path testDirectory) {
         int queryRuns = 2;
+        cs.configureQueryExecution(artifacts.queryExecutionMode(), artifacts.queryBatchSize());
         System.out.format("%s: Using %s:%n", cs.ds.getName(), cs.index);
 
         Map<String, List<String>> benchmarksToCompute = artifacts.benchmarksToCompute();
@@ -1385,6 +1386,34 @@ public class Grid {
         CompressedVectors cv;
         Set<FeatureId> features;
         private final Supplier<RandomAccessVectorValues> exactVectors;
+        private boolean queuedExecution;
+        private int queryBatchSize = 8;
+        private io.github.jbellis.jvector.graph.similarity.QueryPreparer queryPreparer;
+        private java.util.concurrent.ExecutorService queuedQueryWorkers;
+        private boolean closed;
+
+        public int queryWorkerCount() {
+            return Math.max(1, Math.min(Runtime.getRuntime().availableProcessors(), PhysicalCoreExecutor.getPhysicalCoreCount()));
+        }
+
+        /** Shared across this configured index's warmups and all query measurements. */
+        public synchronized java.util.concurrent.ExecutorService queryWorkers() {
+            if (closed) throw new IllegalStateException("Configured system is closed");
+            if (queuedQueryWorkers == null)
+                queuedQueryWorkers = java.util.concurrent.Executors.newFixedThreadPool(queryWorkerCount());
+            return queuedQueryWorkers;
+        }
+
+        public void configureQueryExecution(String mode, int batchSize) {
+            queuedExecution = "queued".equals(mode);
+            queryBatchSize = batchSize;
+            if (queuedExecution && queryPreparer == null)
+                queryPreparer = index.queryPreparer(ds.getSimilarityFunction()).orElse(null);
+        }
+        public boolean usesQueuedExecution() { return queuedExecution; }
+        public int queryBatchSize() { return queryBatchSize; }
+        public io.github.jbellis.jvector.graph.similarity.QueryPreparer queryPreparer() { return queryPreparer; }
+
 
         private final ExplicitThreadLocal<GraphSearcher> searchers = ExplicitThreadLocal.withInitial(() -> {
             return new GraphSearcher(index);
@@ -1425,8 +1454,22 @@ public class Grid {
         }
 
         @Override
-        public void close() throws Exception {
-            searchers.close();
+        public synchronized void close() throws Exception {
+            closed = true;
+            try {
+                if (queuedQueryWorkers != null) {
+                    queuedQueryWorkers.shutdown();
+                    boolean interrupted = false;
+                    try {
+                        while (!queuedQueryWorkers.isTerminated()) {
+                            try { queuedQueryWorkers.awaitTermination(Long.MAX_VALUE, java.util.concurrent.TimeUnit.NANOSECONDS); }
+                            catch (InterruptedException e) { interrupted = true; }
+                        }
+                    } finally { if (interrupted) Thread.currentThread().interrupt(); }
+                }
+            } finally {
+                searchers.close();
+            }
         }
     }
 
