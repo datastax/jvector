@@ -48,3 +48,4 @@ jvector-fastervector/src/main/native/fvec_capi.h
 src/main/native/fvec_capi.h
 jvector-fastervector/src/test/resources/native/linux-x86_64/fake_lib*.so
 src/test/resources/native/linux-x86_64/fake_lib*.so
+jvector-fastervector/pom.xml

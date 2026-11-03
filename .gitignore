@@ -64,3 +64,6 @@ dependency-reduced-pom.xml
 results.csv
 **/datasets/custom/**
 **/dataset_cache/**
+
+# fastervector native libraries, staged by jvector-fastervector/scripts/stage-fastervector-native.sh
+jvector-fastervector/native/

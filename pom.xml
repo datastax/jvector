@@ -231,4 +231,13 @@
             </dependency>
         </dependencies>
     </dependencyManagement>
+    <profiles>
+        <!-- Opt-in: the fastervector IVF-ASH bindings need JDK 22+ and staged Linux x86_64 native libraries -->
+        <profile>
+            <id>fastervector</id>
+            <modules>
+                <module>jvector-fastervector</module>
+            </modules>
+        </profile>
+    </profiles>
 </project>
