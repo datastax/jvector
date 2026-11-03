@@ -25,6 +25,7 @@ import java.nio.file.Path;
 import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -35,8 +36,25 @@ class FastervectorLibraryTest {
     void testConstants() {
         assertEquals("libjvector.so.0", FastervectorLibrary.LIB_JVECTOR);
         assertEquals("libfvec_runtime.so", FastervectorLibrary.LIB_FVEC_RUNTIME);
-        assertEquals("fvec.native.dir", FastervectorLibrary.OVERRIDE_PROPERTY);
-        assertEquals("native/", FastervectorLibrary.RESOURCE_PREFIX);
+        assertEquals("jvector.fastervector.native.dir", FastervectorLibrary.OVERRIDE_PROPERTY);
+        assertEquals("native/linux-x86_64/", FastervectorLibrary.RESOURCE_PREFIX);
+    }
+
+    @Test
+    void testSupportedPlatform() {
+        assertTrue(FastervectorLibrary.isSupportedPlatform("Linux", "amd64"));
+        assertTrue(FastervectorLibrary.isSupportedPlatform("Linux", "x86_64"));
+        assertFalse(FastervectorLibrary.isSupportedPlatform("Linux", "aarch64"));
+        assertFalse(FastervectorLibrary.isSupportedPlatform("Mac OS X", "x86_64"));
+        assertFalse(FastervectorLibrary.isSupportedPlatform("Windows 11", "amd64"));
+    }
+
+    @Test
+    void testCpuFlagsHaveAvx2() {
+        assertTrue(FastervectorLibrary.cpuFlagsHaveAvx2("flags\t\t: fpu sse4_2 avx avx2 fma"));
+        assertTrue(FastervectorLibrary.cpuFlagsHaveAvx2("flags\t\t: avx2"));
+        assertFalse(FastervectorLibrary.cpuFlagsHaveAvx2("flags\t\t: fpu sse4_2 avx fma avx512f"));
+        assertFalse(FastervectorLibrary.cpuFlagsHaveAvx2(""));
     }
 
     @Test
@@ -64,7 +82,8 @@ class FastervectorLibraryTest {
 
         assertNotNull(error.getMessage());
         assertTrue(error.getMessage().contains("non_existent_lib.so"));
-        assertTrue(error.getMessage().contains("scripts/build-and-run.sh"));
+        assertTrue(error.getMessage().contains("stage-fastervector-native.sh"));
+        assertTrue(error.getMessage().contains(FastervectorLibrary.OVERRIDE_PROPERTY));
     }
 
     @Test

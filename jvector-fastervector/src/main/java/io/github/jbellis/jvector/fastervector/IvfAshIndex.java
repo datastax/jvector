@@ -17,6 +17,8 @@
 package io.github.jbellis.jvector.fastervector;
 
 import io.github.jbellis.jvector.fastervector.ffi.FvecCapi;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.io.IOException;
 import java.lang.foreign.Arena;
@@ -41,6 +43,7 @@ import java.util.concurrent.ConcurrentHashMap;
  * deletes the native index.  {@link #close()} is idempotent.
  */
 public final class IvfAshIndex implements AutoCloseable {
+    private static final Logger log = LoggerFactory.getLogger(IvfAshIndex.class);
 
     /** Raw native pointer to the {@code IvfAshHandle}. Null if closed. */
     private volatile MemorySegment nativePtr;
@@ -266,13 +269,13 @@ public final class IvfAshIndex implements AutoCloseable {
                 MemorySegment chunkBuf = chunkArena.allocate((long) dim * bufVecs * Float.BYTES);
 
                 // ── Pass 0: train on first chunk ──────────────────────────────────
-                System.out.println(">> [Pass 0] Reading chunk 0 for IVF-ASH training\u2026");
+                log.debug("[Pass 0] Reading chunk 0 for IVF-ASH training");
                 VecsCursor cursor0 = vectors.getCursor();
                 long n0 = BuildChunks.fillChunk(cursor0, dim, chunkSize, chunkBuf);
                 if (n0 == 0) {
                     throw new FvecException("dataset is empty — cannot train");
                 }
-                System.out.println(">> [Pass 0] Training on " + n0 + " vectors\u2026");
+                log.info("[Pass 0] Training on {} vectors", n0);
 
                 MemorySegment poolPtr = buildThreadPool != null
                         ? buildThreadPool.nativePtr() : MemorySegment.NULL;
@@ -292,10 +295,10 @@ public final class IvfAshIndex implements AutoCloseable {
                         throw new FvecException("fvec_ivfash_create_builder_phase0 failed (rc=" + rc + ")");
                     }
                     MemorySegment phase0Handle = phase0Out.get(ValueLayout.ADDRESS, 0);
-                    System.out.println(">> [Pass 0] Training complete.");
+                    log.debug("[Pass 0] Training complete");
 
                     // ── Pass 1: coarse assignment ─────────────────────────────────
-                    System.out.println(">> [Pass 1] Coarse assignment pass\u2026");
+                    log.info("[Pass 1] Coarse assignment of {} chunks", numChunks);
                     VecsCursor cursor1 = vectors.getCursor();
                     long chunkIdx = 0;
                     while (true) {
@@ -309,11 +312,9 @@ public final class IvfAshIndex implements AutoCloseable {
                                     "fvec_ivfash_builder_phase0_assign_chunk failed (rc=" + rc + ")");
                         }
                         chunkIdx++;
-                        System.out.print("\r   [Pass 1] " + chunkIdx + "/" + numChunks);
-                        System.out.flush();
+                        log.debug("[Pass 1] Chunk {}/{}", chunkIdx, numChunks);
                     }
-                    System.out.println();
-                    System.out.println(">> [Pass 1] Assignment complete.");
+                    log.debug("[Pass 1] Assignment complete");
 
                     // Transition Phase 0 → Phase 1 (consumes phase0Handle unconditionally)
                     MemorySegment phase1Out = strArena.allocate(ValueLayout.ADDRESS);
@@ -327,7 +328,7 @@ public final class IvfAshIndex implements AutoCloseable {
                     MemorySegment phase1Handle = phase1Out.get(ValueLayout.ADDRESS, 0);
 
                     // ── Pass 2: encode + stream to SSD ────────────────────────────
-                    System.out.println(">> [Pass 2] Encode & SSD stream pass\u2026");
+                    log.info("[Pass 2] Encoding and streaming {} chunks to SSD", numChunks);
                     VecsCursor cursor2 = vectors.getCursor();
                     chunkIdx = 0;
                     while (true) {
@@ -341,10 +342,8 @@ public final class IvfAshIndex implements AutoCloseable {
                                     "fvec_ivfash_builder_phase1_add failed (rc=" + rc + ")");
                         }
                         chunkIdx++;
-                        System.out.print("\r   [Pass 2] " + chunkIdx + "/" + numChunks);
-                        System.out.flush();
+                        log.debug("[Pass 2] Chunk {}/{}", chunkIdx, numChunks);
                     }
-                    System.out.println();
 
                     // Finalize (consumes phase1Handle unconditionally)
                     MemorySegment indexOut = strArena.allocate(ValueLayout.ADDRESS);
@@ -354,7 +353,7 @@ public final class IvfAshIndex implements AutoCloseable {
                                 "fvec_ivfash_builder_phase1_done failed (rc=" + rc + ")");
                     }
                     MemorySegment indexPtr = indexOut.get(ValueLayout.ADDRESS, 0);
-                    System.out.println(">> SSD index built successfully.");
+                    log.info("IVF-ASH index built at {}", manifestPath);
                     return new IvfAshIndex(indexPtr, dim);
                 }
             }
@@ -443,7 +442,7 @@ public final class IvfAshIndex implements AutoCloseable {
             }
             NativeHolder.ensureLoaded();
 
-            System.out.println(">> [open] Reconstructing index from " + manifestPath + "\u2026");
+            log.debug("[open] Reconstructing index from {}", manifestPath);
 
             MemorySegment poolPtr = buildThreadPool != null
                     ? buildThreadPool.nativePtr() : MemorySegment.NULL;
@@ -459,7 +458,7 @@ public final class IvfAshIndex implements AutoCloseable {
                     throw new FvecException("fvec_ivfash_index_open failed (rc=" + rc + ")");
                 }
                 MemorySegment indexPtr = out.get(ValueLayout.ADDRESS, 0);
-                System.out.println(">> [open] Index loaded.");
+                log.info("IVF-ASH index opened from {}", manifestPath);
                 // dim = 0 unless set via dim(int): the C API does not expose it
                 return new IvfAshIndex(indexPtr, dim);
             }
