@@ -191,6 +191,9 @@ final class NativeASHProjection implements VectorUtilSupport.AshProjection {
         }
     }
 
+    @Override
+    public boolean supportsBatchProjection() { return BATCH != null; }
+
     /** Query-only selection; the original FP32 matrix and encoding path are retained. */
     @Override
     public VectorUtilSupport.AshProjection forQueryScoring() {
