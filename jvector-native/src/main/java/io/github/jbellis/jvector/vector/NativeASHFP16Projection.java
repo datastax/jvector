@@ -38,7 +38,7 @@ import static java.lang.foreign.ValueLayout.JAVA_LONG;
  * Neither thread-local cache retains the model or its matrix.
  *
  * <p>Only query-scoring views use this representation. Encoding retains Highway
- * FP32. Each call projects one vector on the calling thread.
+ * FP32. Singleton and batch calls execute on the calling thread.
  */
 final class NativeASHFP16Projection implements VectorUtilSupport.AshProjection {
     private static final int OK = 0, UNSUPPORTED = 1, INVALID_ARGUMENT = 2,
@@ -50,7 +50,7 @@ final class NativeASHFP16Projection implements VectorUtilSupport.AshProjection {
     /** Loaded only if a query actually asks for an FP16 view. */
     private static final class Bindings {
         static final Bindings INSTANCE = load();
-        final MethodHandle create, destroy, project, bytes;
+        final MethodHandle create, destroy, project, bytes, batch;
 
         private Bindings(SymbolLookup lookup) throws Throwable {
             MethodHandle abi = bind(lookup, "jvector_ash_fp16_abi", FunctionDescriptor.of(JAVA_INT));
@@ -62,6 +62,11 @@ final class NativeASHFP16Projection implements VectorUtilSupport.AshProjection {
             project = bind(lookup, "jvector_ash_fp16_project",
                     FunctionDescriptor.of(JAVA_INT, ADDRESS, ADDRESS, ADDRESS, ADDRESS));
             bytes = bind(lookup, "jvector_ash_fp16_bytes", FunctionDescriptor.of(JAVA_LONG, ADDRESS));
+            // Older optional libraries retain correct singleton FP16 behavior.
+            batch = lookup.find("jvector_ash_fp16_project_batch")
+                    .map(symbol -> Linker.nativeLinker().downcallHandle(symbol,
+                            FunctionDescriptor.of(JAVA_INT, ADDRESS, ADDRESS, JAVA_INT, ADDRESS, ADDRESS)))
+                    .orElse(null);
         }
 
         private static MethodHandle bind(SymbolLookup lookup, String name, FunctionDescriptor descriptor) {
@@ -87,7 +92,17 @@ final class NativeASHFP16Projection implements VectorUtilSupport.AshProjection {
 
     private final MemorySegment context;
     private final int rows, columns;
-    private final long weightBytes;
+    private volatile long retainedBytes;
+    private volatile boolean batchAvailable;
+    private static final java.lang.invoke.VarHandle RETAINED_BYTES;
+    static {
+        try {
+            RETAINED_BYTES = java.lang.invoke.MethodHandles.lookup().findVarHandle(
+                    NativeASHFP16Projection.class, "retainedBytes", long.class);
+        } catch (ReflectiveOperationException failure) {
+            throw new ExceptionInInitializerError(failure);
+        }
+    }
     // Present only in automatic mode, for queries outside the finite FP16 range.
     private final VectorUtilSupport.AshProjection fallback;
 
@@ -96,7 +111,8 @@ final class NativeASHFP16Projection implements VectorUtilSupport.AshProjection {
         this.context = context;
         this.rows = rows;
         this.columns = columns;
-        this.weightBytes = weightBytes;
+        this.retainedBytes = weightBytes;
+        this.batchAvailable = Bindings.INSTANCE.batch != null;
         this.fallback = fallback;
     }
 
@@ -155,9 +171,57 @@ final class NativeASHFP16Projection implements VectorUtilSupport.AshProjection {
         return new IllegalStateException(message + " (status " + code + ")");
     }
 
-    /** Retained packed weights; per-thread staging and oneDNN scratch are excluded. */
+    /** Native owned storage; per-thread staging and opaque oneDNN scratch are excluded. */
     @Override
-    public long ramBytesUsed() { return weightBytes; }
+    public long ramBytesUsed() { return retainedBytes; }
+
+    @Override
+    public boolean supportsBatchProjection() { return batchAvailable; }
+
+    /** Shares prepared FP16 weights; bounded native tiles handle arbitrary batch lengths. */
+    @Override
+    public void projectBatch(float[][] inputs, float[][] outputs, int count) {
+        VectorUtilSupport.AshProjection.validateBatch(inputs, outputs, count);
+        if (count == 0) return;
+        if (inputs[0].length != columns || outputs[0].length != rows)
+            throw new IllegalArgumentException("ASH FP16 batch shape mismatch");
+        if (count == 1 || !batchAvailable) {
+            for (int i = 0; i < count; i++) project(inputs[i], outputs[i]);
+            return;
+        }
+        long inputRowBytes = (long) columns * Float.BYTES;
+        long outputRowBytes = (long) rows * Float.BYTES;
+        NativeASHProjection.Buffers buffers = NativeASHProjection.buffers(
+                Math.multiplyExact(count, inputRowBytes), Math.multiplyExact(count, outputRowBytes));
+        for (int i = 0; i < count; i++)
+            MemorySegment.copy(MemorySegment.ofArray(inputs[i]), 0, buffers.input,
+                    i * inputRowBytes, inputRowBytes);
+        if (buffers.status.byteSize() == 0) buffers.status = Arena.ofAuto().allocate(RESULT_LAYOUT);
+        try {
+            int status = (int) Bindings.INSTANCE.batch.invokeExact(
+                    context, buffers.input, count, buffers.output, buffers.status);
+            // Publish lazy packing even on a partially successful/failed native
+            // call. Concurrent callers cannot overwrite a newer, larger total.
+            long current = (long) Bindings.INSTANCE.bytes.invokeExact(context);
+            for (long previous; (previous = retainedBytes) < current;)
+                if (RETAINED_BYTES.compareAndSet(this, previous, current)) break;
+            if (status == UNSUPPORTED) batchAvailable = false;
+            if (status == UNSUPPORTED || (status == RANGE && fallback != null)) {
+                // Preserve each query's FP16/automatic-range behavior, including
+                // compatibility with libraries lacking an optimized batch shape.
+                for (int i = 0; i < count; i++) project(inputs[i], outputs[i]);
+                return;
+            }
+            if (status != OK) throw failure(status, buffers.status);
+        } catch (RuntimeException | Error failure) {
+            throw failure;
+        } catch (Throwable failure) {
+            throw new AssertionError("Unexpected ASH FP16 batch execution failure", failure);
+        }
+        for (int i = 0; i < count; i++)
+            MemorySegment.copy(buffers.output, i * outputRowBytes,
+                    MemorySegment.ofArray(outputs[i]), 0, outputRowBytes);
+    }
 
     @Override
     public void project(float[] query, float[] out) {

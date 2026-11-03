@@ -15,6 +15,7 @@
  */
 #include "jvector_ash_fp16.h"
 #include <gtest/gtest.h>
+#include <algorithm>
 #include <array>
 #include <future>
 #include <limits>
@@ -32,6 +33,10 @@ TEST(AshFp16, InvalidArgumentsDoNotCrossTheAbi) {
     EXPECT_EQ(jvector_ash_fp16_create(matrix, 1, -1, &result), nullptr);
     EXPECT_EQ(jvector_ash_fp16_create(matrix, 1, 1, nullptr), nullptr);
     EXPECT_EQ(jvector_ash_fp16_project(nullptr, nullptr, nullptr, &result), JV_ASH_FP16_INVALID_ARGUMENT);
+    EXPECT_EQ(jvector_ash_fp16_project_batch(nullptr, nullptr, 0, nullptr, &result),
+              JV_ASH_FP16_INVALID_ARGUMENT);
+    EXPECT_EQ(jvector_ash_fp16_project_batch(nullptr, nullptr, 1, nullptr, nullptr),
+              JV_ASH_FP16_INVALID_ARGUMENT);
     EXPECT_EQ(jvector_ash_fp16_bytes(nullptr), 0);
     jvector_ash_fp16_destroy(nullptr);
 }
@@ -42,6 +47,35 @@ TEST(AshFp16, RejectsMatrixRangeBeforeCreatingContext) {
         jvector_ash_fp16_result result{};
         EXPECT_EQ(jvector_ash_fp16_create(&value, 1, 1, &result), nullptr);
         EXPECT_EQ(result.status, JV_ASH_FP16_RANGE);
+    }
+}
+
+TEST(AshFp16, TrueBatchesCacheWeightsAndHandleTilesAndTails) {
+    const float matrix[] = {.25f, -.5f, .75f, -.125f, .5f, .25f};
+    jvector_ash_fp16_result result{};
+    using Owner = std::unique_ptr<void, decltype(&jvector_ash_fp16_destroy)>;
+    Owner context(jvector_ash_fp16_create(matrix, 2, 3, &result), &jvector_ash_fp16_destroy);
+    if (result.status == JV_ASH_FP16_UNSUPPORTED) GTEST_SKIP() << result.message;
+    ASSERT_EQ(result.status, JV_ASH_FP16_OK) << result.message;
+    const auto weights = jvector_ash_fp16_bytes(context.get());
+    for (int count : {1, 2, 3, 4, 5, 7, 8, 9, 17}) {
+        std::vector<float> input(count * 3, 1), output(count * 2, -99);
+        ASSERT_EQ(jvector_ash_fp16_project_batch(context.get(), input.data(), count,
+                                                output.data(), &result), JV_ASH_FP16_OK) << result.message;
+        for (int i = 0; i < count; ++i) {
+            EXPECT_FLOAT_EQ(output[i * 2], .5f);
+            EXPECT_FLOAT_EQ(output[i * 2 + 1], .625f);
+        }
+        const auto retained = jvector_ash_fp16_bytes(context.get());
+        EXPECT_GE(retained, weights);
+        ASSERT_EQ(jvector_ash_fp16_project_batch(context.get(), input.data(), count,
+                                                output.data(), &result), JV_ASH_FP16_OK);
+        EXPECT_EQ(retained, jvector_ash_fp16_bytes(context.get()));
+        input.back() = std::numeric_limits<float>::quiet_NaN();
+        std::fill(output.begin(), output.end(), -99);
+        EXPECT_EQ(jvector_ash_fp16_project_batch(context.get(), input.data(), count,
+                                                output.data(), &result), JV_ASH_FP16_RANGE);
+        for (float value : output) EXPECT_FLOAT_EQ(value, -99);
     }
 }
 

@@ -15,13 +15,16 @@
  */
 #include "jvector_ash_fp16.h"
 #include <oneapi/dnnl/dnnl.hpp>
+#include <algorithm>
 #include <atomic>
+#include <array>
 #include <cmath>
 #include <cstddef>
 #include <cstdio>
 #include <cstring>
 #include <limits>
 #include <memory>
+#include <mutex>
 #include <new>
 #include <stdexcept>
 
@@ -50,6 +53,29 @@ bool representable(const float* values, size_t count) noexcept {
 
 struct Unsupported : std::runtime_error { using std::runtime_error::runtime_error; };
 
+// A bounded primitive cache is an implementation tile, not an API batch limit.
+constexpr int kBatchTile = 8;
+struct BatchKernel {
+    matmul::primitive_desc descriptor;
+    matmul operation;
+    memory weights;
+    BatchKernel(const engine& cpu, int rows, int columns, int count) {
+        primitive_attr attributes;
+        attributes.set_scratchpad_mode(scratchpad_mode::user);
+        attributes.set_fpmath_mode(fpmath_mode::strict);
+        attributes.set_accumulation_mode(accumulation_mode::strict);
+        // GEMV and GEMM need different packing. Let oneDNN choose the batch
+        // layout; Context shares one packed matrix between compatible kernels.
+        descriptor = matmul::primitive_desc(cpu,
+            memory::desc({count, columns}, memory::data_type::f16, memory::format_tag::ab),
+            memory::desc({columns, rows}, memory::data_type::f16, memory::format_tag::any),
+            memory::desc({count, rows}, memory::data_type::f32, memory::format_tag::ab), attributes);
+        if (std::strncmp(descriptor.impl_info_str(), "ref", 3) == 0)
+            throw Unsupported("No optimized oneDNN FP16 batch kernel supports this layout");
+        operation = matmul(descriptor);
+    }
+};
+
 struct Context {
     const uint64_t id = next_id.fetch_add(1, std::memory_order_relaxed);
     const int rows, columns;
@@ -58,8 +84,46 @@ struct Context {
     matmul operation;
     memory weights;
     uint64_t weight_bytes = 0;
+    std::atomic<uint64_t> retained_bytes{0};
+    std::array<std::atomic<BatchKernel*>, kBatchTile + 1> batch_ready{};
+    std::array<std::unique_ptr<BatchKernel>, kBatchTile + 1> batches{};
+    std::mutex batch_mutex;
+
+    const BatchKernel& batch(int count) {
+        auto* ready = batch_ready[count].load(std::memory_order_acquire);
+        if (!ready) {
+            std::lock_guard<std::mutex> guard(batch_mutex);
+            ready = batch_ready[count].load(std::memory_order_relaxed);
+            if (!ready) {
+                auto kernel = std::make_unique<BatchKernel>(cpu, rows, columns, count);
+                uint64_t added = sizeof(BatchKernel);
+                if (kernel->descriptor.weights_desc() == weights.get_desc()) kernel->weights = weights;
+                else {
+                    for (const auto& other : batches) {
+                        if (other && other->weights.get_desc() == kernel->descriptor.weights_desc()) {
+                            kernel->weights = other->weights;
+                            break;
+                        }
+                    }
+                    if (!kernel->weights) {
+                        kernel->weights = memory(kernel->descriptor.weights_desc(), cpu);
+                        stream setup(cpu);
+                        reorder(weights, kernel->weights).execute(setup, weights, kernel->weights);
+                        setup.wait();
+                        added += kernel->descriptor.weights_desc().get_size();
+                    }
+                }
+                batches[count] = std::move(kernel);
+                retained_bytes.fetch_add(added, std::memory_order_release);
+                ready = batches[count].get();
+                batch_ready[count].store(ready, std::memory_order_release);
+            }
+        }
+        return *ready;
+    }
 
     Context(const float* matrix, int r, int c) : rows(r), columns(c) {
+        for (auto& entry : batch_ready) entry.store(nullptr, std::memory_order_relaxed);
         // A is row-major [rows][columns]. Its transpose is the [columns][rows]
         // right operand, represented by strides instead of a second FP32 copy.
         const memory::dims shape{columns, rows}, strides{1, columns};
@@ -89,6 +153,7 @@ struct Context {
             setup.wait();
         }
         weight_bytes = descriptor.weights_desc().get_size();
+        retained_bytes.store(weight_bytes + sizeof(Context), std::memory_order_relaxed);
         // Only the prepared representation survives construction. In particular,
         // an additional unneeded copy of the FP16 matrix is not retained.
     }
@@ -117,6 +182,29 @@ struct Workspace {
     }
 };
 thread_local Workspace workspace;
+
+struct BatchWorkspace {
+    uint64_t context_id = 0;
+    std::unique_ptr<stream> execution;
+    memory source_f32, source_f16, output, scratch;
+    reorder conversion;
+
+    void initialize(const Context& context, const BatchKernel& kernel, int count,
+                    const float* input, float* out) {
+        context_id = 0;
+        execution = std::make_unique<stream>(context.cpu);
+        source_f32 = memory(memory::desc({count, context.columns}, memory::data_type::f32,
+                             memory::format_tag::ab), context.cpu, const_cast<float*>(input));
+        source_f16 = memory(kernel.descriptor.src_desc(), context.cpu);
+        output = memory(kernel.descriptor.dst_desc(), context.cpu, out);
+        scratch = memory(kernel.descriptor.scratchpad_desc(), context.cpu);
+        conversion = reorder(source_f32, source_f16);
+        context_id = context.id;
+    }
+};
+// Separate slots prevent changing natural batch sizes from allocating on every
+// call. They hold caller scratch and handles, never a Context or its weights.
+thread_local std::array<BatchWorkspace, kBatchTile + 1> batch_workspaces;
 }
 
 extern "C" {
@@ -155,7 +243,7 @@ void* jvector_ash_fp16_create(const float* matrix, int rows, int columns, jvecto
 void jvector_ash_fp16_destroy(void* pointer) { delete static_cast<Context*>(pointer); }
 
 uint64_t jvector_ash_fp16_bytes(const void* pointer) {
-    return pointer ? static_cast<const Context*>(pointer)->weight_bytes : 0;
+    return pointer ? static_cast<const Context*>(pointer)->retained_bytes.load(std::memory_order_acquire) : 0;
 }
 
 int jvector_ash_fp16_project(void* pointer, const float* input, float* output,
@@ -193,6 +281,62 @@ int jvector_ash_fp16_project(void* pointer, const float* input, float* output,
     catch (const std::bad_alloc& e) { return set_error(result, JV_ASH_FP16_NO_MEMORY, e.what()); }
     catch (const std::exception& e) { return set_error(result, JV_ASH_FP16_ERROR, e.what()); }
     catch (...) { return set_error(result, JV_ASH_FP16_ERROR, "Unknown projection execution failure"); }
+}
+
+int jvector_ash_fp16_project_batch(void* pointer, const float* input, int count,
+                                  float* output, jvector_ash_fp16_result* result) {
+    if (!result) return JV_ASH_FP16_INVALID_ARGUMENT;
+    result->message[0] = '\0';
+    result->status = JV_ASH_FP16_OK;
+    if (!pointer || !input || !output || input == output || count <= 0)
+        return set_error(result, JV_ASH_FP16_INVALID_ARGUMENT, "Invalid FP16 batch buffers or count");
+    auto& context = *static_cast<Context*>(pointer);
+    if (uint64_t(count) > std::numeric_limits<size_t>::max() / sizeof(float)
+                             / uint64_t(std::max(context.rows, context.columns)))
+        return set_error(result, JV_ASH_FP16_INVALID_ARGUMENT, "FP16 batch size overflow");
+    // Validate the entire input before writing any result, including later tiles.
+    if (!representable(input, size_t(count) * size_t(context.columns)))
+        return set_error(result, JV_ASH_FP16_RANGE, "Query is outside the finite FP16 range");
+    try {
+        for (int first = 0; first < count;) {
+            const int size = std::min(kBatchTile, count - first);
+            const float* in = input + size_t(first) * context.columns;
+            float* out = output + size_t(first) * context.rows;
+            if (size == 1) {
+                int status = jvector_ash_fp16_project(pointer, in, out, result);
+                if (status != JV_ASH_FP16_OK) return status;
+            } else {
+                const auto& kernel = context.batch(size);
+                auto& buffers = batch_workspaces[size];
+                if (buffers.context_id != context.id)
+                    buffers.initialize(context, kernel, size, in, out);
+                buffers.source_f32.set_data_handle(const_cast<float*>(in));
+                buffers.output.set_data_handle(out);
+                const dnnl_exec_arg_t conversion[] = {
+                    {DNNL_ARG_FROM, buffers.source_f32.get()}, {DNNL_ARG_TO, buffers.source_f16.get()}};
+                auto status = dnnl_primitive_execute(buffers.conversion.get(), buffers.execution->get(), 2, conversion);
+                if (status != dnnl_success) return set_error(result,
+                    status == dnnl_out_of_memory ? JV_ASH_FP16_NO_MEMORY : JV_ASH_FP16_ERROR,
+                    "FP16 batch conversion failed");
+                const dnnl_exec_arg_t arguments[] = {{DNNL_ARG_SRC, buffers.source_f16.get()},
+                    {DNNL_ARG_WEIGHTS, kernel.weights.get()}, {DNNL_ARG_DST, buffers.output.get()},
+                    {DNNL_ARG_SCRATCHPAD, buffers.scratch.get()}};
+                status = dnnl_primitive_execute(kernel.operation.get(), buffers.execution->get(), 4, arguments);
+                if (status != dnnl_success) return set_error(result,
+                    status == dnnl_out_of_memory ? JV_ASH_FP16_NO_MEMORY : JV_ASH_FP16_ERROR,
+                    "FP16 batch execution failed");
+                buffers.execution->wait();
+            }
+            first += size;
+        }
+        return JV_ASH_FP16_OK;
+    } catch (const Unsupported& e) { return set_error(result, JV_ASH_FP16_UNSUPPORTED, e.what()); }
+    catch (const dnnl::error& e) { return set_error(result, e.status == dnnl_unimplemented
+        ? JV_ASH_FP16_UNSUPPORTED : e.status == dnnl_out_of_memory
+        ? JV_ASH_FP16_NO_MEMORY : JV_ASH_FP16_ERROR, e.what()); }
+    catch (const std::bad_alloc& e) { return set_error(result, JV_ASH_FP16_NO_MEMORY, e.what()); }
+    catch (const std::exception& e) { return set_error(result, JV_ASH_FP16_ERROR, e.what()); }
+    catch (...) { return set_error(result, JV_ASH_FP16_ERROR, "Unknown FP16 batch execution failure"); }
 }
 
 }

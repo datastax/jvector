@@ -50,12 +50,19 @@ JV_ASH_FP16_EXPORT int jvector_ash_fp16_abi(void);
 JV_ASH_FP16_EXPORT void* jvector_ash_fp16_create(const float* matrix, int rows,
                                                int columns, jvector_ash_fp16_result* result);
 JV_ASH_FP16_EXPORT void jvector_ash_fp16_destroy(void* context);
-/* Retained packed weight bytes, excluding per-calling-thread workspace. */
+/* Retained native context, kernel wrappers and distinct packed weights.
+ * Per-calling-thread workspace and opaque oneDNN/JIT bookkeeping are excluded. */
 JV_ASH_FP16_EXPORT uint64_t jvector_ash_fp16_bytes(const void* context);
 /* input has columns floats, output has rows floats; neither may alias the other.
  * Finite operands must be within the FP16 finite range. Output is FP32. */
 JV_ASH_FP16_EXPORT int jvector_ash_fp16_project(void* context, const float* input,
                                               float* output, jvector_ash_fp16_result* result);
+/* Row-major input [count][columns], output [count][rows]. Caches packed FP16
+ * weights by layout; count is positive and has no tile-size cap.
+ * Conversion and accumulation match singleton projection. No exception crosses
+ * the ABI. Java validates shape and nonaliasing before entering native code. */
+JV_ASH_FP16_EXPORT int jvector_ash_fp16_project_batch(void* context, const float* input,
+        int count, float* output, jvector_ash_fp16_result* result);
 
 /* FP32 bulk projection, using the same sequential oneDNN package.
  * Matrix is row-major [rows][columns], input [count][columns], output [count][rows].

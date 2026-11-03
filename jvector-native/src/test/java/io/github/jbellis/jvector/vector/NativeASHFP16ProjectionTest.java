@@ -29,6 +29,7 @@ import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Random;
+import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 import java.util.jar.JarEntry;
@@ -86,6 +87,129 @@ class NativeASHFP16ProjectionTest {
             }
             assertEquals(expected, actual[row], 2e-6 * magnitude + 1e-7, "row " + row);
         }
+    }
+
+    @Test
+    void batchAbiExecutesOptimizedPrimitivesForSmallAndLargeMatrices() throws Throwable {
+        required(new NativeASHProjection(new float[][]{{1}}));
+        var signature = java.lang.foreign.FunctionDescriptor.of(java.lang.foreign.ValueLayout.JAVA_INT,
+                java.lang.foreign.ValueLayout.ADDRESS, java.lang.foreign.ValueLayout.ADDRESS,
+                java.lang.foreign.ValueLayout.JAVA_INT, java.lang.foreign.ValueLayout.ADDRESS,
+                java.lang.foreign.ValueLayout.ADDRESS);
+        var symbol = java.lang.foreign.SymbolLookup.loaderLookup().find("jvector_ash_fp16_project_batch");
+        if (Boolean.getBoolean("jvector.test.requireFp16")) assertTrue(symbol.isPresent());
+        else assumeTrue(symbol.isPresent(), "Optional FP16 batch ABI unavailable");
+        var call = java.lang.foreign.Linker.nativeLinker().downcallHandle(symbol.orElseThrow(), signature);
+        for (int[] shape : new int[][]{{3,7}, {384,768}, {1536,3072}}) {
+            float[][] matrix = new float[shape[0]][shape[1]];
+            for (float[] row : matrix) Arrays.fill(row, .25f);
+            var projection = required(new NativeASHProjection(matrix));
+            var field = NativeASHFP16Projection.class.getDeclaredField("context");
+            field.setAccessible(true);
+            var context = (java.lang.foreign.MemorySegment) field.get(projection);
+            try (var arena = java.lang.foreign.Arena.ofConfined()) {
+                var input = arena.allocate(17L * shape[1] * Float.BYTES, Float.BYTES);
+                var output = arena.allocate(17L * shape[0] * Float.BYTES, Float.BYTES);
+                var status = arena.allocate(260, Integer.BYTES);
+                for (long i = 0; i < 17L * shape[1]; i++)
+                    input.setAtIndex(java.lang.foreign.ValueLayout.JAVA_FLOAT, i, 1f);
+                for (int count : new int[]{2,3,4,5,6,7,8,9,17}) {
+                    int result = (int) call.invokeExact(context, input, count, output, status);
+                    if (result == 1 && !Boolean.getBoolean("jvector.test.requireFp16"))
+                        assumeTrue(false, "Optimized FP16 batch unsupported on this CPU");
+                    assertEquals(0, result, "Required batch must execute without singleton fallback");
+                    for (long i = 0; i < (long) count * shape[0]; i++)
+                        assertEquals(shape[1] * .25f, output.getAtIndex(java.lang.foreign.ValueLayout.JAVA_FLOAT, i));
+                }
+            }
+        }
+    }
+
+    @Test
+    void batchesMatchRoundedOracleIncludingTailsAndPreserveWeightStorage() {
+        Random random = new Random(162784);
+        for (int[] shape : new int[][]{{3,7}, {65,129}, {384,768}, {1536,3072}}) {
+            float[][] matrix = new float[shape[0]][shape[1]];
+            for (float[] row : matrix) for (int j = 0; j < row.length; j++) row[j] = random.nextFloat() - .5f;
+            var projection = required(new NativeASHProjection(matrix));
+            long weightBytes = projection.ramBytesUsed();
+            for (int count : new int[]{0,1,2,3,4,5,7,8,9,17}) {
+                float[][] inputs = new float[count + 1][shape[1]], outputs = new float[count + 1][shape[0]];
+                for (float[] input : inputs) for (int j = 0; j < input.length; j++) input[j] = random.nextFloat() - .5f;
+                Arrays.fill(outputs[count], 123f);
+                projection.projectBatch(inputs, outputs, count);
+                for (int i = 0; i < count; i++) checkOracle(matrix, inputs[i], outputs[i], true);
+                for (float value : outputs[count]) assertEquals(123f, value);
+                assertTrue(projection.ramBytesUsed() >= weightBytes);
+                long retained = projection.ramBytesUsed();
+                projection.projectBatch(inputs, outputs, count);
+                assertEquals(retained, projection.ramBytesUsed(), "Repeated batch sizes reuse their packed storage");
+            }
+        }
+    }
+
+    @Test
+    void batchGuardsAndAutomaticRangeFallback() {
+        float[][] matrix = {{.1234567f, .3456789f}, {-.3333333f, .5f}};
+        var projection = required(new NativeASHProjection(matrix));
+        float[][] inputs = {{1,2}, {3,4}}, outputs = {{42,42}, {42,42}};
+        assertThrows(IllegalArgumentException.class, () -> projection.projectBatch(inputs, outputs, -1));
+        assertThrows(IllegalArgumentException.class, () -> projection.projectBatch(inputs, inputs, 2));
+        assertThrows(IllegalArgumentException.class, () -> projection.projectBatch(inputs, new float[][]{outputs[0], outputs[0]}, 2));
+        assertThrows(IllegalArgumentException.class, () -> projection.projectBatch(inputs, new float[][]{outputs[0], new float[1]}, 2));
+        inputs[1][1] = Float.NaN;
+        assertThrows(IllegalArgumentException.class, () -> projection.projectBatch(inputs, outputs, 2));
+        for (float[] out : outputs) assertArrayEquals(new float[]{42,42}, out);
+        inputs[1][1] = 70000f;
+        var automatic = view(new NativeASHProjection(matrix), "auto");
+        automatic.projectBatch(inputs, outputs, 2);
+        checkOracle(matrix, inputs[0], outputs[0], true);
+        checkOracle(matrix, inputs[1], outputs[1], false);
+    }
+
+    @Test
+    void unavailableBatchCapabilityUsesTheOriginalSingletonPath() throws Exception {
+        float[][] matrix = {{.1234567f, .3456789f}, {-.3333333f, .5f}};
+        var projection = required(new NativeASHProjection(matrix));
+        var availability = NativeASHFP16Projection.class.getDeclaredField("batchAvailable");
+        availability.setAccessible(true);
+        availability.setBoolean(projection, false); // Also the state of an older, singleton-only ABI.
+        assertFalse(projection.supportsBatchProjection());
+        float[][] inputs = {{1,2}, {3,4}, {5,6}}, outputs = new float[3][2];
+        projection.projectBatch(inputs, outputs, inputs.length);
+        for (int i = 0; i < inputs.length; i++) checkOracle(matrix, inputs[i], outputs[i], true);
+        assertFalse(projection.supportsBatchProjection());
+    }
+
+    @Test
+    void concurrentBatchInitializationAndModelSwitchingKeepCallerOutputsIndependent() throws Exception {
+        float[][] a = {{.1234567f, -.3333333f, .9f}, {-.5555555f, .0123456f, .25f}};
+        float[][] b = {{.456789f, .234567f, -.75f}};
+        var first = required(new NativeASHProjection(a));
+        var second = required(new NativeASHProjection(b));
+        var start = new CountDownLatch(1);
+        try (var pool = Executors.newFixedThreadPool(8)) {
+            var futures = new ArrayList<java.util.concurrent.Future<?>>();
+            for (int worker = 0; worker < 8; worker++) {
+                final int count = new int[]{2,3,8,17}[worker % 4];
+                futures.add(pool.submit(() -> {
+                    float[][] inputs = new float[count][3], outA = new float[count][2], outB = new float[count][1];
+                    for (int i = 0; i < count; i++) inputs[i] = new float[]{.234567f + i * .01f, -.456789f, .75f};
+                    start.await();
+                    for (int repeat = 0; repeat < 20; repeat++) {
+                        first.projectBatch(inputs, outA, count);
+                        second.projectBatch(inputs, outB, count);
+                        for (int i = 0; i < count; i++) {
+                            checkOracle(a, inputs[i], outA[i], true);
+                            checkOracle(b, inputs[i], outB[i], true);
+                        }
+                    }
+                    return null;
+                }));
+            }
+            start.countDown();
+            for (var future : futures) future.get(30, TimeUnit.SECONDS);
+        } finally { start.countDown(); }
     }
 
     @Test

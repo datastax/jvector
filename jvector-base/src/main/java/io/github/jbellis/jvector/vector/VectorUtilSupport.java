@@ -479,6 +479,14 @@ public interface VectorUtilSupport {
       for (int i = 0; i < count; i++) project(inputs[i], outputs[i]);
     }
 
+    /**
+     * Whether this view has a genuine multi-vector projection implementation.
+     * Query dispatch uses this capability to avoid coordinating providers whose
+     * batch method simply repeats singleton calls. This is a capability flag,
+     * not a performance promise, and may become false after a native fallback.
+     */
+    default boolean supportsBatchProjection() { return false; }
+
     /** Validates a batch before any output is changed. */
     static void validateBatch(float[][] inputs, float[][] outputs, int count) {
       java.util.Objects.requireNonNull(inputs, "inputs");
