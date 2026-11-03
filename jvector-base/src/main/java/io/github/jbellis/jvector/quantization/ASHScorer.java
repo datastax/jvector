@@ -296,6 +296,11 @@ public final class ASHScorer {
         // Scratch is constructed with this model and never resized on the hot path.
         for (int k = 0; k < input.length; k++) input[k] = query.get(k);
         ash.stiefelTransform.projectQuery(input, prepared.qProj);
+        finishQuery(query, prepared);
+    }
+
+    /** Completes the non-projection terms after direct or batched query projection. */
+    void finishQuery(VectorFloat<?> query, QueryPrecompute prepared) {
         for (int c = 0; c < ash.landmarkCount; c++) {
             prepared.dotQMuByLandmark[c] = VectorUtil.dotProduct(query, ash.landmarks[c]);
         }

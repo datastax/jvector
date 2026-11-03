@@ -250,6 +250,16 @@ public class FusedASH extends AbstractFeature implements FusedFeature {
                 vsf);
     }
 
+    /** Bind preparation to the view while retaining the established decoder lifetime checks. */
+    public ScoreFunction.ApproximateScoreFunction approximateScoreFunctionFor(
+            io.github.jbellis.jvector.graph.similarity.PreparedQuery query,
+            OnDiskGraphIndex.View view) {
+        return FusedASHDecoder.newDecoder(new PackedNeighborhoods(view), ash,
+                view.getInlineSourceFeatures(), source -> ((FusedASHInlineSource) source).getVector(),
+                query, view.getOrCreateFeatureScratch(id(), FusedASHDecoder.QueryScratch.class,
+                        queryScratchFactory), blockSize);
+    }
+
     @Override
     public void writeSourceFeature(IndexWriter out, Feature.State state_) throws IOException {
         var state = (FusedASH.State) state_;
