@@ -40,7 +40,6 @@ import io.github.jbellis.jvector.graph.similarity.DefaultSearchScoreProvider;
 import io.github.jbellis.jvector.graph.similarity.ScoreFunction;
 import io.github.jbellis.jvector.graph.similarity.SearchScoreProvider;
 import io.github.jbellis.jvector.quantization.CompressedVectors;
-import io.github.jbellis.jvector.quantization.ProductQuantization;
 import io.github.jbellis.jvector.quantization.VectorCompressor;
 import io.github.jbellis.jvector.util.ExplicitThreadLocal;
 import io.github.jbellis.jvector.vector.types.VectorFloat;
@@ -607,19 +606,20 @@ public class Grid {
         return cachedCompressors.computeIfAbsent(fname, __ -> {
             Path path = Paths.get(pqCacheDir).resolve(fname);
             if (Files.exists(path)) {
-                return loadFromCache(ds, fname, path);
+                return loadFromCache(ds, cp, fname, path);
             }
             return executionWrapper.get();
         });
     }
 
     // Load/save helpers for getCompressor
-    private static VectorCompressor<?> loadFromCache(DataSet ds, String fname, Path path) {
+    private static VectorCompressor<?> loadFromCache(DataSet ds, CompressorParameters cp, String fname, Path path) {
         try (var readerSupplier = ReaderSupplierFactory.open(path);
              var rar = readerSupplier.get()) {
-            var pq = ProductQuantization.load(rar);
-            System.out.format("%s: %s codebooks loaded from %s%n", ds.getName(), pq, fname);
-            return pq;
+            // Each compressor type has its own on-disk format, so the parameters that saved it read it back.
+            var compressor = cp.loadCompressor(rar);
+            System.out.format("%s: %s loaded from %s%n", ds.getName(), compressor, fname);
+            return compressor;
         } catch (IOException e) {
             throw new UncheckedIOException(e);
         }
