@@ -148,6 +148,7 @@ public class TestRetainedMemoryAccounting {
         verifyRequestedLayout();
         verifyBuffers();
         verifyObjectSharing();
+        verifyPQStorage();
         verifyGraphs();
         System.out.println("Retained-memory footprints match the JVM");
     }
@@ -254,6 +255,66 @@ public class TestRetainedMemoryAccounting {
         }
     }
 
+    private static void verifyPQStorage() throws Exception {
+        var types = VectorizationProvider.getInstance().getVectorTypeSupport();
+        for (int codeSize : new int[]{1, 7, 17, 48, 96, 192, 384, 768}) {
+            var books = new VectorFloat<?>[codeSize];
+            var subspaces = new int[codeSize][2];
+            for (int j = 0; j < codeSize; j++) {
+                books[j] = types.createFloatVector(256);
+                subspaces[j] = new int[]{1, j};
+            }
+            var pq = new ProductQuantization(books, 256, subspaces, null, KMeansPlusPlusClusterer.UNWEIGHTED);
+            var mutable = new MutablePQVectors(pq);
+            assertPQStorage(mutable, pq);
+            long emptyBytes = mutable.ramBytesUsed();
+            assertThrows(IllegalArgumentException.class, () -> mutable.setZero(-1));
+            assertThrows(IllegalArgumentException.class, () -> mutable.setZero(Integer.MAX_VALUE));
+            assertEquals(emptyBytes, mutable.ramBytesUsed());
+            for (int ordinal : new int[]{0, 1023, 1024, 1023, 10240, 20480}) {
+                mutable.setZero(ordinal);
+                assertPQStorage(mutable, pq);
+            }
+            long bytes = mutable.ramBytesUsed();
+            mutable.setZero(0); // Logical deletion/reuse does not free or allocate chunk capacity.
+            mutable.encodeAndSet(7, types.createFloatVector(codeSize));
+            assertEquals(bytes, mutable.ramBytesUsed());
+            assertPQStorage(mutable, pq);
+
+            var full = types.createByteSequence(codeSize * 3);
+            ByteSequence<?>[] chunks = {full.slice(0, codeSize), full.slice(codeSize, codeSize), full.slice(0, codeSize)};
+            var immutable = new ImmutablePQVectors(pq, chunks, 3, 1);
+            assertPQStorage(immutable, pq);
+            chunks[0] = null; // Caller cannot replace the immutable instance's owned reference array.
+            assertNotNull(immutable.get(0));
+            assertPQStorage(immutable, pq);
+            assertPQStorage(new ImmutablePQVectors(pq, new ByteSequence<?>[0], 0, 1), pq);
+        }
+        var pq = new ProductQuantization(new VectorFloat<?>[]{types.createFloatVector(256)},
+                256, new int[][]{{1, 0}}, null, KMeansPlusPlusClusterer.UNWEIGHTED);
+        var mutable = new MutablePQVectors(pq);
+        var workers = java.util.concurrent.Executors.newFixedThreadPool(4);
+        try {
+            var futures = new ArrayList<java.util.concurrent.Future<?>>();
+            for (int ordinal : new int[]{0, 15360, 9216, 3072}) futures.add(workers.submit(() -> mutable.setZero(ordinal)));
+            for (var future : futures) future.get();
+        } finally {
+            workers.shutdownNow();
+        }
+        assertPQStorage(mutable, pq);
+    }
+
+    private static void assertPQStorage(PQVectors vectors, ProductQuantization pq) throws Exception {
+        Set<Object> external = Collections.newSetFromMap(new IdentityHashMap<>());
+        if (vectors instanceof ImmutablePQVectors) {
+            var scoring = ImmutablePQVectors.class.getDeclaredField("codebookPartialSumsMap");
+            scoring.setAccessible(true);
+            external.add(scoring.get(vectors)); // Existing derived-score-workspace boundary.
+        }
+        assertEquals("PQ storage plus its separately reported compressor estimate",
+                measured(vectors, external) + pq.ramBytesUsed(), vectors.ramBytesUsed());
+    }
+
     private static void verifyGraph(int version, int[] shape, ProductQuantization pq) throws Exception {
         verifyGraph(version, shape, pq, FeatureId.INLINE_VECTORS);
     }
@@ -311,25 +372,17 @@ public class TestRetainedMemoryAccounting {
                 format.setAccessible(true);
                 external.add(format.get(loaded));
                 assertGraphEquals(description, loaded, external);
-                // Allocating collection views changes retention; measurement must not create them.
+                // Exposed retained views are prepared during loading. Reads must leave the
+                // immutable index's footprint unchanged, including upper-layer node iteration.
                 loaded.getFeatureSet().iterator().hasNext();
+                loaded.getFeatures().values(); loaded.getFeatures().entrySet();
+                for (int level = 1; level < shape[2]; level++) loaded.getNodes(level);
+                assertThrows(UnsupportedOperationException.class, () -> loaded.getFeatures().clear());
+                assertThrows(UnsupportedOperationException.class, () -> loaded.getFeatureSet().clear());
                 if (pq != null) {
                     var sources = view.getInlineSourceFeatures();
                     sources.keySet(); sources.values(); sources.entrySet();
                     assertGraphEquals(description + " views", loaded, external);
-                    var saved = new ArrayList<>(sources.values());
-                    sources.clear();
-                    assertGraphEquals(description + " cleared", loaded, external);
-                    // Duplicate identities and shared backing storage must not be charged twice.
-                    var code = types.createByteSequence(33);
-                    sources.put(1001, new FusedPQ.FusedPQInlineSource(code));
-                    sources.put(1002, new FusedPQ.FusedPQInlineSource(code.slice(1, 17)));
-                    sources.put(1003, sources.get(1001));
-                    assertGraphEquals(description + " shared", loaded, external);
-                    for (int i = 0; i < 40; i++) sources.put(2000 + i, saved.get(0));
-                    assertGraphEquals(description + " grown", loaded, external);
-                    sources.clear(); sources.compact();
-                    assertGraphEquals(description + " compacted", loaded, external);
                 }
                 assertGraphEquals(description + " stable", loaded, external);
             }

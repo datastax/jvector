@@ -32,7 +32,6 @@ import org.junit.Test;
 
 import java.nio.file.Files;
 import java.util.EnumMap;
-import java.util.HashMap;
 import java.util.Random;
 import java.util.function.IntFunction;
 
@@ -55,7 +54,7 @@ public class TestFusedPQMemoryAccounting {
     }
 
     @Test
-    public void graphSumsCachedSourceEstimatesAsBytes() throws Exception {
+    public void graphIncludesCachedSourceStorage() throws Exception {
         var types = VectorizationProvider.getInstance().getVectorTypeSupport();
         // Fixed codebooks avoid training: this test only serializes and loads source storage.
         var pq = new ProductQuantization(new VectorFloat<?>[]{
@@ -79,17 +78,11 @@ public class TestFusedPQMemoryAccounting {
                  var view = loaded.getView()) {
                 var sources = view.getInlineSourceFeatures();
                 assertFalse("The entry point must have a cached source", sources.isEmpty());
-                var saved = new HashMap<Integer, FusedFeature.InlineSource>(sources);
                 long sourceBytes = sources.values().stream().mapToLong(FusedFeature.InlineSource::ramBytesUsed).sum();
-                long withSources = loaded.ramBytesUsed();
-                try {
-                    // Keep the same cache map and graph metadata; remove only the source values.
-                    sources.clear();
-                    assertEquals(sourceBytes, withSources - loaded.ramBytesUsed());
-                } finally {
-                    sources.putAll(saved);
-                }
-                assertEquals(withSources, loaded.ramBytesUsed());
+                long retained = loaded.ramBytesUsed();
+                assertTrue(retained >= sourceBytes + RamUsageEstimator.shallowSizeOf(loaded));
+                // Memory reporting is a cached read; it neither traverses nor changes the cache.
+                for (int i = 0; i < 1000; i++) assertEquals(retained, loaded.ramBytesUsed());
             }
         } finally {
             Files.deleteIfExists(path);
