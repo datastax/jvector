@@ -51,6 +51,21 @@ final class FeatureProviders {
         return PROVIDERS.get(id);
     }
 
+    /**
+     * The provider for {@code id}.
+     *
+     * @throws IllegalArgumentException if Grid has no provider for {@code id}, so results are never labeled
+     * with a feature the index does not contain
+     */
+    static FeatureProvider require(FeatureId id) {
+        var provider = PROVIDERS.get(id);
+        if (provider == null) {
+            throw new IllegalArgumentException("Grid has no FeatureProvider for " + id
+                    + "; register one in FeatureProviders (supported: " + PROVIDERS.keySet() + ")");
+        }
+        return provider;
+    }
+
     /** Whether any feature in {@code features} has a provider matching {@code test}; unknown features never match. */
     static boolean anyMatch(Set<FeatureId> features, Predicate<FeatureProvider> test) {
         for (var id : features) {
@@ -77,12 +92,7 @@ final class FeatureProviders {
         var writer = GraphBuilderFactory.writerBuilder(graph, outPath, vectors.size());
         var ctx = new FeatureWriteContext(writer, graph, vectors, buildPQ, metrics);
         for (var id : features) {
-            var provider = PROVIDERS.get(id);
-            if (provider == null) {
-                System.out.println("Skipping " + id + ": Grid has no FeatureProvider for it");
-                continue;
-            }
-            provider.configure(ctx);
+            require(id).configure(ctx);
         }
         return ctx;
     }

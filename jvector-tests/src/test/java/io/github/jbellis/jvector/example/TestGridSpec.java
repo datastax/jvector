@@ -98,6 +98,17 @@ public class TestGridSpec {
     }
 
     @Test
+    public void aFeatureWithoutAProviderIsRejected() {
+        var builder = GridSpec.builder()
+                .sweep("M", List.of(16), BuildConfig.Builder::M)
+                .featureSets(List.of(EnumSet.of(FeatureId.INLINE_VECTORS),
+                        EnumSet.of(FeatureId.SEPARATED_VECTORS)))
+                .search(search());
+        var e = assertThrows(IllegalArgumentException.class, builder::build);
+        assertTrue(e.getMessage(), e.getMessage().contains("SEPARATED_VECTORS"));
+    }
+
+    @Test
     public void aMissingRequiredParameterNamesIt() {
         var spec = GridSpec.builder()
                 .sweep("M", List.of(16), BuildConfig.Builder::M)

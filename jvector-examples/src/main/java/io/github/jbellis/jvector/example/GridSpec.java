@@ -151,10 +151,19 @@ public final class GridSpec {
         public Builder search(SearchConfig search) { this.search = search; return this; }
         public Builder enableIndexCache(boolean enableIndexCache) { this.enableIndexCache = enableIndexCache; return this; }
 
-        /** @throws IllegalStateException if the feature sets or search config were not set */
+        /**
+         * @throws IllegalStateException if the feature sets or search config were not set
+         * @throws IllegalArgumentException if a feature set names a feature with no {@link FeatureProvider}
+         */
         public GridSpec build() {
             if (featureSets == null) {
                 throw new IllegalStateException("GridSpec.featureSets must be set");
+            }
+            // Fail before the first build rather than write indexes without the feature.
+            for (var features : featureSets) {
+                for (var id : features) {
+                    FeatureProviders.require(id);
+                }
             }
             if (search == null) {
                 throw new IllegalStateException("GridSpec.search must be set");
