@@ -51,6 +51,19 @@ public class ASHVectors implements CompressedVectors {
     final AsymmetricHashing ash;
     final AsymmetricHashing.QuantizedVector[] compressedVectors;
     final ASHScorer scorer;
+    private final long vectorDataBytes;
+    private final long containerBytes;
+    private final java.util.concurrent.atomic.AtomicLong projectionCacheBytes = new java.util.concurrent.atomic.AtomicLong();
+
+    // Conservatively include a key, node and initial-sized table per cached layout.
+    // Arrays dominate this charge; no map traversal is needed when Cassandra polls it.
+    private static final long PROJECTION_CACHE_ENTRY_BYTES =
+            RamUsageEstimator.shallowSizeOfInstance(Integer.class)
+            + RamUsageEstimator.alignObjectSize(RamUsageEstimator.NUM_BYTES_OBJECT_HEADER
+                    + Integer.BYTES + 4L * RamUsageEstimator.NUM_BYTES_OBJECT_REF)
+            + RamUsageEstimator.alignObjectSize(RamUsageEstimator.NUM_BYTES_ARRAY_HEADER
+                    + 16L * RamUsageEstimator.NUM_BYTES_OBJECT_REF);
+
     private volatile ASHSymmetricScorer diversityScorer;
 
     enum AshSingleKernel {
@@ -92,7 +105,7 @@ public class ASHVectors implements CompressedVectors {
 
     // Packed block-column-major sign bits (built lazily per blockSize, 1-bit path only)
     private int packedBlockSize = -1;
-    private long[] packedBits = null;
+    private volatile long[] packedBits = null;
     private int packedBlockCount = 0;
 
     // Flat row-major sign bits for single-vector SIMD (built lazily, 1-bit path only)
@@ -123,12 +136,16 @@ public class ASHVectors implements CompressedVectors {
         this.scales = new float[n];
         this.offsets = new float[n];
         this.landmarks = new byte[n];
+        long dataBytes = 0;
         for (int i = 0; i < n; i++) {
             var v = compressedVectors[i];
+            dataBytes = Math.addExact(dataBytes, v.ramBytesUsed());
             scales[i]    = v.scale;
             offsets[i]   = v.offset;
             landmarks[i] = v.landmark;
         }
+        this.vectorDataBytes = dataBytes;
+        this.containerBytes = containerBytes();
     }
 
     // Private constructor that trusts prebuilt arrays (for vector landmark sorting)
@@ -136,7 +153,8 @@ public class ASHVectors implements CompressedVectors {
                        AsymmetricHashing.QuantizedVector[] compressedVectors,
                        float[] scales,
                        float[] offsets,
-                       byte[] landmarks) {
+                       byte[] landmarks,
+                       long vectorDataBytes) {
         this.ash = ash;
         this.compressedVectors = compressedVectors;
         this.scorer = new ASHScorer(ash);
@@ -154,6 +172,8 @@ public class ASHVectors implements CompressedVectors {
         this.scales = scales;
         this.offsets = offsets;
         this.landmarks = landmarks;
+        this.vectorDataBytes = vectorDataBytes; // Reordering preserves the same vector multiset.
+        this.containerBytes = containerBytes();
 
         // packedBits cache starts empty (as usual)
         this.packedBlockSize = -1;
@@ -495,6 +515,7 @@ public class ASHVectors implements CompressedVectors {
         int count = compressedVectors.length;
         int bytes = FusedASHLayout.canonicalCodeBytes(d, ash.bitsPerDimension);
         byte[][] blocks = new byte[count / blockSize + (count % blockSize == 0 ? 0 : 1)][];
+        long bytesUsed = RamUsageEstimator.shallowSizeOf(blocks);
         for (int block = 0; block < blocks.length; block++) {
             byte[] body = new byte[Math.multiplyExact(bytes, blockSize)];
             int base = block * blockSize;
@@ -506,7 +527,10 @@ public class ASHVectors implements CompressedVectors {
                 for (int i = 0; i < bytes; i++) body[i * blockSize + lane] = code[i];
             }
             blocks[block] = body;
+            bytesUsed = Math.addExact(bytesUsed, RamUsageEstimator.sizeOf(body));
         }
+        // computeIfAbsent serializes creation for a layout. Failed packing is not charged.
+        projectionCacheBytes.accumulateAndGet(Math.addExact(bytesUsed, PROJECTION_CACHE_ENTRY_BYTES), Math::addExact);
         return blocks;
     }
 
@@ -996,7 +1020,7 @@ public class ASHVectors implements CompressedVectors {
             oldToNew[newToOld[newOrd]] = newOrd;
         }
 
-        ASHVectors reordered = new ASHVectors(ash, newVecs, newScales, newOffsets, newLandmarks);
+        ASHVectors reordered = new ASHVectors(ash, newVecs, newScales, newOffsets, newLandmarks, vectorDataBytes);
         return new LandmarkOrder(reordered, newToOld, oldToNew, landmarkOffsets);
     }
 
@@ -1113,22 +1137,27 @@ public class ASHVectors implements CompressedVectors {
         return ash;
     }
 
+    private long containerBytes() {
+        return RamUsageEstimator.shallowSizeOfInstance(ASHVectors.class)
+                + RamUsageEstimator.shallowSizeOf(compressedVectors)
+                + RamUsageEstimator.sizeOf(scales) + RamUsageEstimator.sizeOf(offsets)
+                + RamUsageEstimator.sizeOf(landmarks) + RamUsageEstimator.shallowSizeOf(scorer)
+                + RamUsageEstimator.shallowSizeOf(projectionBlocks)
+                + RamUsageEstimator.shallowSizeOf(projectionCacheBytes);
+    }
+
+    /**
+     * Retained compressor, vector heap storage and published caches, analogous to PQVectors.
+     * Vector objects/arrays are charged per ordinal (conservative for caller-shared vectors).
+     * Query-local scorers and worker scratch are owned by callers and excluded here.
+     * Immutable payload totals are cached at construction; lazy cache totals at allocation.
+     */
     @Override
     public long ramBytesUsed() {
-        int REF_BYTES = RamUsageEstimator.NUM_BYTES_OBJECT_REF;
-        int AH_BYTES = RamUsageEstimator.NUM_BYTES_ARRAY_HEADER;
-
-        long vectorsArraySize =
-                AH_BYTES + (long) REF_BYTES * compressedVectors.length;
-        long vectorsDataSize =
-                (long) ash.compressedVectorSize() * compressedVectors.length;
-
-        long projectionCacheBytes = 0;
-        for (byte[][] blocks : projectionBlocks.values()) {
-            projectionCacheBytes += AH_BYTES + (long) REF_BYTES * blocks.length;
-            for (byte[] body : blocks) projectionCacheBytes += RamUsageEstimator.sizeOf(body);
-        }
-        return ash.ramBytesUsed() + vectorsArraySize + vectorsDataSize + projectionCacheBytes;
+        ASHSymmetricScorer symmetric = diversityScorer;
+        return ash.ramBytesUsed() + containerBytes + vectorDataBytes + projectionCacheBytes.get()
+                + RamUsageEstimator.shallowSizeOf(packedBits) + RamUsageEstimator.shallowSizeOf(flatPackedVectors)
+                + (symmetric == null ? 0 : symmetric.ramBytesUsed());
     }
 
     @Override

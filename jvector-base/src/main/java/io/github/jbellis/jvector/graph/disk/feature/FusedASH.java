@@ -29,6 +29,7 @@ import io.github.jbellis.jvector.quantization.AsymmetricHashing;
 import io.github.jbellis.jvector.quantization.FusedASHDecoder;
 import io.github.jbellis.jvector.quantization.FusedASHLayout;
 import io.github.jbellis.jvector.quantization.VectorCompressor;
+import io.github.jbellis.jvector.util.RamUsageEstimator;
 import io.github.jbellis.jvector.vector.VectorSimilarityFunction;
 import io.github.jbellis.jvector.vector.types.ByteSequence;
 import io.github.jbellis.jvector.vector.types.VectorFloat;
@@ -54,6 +55,7 @@ import java.util.function.Supplier;
  * of the fused graph hot path.</p>
  */
 public class FusedASH extends AbstractFeature implements FusedFeature {
+    private static final long INLINE_SOURCE_BYTES = RamUsageEstimator.shallowSizeOfInstance(FusedASHInlineSource.class);
     private final int maxDegree;
     private final int blockSize;
     private final AsymmetricHashing ash;
@@ -274,7 +276,7 @@ public class FusedASH extends AbstractFeature implements FusedFeature {
 
         @Override
         public long ramBytesUsed() {
-            return ash.compressedVectorSize();
+            return INLINE_SOURCE_BYTES + vector.ramBytesUsed();
         }
     }
 

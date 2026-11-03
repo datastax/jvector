@@ -17,6 +17,7 @@
 package io.github.jbellis.jvector.quantization;
 
 import io.github.jbellis.jvector.graph.similarity.ScoreFunction;
+import io.github.jbellis.jvector.util.RamUsageEstimator;
 import io.github.jbellis.jvector.vector.VectorUtil;
 
 /**
@@ -36,6 +37,7 @@ public final class ASHSymmetricScorer {
     private final float[][] landmarkDots;
     private final float[] centeredOffsets;
     private final boolean simd;
+    private final long retainedBytes;
     private final io.github.jbellis.jvector.vector.VectorUtilSupport backend =
             io.github.jbellis.jvector.vector.VectorizationProvider.getInstance().getVectorUtilSupport();
 
@@ -64,7 +66,13 @@ public final class ASHSymmetricScorer {
         } else {
             centeredOffsets = null;
         }
+        retainedBytes = RamUsageEstimator.shallowSizeOfInstance(ASHSymmetricScorer.class)
+                + AsymmetricHashing.estimateArray2DBytes(landmarkDots)
+                + RamUsageEstimator.shallowSizeOf(centeredOffsets);
     }
+
+    /** Owned cache storage only; the shared compressor and vectors are charged by ASHVectors. */
+    long ramBytesUsed() { return retainedBytes; }
 
     private boolean selectSimd(Kernel kernel) {
         boolean supported = (bits == 1 || bits == 2 || bits == 4) && backend.supportsAshSymmetricScoring();
