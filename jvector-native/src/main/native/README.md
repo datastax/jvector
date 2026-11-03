@@ -954,3 +954,17 @@ its timers and compare recall@10 as well as QPS. Control CPU affinity and NUMA
 memory placement consistently across runs; otherwise projection locality can
 obscure the precision comparison. Do not include compilation or another active
 benchmark in the query measurement interval.
+
+
+### Concurrent query integration
+
+ASH can combine independent query projections into true FP16 oneDNN matrix
+multiplication while retaining the direct singleton path. Applications continue
+to issue synchronous searches; no query executor or nested native thread pool
+is created. Base-vector encoding and training remain FP32.
+
+Database developers should follow [ASH query callers and CPU budgeting](../../../../docs/ash-query-integration.md)
+for caller concurrency, bounded admission, resource ownership and latency
+validation. The [maintainer design](../../../../docs/ash-query-batching-design.md)
+describes coordination separately. Native batch entry points accept counts above
+eight; internal micro-tiling does not restrict their API.

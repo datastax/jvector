@@ -179,6 +179,7 @@ public class TestASHMemoryAccounting {
                 var ash = model(2, 1);
                 long before = ash.ramBytesUsed();
                 assertNull(field(ash.stiefelTransform, "queryProjection"));
+                assertNull(field(ash.stiefelTransform, "queryBatches"));
                 float[] input = new float[64], output = new float[33];
                 ash.stiefelTransform.projectQuery(input, output);
                 var primary = (io.github.jbellis.jvector.vector.VectorUtilSupport.AshProjection)
@@ -190,7 +191,11 @@ public class TestASHMemoryAccounting {
                     assertNotSame(primary, query);
                     assertTrue(query.ramBytesUsed() >= 64L*33*Short.BYTES);
                 }
-                long added = query == primary ? 0 : RamUsageEstimator.shallowSizeOf(query)+query.ramBytesUsed();
+                long added = (long) field(ash.stiefelTransform, "queryProjectionHeapBytes")
+                        + (query == primary ? 0 : query.ramBytesUsed());
+                var batches = field(ash.stiefelTransform, "queryBatches");
+                if (query.supportsBatchProjection()) assertNotNull(batches);
+                else assertNull(batches);
                 assertEquals(before+added, ash.ramBytesUsed());
                 ash.stiefelTransform.projectQuery(input, output);
                 assertEquals(before+added, ash.ramBytesUsed());
@@ -304,6 +309,97 @@ public class TestASHMemoryAccounting {
         } finally { Files.deleteIfExists(path); }
     }
 
+
+
+    @Test
+    public void queryBatchConfigurationIsValidatedAndDoesNotChangeEncodingOnlyMemory() throws Exception {
+        String property = "jvector.ash.queryBatchSize";
+        String previous = System.getProperty(property);
+        try {
+            for (String invalid : new String[]{"", "invalid", "0", "-1", "2147483647", "2147483648"}) {
+                System.setProperty(property, invalid);
+                assertThrows(IllegalArgumentException.class, () ->
+                        new AsymmetricHashing.StiefelTransform(new Array2DRowRealMatrix(4, 2)));
+            }
+            long encodingBytes = -1;
+            for (int capacity : new int[]{1,8,17}) {
+                System.setProperty(property, Integer.toString(capacity));
+                var transform = new AsymmetricHashing.StiefelTransform(new Array2DRowRealMatrix(4, 2));
+                long before = (long) field(transform, "heapBytes");
+                if (encodingBytes < 0) encodingBytes = before;
+                assertEquals("No query dispatcher is allocated by construction", encodingBytes, before);
+                transform.project(new float[4], new float[2]);
+                transform.projectBatch(new float[2][4], new float[2][2], 2);
+                assertEquals(before, (long) field(transform, "heapBytes"));
+                assertNull(field(transform, "queryProjection"));
+                assertNull(field(transform, "queryBatches"));
+                assertNull(transform.queryProjectionBatchHistogram());
+                transform.projectQuery(new float[4], new float[2]);
+                if (capacity == 1) {
+                    assertNull(field(transform, "queryBatches"));
+                    assertNull(transform.queryProjectionBatchHistogram());
+                }
+            }
+            System.clearProperty(property);
+            var defaults = new AsymmetricHashing.StiefelTransform(new Array2DRowRealMatrix(4, 2));
+            assertEquals(8, field(defaults, "queryBatchSize"));
+        } finally {
+            if (previous == null) System.clearProperty(property); else System.setProperty(property, previous);
+        }
+    }
+
+    @Test
+    public void callerLedProjectionPreservesResultsAndDoesNotChangeEncodingPrecision() throws Exception {
+        String property = "jvector.ash.queryBatchSize";
+        String old = System.getProperty(property);
+        try {
+            for (int batchSize : new int[]{2,8,17}) {
+                System.setProperty(property, Integer.toString(batchSize));
+                var ash = model(4, 1);
+                float[][] inputs = new float[8][64], expected = new float[8][33];
+                Random random = new Random(78342);
+                for (int i = 0; i < inputs.length; i++) {
+                    for (int j = 0; j < inputs[i].length; j++) inputs[i][j] = random.nextFloat() - .5f;
+                    ash.stiefelTransform.projectQuery(inputs[i], expected[i]);
+                }
+                var pool = Executors.newFixedThreadPool(8);
+                try {
+                    var jobs = new ArrayList<java.util.concurrent.Callable<Void>>();
+                    for (int i = 0; i < 8; i++) {
+                        final int index = i;
+                        jobs.add(() -> {
+                            float[] actual = new float[33];
+                            for (int repeat = 0; repeat < 50; repeat++) {
+                                ash.stiefelTransform.projectQuery(inputs[index], actual);
+                                assertArrayEquals(expected[index], actual, 2e-6f);
+                            }
+                            return null;
+                        });
+                    }
+                    for (var result : pool.invokeAll(jobs)) result.get();
+                } finally {
+                    pool.shutdownNow();
+                    assertTrue(pool.awaitTermination(30, java.util.concurrent.TimeUnit.SECONDS));
+                }
+                long projected = 0;
+                long[] histogram = ash.stiefelTransform.queryProjectionBatchHistogram();
+                if (histogram != null) {
+                    for (int i = 1; i < histogram.length; i++) projected += i * histogram[i];
+                    assertEquals(408, projected);
+                }
+                float[] encodedProjection = new float[33];
+                ash.stiefelTransform.project(inputs[0], encodedProjection);
+                for (int row = 0; row < 33; row++) {
+                    double value = 0;
+                    for (int col = 0; col < 64; col++)
+                        value += (double) ash.stiefelTransform.AFloat[row][col] * inputs[0][col];
+                    assertEquals(value, encodedProjection[row], 2e-6);
+                }
+            }
+        } finally {
+            if (old == null) System.clearProperty(property); else System.setProperty(property, old);
+        }
+    }
 
     @Test
     public void repeatedModelAndVectorAccountingDoesNotAllocate() throws Exception {
