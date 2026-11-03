@@ -22,6 +22,7 @@ import io.github.jbellis.jvector.disk.RandomAccessReader;
 import io.github.jbellis.jvector.graph.RandomAccessVectorValues;
 import io.github.jbellis.jvector.graph.disk.OnDiskGraphIndex;
 import io.github.jbellis.jvector.util.Accountable;
+import io.github.jbellis.jvector.util.CallerBatchProcessor;
 import io.github.jbellis.jvector.util.PhysicalCoreExecutor;
 import io.github.jbellis.jvector.util.RamUsageEstimator;
 import io.github.jbellis.jvector.vector.VectorUtil;
@@ -36,6 +37,7 @@ import dev.ludovic.netlib.blas.BLAS;
 import dev.ludovic.netlib.lapack.LAPACK;
 import java.io.IOException;
 import java.util.Arrays;
+import java.util.List;
 import java.util.Objects;
 import java.util.concurrent.ForkJoinPool;
 import java.util.Random;
@@ -1248,6 +1250,8 @@ public class AsymmetricHashing implements VectorCompressor<AsymmetricHashing.Qua
      * Orthonormal linear transform on the Stiefel manifold.
      * W  : originalDim × quantizedDim
      * A  : quantizedDim × originalDim, where A = Wᵀ
+     * Concurrent query projection and caller CPU budgeting are described in
+     * {@code docs/ash-query-integration.md}.
      * The transform is applied as:
      *     y = A · (x − μ)
      */
@@ -1274,27 +1278,87 @@ public class AsymmetricHashing implements VectorCompressor<AsymmetricHashing.Qua
         public final float[][] AFloat;
 
         // Prepared once per immutable model, including models loaded from disk.
-        private final io.github.jbellis.jvector.vector.VectorUtilSupport.AshProjection projection;
+        private final VectorUtilSupport.AshProjection projection;
 
         // Prepared only when this model is used for queries. Encoding-only work
         // must not allocate an extra matrix or change its arithmetic precision.
-        private volatile io.github.jbellis.jvector.vector.VectorUtilSupport.AshProjection queryProjection;
+        private volatile VectorUtilSupport.AshProjection queryProjection;
         private long queryProjectionHeapBytes;
         private final long heapBytes;
 
+        // Default group capacity. Larger configured groups are supported by
+        // grow-once caller scratch; native code controls its own micro-tiling.
+        private static final int QUERY_BATCH_SIZE = 8;
+        // Published together with queryProjection. Training/encoding never
+        // initializes query-only dispatch or its retained storage.
+        private CallerBatchProcessor<float[], float[]> queryBatches;
+        private final int queryBatchSize;
+        private static final class QueryBatchRows {
+            float[][] input = new float[QUERY_BATCH_SIZE][];
+            float[][] output = new float[QUERY_BATCH_SIZE][];
+            void ensure(int count) {
+                if (input.length >= count) return;
+                float[][] nextInput = new float[count][];
+                float[][] nextOutput = new float[count][];
+                input = nextInput;
+                output = nextOutput;
+            }
+        }
+        // Scratch holds row references only during a batch and never a model.
+        private static final ThreadLocal<QueryBatchRows> QUERY_BATCH_ROWS =
+                ThreadLocal.withInitial(QueryBatchRows::new);
+
         /** Projects a search query; encoding and training continue through project(). */
         public void projectQuery(float[] query, float[] out) {
-            queryProjection().project(query, out);
+            var projection = queryProjection(); // Acquire the matching dispatcher too.
+            var batches = queryBatches;
+            if (batches == null || !projection.supportsBatchProjection()) projection.project(query, out);
+            else batches.process(query, out);
         }
 
-        private io.github.jbellis.jvector.vector.VectorUtilSupport.AshProjection queryProjection() {
+        /** Snapshot of completed/claimed batch counts, or null when combining is disabled. */
+        public long[] queryProjectionBatchHistogram() {
+            var projection = queryProjection; // Inspection must not prepare a query view.
+            return projection == null || queryBatches == null ? null : queryBatches.batchHistogram();
+        }
+
+        private VectorUtilSupport.AshProjection queryProjection() {
             var ready = queryProjection;
             if (ready == null) {
                 synchronized (this) {
                     ready = queryProjection;
                     if (ready == null) {
                         ready = projection.forQueryScoring();
-                        queryProjectionHeapBytes = ready == projection ? 0 : RamUsageEstimator.shallowSizeOf(ready);
+                        long retained = ready == projection ? 0 : RamUsageEstimator.shallowSizeOf(ready);
+                        if (queryBatchSize > 1 && ready.supportsBatchProjection()) {
+                            final var target = ready;
+                            var operation = new CallerBatchProcessor.Operation<float[], float[]>() {
+                                @Override
+                                public void apply(float[] input, float[] output) { target.project(input, output); }
+                                @Override
+                                public void applyBatch(List<float[]> inputs, List<float[]> outputs) {
+                                    QueryBatchRows rows = QUERY_BATCH_ROWS.get();
+                                    int count = inputs.size();
+                                    rows.ensure(count);
+                                    try {
+                                        for (int i = 0; i < count; i++) {
+                                            rows.input[i] = inputs.get(i);
+                                            rows.output[i] = outputs.get(i);
+                                        }
+                                        target.projectBatch(rows.input, rows.output, count);
+                                    } finally {
+                                        Arrays.fill(rows.input, 0, count, null);
+                                        Arrays.fill(rows.output, 0, count, null);
+                                    }
+                                }
+                            };
+                            int budget = Math.max(1, Math.min(Runtime.getRuntime().availableProcessors(),
+                                    PhysicalCoreExecutor.getPhysicalCoreCount()));
+                            queryBatches = CallerBatchProcessor.opportunistic(
+                                    budget, queryBatchSize, operation);
+                            retained += queryBatches.ramBytesUsed() + RamUsageEstimator.shallowSizeOf(operation);
+                        }
+                        queryProjectionHeapBytes = retained;
                         queryProjection = ready; // Publish the representation and its heap charge together.
                     }
                 }
@@ -1320,6 +1384,13 @@ public class AsymmetricHashing implements VectorCompressor<AsymmetricHashing.Qua
 
         public StiefelTransform(RealMatrix W) {
             this.W = Objects.requireNonNull(W, "W");
+            String batchSize = System.getProperty("jvector.ash.queryBatchSize", "8");
+            try { queryBatchSize = Integer.parseInt(batchSize); }
+            catch (NumberFormatException invalid) {
+                throw new IllegalArgumentException("jvector.ash.queryBatchSize must be a positive integer: " + batchSize, invalid);
+            }
+            if (queryBatchSize < 1 || queryBatchSize == Integer.MAX_VALUE)
+                throw new IllegalArgumentException("jvector.ash.queryBatchSize must be between 1 and " + (Integer.MAX_VALUE - 1));
 
             // Dimensions: W is [D × d]
             final int originalDim = W.getRowDimension();     // D
@@ -2648,8 +2719,9 @@ public class AsymmetricHashing implements VectorCompressor<AsymmetricHashing.Qua
     public long ramBytesUsed() {
         long bytes = heapBytes + stiefelTransform.projection.ramBytesUsed();
         var queryProjection = stiefelTransform.queryProjection;
-        if (queryProjection != null && queryProjection != stiefelTransform.projection) {
-            bytes += stiefelTransform.queryProjectionHeapBytes + queryProjection.ramBytesUsed();
+        if (queryProjection != null) {
+            bytes += stiefelTransform.queryProjectionHeapBytes;
+            if (queryProjection != stiefelTransform.projection) bytes += queryProjection.ramBytesUsed();
         }
         return bytes;
     }

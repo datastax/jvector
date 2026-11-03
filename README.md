@@ -48,6 +48,8 @@ including runnable 100k-vector examples and optional integration with PQ and NVQ
 
 For writing completed graphs with FP or NVQ features, see [Deferred batch serialization](./docs/deferred-batch-writer.md). It works with application vector sources and preloaded data; dataset prefetching is optional.
 
+For database integration with ASH, see [ASH query callers and CPU budgeting](./docs/ash-query-integration.md), covering caller concurrency, bounded admission, state ownership and latency validation.
+
 The older step-by-step guide for JV can be found [here](./docs/legacy/jvector-step-by-step.md). New users should start with the tutorials mentioned earler, but the step-by-step guide contains useful commentary for advanced users.
 
 
