@@ -1,0 +1,4 @@
+# fastervector source for the Java code, ffi/ header, and native libraries in this module.
+# Update on every re-sync.
+fastervector.branch=java-bindings
+fastervector.commit=6649bf20114d85f2ff6c463c18dbacb5577834a5

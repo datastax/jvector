@@ -40,3 +40,11 @@ jvector-native/src/main/native/third_party/**
 src/main/native/third_party/**
 jvector-native/src/target/meson-build/**
 jvector-native/target/meson-build/**
+jvector-fastervector/FASTERVECTOR_SOURCE
+FASTERVECTOR_SOURCE
+jvector-fastervector/native/**
+native/linux-x86_64/**
+jvector-fastervector/src/main/native/fvec_capi.h
+src/main/native/fvec_capi.h
+jvector-fastervector/src/test/resources/native/fake_lib*.so
+src/test/resources/native/fake_lib*.so
