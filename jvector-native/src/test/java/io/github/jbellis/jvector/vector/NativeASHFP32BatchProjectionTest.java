@@ -16,6 +16,7 @@
 
 package io.github.jbellis.jvector.vector;
 
+import io.github.jbellis.jvector.util.RamUsageEstimator;
 import io.github.jbellis.jvector.vector.cnative.LibraryLoader;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
@@ -91,6 +92,30 @@ class NativeASHFP32BatchProjectionTest {
     }
 
     @Test
+    void queryFallbackRetainsOwnerIdentityAndDoesNotDoubleChargeWeights() {
+        String previous = System.getProperty("jvector.ash.queryProjection");
+        try {
+            System.setProperty("jvector.ash.queryProjection", "fp32");
+            var projection = prepared(new float[][]{{1, 2}, {3, 4}});
+            long bytes = projection.ramBytesUsed();
+            assertSame(projection, projection.forQueryScoring());
+            assertEquals(bytes, projection.ramBytesUsed());
+            System.setProperty("jvector.ash.queryProjection", "auto");
+            // Finite FP32 weights outside FP16 range force the automatic FP32 fallback.
+            var fullRange = prepared(new float[][]{{70000f}});
+            assertSame(fullRange, fullRange.forQueryScoring());
+            float[] out = new float[1];
+            fullRange.forQueryScoring().project(new float[]{2f}, out);
+            assertEquals(140000f, out[0]);
+            assertEquals(Float.BYTES + RamUsageEstimator.shallowSizeOfInstance(NativeASHProjection.class),
+                    fullRange.ramBytesUsed());
+        } finally {
+            if (previous == null) System.clearProperty("jvector.ash.queryProjection");
+            else System.setProperty("jvector.ash.queryProjection", previous);
+        }
+    }
+
+    @Test
     void fp32ArithmeticSupportsArbitraryBatchSizesAndSimdTails() {
         Random random = new Random(32145);
         for (int[] shape : new int[][]{{1,1},{3,7},{33,65},{384,768},{1536,3072}}) {
@@ -106,7 +131,8 @@ class NativeASHFP32BatchProjectionTest {
                 for (int i = 0; i <= count; i++) assertArrayEquals(saved[i], inputs[i]);
                 for (float value : outputs[count]) assertEquals(123f, value);
             }
-            assertEquals((long) shape[0] * shape[1] * Float.BYTES, projection.ramBytesUsed());
+            assertEquals((long) shape[0] * shape[1] * Float.BYTES
+                    + RamUsageEstimator.shallowSizeOfInstance(NativeASHProjection.class), projection.ramBytesUsed());
         }
     }
 

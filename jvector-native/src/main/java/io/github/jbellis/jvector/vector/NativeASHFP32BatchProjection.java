@@ -16,6 +16,7 @@
 
 package io.github.jbellis.jvector.vector;
 
+import io.github.jbellis.jvector.util.RamUsageEstimator;
 import io.github.jbellis.jvector.vector.cnative.LibraryLoader;
 import java.lang.foreign.FunctionDescriptor;
 import java.lang.foreign.Linker;
@@ -63,6 +64,10 @@ final class NativeASHFP32BatchProjection implements VectorUtilSupport.AshProject
         }
     }
 
+    // The model charges this adapter; its retained delegate is separate.
+    private static final long FALLBACK_HEAP_BYTES =
+            RamUsageEstimator.shallowSizeOfInstance(NativeASHProjection.class);
+
     private final NativeASHProjection fallback;
 
     static VectorUtilSupport.AshProjection prepare(NativeASHProjection fallback) {
@@ -74,13 +79,18 @@ final class NativeASHFP32BatchProjection implements VectorUtilSupport.AshProject
     }
 
     @Override
-    public long ramBytesUsed() { return fallback.ramBytesUsed(); }
+    public long ramBytesUsed() { return FALLBACK_HEAP_BYTES + fallback.ramBytesUsed(); }
 
     @Override
     public void project(float[] input, float[] output) { fallback.project(input, output); }
 
     @Override
-    public VectorUtilSupport.AshProjection forQueryScoring() { return fallback.forQueryScoring(); }
+    public VectorUtilSupport.AshProjection forQueryScoring() {
+        var query = fallback.forQueryScoring();
+        // No new representation means the same backing. Preserve the owning view's
+        // identity so model accounting does not charge the FP32 matrix twice.
+        return query == fallback ? this : query;
+    }
 
     @Override
     public void projectBatch(float[][] inputs, float[][] outputs, int count) {
