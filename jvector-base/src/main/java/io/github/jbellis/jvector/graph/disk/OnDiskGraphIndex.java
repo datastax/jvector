@@ -486,6 +486,17 @@ public class OnDiskGraphIndex implements ImmutableGraphIndex, AutoCloseable, Acc
         return (double) sum / it.size();
     }
 
+    @Override
+    public java.util.Optional<io.github.jbellis.jvector.graph.similarity.QueryPreparer> queryPreparer(
+            VectorSimilarityFunction similarity) {
+        var feature = features.get(FeatureId.FUSED_ASH);
+        if (feature == null) return java.util.Optional.empty();
+        if (similarity != VectorSimilarityFunction.DOT_PRODUCT)
+            throw new UnsupportedOperationException("FusedASH supports DOT_PRODUCT only");
+        return java.util.Optional.of(new io.github.jbellis.jvector.quantization.ASHQueryPreparer(
+                ((FusedASH) feature).getASH()));
+    }
+
     public class View implements FeatureSource, ScoringView, RandomAccessVectorValues {
         protected final RandomAccessReader reader;
         private final int[] neighbors;
@@ -735,6 +746,16 @@ public class OnDiskGraphIndex implements ImmutableGraphIndex, AutoCloseable, Acc
             } else {
                 throw new UnsupportedOperationException("No reranker available for this graph");
             }
+        }
+
+        @Override
+        public io.github.jbellis.jvector.graph.similarity.SearchScoreProvider scoreProviderFor(
+                io.github.jbellis.jvector.graph.similarity.PreparedQuery prepared, boolean rerank) {
+            var feature = (FusedASH) features.get(FeatureId.FUSED_ASH);
+            if (feature == null) throw new UnsupportedOperationException("Prepared query scoring requires FusedASH");
+            var asf = feature.approximateScoreFunctionFor(prepared, this);
+            var rr = rerank ? rerankerFor(prepared.queryVector(), VectorSimilarityFunction.DOT_PRODUCT) : null;
+            return new io.github.jbellis.jvector.graph.similarity.DefaultSearchScoreProvider(asf, rr, true);
         }
 
         @Override
