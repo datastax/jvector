@@ -75,8 +75,14 @@ public final class ASHQueryPreparer implements QueryPreparer {
         Objects.requireNonNull(preparedStates, "preparedStates");
         Objects.checkFromIndexSize(0, count, queries.length);
         Objects.checkFromIndexSize(0, count, preparedStates.length);
-        validateBatch(queries, preparedStates, count);
         if (count == 0) return;
+        if (count == 1) {
+            // Preserve each provider's direct kernel and avoid batch staging.
+            // prepare() validates before invalidating or overwriting the state.
+            prepare(queries[0], preparedStates[0]);
+            return;
+        }
+        validateBatch(queries, preparedStates, count);
         Rows buffers = rows.get();
         buffers.ensure(count);
         // Invalidate all outputs before any computation can fail.
