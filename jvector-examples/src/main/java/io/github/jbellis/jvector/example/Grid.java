@@ -730,8 +730,9 @@ public class Grid {
         return indexes;
     }
 
-    // avoid recomputing the compressor repeatedly (this is a relatively small memory footprint)
-    static final Map<String, VectorCompressor<?>> cachedCompressors = new IdentityHashMap<>();
+    // avoid recomputing the compressor repeatedly (this is a relatively small memory footprint);
+    // keys are formatted afresh per call, so they must compare by value
+    static final Map<String, VectorCompressor<?>> cachedCompressors = new HashMap<>();
 
     private static void testConfiguration(ConfiguredSystem cs,
                                           Map<Integer, List<Double>> topKGrid,
@@ -1189,19 +1190,20 @@ public class Grid {
         return cachedCompressors.computeIfAbsent(fname, __ -> {
             Path path = Paths.get(pqCacheDir).resolve(fname);
             if (Files.exists(path)) {
-                return loadFromCache(ds, fname, path);
+                return loadFromCache(ds, cp, fname, path);
             }
             return executionWrapper.get();
         });
     }
 
     // Load/save helpers for getCompressor
-    private static VectorCompressor<?> loadFromCache(DataSet ds, String fname, Path path) {
+    private static VectorCompressor<?> loadFromCache(DataSet ds, CompressorParameters cp, String fname, Path path) {
         try (var readerSupplier = ReaderSupplierFactory.open(path);
              var rar = readerSupplier.get()) {
-            var pq = ProductQuantization.load(rar);
-            System.out.format("%s: %s codebooks loaded from %s%n", ds.getName(), pq, fname);
-            return pq;
+            // Each compressor type has its own on-disk format, so the parameters that saved it read it back.
+            var compressor = cp.loadCompressor(rar);
+            System.out.format("%s: %s loaded from %s%n", ds.getName(), compressor, fname);
+            return compressor;
         } catch (IOException e) {
             throw new UncheckedIOException(e);
         }
