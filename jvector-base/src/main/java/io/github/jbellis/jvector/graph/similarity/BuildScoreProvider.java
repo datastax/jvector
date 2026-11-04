@@ -289,6 +289,7 @@ public interface BuildScoreProvider {
                 var centroid = vts.createFloatVector(vv.dimension());
                 for (int i = 0; i < vv.size(); i++) {
                     var v = vv.getVector(i);
+                    if (v == null) continue;
                     for (int d = 0; d < vv.dimension(); d++) {
                         centroid.set(d, centroid.get(d) + v.get(d));
                     }

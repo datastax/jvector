@@ -245,9 +245,21 @@ public final class VectorUtil {
     return impl.squareDistance(a, b);
   }
 
-  /** Returns the cosine similarity of two signed int8 byte vectors. */
+  /**
+   * Returns the cosine similarity of two signed int8 byte vectors.
+   * <p>
+   * As with the float overload, zero vectors (all components zero) are not supported: their norm is zero,
+   * so the result is NaN. Callers must not pass zero vectors; this is checked with an assertion.
+   *
+   * @throws IllegalArgumentException if the vectors' dimensions differ.
+   */
   public static float cosine(ByteSequence<?> a, ByteSequence<?> b) {
-    return impl.cosine(a, b);
+    if (a.length() != b.length()) {
+      throw new IllegalArgumentException("vector dimensions differ: " + a.length() + "!=" + b.length());
+    }
+    float r = impl.cosine(a, b);
+    assert Float.isFinite(r) : String.format("cosine(%s, %s) = %s", a, b, r);
+    return r;
   }
 
   public static int hammingDistance(long[] v1, long[] v2) {

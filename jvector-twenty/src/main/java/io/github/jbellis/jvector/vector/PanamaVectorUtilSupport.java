@@ -56,8 +56,11 @@ class PanamaVectorUtilSupport implements VectorUtilSupport {
         vector.intoArray(((ArrayVectorFloat) v).get(), offset);
     }
 
+    /// Loads from the backing array of an array-backed sequence (plain or sliced).
+    /// `offset` is an index into the backing array, so callers working with a slice
+    /// must include `vector.offset()`.
     protected ByteVector fromByteSequence(VectorSpecies<Byte> SPEC, ByteSequence<?> vector, int offset) {
-        return ByteVector.fromArray(SPEC, ((ArrayByteSequence) vector).get(), offset);
+        return ByteVector.fromArray(SPEC, (byte[]) vector.get(), offset);
     }
 
     protected void intoByteSequence(ByteVector vector, ByteSequence<?> v, int offset) {
@@ -1059,10 +1062,10 @@ class PanamaVectorUtilSupport implements VectorUtilSupport {
         IntVector acc    = IntVector.zero(IntVector.SPECIES_512);
 
         for (int i = 0; i < limit; i += step) {
-            IntVector va = fromByteSequence(ByteVector.SPECIES_128, a, i)
+            IntVector va = fromByteSequence(ByteVector.SPECIES_128, a, a.offset() + i)
                     .convertShape(VectorOperators.B2I, IntVector.SPECIES_512, 0)
                     .reinterpretAsInts();
-            IntVector vb = fromByteSequence(ByteVector.SPECIES_128, b, i)
+            IntVector vb = fromByteSequence(ByteVector.SPECIES_128, b, b.offset() + i)
                     .convertShape(VectorOperators.B2I, IntVector.SPECIES_512, 0)
                     .reinterpretAsInts();
             acc = acc.add(va.mul(vb));
@@ -1082,10 +1085,10 @@ class PanamaVectorUtilSupport implements VectorUtilSupport {
         IntVector acc    = IntVector.zero(IntVector.SPECIES_256);
 
         for (int i = 0; i < limit; i += step) {
-            IntVector va = fromByteSequence(ByteVector.SPECIES_64, a, i)
+            IntVector va = fromByteSequence(ByteVector.SPECIES_64, a, a.offset() + i)
                     .convertShape(VectorOperators.B2I, IntVector.SPECIES_256, 0)
                     .reinterpretAsInts();
-            IntVector vb = fromByteSequence(ByteVector.SPECIES_64, b, i)
+            IntVector vb = fromByteSequence(ByteVector.SPECIES_64, b, b.offset() + i)
                     .convertShape(VectorOperators.B2I, IntVector.SPECIES_256, 0)
                     .reinterpretAsInts();
             acc = acc.add(va.mul(vb));
@@ -1127,10 +1130,10 @@ class PanamaVectorUtilSupport implements VectorUtilSupport {
         IntVector acc    = IntVector.zero(IntVector.SPECIES_512);
 
         for (int i = 0; i < limit; i += step) {
-            IntVector va   = fromByteSequence(ByteVector.SPECIES_128, a, i)
+            IntVector va   = fromByteSequence(ByteVector.SPECIES_128, a, a.offset() + i)
                     .convertShape(VectorOperators.B2I, IntVector.SPECIES_512, 0)
                     .reinterpretAsInts();
-            IntVector vb   = fromByteSequence(ByteVector.SPECIES_128, b, i)
+            IntVector vb   = fromByteSequence(ByteVector.SPECIES_128, b, b.offset() + i)
                     .convertShape(VectorOperators.B2I, IntVector.SPECIES_512, 0)
                     .reinterpretAsInts();
             IntVector diff = va.sub(vb);
@@ -1152,10 +1155,10 @@ class PanamaVectorUtilSupport implements VectorUtilSupport {
         IntVector acc    = IntVector.zero(IntVector.SPECIES_256);
 
         for (int i = 0; i < limit; i += step) {
-            IntVector va   = fromByteSequence(ByteVector.SPECIES_64, a, i)
+            IntVector va   = fromByteSequence(ByteVector.SPECIES_64, a, a.offset() + i)
                     .convertShape(VectorOperators.B2I, IntVector.SPECIES_256, 0)
                     .reinterpretAsInts();
-            IntVector vb   = fromByteSequence(ByteVector.SPECIES_64, b, i)
+            IntVector vb   = fromByteSequence(ByteVector.SPECIES_64, b, b.offset() + i)
                     .convertShape(VectorOperators.B2I, IntVector.SPECIES_256, 0)
                     .reinterpretAsInts();
             IntVector diff = va.sub(vb);
@@ -1202,10 +1205,10 @@ class PanamaVectorUtilSupport implements VectorUtilSupport {
         IntVector normB  = IntVector.zero(IntVector.SPECIES_512);
 
         for (int i = 0; i < limit; i += step) {
-            IntVector va = fromByteSequence(ByteVector.SPECIES_128, a, i)
+            IntVector va = fromByteSequence(ByteVector.SPECIES_128, a, a.offset() + i)
                     .convertShape(VectorOperators.B2I, IntVector.SPECIES_512, 0)
                     .reinterpretAsInts();
-            IntVector vb = fromByteSequence(ByteVector.SPECIES_128, b, i)
+            IntVector vb = fromByteSequence(ByteVector.SPECIES_128, b, b.offset() + i)
                     .convertShape(VectorOperators.B2I, IntVector.SPECIES_512, 0)
                     .reinterpretAsInts();
             dot   = dot.add(va.mul(vb));
@@ -1235,10 +1238,10 @@ class PanamaVectorUtilSupport implements VectorUtilSupport {
         IntVector normB  = IntVector.zero(IntVector.SPECIES_256);
 
         for (int i = 0; i < limit; i += step) {
-            IntVector va = fromByteSequence(ByteVector.SPECIES_64, a, i)
+            IntVector va = fromByteSequence(ByteVector.SPECIES_64, a, a.offset() + i)
                     .convertShape(VectorOperators.B2I, IntVector.SPECIES_256, 0)
                     .reinterpretAsInts();
-            IntVector vb = fromByteSequence(ByteVector.SPECIES_64, b, i)
+            IntVector vb = fromByteSequence(ByteVector.SPECIES_64, b, b.offset() + i)
                     .convertShape(VectorOperators.B2I, IntVector.SPECIES_256, 0)
                     .reinterpretAsInts();
             dot   = dot.add(va.mul(vb));
