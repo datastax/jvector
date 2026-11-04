@@ -209,20 +209,36 @@ float ash_projection_dot_4bit_f32(const float *HWY_RESTRICT query,
     const hn::Rebind<uint32_t, decltype(d)> du;
     const size_t lanes = hn::Lanes(d);
     const size_t count = static_cast<size_t>(dimensions);
+#if HWY_TARGET == HWY_AVX3 || HWY_TARGET == HWY_AVX3_DL || HWY_TARGET == HWY_AVX3_SPR
+    // Exact signed-magnitude levels: keep them in one register instead of
+    // converting magnitudes and constructing sign masks for every vector.
+    alignas(64) static constexpr float levels[16] = {
+        -.5f, -1.5f, -2.5f, -3.5f, -4.5f, -5.5f, -6.5f, -7.5f,
+         .5f,  1.5f,  2.5f,  3.5f,  4.5f,  5.5f,  6.5f,  7.5f};
+    const auto table = hn::LoadU(d, levels);
+#else
     const auto magnitudeMask = hn::Set(du, 7);
     const auto signMask = hn::Set(du, 8);
     const auto half = hn::Set(d, 0.5f);
+#endif
     auto low = hn::Zero(d), high = hn::Zero(d);
     size_t i = 0;
     for (; i + 2 * lanes <= count; i += 2 * lanes) {
         const auto packed = hn::PromoteTo(du, hn::LoadU(db, code + i / 2));
         const auto hiCode = hn::ShiftRight<4>(packed);
+#if HWY_TARGET == HWY_AVX3 || HWY_TARGET == HWY_AVX3_DL || HWY_TARGET == HWY_AVX3_SPR
+        // VPERMPS uses only the low four index bits. Use the intrinsic to avoid
+        // a redundant mask and Highway IndicesFromVec debug checks on upper bits.
+        const auto loValue = hn::VFromD<decltype(d)>{_mm512_permutexvar_ps(packed.raw, table.raw)};
+        const auto hiValue = hn::VFromD<decltype(d)>{_mm512_permutexvar_ps(hiCode.raw, table.raw)};
+#else
         auto loValue = hn::Add(hn::ConvertTo(d, hn::And(packed, magnitudeMask)), half);
         auto hiValue = hn::Add(hn::ConvertTo(d, hn::And(hiCode, magnitudeMask)), half);
         loValue = hn::IfThenElse(hn::RebindMask(d, hn::Eq(hn::And(packed, signMask), hn::Zero(du))),
                                 hn::Neg(loValue), loValue);
         hiValue = hn::IfThenElse(hn::RebindMask(d, hn::Eq(hn::And(hiCode, signMask), hn::Zero(du))),
                                 hn::Neg(hiValue), hiValue);
+#endif
         hn::VFromD<decltype(d)> qLow, qHigh;
         hn::LoadInterleaved2(d, query + i, qLow, qHigh);
         low = hn::MulAdd(qLow, loValue, low);
