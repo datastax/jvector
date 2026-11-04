@@ -1316,6 +1316,21 @@ public class AsymmetricHashing implements VectorCompressor<AsymmetricHashing.Qua
             else batches.process(query, out);
         }
 
+        /** Prepared-query callers already own scheduling; avoid a second combining layer. */
+        public void projectQueryDirect(float[] query, float[] out) {
+            queryProjection().project(query, out);
+        }
+
+        /** Executes a caller-formed batch with the query precision, never the encoding view. */
+        public void projectQueryBatch(float[][] queries, float[][] out, int count) {
+            queryProjection().projectBatch(queries, out, count);
+        }
+
+        /** Capability inspection may lazily prepare the immutable query representation. */
+        public boolean supportsQueryBatchProjection() {
+            return queryProjection().supportsBatchProjection();
+        }
+
         /** Snapshot of completed/claimed batch counts, or null when combining is disabled. */
         public long[] queryProjectionBatchHistogram() {
             var projection = queryProjection; // Inspection must not prepare a query view.

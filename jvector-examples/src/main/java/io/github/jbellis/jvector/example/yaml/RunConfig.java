@@ -22,6 +22,8 @@ import java.io.File;
 import java.io.FileInputStream;
 import java.io.FileNotFoundException;
 import java.io.InputStream;
+import java.io.IOException;
+import java.io.UncheckedIOException;
 import java.util.List;
 import java.util.Map;
 
@@ -41,6 +43,14 @@ public class RunConfig {
     public int yamlSchemaVersion;
     public int onDiskIndexVersion;
 
+    /** Query delivery policy; omitted settings preserve the synchronous benchmark. */
+    public QueryExecution queryExecution = new QueryExecution();
+
+    public static class QueryExecution {
+        public String mode = "direct";
+        public int maxBatchSize = 8;
+    }
+
     /** Benchmark computation policy (what is computed). */
     public Map<String, List<String>> benchmarks;
 
@@ -50,8 +60,9 @@ public class RunConfig {
     /** Logging selection and run-level logging settings. */
     public RunLogging logging;
 
+    /** Select an explicit run YAML without editing the checkout's default file. */
     public static RunConfig loadDefault() throws FileNotFoundException {
-        return load(defaultDirectory + defaultRunFile);
+        return load(System.getProperty("jvector.bench.runConfig", defaultDirectory + defaultRunFile));
     }
 
     public static RunConfig load(String configName) throws FileNotFoundException {
@@ -62,9 +73,16 @@ public class RunConfig {
         if (!configFile.exists()) {
             throw new FileNotFoundException(configFile.getAbsolutePath());
         }
-        InputStream inputStream = new FileInputStream(configFile);
-        Yaml yaml = new Yaml();
-        return yaml.loadAs(inputStream, RunConfig.class);
+        try (InputStream inputStream = new FileInputStream(configFile)) {
+            Yaml yaml = new Yaml();
+            RunConfig config = yaml.loadAs(inputStream, RunConfig.class);
+            if (config == null) throw new IllegalArgumentException("Empty run configuration: " + configFile);
+            return config;
+        } catch (FileNotFoundException failure) {
+            throw failure;
+        } catch (IOException failure) {
+            throw new UncheckedIOException("Cannot read run configuration: " + configFile, failure);
+        }
     }
 
     /** Run-level logging settings + selection for experiments.csv. */

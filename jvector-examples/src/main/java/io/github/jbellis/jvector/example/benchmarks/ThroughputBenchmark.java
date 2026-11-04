@@ -29,6 +29,9 @@ import java.io.IOException;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
+import java.util.Objects;
+import java.util.function.Consumer;
+import java.util.function.Supplier;
 import java.util.concurrent.ThreadLocalRandom;
 import java.util.concurrent.atomic.LongAdder;
 import java.util.stream.IntStream;
@@ -135,18 +138,40 @@ public class ThroughputBenchmark extends AbstractQueryBenchmark {
             boolean usePruning,
             int queryRuns) {
 
+        return runWithReporting(cs, topK, rerankK, usePruning, queryRuns, null);
+    }
+
+    @Override
+    public List<Metric> runBenchmark(
+            ConfiguredSystem cs, int topK, int rerankK, boolean usePruning,
+            int queryRuns, Consumer<Supplier<List<Metric>>> deferredReports) {
+        return runWithReporting(cs, topK, rerankK, usePruning, queryRuns,
+                Objects.requireNonNull(deferredReports, "deferredReports"));
+    }
+
+    private List<Metric> runWithReporting(
+            ConfiguredSystem cs, int topK, int rerankK, boolean usePruning,
+            int queryRuns, Consumer<Supplier<List<Metric>>> deferredReports) {
+        if (cs.usesQueuedExecution()) return runConfiguredBenchmark(cs, topK, rerankK, usePruning, queryRuns, deferredReports);
         int threads = Integer.getInteger("jvector.bench.queryThreads", 0);
         if (threads < 0) throw new IllegalArgumentException("queryThreads must be nonnegative");
         System.out.printf("QUERY_CONCURRENCY threads=%s%n", threads == 0 ? "common-pool" : threads);
         if (threads > 1) {
             var pool = new java.util.concurrent.ForkJoinPool(threads);
             try {
-                return pool.submit(() -> runConfiguredBenchmark(cs, topK, rerankK, usePruning, queryRuns)).join();
+                return pool.submit(() -> runConfiguredBenchmark(cs, topK, rerankK, usePruning, queryRuns, deferredReports)).join();
             } finally {
                 pool.shutdown();
             }
         }
-        return runConfiguredBenchmark(cs, topK, rerankK, usePruning, queryRuns);
+        return runConfiguredBenchmark(cs, topK, rerankK, usePruning, queryRuns, deferredReports);
+    }
+
+    private VectorFloat<?> randomQuery(int dim) {
+        VectorFloat<?> query = vts.createFloatVector(dim);
+        for (int j = 0; j < dim; j++) query.set(j, ThreadLocalRandom.current().nextFloat());
+        VectorUtil.l2normalize(query);
+        return query;
     }
 
     private static IntStream queryStream(int count) {
@@ -155,26 +180,33 @@ public class ThroughputBenchmark extends AbstractQueryBenchmark {
     }
 
     private List<Metric> runConfiguredBenchmark(ConfiguredSystem cs, int topK, int rerankK,
-                                                boolean usePruning, int queryRuns) {
+                                                boolean usePruning, int queryRuns,
+                                                Consumer<Supplier<List<Metric>>> deferredReports) {
+
+        if (!(computeAvgQps || computeMedianQps || computeMaxQps)) {
+            throw new RuntimeException("At least one metric must be displayed");
+        }
+        try (BenchmarkDiagnostics diagnostics = new BenchmarkDiagnostics(diagnosticLevel);
+             QueuedQueryExecution queued = cs.usesQueuedExecution()
+                     ? new QueuedQueryExecution(cs, topK, rerankK, usePruning) : null) {
         if (Boolean.getBoolean("jvector.bench.verifyConcurrentResults")) {
             int count = cs.getDataSet().getQueryVectors().size();
             SearchResult[] serial = new SearchResult[count];
             for (int i = 0; i < count; i++)
                 serial[i] = QueryExecutor.executeQuery(cs, topK, rerankK, usePruning, i);
+            SearchResult[] queuedResults = queued == null ? null : queued.runPass(count,
+                    cs.getDataSet().getQueryVectors()::get, null, true).results;
             queryStream(count).forEach(i -> {
-                SearchResult actual = QueryExecutor.executeQuery(cs, topK, rerankK, usePruning, i);
+                SearchResult actual = queuedResults == null
+                        ? QueryExecutor.executeQuery(cs, topK, rerankK, usePruning, i) : queuedResults[i];
                 if (!Arrays.equals(serial[i].getNodes(), actual.getNodes())
-                        || serial[i].getVisitedCount() != actual.getVisitedCount())
+                        || (queued == null && serial[i].getVisitedCount() != actual.getVisitedCount()))
                     throw new IllegalStateException("Concurrent query mismatch at " + i);
             });
             System.out.printf("CONCURRENCY_VALIDATION queries=%d topK=%d rerankK=%d status=PASS%n",
                     count, topK, rerankK);
         }
 
-        if (!(computeAvgQps || computeMedianQps || computeMaxQps)) {
-            throw new RuntimeException("At least one metric must be displayed");
-        }
-        try (BenchmarkDiagnostics diagnostics = new BenchmarkDiagnostics(diagnosticLevel)) {
 
             int totalQueries = cs.getDataSet().getQueryVectors().size();
             int dim = cs.getDataSet().getDimension();
@@ -185,16 +217,14 @@ public class ThroughputBenchmark extends AbstractQueryBenchmark {
                 String warmupPhase = "Warmup-" + warmupRun;
 
                 warmupQps[warmupRun] = diagnostics.monitorPhaseWithQueryTiming(warmupPhase, (recorder) -> {
-                    queryStream(totalQueries)
+                    if (queued != null) {
+                        SINK += queued.runPass(totalQueries, k -> randomQuery(dim), recorder, false).visited();
+                    } else queryStream(totalQueries)
                             .forEach(k -> {
                                 long queryStart = System.nanoTime();
 
                                 // Generate a random vector
-                                VectorFloat<?> randQ = vts.createFloatVector(dim);
-                                for (int j = 0; j < dim; j++) {
-                                    randQ.set(j, ThreadLocalRandom.current().nextFloat());
-                                }
-                                VectorUtil.l2normalize(randQ);
+                                VectorFloat<?> randQ = randomQuery(dim);
                                 SearchResult sr = QueryExecutor.executeQuery(
                                         cs, topK, rerankK, usePruning, randQ);
                                 SINK += sr.getVisitedCount();
@@ -228,6 +258,7 @@ public class ThroughputBenchmark extends AbstractQueryBenchmark {
                 throw new IllegalArgumentException("throughputMinSeconds must be finite and nonnegative");
             long minSampleNanos = (long)(minSampleSeconds * 1e9);
             double[] qpsSamples = new double[numTestRuns];
+            if (queued != null) queued.beginMeasurements();
             for (int testRun = 0; testRun < numTestRuns; testRun++) {
                 String testPhase = "Test-" + testRun;
 
@@ -250,7 +281,10 @@ public class ThroughputBenchmark extends AbstractQueryBenchmark {
 
                     long completedQueries = 0;
                     do {
-                        queryStream(totalQueries)
+                        if (queued != null) {
+                            visitedAdder.add(queued.runPass(totalQueries,
+                                    cs.getDataSet().getQueryVectors()::get, recorder, false).visited());
+                        } else queryStream(totalQueries)
                                 .forEach(i -> {
                                     long queryStart = System.nanoTime();
 
@@ -333,6 +367,11 @@ public class ThroughputBenchmark extends AbstractQueryBenchmark {
                         "Min QPS\n (of " + numTestRuns + ")",
                         formatMaxQps,
                         minQps));
+            }
+            if (queued != null) {
+                var samples = queued.finishMeasurements();
+                if (deferredReports == null) list.addAll(samples.metrics());
+                else deferredReports.accept(samples::metrics);
             }
             return list;
         }

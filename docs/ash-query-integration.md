@@ -14,146 +14,167 @@ See the License for the specific language governing permissions and
 limitations under the License.
 -->
 
-# Integrating ASH search into a database
+# Integrating ASH queries into a database
 
-ASH search uses the application's calling threads. A search is synchronous:
-its result or exception is returned to the caller when the work finishes.
-JVector does not create an ASH query executor. Concurrent searches sharing an ASH
-model can automatically combine projection work; isolated requests start
-immediately without waiting for more queries. Applications submit ordinary,
-independent searches and do not construct batches.
+The database selects the physical-core budget **C** for search. Queries may be
+submitted independently without blocking a producer thread for every outstanding
+request. JVector prepares currently waiting compatible queries together, then
+executes each graph search independently. It never waits for a timer to fill a
+batch. An isolated request starts as soon as its execution capacity is available.
 
-## Recommended caller configuration
+The existing synchronous `GraphSearcher` API remains available. The prepared-query
+and bounded-execution APIs are optional and do not change index formats, write
+ordering, FP32 encoding/training, or the default FP16 query precision selection.
 
-Let **C** be the physical cores allocated to search, after reserving capacity for
-other database work. Count the cores available to this service or partition,
-not every core in the host and not both SMT siblings as two physical cores.
-Use one shared admission budget across indexes that compete for those cores.
-A request that fans out to several indexes consumes several search slots.
+## Recommended asynchronous allocation
 
-Use **4C caller workers** and keep the default maximum projection batch size of
-**8**. Apply the same rule across models and compression levels. The integration
-selects its existing search CPU budget C; worker capacity is derived from it.
-No model-specific concurrency setting or separate projection executor is needed.
+Use these defaults for the search CPU budget assigned by the database:
 
-| Search CPU budget C | Caller worker capacity 4C |
-| --- | --- |
-| 1 core | 4 workers |
-| 2 cores | 8 workers |
-| 4 cores | 16 workers |
-| 8 cores | 32 workers |
-| 16 cores | 64 workers |
-| 32 cores | 128 workers |
-| 48 cores | 192 workers |
+* At most **C** execution workers, shared across the indexes competing for those
+  cores. Producers do not need a worker thread for every submitted query.
+* Maximum preparation batch **8** and admission **8C**. These are fixed defaults,
+  not settings to tune for particular datasets. Admission includes pending,
+  preparing and executing requests; completion callbacks are excluded.
+* One immutable model representation per loaded model, with reusable prepared
+  state and exclusive search state for each active request.
 
-This is the recommended configuration, not a requirement to maintain 4C requests
-in flight. Under light traffic, one request starts immediately and the remaining
-workers stay idle. Under load, additional callers allow searches to progress
-while others wait for shared computation or I/O. They do not add CPU capacity.
-Keep the worker capacity fixed as arrival rate changes; let bounded admission
-control overload instead of creating more workers or waiting to fill a batch.
+| Physical search cores C | Maximum execution workers | Request admission |
+| --- | ---: | ---: |
+| 1 | 1 | 8 |
+| 2 | 2 | 16 |
+| 4 | 4 | 32 |
+| 8 | 8 | 64 |
+| 16 | 16 | 128 |
+| 32 | 32 | 256 |
+| 48 | 48 | 384 |
 
-Validate end-to-end latency against the database's service objectives. More
-runnable callers than cores can introduce CPU scheduling tails. Record p50, p95,
-p99 and deadline misses as well as QPS; the recommendation does not guarantee an
-improvement in every latency percentile.
+The integration needs to select only C. Do not expose internal batching policy
+as database configuration. Larger explicit batches remain supported by the
+numerical API; this recommendation does not impose an eight-row API limit.
+The defaults bound memory and waiting but cannot guarantee a time limit under
+arbitrary overload. Reject or backpressure arrivals when admission is exhausted.
 
-Use a bounded platform-thread pool or an equivalent database scheduler for
-these synchronous calls. A large number of tasks or virtual threads is not by
-itself evidence that enough independent searches can execute concurrently.
-Blocking native computation occupies the executing thread; test the scheduler
-that will actually run in production.
+Choose physical cores, not both SMT siblings counted separately. Reserve a
+separate budget for construction, compaction and other database work. Tell
+JVector the allocation before initialization using `jvector.physical_core_count`;
+use `-XX:ActiveProcessorCount` consistently when appropriate. Neither property
+pins threads. Use the database's scheduler, OS affinity or container controls,
+and place query execution and index memory together on NUMA systems.
 
-## Tell JVector about the allocation
+For an integration retaining only synchronous searches, the earlier caller
+recommendation is 4C bounded caller threads, with the same physical CPU budget.
+That does not mean an asynchronous integration needs 4C execution workers.
+Both execution modes are measured separately by the
+[reproducible BenchYAML comparison](ash-pq-benchmark.md).
 
-Before initializing JVector, set the existing JVM property
-`-Djvector.physical_core_count=C` to the physical-core budget assigned to search.
-ASH also respects the JVM's `availableProcessors()` limit, using the smaller of
-these two counts. The property is a sizing hint: it does **not** pin threads or
-reserve cores, and it also sizes other JVector physical-core executors. Use the
-database's CPU controls, OS affinity, or container allocation to enforce the
-budget. If necessary, use the JVM's `-XX:ActiveProcessorCount=C` consistently
-with that allocation.
+## Library responsibilities and host responsibilities
 
-On NUMA machines, place search callers and index memory together where practical.
-Validate placement rather than assuming a thread-count property controls it.
-Budget concurrent index construction, compaction and training separately from
-query traffic so they cannot silently consume the search allocation.
+`ImmutableGraphIndex.queryPreparer(similarity)` returns an optional
+`QueryPreparer`. Cache it with the loaded model. `newState()` creates reusable
+`PreparedQuery` buffers. `prepare` and `prepareBatch` snapshot FP32 query inputs,
+compute the projection and scoring data, and retain no traversal state. ASH
+uses its selected native query representation; encoding and training remain
+FP32. Unsupported providers retain their existing fallback behavior.
 
-Keep ASH's default maximum projection batch size of **8**. No other ASH query
-coordination setting is needed. The optional JVM property
-`-Djvector.ash.queryBatchSize=1` disables query combining for comparison or
-operational rollback. This property is read when each ASH model is constructed
-or loaded; set it before doing so. It does not change compression, the index
-format, or FP32 base-vector encoding/training. Batch size does not set the
-application's queue depth or concurrent search count.
+`BatchingExecutor<T>` is a reusable two-stage executor, independent of ASH and
+graph types. Its operation supplies a compatibility key, preparation, execution
+and completion. A key is an immutable identity for the numerical model, not a
+dataset name or mutable query buffer. Use null when preparation cannot benefit
+from batching, as with the current PQ query path. Distinct keys never share a
+preparation call. Mixed-model requests retain FIFO pending order; grouping only
+collects compatible requests currently adjacent at the front.
 
-For native deployment, follow the repository's
-[oneDNN build and packaging instructions](../jvector-native/src/main/native/README.md#recommended-onednn-build-and-package).
-JDK 22+ native access and the Vector API must be enabled as described in the
-[provider instructions](../README.md#simd-provider-selection). The packaged
-oneDNN query implementation runs on the calling threads without a nested native
-thread pool. Retain that model; adding native query threads on top of the
-application's callers oversubscribes the CPU budget. When optimized projection
-is unavailable, JVector retains its existing projection fallback.
+The host owns the executor and maps its request objects to these operations:
 
-## Admission, state ownership and completion
+```java
+int searchCores = databaseSearchBudget;
+int maximumBatch = 8;
+int admission = Math.multiplyExact(searchCores, maximumBatch);
+var searches = new BatchingExecutor<Request>(searchCores, admission, maximumBatch,
+                                            databaseSearchExecutor, operation);
+if (!searches.trySubmit(request)) {
+    // The host still owns this request: reject or apply bounded backpressure.
+}
+```
 
-The database owns arrival scheduling, overload handling and completion delivery:
+The supplied executor must schedule asynchronously and explicitly reject work
+it cannot accept. Do not use direct execution, caller-runs fallback or silent
+discard. The service validates known unsuitable thread-pool policies. It submits
+at most C reusable drain tasks and releases their execution capacity when idle;
+it does not permanently park C tasks in the database's pool. A dedicated host
+pool may use an array-backed work queue to avoid a queue-node allocation for
+each task submission. Do not submit synchronous waiters to a pool whose entire
+capacity they would occupy while waiting for this same pool to run searches.
 
-1. Admit a request to a bounded search executor or reject/backpressure it when
-   that executor and its bounded queue are full. Size the admission queue from
-   the request latency budget; an unbounded queue turns overload into long
-   delays and retained request memory.
-2. Reuse the loaded index and its immutable ASH model across searches. Give
-   each active search exclusive use of a `GraphSearcher`, its view and mutable
-   scoring/scratch state. A pool can reuse that state after a call completes;
-   concurrent calls must not share one searcher's mutable state. Creating a
-   separate model per request prevents sharing and repeatedly allocates matrices.
-3. Obtain the query vector from the database's normal request/source API before
-   invoking the synchronous search. Keep it and any borrowed buffers valid and
-   unmodified until the call returns. ASH does not fetch queries from an input
-   source or take ownership of the database's request queue.
-4. Return the result or exception through the database's existing response path.
-   An asynchronous integration may complete an application-owned promise after
-   the synchronous call finishes. JVector does not create a future per query.
+The execution operation borrows an exclusive `GraphSearcher`/view and binds the
+prepared state through `ScoringView.scoreProviderFor(prepared, true)`. It then
+uses the existing search, filtering and reranking API. Models without a preparer
+use ordinary scoring. Numerical batches call the native batch kernel directly,
+without a second scheduling layer. The preparing worker executes the first
+search and publishes the others, allowing parallel traversal without waiting
+for the whole batch to finish.
 
-A request timeout may stop the database waiting for a result, but must not cause
-its buffers, searcher, or index/model resources to be reused or closed while
-native work is still running. Release them only after the actual call finishes.
-Interrupts are preserved; they do not abandon borrowed buffers in another
-caller's computation. Apply deadlines and cancellation at admission and at safe
-boundaries supported by the integration. Include waiting for admission in
-end-to-end latency.
+## Input, result and resource ownership
 
-## Validate the integration
+An accepted request owns stable input data until preparation completes; keeping
+it stable through completion is the simplest contract. Source APIs that reuse
+a scratch vector must copy into request-owned reusable storage before fetching
+the next vector. A batch must not consist of several references to one source
+buffer that is overwritten on each fetch. The database may queue many independent
+requests from one producer, provided each request's inputs have this lifetime.
 
-Use the database's normal query mix and scheduler, with native dependencies and
-CPU/NUMA placement matching deployment. Compare the default against batch size 1
-under the same placement and caller budget:
+Each active traversal exclusively owns its searcher, view and mutable scoring
+state. `PreparedQuery` owns the query snapshot and numerical buffers; its
+`ramBytesUsed()` excludes shared model weights. Do not prepare it again until
+every search and resumable iterator borrowing it has finished. Publishing it
+to another thread requires a normal queue/executor handoff. Generation checks
+detect reuse of a prepared state that is still bound to a scoring provider.
 
-- **Isolated requests:** submit one query at a time to the normal 4C-worker
-  executor with the default batch size. There should be no deliberate delay to
-  collect more queries. One active request is a traffic scenario, not a different
-  worker configuration.
-- **Sustained backlog:** keep the recommended 4C callers supplied with work.
-  Record achieved QPS, CPU utilization, memory and p50/p95/p99
-  acceptance-to-completion latency. Keep the 4:1 worker/core ratio when comparing
-  different CPU budgets.
-- **Intermediate and bursty traffic:** test several offered rates below
-  saturation, including a Poisson arrival stream and realistic bursts. Report
-  offered and achieved QPS separately and keep late requests in the latency
-  measurement instead of dropping them.
+Completion returns each result or error through that request's callback. Use
+the database's request identifier/promise/response destination to correlate it;
+results need not return on the original worker or finish in submission order.
+Completion callbacks must return promptly and must not wait for other work that
+needs the same execution budget. Admission is released before completion so
+callbacks can recycle a bounded request record safely.
 
-Measure the entire real search, including query preparation and reranking.
-Check recall against the same queries and ground truth, and require no regression
-when changing execution policy. Repeat matched runs to distinguish scheduling
-variance from a persistent regression. A projection-only speedup is useful
-analysis, but does not establish an end-to-end search improvement.
+For a completed top-K `SearchResult`, request state can be recycled once the
+callback has copied or transferred its result. A resumable iterator instead
+retains an exclusive search session: keep its searcher, view and prepared state
+leased until iteration finishes or closes. Do not return a worker's reusable
+searcher to the pool while such an iterator is live. Budget retained sessions
+and application-held results separately from the executor's admission count.
 
-Warm each loaded model through the real query path before serving latency-sensitive
-traffic if deployment permits. Include representative concurrency as well as
-isolated searches during warmup. Query-specific matrices, native kernels and caller
-scratch are created lazily. Include model-retained memory in the index budget and
-per-active-caller scratch in the caller budget; increasing the caller count has a
-memory cost even when the model is shared.
+This executor schedules read-only query work. It does not reorder additions,
+deletions, flushes or publication of indexes. Retain the database's existing
+ordering, visibility and view-consistency rules for those operations.
+
+A request timeout can stop the client waiting; it does not cancel a native call
+or release borrowed buffers. Drain accepted work before closing model/index
+resources. Interruption is preserved by close, which waits for callbacks too.
+Close the batching service before shutting down its host executor; forcibly
+discarding already accepted host tasks violates the execution contract.
+
+Preparation, search and explicit dispatch failures are delivered once to each
+accepted request. A throwing completion callback is contained: inspect
+`completionFailureCount()` and `firstCompletionFailure()` for monitoring. Later
+submissions remain usable; graceful close reports retained callback failures
+after draining. Call close from the lifecycle owner, not a service operation
+or callback. Pool only bounded request/state storage, and include per-request
+scratch, host task queues and retained sessions in the integration's memory budget.
+
+## Deployment and measurement
+
+Build/package native dependencies through the repository's
+[oneDNN instructions](../jvector-native/src/main/native/README.md#recommended-onednn-build-and-package).
+Enable Vector API modules and native access as described in the provider guide.
+The preferred query implementation runs on the host workers without a nested
+native thread pool; avoid adding native worker counts on top of that CPU budget.
+
+Validate production-like CPU/NUMA placement and actual traffic. Isolated queries
+must launch without deliberate batching delay; sustained backlog should create
+larger batches; intermediate arrivals should neither require a different
+configuration nor an unbounded queue. Include preparation, traversal, reranking,
+admission and dispatch in the metrics where they occur. Compare distributions,
+serious stalls and achieved QPS, with unchanged recall and explicit overload
+behavior. Use the checked-in BenchYAML recipe for reproducible library comparisons;
+its unloaded latency and bounded-backlog response samples are different metrics.

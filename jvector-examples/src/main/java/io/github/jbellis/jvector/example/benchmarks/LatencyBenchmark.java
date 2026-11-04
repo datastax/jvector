@@ -112,12 +112,15 @@ public class LatencyBenchmark extends AbstractQueryBenchmark {
         // Collect every query latency
         List<Long> latencies = new ArrayList<>(totalQueries * queryRuns);
 
+        try (QueuedQueryExecution queued = cs.usesQueuedExecution()
+                ? new QueuedQueryExecution(cs, topK, rerankK, usePruning) : null) {
         // Run the full set of queries queryRuns times
         for (int run = 0; run < queryRuns; run++) {
             for (int i = 0; i < totalQueries; i++) {
                 long start = System.nanoTime();
-                SearchResult sr = QueryExecutor.executeQuery(
-                        cs, topK, rerankK, usePruning, i);
+                SearchResult sr = queued == null ? QueryExecutor.executeQuery(
+                        cs, topK, rerankK, usePruning, i)
+                        : queued.executeSingle(cs.getDataSet().getQueryVectors().get(i));
                 long duration = System.nanoTime() - start;
                 // record latency for percentile computation
                 latencies.add(duration);
@@ -152,6 +155,7 @@ public class LatencyBenchmark extends AbstractQueryBenchmark {
             list.add(Metric.of("search.latency.p999_ms", "p999 Latency (ms)", formatP999Latency, p999Latency));
         }
         return list;
+        }
 
     }
 }

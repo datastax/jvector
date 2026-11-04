@@ -45,8 +45,14 @@ public class BenchYAML {
         }
         Grid.configureWriterForBenchmark();
 
+        // A file path is not a dataset regular expression (and may contain
+        // spaces, brackets or platform-specific path separators).
+        List<String> configNames = Arrays.stream(args).filter(Objects::nonNull)
+                .filter(s -> s.endsWith(".yml")).collect(Collectors.toList());
+
         String regex = Arrays.stream(args)
                 .filter(Objects::nonNull)
+                .filter(s -> !s.endsWith(".yml"))
                 .flatMap(s -> Arrays.stream(s.split("\\s")))
                 .filter(s -> !s.isEmpty())
                 .collect(Collectors.joining("|"));
@@ -55,7 +61,8 @@ public class BenchYAML {
         System.out.println("Heap space available is " + Runtime.getRuntime().maxMemory());
 
         var datasetCollection = DatasetCollection.load();
-        var datasetNames = datasetCollection.getAll().stream().filter(dn -> pattern.matcher(dn).find()).collect(Collectors.toList());
+        var datasetNames = regex.isEmpty() && !configNames.isEmpty() ? List.<String>of()
+                : datasetCollection.getAll().stream().filter(dn -> pattern.matcher(dn).find()).collect(Collectors.toList());
 
         List<MultiConfig> allConfigs = new ArrayList<>();
 
@@ -73,14 +80,10 @@ public class BenchYAML {
         }
 
         // get the list of YAML files from args
-        List<String> configNames = (args == null) ? Collections.emptyList() : Arrays.stream(args)
-                .filter(Objects::nonNull)
-                .filter(s -> s.endsWith(".yml"))
-                .collect(Collectors.toList());
 
         if (!configNames.isEmpty()) {
             for (var configName : configNames) {
-                MultiConfig config = MultiConfig.getDefaultConfig(configName);
+                MultiConfig config = MultiConfig.getConfig(configName);
                 allConfigs.add(config);
             }
         }
@@ -96,6 +99,7 @@ public class BenchYAML {
             RunConfig runCfg = RunConfig.loadDefault();
             artifacts = RunArtifacts.open(runCfg, allConfigs);
         } catch (java.io.FileNotFoundException e) {
+            if (System.getProperty("jvector.bench.runConfig") != null) throw e;
             // Legacy yamlSchemaVersion "0" behavior: no run-config.yml
             // - logging disabled
             // - console shows compute selection

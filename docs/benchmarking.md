@@ -123,3 +123,10 @@ BenchYAML and AutoBenchYAML default to parallel complete-record serialization
 selects the sequential path, which encodes FP/NVQ features during insertion.
 Dataset prefetching is a separate option and is not required. See
 [Deferred batch serialization](deferred-batch-writer.md) for activation and caller examples.
+
+
+## Fused PQ and ASH comparison
+
+The [standalone comparison recipe](ash-pq-benchmark.md) provides fixed, byte-matched
+configurations for all four 1M dataset cases, native packaging commands, CPU/NUMA
+placement, construction repetitions, and direct/queued query measurements.

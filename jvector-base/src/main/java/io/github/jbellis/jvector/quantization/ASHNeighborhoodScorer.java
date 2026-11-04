@@ -80,6 +80,12 @@ public final class ASHNeighborhoodScorer {
     /** Borrows a view-owned LUT; its owner prevents use after the next query. */
     ASHNeighborhoodScorer(AsymmetricHashing ash, ASHScorer.QueryPrecompute query,
                           int maxDegree, int blockSize, float[] reusableLut) {
+        this(ash, query, maxDegree, blockSize, reusableLut, false);
+    }
+
+    /** An externally prepared LUT is immutable until all borrowing searches finish. */
+    ASHNeighborhoodScorer(AsymmetricHashing ash, ASHScorer.QueryPrecompute query,
+                          int maxDegree, int blockSize, float[] reusableLut, boolean alreadyPrepared) {
         FusedASHLayout.validateBitsPerDimension(ash.bitsPerDimension);
         FusedASHLayout.validateBlockSize(blockSize);
         this.maxDegree = maxDegree;
@@ -95,7 +101,7 @@ public final class ASHNeighborhoodScorer {
             throw new IllegalArgumentException("LUT size does not match the ASH model");
         }
         this.lut = reusableLut == null ? new float[lutSize] : reusableLut;
-        FusedASHLayout.buildQueryLut(query.qProj, dimensions, bits, lut);
+        if (!alreadyPrepared) FusedASHLayout.buildQueryLut(query.qProj, dimensions, bits, lut);
         var backend = VectorizationProvider.getInstance().getVectorUtilSupport();
         this.neighborhoodBackend =
                 kernel.isSimd() && dotQMu.length == 1 && backend.supportsAshNeighborhoodScoring() ? backend : null;

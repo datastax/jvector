@@ -63,9 +63,9 @@ public final class RunReporting {
         String runId = RunIdUtil.renderRunId(runIdTemplate, clock);
 
         // Run metadata
-        String jvectorRef = (runCfg != null && runCfg.logging != null && runCfg.logging.jvectorRef != null)
-                ? runCfg.logging.jvectorRef
-                : "";
+        String configuredRef = (runCfg != null && runCfg.logging != null && runCfg.logging.jvectorRef != null)
+                ? runCfg.logging.jvectorRef : "";
+        String jvectorRef = System.getProperty("jvector.bench.sourceRef", configuredRef);
 
         UUID runUuid = UUID.randomUUID();
         Instant createdAt = clock.instant();
@@ -74,7 +74,15 @@ public final class RunReporting {
         Files.createDirectories(runDir);
 
         Integer buildThreads = detectBuildThreads();
-        Integer queryThreads = java.util.concurrent.ForkJoinPool.getCommonPoolParallelism();
+        Integer queryThreads;
+        if (runCfg != null && runCfg.queryExecution != null && "queued".equals(runCfg.queryExecution.mode)) {
+            queryThreads = Math.max(1, Math.min(Runtime.getRuntime().availableProcessors(),
+                    io.github.jbellis.jvector.util.PhysicalCoreExecutor.getPhysicalCoreCount()));
+        } else {
+            int selected = Integer.getInteger("jvector.bench.queryThreads", 0);
+            if (selected < 0) throw new IllegalArgumentException("queryThreads must be nonnegative");
+            queryThreads = selected == 0 ? java.util.concurrent.ForkJoinPool.getCommonPoolParallelism() : selected;
+        }
 
         String systemId = SysInfoWriter.writeSysInfo(
                 runDir,
