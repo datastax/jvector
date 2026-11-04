@@ -106,7 +106,16 @@ final class CompressedOnDiskBuild implements IndexBuildStrategy {
         if (!missing.isEmpty()) {
             // At least one index needs to be built (b/c not in cache or cache is disabled)
             // We pass the handles map so buildMissing knows exactly where to write
-            buildTimeS = buildMissing(missing, build, ds, outputDir, handles, indexes, fileSizes);
+            try {
+                buildTimeS = buildMissing(missing, build, ds, outputDir, handles, indexes, fileSizes);
+            } catch (IOException | RuntimeException e) {
+                // A rejected or failed build must not leave the cache's temp files behind.
+                for (var handle : handles.values()) {
+                    try { handle.close(); }
+                    catch (IOException suppressed) { e.addSuppressed(suppressed); }
+                }
+                throw e;
+            }
         }
         return new BuiltIndexes(indexes, fileSizes, buildTimeS);
     }
@@ -147,17 +156,26 @@ final class CompressedOnDiskBuild implements IndexBuildStrategy {
         Map<Set<FeatureId>, RandomAccessOnDiskGraphIndexWriter> writers = new LinkedHashMap<>();
         Map<Set<FeatureId>, FeatureWriteContext> contexts = new LinkedHashMap<>();
         int n = 0;
-        for (var features : featureSets) {
-            // if we are using index caching, use cache names instead of tmp names for index files....
-            Path graphPath;
-            if (handles.containsKey(features)) {
-                graphPath = handles.get(features).writePath();
-            } else {
-                graphPath = outputDir.resolve("graph" + n++);
+        try {
+            for (var features : featureSets) {
+                // if we are using index caching, use cache names instead of tmp names for index files....
+                Path graphPath;
+                if (handles.containsKey(features)) {
+                    graphPath = handles.get(features).writePath();
+                } else {
+                    graphPath = outputDir.resolve("graph" + n++);
+                }
+                var ctx = FeatureProviders.configureWriter(features, builder.getGraph(), graphPath, floatVectors, pq, constructionMetrics);
+                writers.put(features, ctx.buildWriter());
+                contexts.put(features, ctx);
             }
-            var ctx = FeatureProviders.configureWriter(features, builder.getGraph(), graphPath, floatVectors, pq, constructionMetrics);
-            writers.put(features, ctx.buildWriter());
-            contexts.put(features, ctx);
+        } catch (IOException | RuntimeException e) {
+            // Close the writers opened so far rather than leak their files when a later one fails.
+            for (var writer : writers.values()) {
+                try { writer.close(); }
+                catch (IOException suppressed) { e.addSuppressed(suppressed); }
+            }
+            throw e;
         }
 
         // The parallel writer calls final suppliers from its workers, so original-vector features
