@@ -32,16 +32,11 @@ import java.security.AccessControlException;
 import java.security.AccessController;
 import java.security.PrivilegedAction;
 import java.text.DecimalFormat;
-import java.util.ArrayDeque;
-import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Collections;
 import java.util.IdentityHashMap;
 import java.util.Map;
-import java.util.Objects;
-import java.util.function.Predicate;
 import java.util.logging.Logger;
-import sun.misc.Unsafe;
 
 /**
  * Estimates the size (memory representation) of Java objects.
@@ -66,23 +61,13 @@ public final class RamUsageEstimator {
   /** No instantiation. */
   private RamUsageEstimator() {}
 
-  private static final Unsafe UNSAFE = getUnsafe();
+  /** Shallow instance sizes are computed once per class from its declared fields. */
   private static final ClassValue<Long> SHALLOW_SIZES = new ClassValue<>() {
     @Override
     protected Long computeValue(Class<?> type) {
       return calculateShallowSize(type);
     }
   };
-
-  private static Unsafe getUnsafe() {
-    try {
-      Field field = Unsafe.class.getDeclaredField("theUnsafe");
-      field.setAccessible(true);
-      return (Unsafe) field.get(null);
-    } catch (ReflectiveOperationException | RuntimeException e) {
-      return null;
-    }
-  }
 
   /** True, iff compressed references (oops) are enabled by this JVM */
   public static final boolean COMPRESSED_REFS_ENABLED;
@@ -126,6 +111,12 @@ public final class RamUsageEstimator {
   }
 
   static final int INTEGER_SIZE, LONG_SIZE, STRING_SIZE;
+
+  /**
+   * HotSpot rounds the array header up to a heap word before JDK 23; from JDK 23 on
+   * (JDK-8139457) elements start at the first offset aligned to their own width.
+   */
+  private static final boolean RELAXED_ARRAY_ELEMENT_ALIGNMENT = Runtime.version().feature() >= 23;
 
   static final String MANAGEMENT_FACTORY_CLASS = "java.lang.management.ManagementFactory";
   static final String HOTSPOT_BEAN_CLASS = "com.sun.management.HotSpotDiagnosticMXBean";
@@ -204,9 +195,7 @@ public final class RamUsageEstimator {
       // reference size is 4, if we have compressed oops:
       NUM_BYTES_OBJECT_REF = COMPRESSED_REFS_ENABLED ? 4 : 8;
       NUM_BYTES_OBJECT_HEADER = compactHeaders ? 8 : 8 + (compressedClassPointers ? 4 : 8);
-      // Compact headers allow byte-array elements to start at offset 12, before object alignment.
-      NUM_BYTES_ARRAY_HEADER = UNSAFE != null ? UNSAFE.arrayBaseOffset(byte[].class)
-          : compactHeaders ? 12 : (int) alignObjectSize(NUM_BYTES_OBJECT_HEADER + Integer.BYTES);
+      NUM_BYTES_ARRAY_HEADER = arrayHeaderBytes(1);
     } else {
       COMPRESSED_REFS_ENABLED = false;
       NUM_BYTES_OBJECT_ALIGNMENT = 8;
@@ -226,6 +215,19 @@ public final class RamUsageEstimator {
       // key + value *
       // hash tables need to be oversized to avoid collisions, assume 2x capacity
       (2L * NUM_BYTES_OBJECT_REF) * 2;
+
+  /**
+   * Offset of the first element of an array whose elements are {@code elementSize} bytes wide:
+   * the object header plus the length field, rounded up to a heap word on 64-bit HotSpot before
+   * JDK 23 and only to the element width from JDK 23 on. {@link #NUM_BYTES_ARRAY_HEADER} is the
+   * value for byte arrays.
+   */
+  public static int arrayHeaderBytes(int elementSize) {
+    int unaligned = NUM_BYTES_OBJECT_HEADER + Integer.BYTES;
+    if (!Constants.JRE_IS_64BIT) return unaligned;
+    int alignment = RELAXED_ARRAY_ELEMENT_ALIGNMENT ? elementSize : 8;
+    return (unaligned + alignment - 1) / alignment * alignment;
+  }
 
   /** Aligns an object size to be the next multiple of {@link #NUM_BYTES_OBJECT_ALIGNMENT}. */
   public static long alignObjectSize(long size) {
@@ -261,32 +263,32 @@ public final class RamUsageEstimator {
 
   /** Returns the size in bytes of the char[] object. */
   public static long sizeOf(char[] arr) {
-    return alignObjectSize((long) NUM_BYTES_ARRAY_HEADER + (long) Character.BYTES * arr.length);
+    return alignObjectSize((long) arrayHeaderBytes(Character.BYTES) + (long) Character.BYTES * arr.length);
   }
 
   /** Returns the size in bytes of the short[] object. */
   public static long sizeOf(short[] arr) {
-    return alignObjectSize((long) NUM_BYTES_ARRAY_HEADER + (long) Short.BYTES * arr.length);
+    return alignObjectSize((long) arrayHeaderBytes(Short.BYTES) + (long) Short.BYTES * arr.length);
   }
 
   /** Returns the size in bytes of the int[] object. */
   public static long sizeOf(int[] arr) {
-    return alignObjectSize((long) NUM_BYTES_ARRAY_HEADER + (long) Integer.BYTES * arr.length);
+    return alignObjectSize((long) arrayHeaderBytes(Integer.BYTES) + (long) Integer.BYTES * arr.length);
   }
 
   /** Returns the size in bytes of the float[] object. */
   public static long sizeOf(float[] arr) {
-    return alignObjectSize((long) NUM_BYTES_ARRAY_HEADER + (long) Float.BYTES * arr.length);
+    return alignObjectSize((long) arrayHeaderBytes(Float.BYTES) + (long) Float.BYTES * arr.length);
   }
 
   /** Returns the size in bytes of the long[] object. */
   public static long sizeOf(long[] arr) {
-    return alignObjectSize((long) NUM_BYTES_ARRAY_HEADER + (long) Long.BYTES * arr.length);
+    return alignObjectSize((long) arrayHeaderBytes(Long.BYTES) + (long) Long.BYTES * arr.length);
   }
 
   /** Returns the size in bytes of the double[] object. */
   public static long sizeOf(double[] arr) {
-    return alignObjectSize((long) NUM_BYTES_ARRAY_HEADER + (long) Double.BYTES * arr.length);
+    return alignObjectSize((long) arrayHeaderBytes(Double.BYTES) + (long) Double.BYTES * arr.length);
   }
 
   /** Returns the size in bytes of the String[] object. */
@@ -337,7 +339,7 @@ public final class RamUsageEstimator {
       return size;
     }
     // assume array-backed collection and add per-object references
-    size += NUM_BYTES_ARRAY_HEADER + collection.size() * NUM_BYTES_OBJECT_REF;
+    size += arrayHeaderBytes(NUM_BYTES_OBJECT_REF) + collection.size() * NUM_BYTES_OBJECT_REF;
     for (Object o : collection) {
       size += sizeOfObject(o, depth, defSize);
     }
@@ -405,7 +407,7 @@ public final class RamUsageEstimator {
   // Use this method instead of #shallowSizeOf(Object) to avoid costly reflection
   public static long shallowSizeOf(Object[] arr) {
     return alignObjectSize(
-        (long) NUM_BYTES_ARRAY_HEADER + (long) NUM_BYTES_OBJECT_REF * arr.length);
+        (long) arrayHeaderBytes(NUM_BYTES_OBJECT_REF) + (long) NUM_BYTES_OBJECT_REF * arr.length);
   }
 
   /**
@@ -441,10 +443,13 @@ public final class RamUsageEstimator {
     return SHALLOW_SIZES.get(clazz);
   }
 
+  /**
+   * Header plus the widths of all instance fields, aligned. HotSpot (JDK 15 and later) packs
+   * fields largest-first and lets subclass fields fill superclass gaps, so this matches its
+   * instance sizes for ordinary classes; older layouts can pad superclass boundaries.
+   */
   private static long calculateShallowSize(Class<?> clazz) {
     long size = NUM_BYTES_OBJECT_HEADER;
-    long fieldSizes = NUM_BYTES_OBJECT_HEADER;
-    boolean useOffsets = UNSAFE != null;
 
     // Walk type hierarchy
     for (; clazz != null; clazz = clazz.getSuperclass()) {
@@ -460,151 +465,11 @@ public final class RamUsageEstimator {
 
       for (Field f : fields) {
         if (!Modifier.isStatic(f.getModifiers())) {
-          fieldSizes = adjustForField(fieldSizes, f);
-          if (useOffsets) {
-            try {
-              long width = f.getType().isPrimitive() ? primitiveSizes.get(f.getType()) : NUM_BYTES_OBJECT_REF;
-              size = Math.max(size, UNSAFE.objectFieldOffset(f) + width);
-            } catch (UnsupportedOperationException e) {
-              // Unsafe does not expose offsets for records or hidden classes (including lambdas).
-              useOffsets = false;
-            }
-          }
+          size = adjustForField(size, f);
         }
       }
     }
-    return alignObjectSize(useOffsets ? size : fieldSizes);
-  }
-
-  private static final ClassValue<ReferenceField[]> REFERENCE_FIELDS = new ClassValue<>() {
-    @Override
-    protected ReferenceField[] computeValue(Class<?> type) {
-      var fields = new ArrayList<ReferenceField>();
-      for (Class<?> current = type; current != null; current = current.getSuperclass()) {
-        for (Field field : current.getDeclaredFields()) {
-          if (!Modifier.isStatic(field.getModifiers()) && !field.getType().isPrimitive()) {
-            fields.add(new ReferenceField(field));
-          }
-        }
-      }
-      return fields.toArray(new ReferenceField[0]);
-    }
-  };
-
-  private static final ClassValue<Object[]> SHARED_CLASS_OBJECTS = new ClassValue<>() {
-    @Override
-    protected Object[] computeValue(Class<?> type) {
-      var shared = new ArrayList<Object>();
-      // Nested collection implementations can use sentinels declared by their enclosing class
-      // (for example ImmutableCollections.List12's unused element and ArrayList's empty arrays).
-      for (Class<?> current = type; current != null; current = current.getSuperclass()) {
-        for (Class<?> enclosing = current; enclosing != null; enclosing = enclosing.getDeclaringClass()) {
-          for (Field field : enclosing.getDeclaredFields()) {
-            if (Modifier.isStatic(field.getModifiers()) && Modifier.isFinal(field.getModifiers())
-                && !field.getType().isPrimitive()) {
-              Object value = readStaticField(field);
-              if (value != null) shared.add(value);
-            }
-          }
-        }
-      }
-      return shared.toArray();
-    }
-  };
-
-  private static Object readStaticField(Field field) {
-    try {
-      if (field.trySetAccessible()) return field.get(null);
-      if (UNSAFE != null) return UNSAFE.getObject(UNSAFE.staticFieldBase(field), UNSAFE.staticFieldOffset(field));
-      throw new IllegalStateException("Cannot identify shared class storage for " + field);
-    } catch (IllegalAccessException e) {
-      throw new IllegalStateException("Cannot identify shared class storage for " + field, e);
-    }
-  }
-
-  private static final class ReferenceField {
-    private final Field field;
-    private final long offset;
-    private final Object[] sharedClassObjects;
-    private final boolean isVolatile;
-
-    ReferenceField(Field field) {
-      this.field = field;
-      // Application fields (including hidden lambda classes) do not require Unsafe. JDK
-      // collection internals remain encapsulated; offsets avoid requiring --add-opens.
-      offset = field.trySetAccessible() ? -1 : objectFieldOffset(field);
-      sharedClassObjects = SHARED_CLASS_OBJECTS.get(field.getDeclaringClass());
-      isVolatile = Modifier.isVolatile(field.getModifiers());
-    }
-
-    private static long objectFieldOffset(Field field) {
-      if (UNSAFE == null) {
-        throw new IllegalStateException("Cannot measure retained storage of " + field
-            + ": JVM field access is unavailable");
-      }
-      return UNSAFE.objectFieldOffset(field);
-    }
-
-    Object get(Object owner) {
-      Object value;
-      if (offset >= 0) {
-        value = isVolatile ? UNSAFE.getObjectVolatile(owner, offset) : UNSAFE.getObject(owner, offset);
-      } else {
-        try {
-          value = field.get(owner);
-        } catch (IllegalAccessException e) {
-          throw new IllegalStateException("Cannot measure retained storage of " + field, e);
-        }
-      }
-      for (Object shared : sharedClassObjects) if (value == shared) return null;
-      return value;
-    }
-  }
-
-  /**
-   * Counts the identity-distinct heap objects reachable from {@code root} through objects accepted
-   * by {@code owned}, excluding class-shared static sentinels. Rejected objects and their
-   * descendants are excluded. The caller must define
-   * ownership explicitly: static data, shared models, external resources, and worker scratch must
-   * not be charged to every owner. No {@link Accountable#ramBytesUsed()} methods are invoked.
-   *
-   * <p>This is an accounting operation, not a scoring operation. It uses temporary storage
-   * proportional to the number of reachable objects and requires a stable object graph while
-   * measuring. Class metadata is cached; no references to measured instances are retained.
-   */
-  public static long sizeOfObjectGraph(Object root, Predicate<Object> owned) {
-    Objects.requireNonNull(owned, "owned");
-    if (root == null) return 0;
-    var seen = new IdentityHashMap<Object, Boolean>();
-    var pending = new ArrayDeque<Object>();
-    pending.add(root);
-    long size = 0;
-    while (!pending.isEmpty()) {
-      Object object = pending.removeLast();
-      if (seen.put(object, Boolean.TRUE) != null || !owned.test(object)) continue;
-      boolean sharedClassObject = false;
-      if (!object.getClass().isArray()) {
-        for (Object shared : SHARED_CLASS_OBJECTS.get(object.getClass())) {
-          if (object == shared) {
-            sharedClassObject = true;
-            break;
-          }
-        }
-      }
-      if (sharedClassObject) continue;
-      size += shallowSizeOf(object);
-      if (object instanceof Object[]) {
-        for (Object value : (Object[]) object) {
-          if (value != null) pending.add(value);
-        }
-      } else if (!object.getClass().isArray()) {
-        for (ReferenceField field : REFERENCE_FIELDS.get(object.getClass())) {
-          Object value = field.get(object);
-          if (value != null) pending.add(value);
-        }
-      }
-    }
-    return size;
+    return alignObjectSize(size);
   }
 
   @SuppressWarnings("removal")
@@ -614,17 +479,9 @@ public final class RamUsageEstimator {
 
   /** Return shallow size of any <code>array</code>. */
   private static long shallowSizeOfArray(Object array) {
-    long size = NUM_BYTES_ARRAY_HEADER;
-    final int len = Array.getLength(array);
-    if (len > 0) {
-      Class<?> arrayElementClazz = array.getClass().getComponentType();
-      if (arrayElementClazz.isPrimitive()) {
-        size += (long) len * primitiveSizes.get(arrayElementClazz);
-      } else {
-        size += (long) NUM_BYTES_OBJECT_REF * len;
-      }
-    }
-    return alignObjectSize(size);
+    Class<?> arrayElementClazz = array.getClass().getComponentType();
+    int elementSize = arrayElementClazz.isPrimitive() ? primitiveSizes.get(arrayElementClazz) : NUM_BYTES_OBJECT_REF;
+    return alignObjectSize((long) arrayHeaderBytes(elementSize) + (long) elementSize * Array.getLength(array));
   }
 
   /**

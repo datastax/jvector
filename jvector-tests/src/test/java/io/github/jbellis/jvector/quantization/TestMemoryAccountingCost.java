@@ -32,7 +32,7 @@ import io.github.jbellis.jvector.vector.types.VectorFloat;
 import org.junit.Test;
 
 import java.lang.management.ManagementFactory;
-import java.lang.invoke.MethodHandles;
+
 import java.nio.file.Files;
 import java.util.Arrays;
 import java.util.EnumMap;
@@ -42,7 +42,7 @@ import java.util.function.IntFunction;
 
 import static org.junit.Assert.assertEquals;
 
-/** Allocation regression and a reproducible exercise; timings include loop/volatile receiver costs. */
+/** Allocation regression and a reproducible exercise; timings include loop/volatile receiver costs. Cold loading time and allocation are reported separately. */
 public class TestMemoryAccountingCost {
     private static volatile Accountable target;
     private static volatile long sink;
@@ -92,23 +92,6 @@ public class TestMemoryAccountingCost {
                         long elapsed = System.nanoTime() - start;
                         long allocated = bean.getThreadAllocatedBytes(Thread.currentThread().getId()) - bytes;
                         System.out.println("ACCOUNTING_LOAD upperNodes=" + upperNodes + " ns=" + elapsed + " allocated=" + allocated);
-                        if (!assertNoAllocation) {
-                            var neighbors = OnDiskGraphIndex.class.getDeclaredField("inMemoryNeighbors");
-                            var sources = OnDiskGraphIndex.class.getDeclaredField("inMemoryFeatures");
-                            var ownership = OnDiskGraphIndex.class.getDeclaredMethod("ownsSharedHeapObject", Object.class);
-                            neighbors.setAccessible(true); sources.setAccessible(true); ownership.setAccessible(true);
-                            Object edges = neighbors.get(loaded), codes = sources.get(loaded);
-                            var owns = MethodHandles.lookup().unreflect(ownership).bindTo(loaded);
-                            java.util.function.Predicate<Object> predicate = object -> {
-                                if (object == edges || object == codes) return false;
-                                try { return (boolean) owns.invokeExact(object); }
-                                catch (Throwable failure) { throw new AssertionError(failure); }
-                            };
-                            // Exercise the bounded, one-time metadata calculation separately
-                            // from file I/O and materializing the actual resident cache.
-                            measure("load-metadata-" + upperNodes,
-                                    () -> RamUsageEstimator.sizeOfObjectGraph(loaded, predicate), 128, false, bean);
-                        }
                         measure("graph-" + upperNodes, loaded, iterations, assertNoAllocation, bean);
                     }
                 } finally {

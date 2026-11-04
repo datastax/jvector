@@ -32,8 +32,6 @@ import io.github.jbellis.jvector.graph.disk.feature.NVQ;
 import io.github.jbellis.jvector.graph.disk.feature.SeparatedFeature;
 import io.github.jbellis.jvector.graph.similarity.ScoreFunction;
 import io.github.jbellis.jvector.util.Accountable;
-import io.github.jbellis.jvector.util.ExplicitThreadLocal;
-import io.github.jbellis.jvector.quantization.VectorCompressor;
 import org.agrona.collections.Int2ObjectHashMap;
 import java.util.ArrayList;
 import io.github.jbellis.jvector.util.Bits;
@@ -48,6 +46,7 @@ import java.io.UncheckedIOException;
 import java.nio.file.Path;
 import java.util.EnumMap;
 import java.util.Collections;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -98,7 +97,8 @@ public class OnDiskGraphIndex implements ImmutableGraphIndex, AutoCloseable, Acc
         this.readerSupplier = readerSupplier;
         this.version = header.common.version;
         this.format = header.common.getGraphIndexFormat();
-        this.layerInfo = header.common.layerInfo;
+        // An owned copy whose element array is sized exactly to its contents.
+        this.layerInfo = new ArrayList<>(header.common.layerInfo);
         this.dimension = header.common.dimension;
         if (header.common.entryNode == ENTRY_NODE_ABSENT) {
             this.entryNode = null;
@@ -106,6 +106,8 @@ public class OnDiskGraphIndex implements ImmutableGraphIndex, AutoCloseable, Acc
             this.entryNode = new NodeAtLevel(header.common.layerInfo.size() - 1, header.common.entryNode);
         }
         this.idUpperBound = header.common.idUpperBound;
+        // The format's map keeps the on-disk feature order (V6 sorts fused features last), so it
+        // is retained as built and only guarded against modification.
         this.features = Collections.unmodifiableMap(header.features);
         this.neighborsOffset = neighborsOffset;
         var inlineBlockSize = 0;
@@ -130,17 +132,10 @@ public class OnDiskGraphIndex implements ImmutableGraphIndex, AutoCloseable, Acc
 
         inMemoryFeatures = loadedSources == null ? null : loadedSources.cache;
 
-        // Collection views retain storage on their map. Prepare the exposed views now so
-        // later metadata reads cannot change this immutable index's retained footprint.
-        features.keySet();
-        features.values();
-        features.entrySet();
-        var sources = inMemoryFeatures;
-        // Only graph/header metadata is traversed. Resident cache payloads are counted at
-        // their existing allocation sites, and every loaded source/adjacency array is fresh.
-        long metadata = RamUsageEstimator.sizeOfObjectGraph(this,
-                object -> object != loadedNeighbors.cache && object != sources && ownsSharedHeapObject(object));
-        retainedBytes = metadata + loadedNeighbors.bytes + (loadedSources == null ? 0 : loadedSources.bytes);
+        // Resident cache payloads are counted at their allocation sites above; the bounded
+        // graph/header metadata is summed explicitly, with its collection views prepared.
+        retainedBytes = metadataBytes(header.features) + loadedNeighbors.bytes
+                + (loadedSources == null ? 0 : loadedSources.bytes);
     }
 
     /** A temporary load result; neither the object nor per-node tracking is retained. */
@@ -151,13 +146,13 @@ public class OnDiskGraphIndex implements ImmutableGraphIndex, AutoCloseable, Acc
     }
 
     private static long referenceArrayBytes(int capacity) {
-        return RamUsageEstimator.alignObjectSize((long) RamUsageEstimator.NUM_BYTES_ARRAY_HEADER
+        return RamUsageEstimator.alignObjectSize((long) RamUsageEstimator.arrayHeaderBytes(RamUsageEstimator.NUM_BYTES_OBJECT_REF)
                 + (long) capacity * RamUsageEstimator.NUM_BYTES_OBJECT_REF);
     }
 
     /** Agrona's actual capacity sizes its parallel key/value arrays; no load-factor estimate. */
     private static long mapStorageBytes(Int2ObjectHashMap<?> map) {
-        long keys = RamUsageEstimator.alignObjectSize((long) RamUsageEstimator.NUM_BYTES_ARRAY_HEADER
+        long keys = RamUsageEstimator.alignObjectSize((long) RamUsageEstimator.arrayHeaderBytes(Integer.BYTES)
                 + (long) map.capacity() * Integer.BYTES);
         return RamUsageEstimator.shallowSizeOf(map) + keys + referenceArrayBytes(map.capacity());
     }
@@ -445,20 +440,74 @@ public class OnDiskGraphIndex implements ImmutableGraphIndex, AutoCloseable, Acc
         return retainedBytes;
     }
 
-    private boolean ownsSharedHeapObject(Object object) {
-        if (object == readerSupplier || object == format || object instanceof Class<?>
-                || object instanceof Enum<?> || object instanceof VectorCompressor<?>
-                || object instanceof ThreadLocal<?> || object instanceof ExplicitThreadLocal<?>) {
-            return false;
+    /**
+     * Shared heap retained by this index's own metadata: this object, the entry node, the layer
+     * list with its entries, the feature map with its prepared views and each feature's own
+     * objects, and the inline-offset map with any boxed values outside the JVM's Integer cache.
+     * Collection views are materialized here so later reads cannot change the footprint. The
+     * reader supplier, the format, enum universes, compressor models, and per-thread scratch
+     * are not owned by the index.
+     */
+    private long metadataBytes(Map<FeatureId, ? extends Feature> featureStorage) {
+        long bytes = RamUsageEstimator.shallowSizeOf(this) + RamUsageEstimator.shallowSizeOf(entryNode);
+        // ArrayList(Collection) sizes its element array exactly; an empty list shares a sentinel.
+        bytes += RamUsageEstimator.shallowSizeOf(layerInfo)
+                + (layerInfo.isEmpty() ? 0 : referenceArrayBytes(layerInfo.size()))
+                + layerInfo.size() * RamUsageEstimator.shallowSizeOfInstance(CommonHeader.LayerInfo.class);
+        // The unmodifiable wrapper and the map it guards each cache three views.
+        bytes += RamUsageEstimator.shallowSizeOf(features)
+                + RamUsageEstimator.shallowSizeOf(features.keySet())
+                + RamUsageEstimator.shallowSizeOf(features.values())
+                + RamUsageEstimator.shallowSizeOf(features.entrySet())
+                + featureMapBytes(featureStorage);
+        for (var feature : featureStorage.values()) {
+            bytes += feature.ramBytesUsed();
         }
-        // EnumMap's key universe is shared by every map of that enum class.
-        if (object.getClass().isArray() && object.getClass().getComponentType().isEnum()) {
-            return false;
+        bytes += enumMapBytes(inlineOffsets);
+        for (FeatureId id : FeatureId.values()) {
+            Integer offset = inlineOffsets.get(id);
+            if (offset != null && offset != Integer.valueOf(offset)) bytes += RamUsageEstimator.sizeOf(offset);
         }
-        if (object instanceof Integer && object == Integer.valueOf((Integer) object)) {
-            return false;
+        return bytes;
+    }
+
+    /** An EnumMap keeps one value slot per constant; its key universe is shared JVM-wide. */
+    private static long enumMapBytes(EnumMap<FeatureId, ?> map) {
+        return RamUsageEstimator.shallowSizeOf(map) + referenceArrayBytes(FeatureId.values().length);
+    }
+
+    private static final Class<?> LINKED_HASH_MAP_ENTRY = linkedHashMapEntryClass();
+
+    private static Class<?> linkedHashMapEntryClass() {
+        try {
+            return Class.forName("java.util.LinkedHashMap$Entry");
+        } catch (ClassNotFoundException e) {
+            throw new IllegalStateException(e);
         }
-        return true;
+    }
+
+    /**
+     * The header's feature map as the format built it, with its three views materialized: an
+     * {@link EnumMap} (formats before V6) or a default-capacity {@link LinkedHashMap} (V6, which
+     * keeps fused features last). Any other map type is estimated per entry.
+     */
+    private static long featureMapBytes(Map<FeatureId, ? extends Feature> map) {
+        long bytes = RamUsageEstimator.shallowSizeOf(map)
+                + RamUsageEstimator.shallowSizeOf(map.keySet())
+                + RamUsageEstimator.shallowSizeOf(map.values())
+                + RamUsageEstimator.shallowSizeOf(map.entrySet());
+        if (map instanceof EnumMap) {
+            return bytes + referenceArrayBytes(FeatureId.values().length);
+        }
+        if (map instanceof LinkedHashMap) {
+            // HashMap allocates a 16-slot table at the first put and doubles it once the size
+            // passes three quarters of it; an empty map has no table.
+            int table = map.isEmpty() ? 0 : 16;
+            while (map.size() > table * 3 / 4) table *= 2;
+            return bytes + (table == 0 ? 0 : referenceArrayBytes(table))
+                    + map.size() * RamUsageEstimator.shallowSizeOfInstance(LINKED_HASH_MAP_ENTRY);
+        }
+        return bytes + map.size() * RamUsageEstimator.HASHTABLE_RAM_BYTES_PER_ENTRY;
     }
 
     public void close() throws IOException {

@@ -448,14 +448,20 @@ public abstract class PQVectors implements CompressedVectors {
     }
 
     /**
-     * Retained vector storage plus the compressor's reported bytes. Derived scoring-table
+     * Retained vector storage plus the compressor's reported bytes: this object, the chunk
+     * reference array at its allocated length, and every allocated chunk as that chunk reports
+     * itself. Chunks that share backing storage are counted per chunk. Derived scoring-table
      * workspaces retain their existing separate accounting boundary. Built-in subclasses cache
      * this total; this fallback remains available to custom storage implementations.
      */
     @Override
     public long ramBytesUsed() {
-        return pq.ramBytesUsed() + RamUsageEstimator.shallowSizeOf(this)
-                + RamUsageEstimator.sizeOfObjectGraph(compressedDataChunks, object -> true);
+        long bytes = pq.ramBytesUsed() + RamUsageEstimator.shallowSizeOf(this)
+                + RamUsageEstimator.shallowSizeOf(compressedDataChunks);
+        for (int i = 0; i < validChunkCount(); i++) {
+            if (compressedDataChunks[i] != null) bytes += compressedDataChunks[i].ramBytesUsed();
+        }
+        return bytes;
     }
 
     @Override

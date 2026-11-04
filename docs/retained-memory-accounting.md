@@ -13,9 +13,10 @@ are not Java heap and are not included.
 
 Resident source buffers and adjacency arrays are fresh allocations made by the index
 loader. Their sizes are accumulated while loading, using actual array lengths and map
-capacities. A one-time traversal measures only the small graph/header metadata; it
-does not walk resident source buffers or adjacency arrays. Temporary metadata tracking
-is discarded before the loaded index is published.
+capacities. The small graph/header metadata (the layer list, the feature map and its
+views, each feature's own objects, and the inline-offset map) is summed explicitly from
+known containers; nothing is traversed reflectively, and no resident source buffer or
+adjacency array is walked.
 
 Retained collection views used by the exposed caches are prepared and counted during
 loading. Feature metadata maps and sets are read-only. The internal primitive source
@@ -30,8 +31,9 @@ retained allocation. Spare chunk-reference capacity is included. Readers use one
 field read; they do not acquire that lock or scan chunks.
 
 Immutable PQ storage owns a copy of its chunk-reference array. Its storage contribution
-is measured once, deduplicating shared buffer objects and backing storage, and the
-temporary identity tracker is discarded. PQ vector totals include the compressor's
+is summed once from each allocated chunk's own report; chunks that share backing storage
+are counted per chunk, and the built-in loaders always allocate distinct chunks. PQ
+vector totals include the compressor's
 existing reported estimate; derived scoring-table workspaces remain outside this
 estimate, as before.
 
@@ -41,11 +43,15 @@ its segment, keep-alive scope, and full backing array. Native byte sequences reu
 existing integer field to remember backing-array length, and cache JVM layout constants
 once; reporting creates no `Optional` objects or new per-vector accounting fields.
 
-Object layout is determined from the running JVM. Compressed object references,
-compressed class pointers, compact headers, field offsets, and object alignment are
-handled independently. Layout support targets HotSpot-compatible JVMs. Inspecting
-encapsulated metadata uses the `sun.misc.Unsafe` facility already used by JVector;
-production does not need a Java agent or `--add-opens` flags.
+Object layout constants come from the running JVM's HotSpot diagnostic options.
+Compressed object references, compressed class pointers, compact headers, and object
+alignment are handled independently. Array headers follow HotSpot's rule for the running
+release: rounded up to a heap word before JDK 23, and only to the element width from JDK 23
+on. A shallow instance size is the header plus the
+declared field widths, aligned, which matches HotSpot's field packing from JDK 15 on;
+earlier releases can pad superclass field boundaries by a heap word. No `sun.misc.Unsafe`
+method, Java agent, or `--add-opens` flag is used, so accounting keeps working when the
+terminally deprecated Unsafe memory-access methods are denied or removed (JEP 471).
 
 ## Validation
 
@@ -74,13 +80,14 @@ Fixtures include code sizes through 768 bytes and alignment boundaries, empty an
 nonempty graphs, formats 2 through 6, hierarchy depths through 32, multiple node counts
 and degrees, and all supported fused-PQ reranking layouts. PQ chunk-boundary growth,
 spare reference capacity, reuse/zeroing, invalid ordinals, concurrent growth, and
-immutable shared/sliced buffers are compared with independent JVM measurements.
+immutable sliced buffers are compared with independent JVM measurements. The comparison
+is exact on JDK 15 and later; on earlier releases the report must not exceed the
+measurement and may fall short by at most 8 bytes per counted object.
 
 The cost regression asserts that repeated built-in graph, PQ, byte-sequence, and slice
 memory reads allocate zero bytes after warmup. It prints diagnostic timing and graph-load
 allocation measurements without timing thresholds. Its optional `main` accepts an
-iteration count for longer exercises and measures bounded metadata sizing separately
-from reporting. Timings include loop, dispatch, and volatile receiver overhead; they
+iteration count for longer exercises. Timings include loop, dispatch, and volatile receiver overhead; they
 are not graph-query throughput benchmarks. Temporary agents, logs, and index files are
 removed by the tests.
 
