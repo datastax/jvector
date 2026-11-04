@@ -746,6 +746,59 @@ public class TestOnDiskGraphIndex extends RandomizedTest {
     }
 
     /**
+     * The reranker reuses a single scratch vector; scores must not depend on which nodes were scored before.
+     */
+    @Test
+    public void testByteVectorRerankerReusesScratchWithoutStaleData() throws IOException {
+        int n = 30, dim = 16;
+        var vectors = randomByteVectors(n, dim);
+        var rabvv   = new ListRandomAccessByteVectorValues(vectors, dim);
+        var bvsf    = ByteVectorSimilarityFunction.EUCLIDEAN;
+
+        var builder = GraphIndexBuilder.builder(rabvv, bvsf, 8)
+                .withBeamWidth(20)
+                .withNeighborOverflow(1.2f)
+                .withAlpha(1.2f)
+                .build();
+        var graph   = builder.build(rabvv);
+
+        var outputPath = testDirectory.resolve("byte_reranker_scratch_test");
+        try (var writer = new OnDiskGraphIndexWriter.Builder(graph, outputPath)
+                .with(new InlineByteVectors(dim))
+                .build())
+        {
+            writer.write(Feature.singleStateFactory(FeatureId.INLINE_BYTE_VECTORS,
+                    nodeId -> new InlineByteVectors.State(rabvv.getVector(nodeId))));
+        }
+
+        try (var rs = new SimpleMappedReader.Supplier(outputPath.toAbsolutePath());
+             var onDisk = OnDiskGraphIndex.load(rs);
+             var view   = onDisk.getView())
+        {
+            byte[] rawQ = new byte[dim];
+            getRandom().nextBytes(rawQ);
+            var query    = vts.createByteSequence(rawQ);
+            var reranker = view.byteVectorRerankerFor(query, bvsf);
+
+            // forward, backward, then repeated: each result must match a direct compare
+            for (int i = 0; i < n; i++) {
+                assertEquals(bvsf.compare(query, rabvv.getVector(i)), reranker.similarityTo(i), 1e-5f);
+            }
+            for (int i = n - 1; i >= 0; i--) {
+                assertEquals(bvsf.compare(query, rabvv.getVector(i)), reranker.similarityTo(i), 1e-5f);
+            }
+            assertEquals(bvsf.compare(query, rabvv.getVector(7)), reranker.similarityTo(7), 1e-5f);
+            assertEquals(bvsf.compare(query, rabvv.getVector(7)), reranker.similarityTo(7), 1e-5f);
+
+            // getByteVectorInto fills a caller-supplied vector with the same bytes getByteVector returns
+            var into = vts.createByteSequence(dim);
+            view.getByteVectorInto(3, into);
+            assertTrue(view.getByteVector(3).equalTo(into));
+            assertTrue(rabvv.getVector(3).equalTo(into));
+        }
+    }
+
+    /**
      * All three byte-vector similarity functions produce results in [0, 1] for all nodes
      * after a full int8 end-to-end write/search cycle.
      */
