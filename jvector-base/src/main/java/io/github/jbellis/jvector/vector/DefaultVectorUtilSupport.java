@@ -338,20 +338,24 @@ final class DefaultVectorUtilSupport implements VectorUtilSupport {
       return res;
   }
 
+  // The int8 methods below accumulate in integers and convert to float only at the end, matching the
+  // Panama and native implementations, so that all execution paths produce identical results.
+  // A float accumulator stops being exact above 2^24, which int8 products reach at ~1,000 dimensions.
+
   @Override
   public float dotProduct(ByteSequence<?> a, ByteSequence<?> b) {
-    float sum = 0;
+    int sum = 0;
     for (int i = 0; i < a.length(); i++) {
-      sum += (int) a.get(i) * (int) b.get(i);
+      sum += a.get(i) * b.get(i);
     }
     return sum;
   }
 
   @Override
   public float squareDistance(ByteSequence<?> a, ByteSequence<?> b) {
-    float sum = 0;
+    int sum = 0;
     for (int i = 0; i < a.length(); i++) {
-      float diff = a.get(i) - b.get(i);
+      int diff = a.get(i) - b.get(i);
       sum += diff * diff;
     }
     return sum;
@@ -359,14 +363,14 @@ final class DefaultVectorUtilSupport implements VectorUtilSupport {
 
   @Override
   public float cosine(ByteSequence<?> a, ByteSequence<?> b) {
-    float dot = 0, normA = 0, normB = 0;
+    long dot = 0, normA = 0, normB = 0;
     for (int i = 0; i < a.length(); i++) {
-      float ai = a.get(i), bi = b.get(i);
+      int ai = a.get(i), bi = b.get(i);
       dot   += ai * bi;
       normA += ai * ai;
       normB += bi * bi;
     }
-    return (float) (dot / Math.sqrt(normA * normB));
+    return (float) (dot / Math.sqrt((double) normA * normB));
   }
 
   @Override

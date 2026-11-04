@@ -589,13 +589,27 @@ public class OnDiskGraphIndex implements ImmutableGraphIndex, AutoCloseable, Acc
          *         {@link InlineByteVectors}
          */
         public ByteSequence<?> getByteVector(int node) {
+            ByteSequence<?> vec = vectorTypeSupport.createByteSequence(dimension);
+            getByteVectorInto(node, vec);
+            return vec;
+        }
+
+        /**
+         * Reads the signed int8 vector stored for {@code node} into {@code destination}, which must have
+         * exactly {@link #dimension()} elements. Use this instead of {@link #getByteVector(int)} on hot paths
+         * to avoid allocating a new vector per read.
+         *
+         * @throws UnsupportedOperationException if the graph was not written with
+         *         {@link InlineByteVectors}
+         */
+        public void getByteVectorInto(int node, ByteSequence<?> destination) {
             if (!features.containsKey(FeatureId.INLINE_BYTE_VECTORS)) {
                 throw new UnsupportedOperationException("No inline byte vectors in this graph");
             }
             try {
                 long diskOffset = offsetFor(node, FeatureId.INLINE_BYTE_VECTORS);
                 reader.seek(diskOffset);
-                return vectorTypeSupport.readByteSequence(reader, dimension);
+                vectorTypeSupport.readByteSequence(reader, destination);
             } catch (IOException e) {
                 throw new UncheckedIOException(e);
             }
@@ -604,6 +618,7 @@ public class OnDiskGraphIndex implements ImmutableGraphIndex, AutoCloseable, Acc
         /**
          * Returns a {@link ScoreFunction.ExactScoreFunction} that scores candidates by reading
          * their int8 vectors from disk and comparing them byte×byte against {@code queryBytes}.
+         * The resulting function reuses a single scratch vector and is NOT thread-safe.
          *
          * @throws UnsupportedOperationException if the graph was not written with
          *         {@link InlineByteVectors}
@@ -613,7 +628,15 @@ public class OnDiskGraphIndex implements ImmutableGraphIndex, AutoCloseable, Acc
             if (!features.containsKey(FeatureId.INLINE_BYTE_VECTORS)) {
                 throw new UnsupportedOperationException("No inline byte vectors in this graph");
             }
-            return node -> bvsf.compare(queryBytes, getByteVector(node));
+            return new ScoreFunction.ExactScoreFunction() {
+                private final ByteSequence<?> scratch = vectorTypeSupport.createByteSequence(dimension);
+
+                @Override
+                public float similarityTo(int node) {
+                    getByteVectorInto(node, scratch);
+                    return bvsf.compare(queryBytes, scratch);
+                }
+            };
         }
 
         public NodesIterator getNeighborsIterator(int level, int node) {
