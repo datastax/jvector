@@ -76,6 +76,14 @@ public interface VectorUtilSupport {
   /** Whether canonical ASH codes can use an already prepared nibble LUT in SIMD. */
   default boolean supportsAshCanonicalLutScoring() { return false; }
 
+  /** Whether canonical LUT scoring is implemented by the native backend. */
+  default boolean supportsNativeAshCanonicalLutScoring() { return false; }
+
+  /** Fail before scoring when the caller explicitly requires a native ASH single scorer. */
+  default void requireNativeAshSingleScoring(int bitsPerDimension) {
+    throw new IllegalStateException("Native ASH single scoring is unavailable for b=" + bitsPerDimension);
+  }
+
   /** Projection dot only; callers apply the vector's scale, offset and landmark term. */
   default float ashCanonicalLutDot(byte[] code, int groups, float[] lut) {
     return ASHLutScoring.dotCanonical(code, groups, lut);

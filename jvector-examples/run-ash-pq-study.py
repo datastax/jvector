@@ -40,6 +40,8 @@ parser.add_argument("--query-node", default="0")
 parser.add_argument("--build-repetitions", type=int, default=5)
 parser.add_argument("--query-repetitions", type=int, default=3)
 parser.add_argument("--dataset-set", choices=("1m", "large"), default="1m")
+parser.add_argument("--algorithms", nargs="+", choices=("pq", "ash"), default=["pq", "ash"])
+parser.add_argument("--query-modes", nargs="+", choices=("direct", "queued"), default=["direct", "queued"])
 parser.add_argument("--plan-only", action="store_true")
 args = parser.parse_args()
 if min(args.build_cores, args.build_repetitions, args.query_repetitions) <= 0:
@@ -73,6 +75,8 @@ for group, (prefix, bits) in enumerate((p, b) for p in prefixes for b in (2, 4))
                     jobs.append(dict(prefix=prefix, bits=bits, algorithm=algorithm, mode=mode,
                                      cores=cores, cpus=cpus, repetition=repetition,
                                      numa="bind:" + args.query_node))
+jobs = [job for job in jobs if job["algorithm"] in args.algorithms
+        and (job["mode"] == "construction" or job["mode"] in args.query_modes)]
 for job in jobs:
     job["id"] = "{prefix}-{bits}bit-{algorithm}-{mode}-c{cores}-r{repetition}".format(**job)
     case_repetition = job["repetition"] if job["mode"] == "construction" else 1

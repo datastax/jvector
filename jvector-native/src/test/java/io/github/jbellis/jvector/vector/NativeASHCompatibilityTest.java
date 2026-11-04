@@ -35,6 +35,9 @@ class NativeASHCompatibilityTest {
         assertTrue(new NativeVectorUtilSupport().supportsAshNeighborhoodScoring());
         assertTrue(new NativeVectorUtilSupport().supportsAshCanonicalLutScoring());
         assertTrue(NativeASHKernels.isFourBitDotAvailable());
+        var backend = new NativeVectorUtilSupport();
+        assertDoesNotThrow(() -> backend.requireNativeAshSingleScoring(2));
+        assertDoesNotThrow(() -> backend.requireNativeAshSingleScoring(4));
         assertTrue(NativeASHProjection.isAvailable());
         assertTrue(NativeASHSymmetricKernels.hasPairKernel());
         assertTrue(NativeASHSymmetricKernels.hasLutKernel());
@@ -75,6 +78,14 @@ class NativeASHCompatibilityTest {
             if (NativeASHKernels.isFourBitDotAvailable() || NativeASHProjection.isAvailable() || NativeASHSymmetricKernels.hasPairKernel()
                     || NativeASHSymmetricKernels.hasLutKernel()) {
                 throw new AssertionError("New ASH symbols unexpectedly available");
+            }
+            for (int bits : new int[] {2, 4}) {
+                try {
+                    backend.requireNativeAshSingleScoring(bits);
+                    throw new AssertionError("Missing native b=" + bits + " single scorer was accepted");
+                } catch (IllegalStateException expected) {
+                    if (!expected.getMessage().contains("b=" + bits)) throw expected;
+                }
             }
             float[] projected = new float[2];
             backend.prepareAshProjection(new float[][]{{1,2,3},{4,5,6}})

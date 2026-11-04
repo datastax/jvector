@@ -33,6 +33,8 @@ import jdk.incubator.vector.VectorSpecies;
  */
 class NativeVectorUtilSupport extends PanamaVectorUtilSupport
 {
+    private static final boolean REQUIRE_NATIVE_ASH = "native".equalsIgnoreCase(
+            System.getProperty("jvector.vectorization_provider", "").trim());
     public NativeVectorUtilSupport() {}
 
     /** Select once at provider creation; leave the wide scan and its call site unchanged. */
@@ -119,9 +121,26 @@ class NativeVectorUtilSupport extends PanamaVectorUtilSupport
     }
 
     @Override
+    public boolean supportsNativeAshCanonicalLutScoring() { return NativeASHKernels.isCanonicalLutAvailable(); }
+
+    @Override
+    public void requireNativeAshSingleScoring(int bitsPerDimension) {
+        if (bitsPerDimension == 2 && NativeASHKernels.isCanonicalLutAvailable()) return;
+        if (bitsPerDimension == 4 && NativeASHKernels.isFourBitDotAvailable()) return;
+        throw new IllegalStateException("Required native ASH single scorer is unavailable for b="
+                + bitsPerDimension + (bitsPerDimension == 2
+                ? " (ash_canonical_lut_dot_f32)" : " (ash_projection_dot_4bit_f32)"));
+    }
+
+    @Override
     public float ashProjectionDot(float[] query, byte[] code, int dimensions, int bitsPerDimension) {
         if (bitsPerDimension == 4 && NativeASHKernels.isFourBitDotAvailable()) {
             return NativeASHKernels.dotFourBit(query, code, dimensions);
+        }
+        if (REQUIRE_NATIVE_ASH) {
+            requireNativeAshSingleScoring(bitsPerDimension);
+            if (bitsPerDimension == 2)
+                throw new IllegalStateException("Native b=2 scoring requires its prepared LUT; use ASHScorer");
         }
         return super.ashProjectionDot(query, code, dimensions, bitsPerDimension);
     }
