@@ -19,16 +19,26 @@ package io.github.jbellis.jvector.example.benchmarks;
 import java.util.List;
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.Objects;
+import java.util.concurrent.ThreadLocalRandom;
+import java.util.concurrent.TimeUnit;
+import java.util.function.Consumer;
+import java.util.function.LongSupplier;
 
 import io.github.jbellis.jvector.example.Grid.ConfiguredSystem;
 import io.github.jbellis.jvector.graph.SearchResult;
+import io.github.jbellis.jvector.vector.VectorUtil;
+import io.github.jbellis.jvector.vector.VectorizationProvider;
+import io.github.jbellis.jvector.vector.types.VectorFloat;
 
 /**
- * Measures per‐query latency (mean and standard deviation) over N runs,
- * and counts correct top‐K results.
+ * Measures unloaded per-query latency after random-query warmup through the
+ * same execution policy used by the timed requests.
  */
 public class LatencyBenchmark extends AbstractQueryBenchmark {
     private static final String DEFAULT_FORMAT = ".3f";
+    private static final int WARMUP_PASSES = 3;
+    private static final long MIN_WARMUP_NANOS = TimeUnit.SECONDS.toNanos(3);
 
     private boolean computeAvgLatency;
     private boolean computeLatencySTD;
@@ -87,6 +97,41 @@ public class LatencyBenchmark extends AbstractQueryBenchmark {
         return this;
     }
 
+    /**
+     * Warm complete random-query passes for at least the minimum time per pass.
+     * The action must complete before returning: one query buffer is reused.
+     * A monotonic clock is supplied so the coverage/minimum-duration contract
+     * can be tested without sleeping. This does not inspect compiler activity.
+     */
+    static long warmup(int dimension, int queriesPerPass, int passes, long minimumNanos,
+                       Consumer<VectorFloat<?>> search, LongSupplier clock) {
+        if (dimension <= 0 || queriesPerPass <= 0 || passes <= 0 || minimumNanos < 0)
+            throw new IllegalArgumentException("Require positive dimension, query count and passes, and nonnegative duration");
+        Objects.requireNonNull(search, "search");
+        Objects.requireNonNull(clock, "clock");
+        var query = VectorizationProvider.getInstance().getVectorTypeSupport().createFloatVector(dimension);
+        var random = ThreadLocalRandom.current();
+        long completed = 0;
+        for (int pass = 0; pass < passes; pass++) {
+            long started = clock.getAsLong();
+            do {
+                for (int i = 0; i < queriesPerPass; i++) {
+                    boolean nonZero = false;
+                    for (int d = 0; d < dimension; d++) {
+                        float value = random.nextFloat();
+                        query.set(d, value);
+                        nonZero |= value != 0;
+                    }
+                    if (!nonZero) query.set(0, 1);
+                    VectorUtil.l2normalize(query);
+                    search.accept(query);
+                    completed++;
+                }
+            } while (clock.getAsLong() - started < minimumNanos);
+        }
+        return completed;
+    }
+
     @Override
     public String getBenchmarkName() {
         return "LatencyBenchmark";
@@ -114,6 +159,18 @@ public class LatencyBenchmark extends AbstractQueryBenchmark {
 
         try (QueuedQueryExecution queued = cs.usesQueuedExecution()
                 ? new QueuedQueryExecution(cs, topK, rerankK, usePruning) : null) {
+        // Throughput warms batched submission. Unloaded latency uses a distinct
+        // synchronous handoff/completion path, so it needs its own warmup on the
+        // same workers and request buffers. Random inputs avoid warming the
+        // measured queries. Do not format reports between warmup and timing.
+        warmup(cs.getDataSet().getDimension(), totalQueries, WARMUP_PASSES, MIN_WARMUP_NANOS,
+                query -> {
+                    SearchResult result = queued == null
+                            ? QueryExecutor.executeQuery(cs, topK, rerankK, usePruning, query)
+                            : queued.executeSingle(query);
+                    SINK += result.getVisitedCount();
+                }, System::nanoTime);
+
         // Run the full set of queries queryRuns times
         for (int run = 0; run < queryRuns; run++) {
             for (int i = 0; i < totalQueries; i++) {
