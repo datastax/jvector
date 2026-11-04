@@ -50,3 +50,6 @@ jvector-fastervector/src/test/resources/native/linux-x86_64/fake_lib*.so
 src/test/resources/native/linux-x86_64/fake_lib*.so
 jvector-fastervector/pom.xml
 jvector-fastervector/target/**
+jvector-fastervector-bench/pom.xml
+jvector-fastervector-bench/target/**
+jvector-fastervector-bench/yaml-configs/**

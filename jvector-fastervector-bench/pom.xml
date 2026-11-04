@@ -1,0 +1,70 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="https://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="https://maven.apache.org/POM/4.0.0
+                             https://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+    <parent>
+        <groupId>io.github.jbellis</groupId>
+        <artifactId>jvector-parent</artifactId>
+        <version>${revision}</version>
+    </parent>
+    <artifactId>jvector-fastervector-bench</artifactId>
+    <name>Fastervector Bench</name>
+    <properties>
+        <fastervector.jvm.args>--enable-native-access=ALL-UNNAMED --add-modules jdk.incubator.vector -Djvector.enable_native_vectorization=false</fastervector.jvm.args>
+    </properties>
+    <build>
+        <plugins>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-compiler-plugin</artifactId>
+                <configuration>
+                    <release>22</release>
+                </configuration>
+            </plugin>
+            <!-- Config paths resolve from the repository root, as in jvector-examples -->
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-surefire-plugin</artifactId>
+                <configuration>
+                    <skip>false</skip>
+                    <argLine>${fastervector.jvm.args}</argLine>
+                    <workingDirectory>${project.parent.basedir}</workingDirectory>
+                </configuration>
+            </plugin>
+            <plugin>
+                <groupId>org.apache.rat</groupId>
+                <artifactId>apache-rat-plugin</artifactId>
+                <configuration>
+                    <excludesFile>${project.parent.basedir}/rat-excludes.txt</excludesFile>
+                </configuration>
+            </plugin>
+        </plugins>
+    </build>
+    <dependencies>
+        <dependency>
+            <groupId>io.github.jbellis</groupId>
+            <artifactId>jvector-fastervector</artifactId>
+            <version>${project.version}</version>
+        </dependency>
+        <!-- Datasets, ground truth, YAML and run config, and reporting. jvector-native is left out
+             so the only libjvector in the JVM is fastervector's (D4). -->
+        <dependency>
+            <groupId>io.github.jbellis</groupId>
+            <artifactId>jvector-examples</artifactId>
+            <version>${project.version}</version>
+            <exclusions>
+                <exclusion>
+                    <groupId>io.github.jbellis</groupId>
+                    <artifactId>jvector-native</artifactId>
+                </exclusion>
+            </exclusions>
+        </dependency>
+        <dependency>
+            <groupId>org.junit.jupiter</groupId>
+            <artifactId>junit-jupiter-engine</artifactId>
+            <scope>test</scope>
+        </dependency>
+    </dependencies>
+</project>

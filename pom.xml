@@ -237,6 +237,7 @@
             <id>fastervector</id>
             <modules>
                 <module>jvector-fastervector</module>
+                <module>jvector-fastervector-bench</module>
             </modules>
         </profile>
     </profiles>
