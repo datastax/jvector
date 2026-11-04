@@ -230,9 +230,12 @@ Unloaded latency has its own warmup through the same single-request execution
 path used by measurement. Throughput's batched warmup alone does not exercise
 the synchronous queue handoff/completion path. Before timing, both direct and
 queued modes run three complete random-query warmup passes, each for at least
-three seconds. The query buffer is reused after each synchronous completion;
+three seconds. A bounded set of random query buffers is refilled between warmup sweeps;
 measured dataset queries are not used for warmup. The scoring operation and
-timed latency interval are unchanged. No compiler-quietness gate is used.
+timed latency interval are unchanged. Both phases use the same execution pass
+and search-function instance, preventing separate call sites from leaving the
+measured path cold after JIT inlining. Primitive timing storage avoids boxing
+one temporary object per latency sample. No compiler-quietness gate is used.
 
 An ASH JFR profile identified compilation of the single-request completion,
 queue and FP16 projection paths during the original latency measurement.
