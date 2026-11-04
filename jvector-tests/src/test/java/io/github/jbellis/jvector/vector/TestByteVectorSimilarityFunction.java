@@ -38,14 +38,29 @@ public class TestByteVectorSimilarityFunction extends RandomizedTest {
     @Test
     public void testEuclideanKnownValue() {
         // v1=[1,0], v2=[0,1]  squared-L2 = 1+1 = 2
-        // maxSquaredDist = 2 * 255^2 = 130050
-        // expected = 1 / (1 + 2/130050)
+        // expected = 1 / (1 + 2) = 1/3
         var v1 = seq((byte) 1, (byte) 0);
         var v2 = seq((byte) 0, (byte) 1);
-        float squaredL2 = 2.0f;
-        float max = 2 * 255.0f * 255.0f;
-        float expected = 1.0f / (1.0f + squaredL2 / max);
-        assertEquals(expected, ByteVectorSimilarityFunction.EUCLIDEAN.compare(v1, v2), 1e-6f);
+        assertEquals(1.0f / 3.0f, ByteVectorSimilarityFunction.EUCLIDEAN.compare(v1, v2), 1e-6f);
+    }
+
+    @Test
+    public void testEuclideanDistinguishesSmallDistancesInHighDimensions() {
+        // At 1024 dimensions, squared distances 0, 1, 2 and 3 must not collapse to the same float score.
+        int dim = 1024;
+        var base = seq(new byte[dim]);
+        float previous = Float.POSITIVE_INFINITY;
+        for (int sq = 0; sq <= 3; sq++) {
+            byte[] other = new byte[dim];
+            for (int i = 0; i < sq; i++) {
+                other[i] = 1; // each unit component adds 1 to the squared distance
+            }
+            float score = ByteVectorSimilarityFunction.EUCLIDEAN.compare(base, seq(other));
+            assertEquals(1.0f / (1.0f + sq), score, 1e-6f);
+            assertTrue("score for squared distance " + sq + " should be strictly lower than for " + (sq - 1),
+                       score < previous);
+            previous = score;
+        }
     }
 
     @Test
@@ -160,6 +175,27 @@ public class TestByteVectorSimilarityFunction extends RandomizedTest {
                 1e-5f);
     }
 
+    @Test
+    public void testCosineDimensionMismatchThrows() {
+        var v1 = seq((byte) 1, (byte) 2, (byte) 3);
+        var v2 = seq((byte) 1, (byte) 2);
+        assertThrows(IllegalArgumentException.class, () -> VectorUtil.cosine(v1, v2));
+    }
+
+    @Test
+    public void testCosineZeroVectorIsRejectedByAssertion() {
+        // Mirrors the float overload: zero vectors are unsupported and caught by an assertion, not defined.
+        boolean assertionsEnabled = false;
+        assert assertionsEnabled = true;
+        org.junit.Assume.assumeTrue("requires -ea", assertionsEnabled);
+
+        var zero = seq(new byte[8]);
+        var nonZero = seq((byte) 1, (byte) 2, (byte) 3, (byte) 4, (byte) 5, (byte) 6, (byte) 7, (byte) 8);
+        assertThrows(AssertionError.class, () -> VectorUtil.cosine(zero, zero));
+        assertThrows(AssertionError.class, () -> VectorUtil.cosine(zero, nonZero));
+        assertThrows(AssertionError.class, () -> VectorUtil.cosine(nonZero, zero));
+    }
+
     // -----------------------------------------------------------------------
     // Boundary values
     // -----------------------------------------------------------------------
@@ -182,5 +218,72 @@ public class TestByteVectorSimilarityFunction extends RandomizedTest {
         float expectedDot = (1.0f + (127.0f * 127.0f) / (128.0f * 128.0f)) / 2.0f;
         assertEquals(expectedDot, ByteVectorSimilarityFunction.DOT_PRODUCT.compare(vMax, vMax), 1e-5f);
         assertEquals(1.0f, ByteVectorSimilarityFunction.COSINE.compare(vMax, vMax), 1e-5f);
+    }
+
+    // -----------------------------------------------------------------------
+    // Default implementation accumulation
+    // -----------------------------------------------------------------------
+
+    @Test
+    public void testDefaultImplementationAccumulatesExactlyInHighDimensions() {
+        // Float accumulation stops being exact above 2^24; these sums exceed it, so a float accumulator
+        // would round differently from the integer-accumulating Panama and native implementations.
+        var impl = new DefaultVectorUtilSupport();
+        int dim = 4096;
+        byte[][][] cases = new byte[3][2][dim];
+        java.util.Arrays.fill(cases[0][0], (byte) 127);
+        java.util.Arrays.fill(cases[0][1], (byte) 127);
+        java.util.Arrays.fill(cases[1][0], (byte) 127);
+        java.util.Arrays.fill(cases[1][1], (byte) -128);
+        getRandom().nextBytes(cases[2][0]);
+        getRandom().nextBytes(cases[2][1]);
+
+        for (byte[][] c : cases) {
+            long dot = 0, normA = 0, normB = 0, sq = 0;
+            for (int i = 0; i < dim; i++) {
+                int ai = c[0][i], bi = c[1][i];
+                dot += ai * bi;
+                normA += ai * ai;
+                normB += bi * bi;
+                sq += (ai - bi) * (ai - bi);
+            }
+            var a = seq(c[0]);
+            var b = seq(c[1]);
+            assertEquals((float) dot, impl.dotProduct(a, b), 0f);
+            assertEquals((float) sq, impl.squareDistance(a, b), 0f);
+            assertEquals((float) (dot / Math.sqrt((double) normA * normB)), impl.cosine(a, b), 0f);
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // Sliced inputs
+    // -----------------------------------------------------------------------
+
+    @Test
+    public void testSlicedInputsMatchScalarReference() {
+        // Lengths cover: shorter than any SIMD step, exact multiples, and lengths with a scalar tail.
+        for (int length : new int[] {5, 8, 16, 37, 64, 100}) {
+            for (int[] offsets : new int[][] {{0, 0}, {3, 0}, {0, 5}, {7, 11}}) {
+                byte[] raw1 = new byte[offsets[0] + length + 9];
+                byte[] raw2 = new byte[offsets[1] + length + 9];
+                getRandom().nextBytes(raw1);
+                getRandom().nextBytes(raw2);
+                var a = seq(raw1).slice(offsets[0], length);
+                var b = seq(raw2).slice(offsets[1], length);
+
+                long dot = 0, normA = 0, normB = 0, sq = 0;
+                for (int i = 0; i < length; i++) {
+                    int ai = raw1[offsets[0] + i], bi = raw2[offsets[1] + i];
+                    dot += ai * bi;
+                    normA += ai * ai;
+                    normB += bi * bi;
+                    sq += (ai - bi) * (ai - bi);
+                }
+                String msg = "length=" + length + " offsets=" + offsets[0] + "," + offsets[1];
+                assertEquals(msg, (float) dot, VectorUtil.dotProduct(a, b), 0f);
+                assertEquals(msg, (float) sq, VectorUtil.squareL2Distance(a, b), 0f);
+                assertEquals(msg, (float) (dot / Math.sqrt((double) normA * normB)), VectorUtil.cosine(a, b), 1e-5f);
+            }
+        }
     }
 }

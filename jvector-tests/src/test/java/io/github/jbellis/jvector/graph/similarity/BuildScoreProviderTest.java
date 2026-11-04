@@ -17,6 +17,7 @@
 package io.github.jbellis.jvector.graph.similarity;
 
 import io.github.jbellis.jvector.graph.ListRandomAccessByteVectorValues;
+import io.github.jbellis.jvector.graph.RandomAccessByteVectorValues;
 import io.github.jbellis.jvector.graph.ListRandomAccessVectorValues;
 import io.github.jbellis.jvector.vector.ByteVectorSimilarityFunction;
 import io.github.jbellis.jvector.vector.VectorSimilarityFunction;
@@ -162,9 +163,101 @@ public class BuildScoreProviderTest {
     }
 
     @Test
+    public void testByteVectorApproximateCentroidSkipsNullVectors() {
+        // Mirrors the float provider: null entries are skipped but still count towards the divisor (size = 3),
+        // so the centroid of [0,10], null, [0,20] is [0, 30/3] = [0,10].
+        var withNull = new ArrayList<ByteSequence<?>>();
+        withNull.add(bseq((byte) 0, (byte) 10));
+        withNull.add(null);
+        withNull.add(bseq((byte) 0, (byte) 20));
+        var bsp = BuildScoreProvider.byteVectorScoreProvider(
+                new ListRandomAccessByteVectorValues(withNull, 2), ByteVectorSimilarityFunction.EUCLIDEAN);
+
+        var centroid = bsp.approximateCentroid();
+        assertEquals(0.0f, centroid.get(0), 1e-5f);
+        assertEquals(10.0f, centroid.get(1), 1e-5f);
+    }
+
+    @Test
     public void testByteVectorThrowsForFloatQuery() {
         var bsp = BuildScoreProvider.byteVectorScoreProvider(byteRavv(), ByteVectorSimilarityFunction.EUCLIDEAN);
         VectorFloat<?> floatQuery = vts.createFloatVector(new float[]{1.0f, 0.0f});
         assertThrows(UnsupportedOperationException.class, () -> bsp.searchProviderFor(floatQuery));
+    }
+
+    /** A byte RAVV whose getVector always returns the same per-instance buffer, like a disk-backed source. */
+    private static class SharedBufferByteVectors implements RandomAccessByteVectorValues {
+        private final List<ByteSequence<?>> data;
+        private final int dimension;
+        private final ByteSequence<?> buffer;
+
+        SharedBufferByteVectors(List<ByteSequence<?>> data, int dimension) {
+            this.data = data;
+            this.dimension = dimension;
+            this.buffer = vts.createByteSequence(dimension);
+        }
+
+        @Override
+        public int size() {
+            return data.size();
+        }
+
+        @Override
+        public int dimension() {
+            return dimension;
+        }
+
+        @Override
+        public ByteSequence<?> getVector(int nodeId) {
+            buffer.copyFrom(data.get(nodeId), 0, 0, dimension);
+            return buffer;
+        }
+
+        @Override
+        public boolean isValueShared() {
+            return true;
+        }
+
+        @Override
+        public RandomAccessByteVectorValues copy() {
+            return new SharedBufferByteVectors(data, dimension);
+        }
+    }
+
+    private SharedBufferByteVectors sharedByteRavv() {
+        return new SharedBufferByteVectors(
+                List.of(bseq((byte) 10, (byte) 0),    // node 0
+                        bseq((byte) 0,  (byte) 10),   // node 1
+                        bseq((byte) -10, (byte) 0)),  // node 2
+                2);
+    }
+
+    @Test
+    public void testByteVectorSearchProviderSurvivesSharedBufferReuse() {
+        var bvsf = ByteVectorSimilarityFunction.EUCLIDEAN;
+        var bsp = BuildScoreProvider.byteVectorScoreProvider(sharedByteRavv(), bvsf);
+        var reference = byteRavv();
+
+        // Creating a second scorer on the same thread must not change what the first one compares against.
+        var scorer0 = bsp.searchProviderFor(0).exactScoreFunction();
+        var scorer1 = bsp.searchProviderFor(1).exactScoreFunction();
+
+        assertEquals(bvsf.compare(reference.getVector(1), reference.getVector(2)), scorer1.similarityTo(2), 1e-6f);
+        assertEquals(bvsf.compare(reference.getVector(0), reference.getVector(2)), scorer0.similarityTo(2), 1e-6f);
+        assertEquals(bvsf.compare(reference.getVector(1), reference.getVector(2)), scorer1.similarityTo(2), 1e-6f);
+    }
+
+    @Test
+    public void testByteVectorDiversityScoreFunctionSurvivesSharedBufferReuse() {
+        var bvsf = ByteVectorSimilarityFunction.EUCLIDEAN;
+        var bsp = BuildScoreProvider.byteVectorScoreProvider(sharedByteRavv(), bvsf);
+        var reference = byteRavv();
+
+        var sf0 = bsp.diversityScoreFunctionFor(0);
+        var sf1 = bsp.diversityScoreFunctionFor(1);
+
+        assertEquals(bvsf.compare(reference.getVector(1), reference.getVector(2)), sf1.similarityTo(2), 1e-6f);
+        assertEquals(bvsf.compare(reference.getVector(0), reference.getVector(2)), sf0.similarityTo(2), 1e-6f);
+        assertEquals(bvsf.compare(reference.getVector(1), reference.getVector(2)), sf1.similarityTo(2), 1e-6f);
     }
 }
