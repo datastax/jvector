@@ -52,8 +52,8 @@ public final class RunArtifacts {
         if (settings == null) return this;
         if (!"direct".equals(settings.mode) && !"queued".equals(settings.mode))
             throw new IllegalArgumentException("queryExecution.mode must be direct or queued");
-        if (settings.maxBatchSize <= 0)
-            throw new IllegalArgumentException("queryExecution.maxBatchSize must be positive");
+        if (settings.maxBatchSize <= 0 || settings.maxBatchSize == Integer.MAX_VALUE)
+            throw new IllegalArgumentException("queryExecution.maxBatchSize must be positive and fit its histogram");
         queryExecutionMode = settings.mode;
         queryBatchSize = settings.maxBatchSize;
         return this;

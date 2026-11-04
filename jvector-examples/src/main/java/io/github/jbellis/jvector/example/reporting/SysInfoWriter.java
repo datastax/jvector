@@ -70,7 +70,7 @@ public final class SysInfoWriter {
         threads.put("parallel_stream_parallelism", fjp);
 
         // Query benchmark characteristics
-        threads.put("query_throughput_parallelism", fjp);
+        threads.put("query_throughput_parallelism", queryThreads == null ? fjp : queryThreads);
         threads.put("query_latency_threads", 1);
 
         // Raw common pool parallelism
