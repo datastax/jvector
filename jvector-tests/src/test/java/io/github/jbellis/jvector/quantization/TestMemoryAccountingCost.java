@@ -125,22 +125,35 @@ public class TestMemoryAccountingCost {
             long until = System.nanoTime() + 250_000_000L;
             do { sink = readMany(100_000); } while (System.nanoTime() < until);
         }
+        // Before JDK 21 the per-thread allocation counter can itself allocate (JDK 11 boxes the
+        // thread id into two long[] per read); measure that so it is not charged to the loop.
+        long overhead = 0;
+        for (int i = 0; i < 3; i++) {
+            long first = bean.getThreadAllocatedBytes(Thread.currentThread().getId());
+            long second = bean.getThreadAllocatedBytes(Thread.currentThread().getId());
+            overhead = Math.max(overhead, second - first);
+        }
         double[] nanos = new double[5];
-        long allocation = 0;
+        long quietest = Long.MAX_VALUE;
+        long loudest = 0;
         for (int sample = 0; sample < nanos.length; sample++) {
             long before = bean.getThreadAllocatedBytes(Thread.currentThread().getId());
             long start = System.nanoTime();
             long sum = readMany(iterations);
             long elapsed = System.nanoTime() - start;
-            long allocated = bean.getThreadAllocatedBytes(Thread.currentThread().getId()) - before;
+            long allocated = Math.max(0, bean.getThreadAllocatedBytes(Thread.currentThread().getId()) - before - overhead);
             sink = sum;
             nanos[sample] = (double) elapsed / iterations;
-            allocation = Math.max(allocation, allocated);
+            quietest = Math.min(quietest, allocated);
+            loudest = Math.max(loudest, allocated);
         }
         Arrays.sort(nanos);
         System.out.println("ACCOUNTING_READ name=" + name + " iterations=" + iterations + " medianNs=" + nanos[2]
-                + " maxAllocatedBytes=" + allocation + " retained=" + value.ramBytesUsed());
-        if (check) assertEquals(name + " reporting allocated bytes", 0, allocation);
+                + " minAllocatedBytes=" + quietest + " maxAllocatedBytes=" + loudest
+                + " samplerBytes=" + overhead + " retained=" + value.ramBytesUsed());
+        // A per-call allocation shows up in every sample; a one-off JIT transition (recompiling
+        // the loop after its call site turns megamorphic) can land in one. Judge the steady state.
+        if (check) assertEquals(name + " steady-state reporting allocated bytes", 0, quietest);
     }
 
     private static long readMany(int iterations) {

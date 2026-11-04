@@ -85,7 +85,9 @@ is exact on JDK 15 and later; on earlier releases the report must not exceed the
 measurement and may fall short by at most 8 bytes per counted object.
 
 The cost regression asserts that repeated built-in graph, PQ, byte-sequence, and slice
-memory reads allocate zero bytes after warmup. It prints diagnostic timing and graph-load
+memory reads allocate zero bytes after warmup, net of the allocation counter's own cost
+(JDK 11 allocates per read) and judged by the quietest of five samples, so a one-off JIT
+recompilation of the measuring loop does not count. It prints diagnostic timing and graph-load
 allocation measurements without timing thresholds. Its optional `main` accepts an
 iteration count for longer exercises. Timings include loop, dispatch, and volatile receiver overhead; they
 are not graph-query throughput benchmarks. Temporary agents, logs, and index files are
