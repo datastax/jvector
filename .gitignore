@@ -14,6 +14,7 @@ dataset_
 pq_cache/
 index_cache/
 dataset_cache/
+ivf_cache/
 
 ### Data catalogs
 jvector-examples/yaml-configs/dataset-catalogs/*.yaml

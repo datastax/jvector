@@ -63,6 +63,21 @@ search:
 Each construction point builds into `<ssdPaths[i]>/<dataset>/nlist<N>-sf<F>/`. Unknown fields and
 invalid values are rejected with the file and field named.
 
+The machine-specific settings can be overridden on the command line, so the same dataset files
+serve every machine:
+
+| Property | Replaces |
+|---|---|
+| `-Divf.ssdPaths=/mnt/nvme/ivf_cache` | `construction.ssdPaths` (comma-separated) |
+| `-Divf.buildThreads=16` | `construction.buildThreads` |
+| `-Divf.searchThreads=1,16,48` | `search.searchThreads` (comma-separated) |
+
+Each applied override is printed. Through Maven, pass them in `-Dbench.jvm.args`.
+
+`yaml-configs/ivf-experiments/` holds one-off experiment configs, such as
+`cap-1M-calibration.yml`, the sweep the per-dataset files are set from. Pass one to `BenchIvfYAML`
+by path.
+
 `BenchIvfYAML` also reads `jvector-examples/yaml-configs/run-config.yml`, the same file `BenchYAML`
 uses, for what to compute, show and log. `AutoBenchIvfYAML`, like `AutoBenchYAML`, always computes
 average QPS, mean latency and recall.

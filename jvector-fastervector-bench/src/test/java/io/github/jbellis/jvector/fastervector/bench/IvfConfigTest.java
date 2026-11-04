@@ -132,6 +132,48 @@ class IvfConfigTest {
         assertInvalid(VALID.substring(0, VALID.indexOf("search:")), "search");
     }
 
+    @Test
+    void machineSettingsCanBeOverridden() throws IOException {
+        IvfConfig config = IvfConfig.getConfig(write(VALID).toString());
+        var props = new java.util.Properties();
+        props.setProperty("ivf.ssdPaths", " /nvme/a , /nvme/b ");
+        props.setProperty("ivf.buildThreads", "48");
+        props.setProperty("ivf.searchThreads", "1,16, 48");
+        config.applyOverrides(props);
+        assertEquals(List.of(Path.of("/nvme/a"), Path.of("/nvme/b")), config.ssdPaths());
+        assertEquals(48, config.construction.buildThreads);
+        assertEquals(List.of(1, 16, 48), config.search.searchThreads);
+        // Dataset settings are untouched
+        assertEquals(List.of(256, 1024), config.construction.nlist);
+    }
+
+    @Test
+    void blankOverridesAreIgnoredAndBadOnesRejected() throws IOException {
+        IvfConfig config = IvfConfig.getConfig(write(VALID).toString());
+        var blank = new java.util.Properties();
+        blank.setProperty("ivf.searchThreads", " ");
+        config.applyOverrides(blank);
+        assertEquals(List.of(1, 4), config.search.searchThreads);
+
+        var bad = new java.util.Properties();
+        bad.setProperty("ivf.buildThreads", "lots");
+        var e = assertThrows(IllegalArgumentException.class, () -> config.applyOverrides(bad));
+        assertTrue(e.getMessage().contains("ivf.buildThreads"), e.getMessage());
+    }
+
+    @Test
+    void overridesApplyWhenLoadingAndAreValidated() throws IOException {
+        Path file = write(VALID);
+        System.setProperty("ivf.searchThreads", "0");
+        try {
+            assertThrows(IllegalArgumentException.class, () -> IvfConfig.getConfig(file.toString()));
+            System.setProperty("ivf.searchThreads", "32");
+            assertEquals(List.of(32), IvfConfig.getConfig(file.toString()).search.searchThreads);
+        } finally {
+            System.clearProperty("ivf.searchThreads");
+        }
+    }
+
     private void assertInvalid(String yaml, String expectedInMessage) throws IOException {
         Path file = write(yaml);
         var e = assertThrows(IllegalArgumentException.class, () -> IvfConfig.getConfig(file.toString()));

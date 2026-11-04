@@ -114,8 +114,57 @@ public class IvfConfig {
         if (config == null) {
             throw new IllegalArgumentException("Empty config: " + configFile.getAbsolutePath());
         }
+        config.applyOverrides(System.getProperties());
         config.validate(configFile.getAbsolutePath());
         return config;
+    }
+
+    /** Machine-specific settings, overridable on the command line so one set of dataset files serves every machine. */
+    static final String SSD_PATHS_PROPERTY = "ivf.ssdPaths";
+    static final String BUILD_THREADS_PROPERTY = "ivf.buildThreads";
+    static final String SEARCH_THREADS_PROPERTY = "ivf.searchThreads";
+
+    /**
+     * Replaces the machine-specific settings with any of these properties that are set:
+     * {@code ivf.ssdPaths} (comma-separated), {@code ivf.buildThreads}, {@code ivf.searchThreads}
+     * (comma-separated). Blank values are ignored.
+     */
+    void applyOverrides(java.util.Properties props) {
+        if (construction == null || search == null) {
+            return;   // validate() reports the missing section
+        }
+        String ssdPaths = props.getProperty(SSD_PATHS_PROPERTY);
+        if (ssdPaths != null && !ssdPaths.isBlank()) {
+            construction.ssdPaths = splitList(ssdPaths);
+            System.out.println("Override " + SSD_PATHS_PROPERTY + ": " + construction.ssdPaths);
+        }
+        String buildThreads = props.getProperty(BUILD_THREADS_PROPERTY);
+        if (buildThreads != null && !buildThreads.isBlank()) {
+            construction.buildThreads = parseInt(BUILD_THREADS_PROPERTY, buildThreads.trim());
+            System.out.println("Override " + BUILD_THREADS_PROPERTY + ": " + construction.buildThreads);
+        }
+        String searchThreads = props.getProperty(SEARCH_THREADS_PROPERTY);
+        if (searchThreads != null && !searchThreads.isBlank()) {
+            search.searchThreads = splitList(searchThreads).stream()
+                    .map(s -> parseInt(SEARCH_THREADS_PROPERTY, s))
+                    .toList();
+            System.out.println("Override " + SEARCH_THREADS_PROPERTY + ": " + search.searchThreads);
+        }
+    }
+
+    private static List<String> splitList(String value) {
+        return java.util.Arrays.stream(value.split(","))
+                .map(String::trim)
+                .filter(s -> !s.isEmpty())
+                .toList();
+    }
+
+    private static int parseInt(String property, String value) {
+        try {
+            return Integer.parseInt(value);
+        } catch (NumberFormatException e) {
+            throw new IllegalArgumentException("-D" + property + " must be an integer, got '" + value + "'");
+        }
     }
 
     void validate(String source) {
