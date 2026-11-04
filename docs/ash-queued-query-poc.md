@@ -164,8 +164,9 @@ preparation is local and has not been applied as production instrumentation.
 
 The follow-up patch keeps the preparation and first-search execution path the
 same for singleton and full-batch traffic. `QueuedQueryExecution` uses
-`prepareBatch` for all group sizes; the backend still selects its single-vector
-kernel for count 1. `BatchingExecutor` publishes searches 2..N and runs the first
+`prepareBatch` for all group sizes. The latest review correction makes
+`ASHQueryPreparer` select direct preparation for count 1 on every backend,
+including native FP32. Larger groups use the backend's batch projection. `BatchingExecutor` publishes searches 2..N and runs the first
 locally. Asynchronous submission remains asynchronous, and the CPU budget,
 precision, admission policy, graph state and search parameters are unchanged.
 
@@ -174,6 +175,11 @@ finished its query benchmarks. Previously that reporting calculation could
 trigger compilation that continued into the subsequent latency measurement.
 This correction preserves every query, latency sample and reporting statistic.
 It affects the new queued mode, not the existing direct-mode warmup policy.
+
+Deferral removes an observed trigger for compilation interference; it does not
+guarantee that compilation will stay out of timed work. Both direct and queued
+execution can still experience late compilation. No compilation-quiescence gate,
+different warmup queries, or new compiler flags are introduced by this patch.
 
 The six-point request trace, JFR and CPU-0 scheduler recording showed that the
 largest stalls were runnable worker CPU waits while C2 compiled code. One
@@ -215,3 +221,90 @@ Evidence is retained under the development server's `tail-profile` directory:
 The broader executor changes discussed in review, including removal of the slot
 pool, short-lived drain tasks, callback failure policy and a CPU-budgeted
 synchronous caller fast path, are not part of this focused patch.
+
+
+## Review corrections and matched direct comparison
+
+The review correction routes a one-row `ASHQueryPreparer.prepareBatch` call to
+`prepare` after checking the array bounds. Validation still precedes state
+invalidation. Every projection provider therefore uses its direct kernel without
+batch row-reference staging; larger groups retain batched preparation. A dispatch
+test wraps a backend without its own count-1 shortcut to verify this behavior.
+
+Deferred reports now belong to a local list in one `QueryTester.run` invocation,
+not to `ConfiguredSystem`. Standalone throughput calls return their supplementary
+metrics immediately. Before an execution closes, it transfers ownership of its
+completed response buffer and snapshots the histogram. The later report owns
+only those samples, without retaining or reading the closed executor. Transfer
+does not copy the large sample buffer; its existing sort/copy is deferred until
+reporting. Failed measurements discard that invocation's pending reports.
+
+The source compiled successfully and passed 38 focused tests in each of four
+combinations: JDK 22 and JDK 25, each using native default query precision and
+explicit FP32. The tests cover one-row dispatch and validation, prepared states,
+graph searches, queue behavior, caller combining, worker lifetime, reporting
+order, failure cleanup, standalone reporting, legacy benchmark compatibility,
+and reporting a completed snapshot after executor closure. Native kernels,
+training, encoding, graph layout and visited-set behavior are unchanged.
+
+The fresh performance comparison uses ordinary BenchYAML on JDK 22, MPNet 1M,
+2-bit ASH, one physical core (CPU 0), NUMA node 0, and the same cached index.
+The existing benchmark warmups, queries, timers, latency endpoints and recall
+checks are unchanged. Direct throughput uses four synchronous caller threads;
+queued throughput uses one execution worker, maximum batch 8 and admission 8.
+Both are restricted to the same CPU. Unloaded latency submits one query at a
+time. Three fresh JVMs per arm ran sequentially in D/Q/Q/D/D/Q order, with idle
+checks before each launch and without profiling. The historical single-JVM
+direct reference is not used in this matched table.
+
+| Overquery | Direct QPS, mean +/- SD | Queued QPS, mean +/- SD | Direct unloaded mean +/- SD (us) | Queued unloaded mean +/- SD (us) | Direct unloaded p99.9, median [range] ms | Queued unloaded p99.9, median [range] ms | Recall@10, both |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| 1x | 12725.60 +/- 52.65 | 13469.67 +/- 23.27 | 78.34 +/- 0.20 | 83.91 +/- 0.24 | 0.140633 [0.134897, 0.141831] | 0.242624 [0.241883, 0.290886] | 0.82012 |
+| 2x | 9664.89 +/- 31.14 | 10167.81 +/- 120.36 | 102.20 +/- 0.21 | 105.70 +/- 0.80 | 0.175723 [0.174020, 0.182396] | 0.172512 [0.170874, 0.174481] | 0.93911 |
+
+Means and sample standard deviations describe the three per-JVM measurements.
+Tail values are medians and ranges of per-JVM percentiles, not pooled percentiles.
+
+Queued bounded-backlog response measurements are reported separately:
+
+| Overquery | Loaded mean +/- SD (ms) | Loaded p95, median [range] ms | Loaded p99, median [range] ms | Mean batch size |
+| --- | ---: | ---: | ---: | ---: |
+| 1x | 0.664472 +/- 0.001166 | 0.732305 [0.731926, 0.736801] | 0.778456 [0.773166, 0.779190] | 8.0000 |
+| 2x | 0.882424 +/- 0.010087 | 0.974059 [0.958689, 0.974725] | 1.019129 [1.002839, 1.020753] | 7.9996 |
+
+At 1x, queued QPS is 5.85% higher and unloaded mean latency is 5.58 us higher.
+At 2x, queued QPS is 5.20% higher and unloaded mean latency is 3.49 us higher.
+
+This establishes the remaining unloaded cost under a matched protocol. It does
+not identify the fraction due to thread handoffs, compilation or other work,
+nor show that a synchronous caller fast path would eliminate the entire gap.
+Loaded response samples end on the worker before completion delivery; unloaded
+latency includes return to the caller. The loaded experiment measures bounded
+backlog, not a controlled arrival-rate or Poisson latency curve.
+
+Reproducibility: the measured Java changes are recorded in
+`tail-profile/review-readiness/manifest.json` and `review-fixes.patch`, based on
+`46dc0543`. The YAML templates retain a legacy descriptive `jvectorRef` label;
+the checked source hashes, rather than that inherited label, identify this run.
+The measurements use the normally compiled repository classes, with no overlay
+classpath, diagnostic timestamps or custom query harness.
+
+Evidence under the same development-server experiment root:
+
+```text
+tail-profile/review-readiness/
+  validation-passed.json
+  validation-commands.json
+  tests-jdk22-auto.log
+  tests-jdk22-fp32.log
+  tests-jdk25-auto.log
+  tests-jdk25-fp32.log
+  benchmark-driver.log
+  matched-1.log ... matched-6.log
+  matched-summary.json
+cases/*-rreview-matched-*/
+  command.json
+  placement.jsonl
+  summary.json
+  logging/*/experiments.csv
+```
