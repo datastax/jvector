@@ -1,0 +1,21 @@
+# Used by standalone BenchYAML via -Djvector.bench.runConfig=<this file>.
+yamlSchemaVersion: 1
+onDiskIndexVersion: 7
+queryExecution:
+  mode: direct
+benchmarks:
+  accuracy: [recall]
+console:
+  benchmarks:
+    accuracy: [recall]
+  metrics:
+    construction: [index_build_time_s, index_quant_time_s, search_quant_time_s]
+logging:
+  dir: logging
+  jvectorRef: ash-dev
+  runId: ash-pq-construction-{ts}
+  type: csv
+  benchmarks:
+    accuracy: [recall]
+  metrics:
+    construction: [index_build_time_s, index_quant_time_s, search_quant_time_s]
