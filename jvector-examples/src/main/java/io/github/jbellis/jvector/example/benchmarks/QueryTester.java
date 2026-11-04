@@ -94,6 +94,9 @@ public class QueryTester {
                 results.addAll(metrics);
             }
 
+            // Fold/sort queued response samples only after all query measurements.
+            cs.appendDeferredQueryMetrics(results);
+
             // Capture memory and disk usage after running queries
             diagnostics.capturePostPhaseSnapshot("Query");
 
@@ -129,6 +132,8 @@ public class QueryTester {
 
         } catch (IOException e) {
             throw new RuntimeException(e);
+        } finally {
+            cs.discardDeferredQueryMetrics();
         }
         return results;
     }
