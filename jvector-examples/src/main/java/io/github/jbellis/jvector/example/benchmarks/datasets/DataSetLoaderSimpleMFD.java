@@ -459,8 +459,9 @@ public class DataSetLoaderSimpleMFD implements DataSetLoader {
                     throw new IllegalArgumentException("Buffered loading is not supported for int8 datasets: " + dataSetName);
                 var bvsf = ByteVectorSimilarityFunction.valueOf(
                         props.similarityFunction().orElseThrow().name());
-                var baseVectors = SiftLoader.readBvecs(effectiveCacheDir.resolve(baseFile).toString());
-                var queryVectors = SiftLoader.readBvecs(effectiveCacheDir.resolve(queryFile).toString());
+                // is_int8 means signed int8 payloads; unsigned uint8 .bvecs files (e.g. SIFT1B/BIGANN) are not supported
+                var baseVectors = SiftLoader.readInt8Bvecs(effectiveCacheDir.resolve(baseFile).toString());
+                var queryVectors = SiftLoader.readInt8Bvecs(effectiveCacheDir.resolve(queryFile).toString());
                 return new ByteSimpleDataSet(dataSetName, bvsf, baseVectors, queryVectors, gtVectors);
             }
             var queryVectors = SiftLoader.readFvecs(effectiveCacheDir.resolve(queryFile).toString());
