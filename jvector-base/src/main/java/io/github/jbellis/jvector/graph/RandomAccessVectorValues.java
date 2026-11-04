@@ -50,6 +50,21 @@ public interface RandomAccessVectorValues extends VectorValues<VectorFloat<?>> {
     @Override
     int size();
 
+    /**
+     * Return the vector value indexed at the given ordinal.
+     * <p>
+     * Redeclared here (rather than only inherited from {@link VectorValues}) so that the method keeps its
+     * {@code VectorFloat<?> getVector(int)} binary signature; the generic inherited declaration erases to
+     * {@code Object getVector(int)}, which would break previously compiled callers and implementations.
+     * <p>
+     * For performance, implementations are free to re-use the same object across invocations.
+     * If you need to retain the value across calls, make a copy.
+     *
+     * @param nodeId a valid ordinal, &ge; 0 and &lt; {@link #size()}.
+     */
+    @Override
+    VectorFloat<?> getVector(int nodeId);
+
     @Deprecated
     default VectorFloat<?> vectorValue(int targetOrd) {
         return getVector(targetOrd);
