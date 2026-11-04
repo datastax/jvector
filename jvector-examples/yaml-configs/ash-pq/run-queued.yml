@@ -1,0 +1,30 @@
+# Used by standalone BenchYAML via -Djvector.bench.runConfig=<this file>.
+yamlSchemaVersion: 1
+onDiskIndexVersion: 7
+queryExecution:
+  mode: queued
+benchmarks:
+  throughput: [AVG]
+  latency: [AVG, STD, P999]
+  accuracy: [recall]
+  count: [visited]
+console:
+  benchmarks:
+    throughput: [AVG]
+    latency: [AVG, STD, P999]
+    accuracy: [recall]
+    count: [visited]
+  metrics:
+    execution: [response_mean_ms, response_p95_ms, response_p99_ms, mean_batch_size]
+logging:
+  dir: logging
+  jvectorRef: ash-dev
+  runId: ash-pq-queued-{ts}
+  type: csv
+  benchmarks:
+    throughput: [AVG]
+    latency: [AVG, STD, P999]
+    accuracy: [recall]
+    count: [visited]
+  metrics:
+    execution: [response_mean_ms, response_p95_ms, response_p99_ms, mean_batch_size]

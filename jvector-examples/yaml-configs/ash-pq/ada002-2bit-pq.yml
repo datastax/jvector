@@ -1,0 +1,38 @@
+# ada002-1M: 1536 input dimensions, 197 code bytes per vector.
+# The 2-bit label describes the ASH budget; PQ uses 197 8-bit subspaces.
+# ASH uses C=1 and D/2 projected dimensions, including its five-byte header.
+# See docs/ash-pq-benchmark.md for construction, direct and queued run commands.
+yamlSchemaVersion: 2
+onDiskIndexVersion: 7
+dataset: ada002-1M
+
+construction:
+  outDegree: [32]
+  efConstruction: [100]
+  neighborOverflow: [1.2f]
+  addHierarchy: [Yes]
+  refineFinalGraph: [Yes]
+  fusedGraph: [Yes]
+  compression:
+    - type: PQ
+      parameters:
+        m: 197
+        k: 256
+        centerData: "No"
+        anisotropicThreshold: -1.0
+  reranking: [NVQ]
+  # A fresh case directory measures training/encoding/construction. Later JVMs
+  # in that directory reuse exactly the same model and index for querying.
+  useSavedIndexIfExists: Yes
+
+search:
+  topKOverquery:
+    10: [1.0, 2.0]
+  useSearchPruning: [No]
+  compression:
+    - type: PQ
+      parameters:
+        m: 197
+        k: 256
+        centerData: "No"
+        anisotropicThreshold: -1.0

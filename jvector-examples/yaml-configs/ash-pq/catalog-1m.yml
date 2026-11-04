@@ -1,0 +1,22 @@
+# Local mapping for the exact normalized benchmark inputs. Obtain the datasets
+# separately, then point JVECTOR_BENCH_DATA_DIR at the directory containing these
+# files/subdirectories. No private machine path or download credentials belong here.
+_defaults:
+  cache_dir: ${JVECTOR_BENCH_DATA_DIR}
+
+mpnet-1m:
+  base: mpnet-1m/wiki_mpnet_embeddings_base_999812.fvecs
+  query: mpnet-1m/wiki_mpnet_embeddings_query_10000.fvecs
+  gt: mpnet-1m/wiki_mpnet_embeddings_gt_ip_100.ivecs
+cohere-english-v3-1M:
+  base: cohere-1m/cohere_wiki_en_flat_base_1m_norm.fvecs
+  query: cohere-1m/cohere_wiki_en_flat_query_10k_norm.fvecs
+  gt: cohere-1m/cohere_wiki_en_flat_gt_1m_ip_k100.ivecs
+ada002-1M:
+  base: ada_002_1M_base_982790.fvecs
+  query: ada_002_1M_query_10000.fvecs
+  gt: ada_002_1M_gt_ip_100.ivecs
+openai-3072-1m:
+  base: openai-3072-1m/dbpedia_openai_3_large_3072_base_999000.fvecs
+  query: openai-3072-1m/dbpedia_openai_3_large_3072_query_1000.fvecs
+  gt: openai-3072-1m/dbpedia_openai_3_large_3072_gt_ip_100.ivecs
