@@ -223,3 +223,22 @@ it does not guarantee that the JVM will never compile during a timed phase.
 There is no compiler-quiescence gate or special warmup of measured query inputs.
 Hardware, OS scheduling and parallel graph construction cause run variation;
 reproduction means the same protocol and comparable distributions.
+
+## Unloaded-latency warmup correction
+
+Unloaded latency has its own warmup through the same single-request execution
+path used by measurement. Throughput's batched warmup alone does not exercise
+the synchronous queue handoff/completion path. Before timing, both direct and
+queued modes run three complete random-query warmup passes, each for at least
+three seconds. The query buffer is reused after each synchronous completion;
+measured dataset queries are not used for warmup. The scoring operation and
+timed latency interval are unchanged. No compiler-quietness gate is used.
+
+An ASH JFR profile identified compilation of the single-request completion,
+queue and FP16 projection paths during the original latency measurement.
+Old query results from that protocol must be identified separately. Since the
+first-overquery latency phase precedes the next overquery's throughput phase,
+corrected comparisons repeat the full query JVM, rather than replacing only
+a latency cell. Construction results remain applicable when all construction
+classes and native libraries are verified unchanged. Retain the source and
+artifact provenance for each construction and query invocation.
