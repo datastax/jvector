@@ -119,6 +119,53 @@ public class TestPreparedASHQuery {
         assertEquals(original, first.queryVector().get(0), 0f);
     }
 
+
+    @Test
+    public void oneRowUsesDirectProjectionEvenWhenBackendHasNoSingleRowShortcut() throws Exception {
+        var values = inputs(17);
+        var ash = model(values, 2);
+        var preparer = new ASHQueryPreparer(ash);
+        preparer.supportsBatchPreparation(); // Initialize the immutable query view.
+        var field = AsymmetricHashing.StiefelTransform.class.getDeclaredField("queryProjection");
+        field.setAccessible(true);
+        var original = (io.github.jbellis.jvector.vector.VectorUtilSupport.AshProjection) field.get(ash.stiefelTransform);
+        int[] calls = new int[2];
+        var wrapper = new io.github.jbellis.jvector.vector.VectorUtilSupport.AshProjection() {
+            public void project(float[] input, float[] output) {
+                calls[0]++;
+                original.project(input, output);
+            }
+            public boolean supportsBatchProjection() { return true; }
+            public void projectBatch(float[][] input, float[][] output, int count) {
+                assertTrue("One-row requests must not enter backend batching", count > 1);
+                calls[1]++;
+                original.projectBatch(input, output, count);
+            }
+            public long ramBytesUsed() { return original.ramBytesUsed(); }
+        };
+        var first = preparer.newState();
+        var second = preparer.newState();
+        field.set(ash.stiefelTransform, wrapper);
+        try {
+            preparer.prepareBatch(values, new PreparedQuery[]{first}, 0);
+            assertArrayEquals(new int[]{0, 0}, calls);
+            preparer.prepareBatch(values, new PreparedQuery[]{first}, 1);
+            assertArrayEquals(new int[]{1, 0}, calls);
+            var snapshot = ASHQueryPreparer.state(ash, first, true).prepared.qProj.clone();
+            long generation = ASHQueryPreparer.state(ash, first, true).generation;
+            var bad = VectorizationProvider.getInstance().getVectorTypeSupport().createFloatVector(63);
+            assertThrows(IllegalArgumentException.class,
+                    () -> preparer.prepareBatch(new VectorFloat<?>[]{bad}, new PreparedQuery[]{first}, 1));
+            assertEquals(generation, ASHQueryPreparer.state(ash, first, true).generation);
+            assertArrayEquals(snapshot, ASHQueryPreparer.state(ash, first, true).prepared.qProj, 0f);
+            assertArrayEquals(new int[]{1, 0}, calls);
+            preparer.prepareBatch(values, new PreparedQuery[]{first, second}, 2);
+            assertArrayEquals(new int[]{1, 1}, calls);
+        } finally {
+            field.set(ash.stiefelTransform, original);
+        }
+    }
+
     @Test(timeout=30000)
     public void distinctStatesCanBePreparedAndHandedOffAcrossThreads() throws Exception {
         var values = inputs(97);
