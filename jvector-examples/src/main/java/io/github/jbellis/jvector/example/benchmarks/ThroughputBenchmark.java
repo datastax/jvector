@@ -29,6 +29,9 @@ import java.io.IOException;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
+import java.util.Objects;
+import java.util.function.Consumer;
+import java.util.function.Supplier;
 import java.util.concurrent.ThreadLocalRandom;
 import java.util.concurrent.atomic.LongAdder;
 import java.util.stream.IntStream;
@@ -135,19 +138,33 @@ public class ThroughputBenchmark extends AbstractQueryBenchmark {
             boolean usePruning,
             int queryRuns) {
 
-        if (cs.usesQueuedExecution()) return runConfiguredBenchmark(cs, topK, rerankK, usePruning, queryRuns);
+        return runWithReporting(cs, topK, rerankK, usePruning, queryRuns, null);
+    }
+
+    @Override
+    public List<Metric> runBenchmark(
+            ConfiguredSystem cs, int topK, int rerankK, boolean usePruning,
+            int queryRuns, Consumer<Supplier<List<Metric>>> deferredReports) {
+        return runWithReporting(cs, topK, rerankK, usePruning, queryRuns,
+                Objects.requireNonNull(deferredReports, "deferredReports"));
+    }
+
+    private List<Metric> runWithReporting(
+            ConfiguredSystem cs, int topK, int rerankK, boolean usePruning,
+            int queryRuns, Consumer<Supplier<List<Metric>>> deferredReports) {
+        if (cs.usesQueuedExecution()) return runConfiguredBenchmark(cs, topK, rerankK, usePruning, queryRuns, deferredReports);
         int threads = Integer.getInteger("jvector.bench.queryThreads", 0);
         if (threads < 0) throw new IllegalArgumentException("queryThreads must be nonnegative");
         System.out.printf("QUERY_CONCURRENCY threads=%s%n", threads == 0 ? "common-pool" : threads);
         if (threads > 1) {
             var pool = new java.util.concurrent.ForkJoinPool(threads);
             try {
-                return pool.submit(() -> runConfiguredBenchmark(cs, topK, rerankK, usePruning, queryRuns)).join();
+                return pool.submit(() -> runConfiguredBenchmark(cs, topK, rerankK, usePruning, queryRuns, deferredReports)).join();
             } finally {
                 pool.shutdown();
             }
         }
-        return runConfiguredBenchmark(cs, topK, rerankK, usePruning, queryRuns);
+        return runConfiguredBenchmark(cs, topK, rerankK, usePruning, queryRuns, deferredReports);
     }
 
     private VectorFloat<?> randomQuery(int dim) {
@@ -163,7 +180,8 @@ public class ThroughputBenchmark extends AbstractQueryBenchmark {
     }
 
     private List<Metric> runConfiguredBenchmark(ConfiguredSystem cs, int topK, int rerankK,
-                                                boolean usePruning, int queryRuns) {
+                                                boolean usePruning, int queryRuns,
+                                                Consumer<Supplier<List<Metric>>> deferredReports) {
 
         if (!(computeAvgQps || computeMedianQps || computeMaxQps)) {
             throw new RuntimeException("At least one metric must be displayed");
@@ -350,7 +368,11 @@ public class ThroughputBenchmark extends AbstractQueryBenchmark {
                         formatMaxQps,
                         minQps));
             }
-            if (queued != null) cs.deferQueryMetrics(queued::measuredMetrics);
+            if (queued != null) {
+                var samples = queued.finishMeasurements();
+                if (deferredReports == null) list.addAll(samples.metrics());
+                else deferredReports.accept(samples::metrics);
+            }
             return list;
         }
         catch (IOException e) {

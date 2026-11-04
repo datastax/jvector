@@ -19,6 +19,8 @@ package io.github.jbellis.jvector.example.benchmarks;
 import io.github.jbellis.jvector.example.Grid.ConfiguredSystem;
 
 import java.util.List;
+import java.util.function.Consumer;
+import java.util.function.Supplier;
 
 /**
  * A common interface for all search benchmarks.
@@ -33,6 +35,19 @@ public interface QueryBenchmark {
             boolean usePruning,
             int queryRuns
     );
+
+    /**
+     * Runs within a query-measurement group. The reporter belongs only to this
+     * invocation and must not be retained after this method returns. Suppliers
+     * must own completed samples, independently of any closed execution object.
+     * QueryTester evaluates them after all measurements in the group succeed.
+     * The original overload remains responsible for immediate standalone reports.
+     */
+    default List<Metric> runBenchmark(
+            ConfiguredSystem cs, int topK, int rerankK, boolean usePruning,
+            int queryRuns, Consumer<Supplier<List<Metric>>> deferredReports) {
+        return runBenchmark(cs, topK, rerankK, usePruning, queryRuns);
+    }
 }
 
 
