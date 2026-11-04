@@ -207,6 +207,20 @@ public final class ASHScorer {
         final int bitsPerDimension = ash.bitsPerDimension;
         final var backend = VectorizationProvider.getInstance().getVectorUtilSupport();
 
+        if (simd && "native".equalsIgnoreCase(
+                System.getProperty("jvector.vectorization_provider", "").trim())) {
+            backend.requireNativeAshSingleScoring(bitsPerDimension);
+        }
+        // The native two-bit kernel consumes a nibble LUT, prepared once per scorer.
+        // Keep it query-owned: prepared scorers may outlive this thread or run concurrently.
+        if (simd && bitsPerDimension == 2 && backend.supportsNativeAshCanonicalLutScoring()) {
+            final int groups = FusedASHLayout.codeGroups(d, bitsPerDimension);
+            final float[] lut = new float[Math.multiplyExact(groups, 16)];
+            FusedASHLayout.buildQueryLut(qp.qProj, d, bitsPerDimension, lut);
+            return v -> v.scale * backend.ashCanonicalLutDot(v.extraBits, groups, lut)
+                    + qp.dotQMuByLandmark[v.landmark & 255] + v.offset;
+        }
+
         // Keep tuning dispatch out of the per-vector default kernel. Its compact
         // compilation shape matters for end-to-end scoring throughput on HotSpot.
         if (simd && backend.usesAshProjectionTuning()) {

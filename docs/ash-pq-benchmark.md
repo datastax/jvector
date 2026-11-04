@@ -86,6 +86,13 @@ matched code budget. PQ uses that many 8-bit subspaces, 256 centroids, no
 centering, and the default non-anisotropic training setting. The 2-bit/4-bit
 labels describe the ASH cases, not PQ centroid precision.
 
+Native single scoring uses the existing canonical nibble-LUT kernel for b=2
+and the projection-code kernel for b=4. The b=2 LUT is prepared once per scorer,
+with query-owned storage; it is not rebuilt for each candidate. Explicit native
+selection rejects a missing required single-scoring symbol rather than silently
+using the Java projection-code fallback. Fused neighborhood scoring and the
+queued query batcher keep their existing native paths.
+
 Both algorithms use fused graph features, NVQ reranking, degree 32,
 `efConstruction=100`, neighbor overflow 1.2, hierarchy and final refinement,
 and top 10 at overquery 1 and 2. Native/oneDNN selection uses production defaults:
@@ -146,6 +153,23 @@ timer. For a host with the reference CPU/node numbering:
 python3 jvector-examples/run-ash-pq-study.py \
   --data "$JVECTOR_BENCH_DATA_DIR" --output /data/jvector-bench/full-study
 ```
+
+To collect only the production ASH query batcher, without collecting PQ or
+synchronous ASH controls, select `--algorithms ash --query-modes queued`.
+A quick complete four-dataset pass uses one fresh build and one query JVM per
+CPU budget for each case:
+
+```bash
+python3 jvector-examples/run-ash-pq-study.py \
+  --data "$JVECTOR_BENCH_DATA_DIR" --output /data/jvector-bench/ash-one-pass \
+  --algorithms ash --query-modes queued \
+  --build-repetitions 1 --query-repetitions 1
+```
+
+This is eight fresh builds and sixteen query JVMs. Each query JVM reports both
+overquery levels. Report these as single measurements, without a sample SD.
+The selections only filter standalone invocations; the BenchYAML timing and
+scoring paths are unchanged. Omit the selectors to retain the full original plan.
 
 Use `--plan-only` to inspect the full job list. CPU/node arguments are listed by
 `--help` for hosts with different topology. `plan.json` fixes the commit, artifact
