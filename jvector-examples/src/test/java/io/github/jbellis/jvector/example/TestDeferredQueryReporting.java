@@ -15,55 +15,150 @@
  */
 package io.github.jbellis.jvector.example;
 
-import io.github.jbellis.jvector.example.benchmarks.*;
+import io.github.jbellis.jvector.example.benchmarks.Metric;
+import io.github.jbellis.jvector.example.benchmarks.QueryBenchmark;
+import io.github.jbellis.jvector.example.benchmarks.QueryTester;
+import io.github.jbellis.jvector.example.benchmarks.QueuedQueryExecution;
 import io.github.jbellis.jvector.example.benchmarks.datasets.SimpleDataSet;
 import io.github.jbellis.jvector.vector.VectorSimilarityFunction;
 import io.github.jbellis.jvector.vector.VectorizationProvider;
 import org.junit.Test;
-import java.util.*;
-import java.util.function.Function;
+
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Set;
+import java.util.function.BiFunction;
+import java.util.function.Consumer;
+import java.util.function.Supplier;
+
 import static org.junit.Assert.*;
 
+/** Reporting belongs to one measurement invocation and owns completed samples. */
 public class TestDeferredQueryReporting {
     private Grid.ConfiguredSystem system() {
-        var v = VectorizationProvider.getInstance().getVectorTypeSupport().createFloatVector(new float[]{1});
-        return new Grid.ConfiguredSystem(new SimpleDataSet("deferred-report", VectorSimilarityFunction.DOT_PRODUCT,
-                List.of(v), List.of(v), List.of(List.of(0))), null, null, Set.of());
+        var vector = VectorizationProvider.getInstance().getVectorTypeSupport()
+                .createFloatVector(new float[]{1});
+        var data = new SimpleDataSet("deferred-report", VectorSimilarityFunction.DOT_PRODUCT,
+                List.of(vector), List.of(vector), List.of(List.of(0)));
+        return new Grid.ConfiguredSystem(data, null, null, Set.of()) {
+            @Override public int queryWorkerCount() { return 1; }
+        };
     }
-    private QueryBenchmark probe(String name, Function<Grid.ConfiguredSystem,List<Metric>> operation) {
+
+    private QueryBenchmark probe(String name,
+            BiFunction<Grid.ConfiguredSystem, Consumer<Supplier<List<Metric>>>, List<Metric>> operation) {
         return new QueryBenchmark() {
             public String getBenchmarkName() { return name; }
-            public List<Metric> runBenchmark(Grid.ConfiguredSystem cs, int k, int r, boolean p, int runs) {
-                return operation.apply(cs);
+
+            public List<Metric> runBenchmark(Grid.ConfiguredSystem cs, int k, int r,
+                    boolean pruning, int runs) {
+                var reports = new ArrayList<Supplier<List<Metric>>>();
+                var result = new ArrayList<>(operation.apply(cs, reports::add));
+                for (var report : reports) result.addAll(report.get());
+                return result;
+            }
+
+            public List<Metric> runBenchmark(Grid.ConfiguredSystem cs, int k, int r,
+                    boolean pruning, int runs, Consumer<Supplier<List<Metric>>> reports) {
+                return operation.apply(cs, reports);
             }
         };
     }
+
+    private static Metric report() {
+        return Metric.of("test.report", "report", ".1f", 7);
+    }
+
     @Test
     public void reportingRunsAfterEveryMeasurementAndRetainsItsValues() throws Exception {
         var order = new ArrayList<String>();
         try (var cs = system()) {
-            var producer = probe("throughput", c -> {
+            var producer = probe("throughput", (c, reports) -> {
                 order.add("throughput");
-                c.deferQueryMetrics(() -> { order.add("report"); return List.of(Metric.of("test.report", "report", ".1f", 7)); });
+                reports.accept(() -> { order.add("report"); return List.of(report()); });
                 return List.of();
             });
-            var latency = probe("latency", c -> { assertFalse(order.contains("report")); order.add("latency"); return List.of(); });
-            var accuracy = probe("accuracy", c -> { assertFalse(order.contains("report")); order.add("accuracy"); return List.of(); });
+            var latency = probe("latency", (c, reports) -> {
+                assertFalse(order.contains("report")); order.add("latency"); return List.of();
+            });
+            var accuracy = probe("accuracy", (c, reports) -> {
+                assertFalse(order.contains("report")); order.add("accuracy"); return List.of();
+            });
             var metrics = new QueryTester(List.of(producer, latency, accuracy)).run(cs, 1, 1, false, 1);
             assertEquals(List.of("throughput", "latency", "accuracy", "report"), order);
-            assertEquals(7, metrics.stream().filter(m -> m.getKey().equals("test.report")).findFirst().orElseThrow().getValue(), 0);
-            var later = new ArrayList<Metric>(); cs.appendDeferredQueryMetrics(later); assertTrue(later.isEmpty());
+            assertEquals(1, metrics.stream().filter(m -> m.getKey().equals("test.report")).count());
+            assertEquals(7, metrics.stream().filter(m -> m.getKey().equals("test.report"))
+                    .findFirst().orElseThrow().getValue(), 0);
+            assertTrue(new QueryTester(List.of()).run(cs, 1, 1, false, 1).stream()
+                    .noneMatch(m -> m.getKey().equals("test.report")));
         }
     }
+
     @Test
-    public void failedMeasurementDiscardsPendingReporting() throws Exception {
+    public void failedMeasurementCannotLeakReportingIntoTheNextInvocation() throws Exception {
         var order = new ArrayList<String>();
         try (var cs = system()) {
-            var producer = probe("throughput", c -> { c.deferQueryMetrics(() -> { order.add("report"); return List.of(); }); return List.of(); });
-            var failure = probe("latency", c -> { throw new IllegalStateException("measurement failed"); });
-            assertThrows(IllegalStateException.class, () -> new QueryTester(List.of(producer, failure)).run(cs, 1, 1, false, 1));
-            var later = new ArrayList<Metric>(); cs.appendDeferredQueryMetrics(later);
-            assertTrue(order.isEmpty()); assertTrue(later.isEmpty());
+            var producer = probe("throughput", (c, reports) -> {
+                reports.accept(() -> { order.add("report"); return List.of(report()); });
+                return List.of();
+            });
+            var failure = probe("latency", (c, reports) -> {
+                throw new IllegalStateException("measurement failed");
+            });
+            assertThrows(IllegalStateException.class,
+                    () -> new QueryTester(List.of(producer, failure)).run(cs, 1, 1, false, 1));
+            var later = new QueryTester(List.of()).run(cs, 1, 1, false, 1);
+            assertTrue(order.isEmpty());
+            assertTrue(later.stream().noneMatch(m -> m.getKey().equals("test.report")));
+        }
+    }
+
+    @Test
+    public void standaloneReportingDoesNotAttachStateToTheConfiguredSystem() throws Exception {
+        try (var cs = system()) {
+            var benchmark = probe("standalone", (c, reports) -> {
+                reports.accept(() -> List.of(report()));
+                return List.of();
+            });
+            assertEquals(1, benchmark.runBenchmark(cs, 1, 1, false, 1).size());
+            assertTrue(new QueryTester(List.of()).run(cs, 1, 1, false, 1).stream()
+                    .noneMatch(m -> m.getKey().equals("test.report")));
+        }
+    }
+
+    @Test
+    public void legacyBenchmarkOverloadStillRunsInQueryTester() throws Exception {
+        try (var cs = system()) {
+            var benchmark = new QueryBenchmark() {
+                public String getBenchmarkName() { return "legacy"; }
+                public List<Metric> runBenchmark(Grid.ConfiguredSystem system, int k, int r,
+                        boolean pruning, int runs) { return List.of(report()); }
+            };
+            assertTrue(new QueryTester(List.of(benchmark)).run(cs, 1, 1, false, 1).stream()
+                    .anyMatch(m -> m.getKey().equals("test.report")));
+        }
+    }
+
+    @Test
+    public void completedSnapshotSurvivesExecutorCloseAndCanOnlyBeTransferredOnce() throws Exception {
+        try (var cs = system()) {
+            QueuedQueryExecution.Measurements samples;
+            try (var queued = new QueuedQueryExecution(cs, 1, 1, false)) {
+                assertThrows(IllegalStateException.class, queued::finishMeasurements);
+                queued.beginMeasurements();
+                assertThrows(IllegalStateException.class, queued::beginMeasurements);
+                queued.runPass(0, i -> { throw new AssertionError("Empty pass fetched a query"); }, null, false);
+                samples = queued.finishMeasurements();
+                assertThrows(IllegalStateException.class, queued::finishMeasurements);
+                assertThrows(IllegalStateException.class, queued::beginMeasurements);
+            }
+            var first = samples.metrics();
+            var second = samples.metrics();
+            assertEquals(4, first.size());
+            for (int i = 0; i < first.size(); i++) {
+                assertEquals(0, first.get(i).getValue(), 0);
+                assertEquals(first.get(i).getValue(), second.get(i).getValue(), 0);
+            }
         }
     }
 }

@@ -47,7 +47,7 @@ public final class QueuedQueryExecution implements AutoCloseable {
     private final ExecutorService workers;
     private final BatchingExecutor<Request> execution;
     private final ArrayBlockingQueue<Request> free;
-    private final LongArrayList measuredResponseTimes = new LongArrayList();
+    private LongArrayList measuredResponseTimes = new LongArrayList();
     private long[] initialHistogram;
     private boolean measuring;
 
@@ -198,25 +198,58 @@ public final class QueuedQueryExecution implements AutoCloseable {
         if (error != null) throw new RuntimeException("Queued query failed", error);
     }
 
-    public void beginMeasurements() { initialHistogram = execution.batchHistogram(); measuring = true; }
+    public void beginMeasurements() {
+        if (measuring || measuredResponseTimes == null)
+            throw new IllegalStateException("Measurements already started or transferred");
+        initialHistogram = execution.batchHistogram();
+        measuring = true;
+    }
 
-    /** Metrics are computed after QPS timers stop; response samples include admission and execution. */
-    public List<Metric> measuredMetrics() {
-        long[] times = measuredResponseTimes.toLongArray();
-        Arrays.sort(times);
-        double sum = 0; for (long time : times) sum += time;
+    /**
+     * Transfers completed samples without copying the large response buffer.
+     * Call after measured passes complete and before closing this execution.
+     * The returned value does not retain this executor, requests, or model.
+     */
+    public Measurements finishMeasurements() {
+        if (!measuring) throw new IllegalStateException("Measurements are not active");
         long[] histogram = execution.batchHistogram();
-        long groups = 0, queries = 0;
-        for (int i = 1; i < histogram.length; i++) {
-            histogram[i] -= initialHistogram[i]; groups += histogram[i]; queries += i * histogram[i];
+        for (int i = 1; i < histogram.length; i++) histogram[i] -= initialHistogram[i];
+        var snapshot = new Measurements(measuredResponseTimes, histogram);
+        measuredResponseTimes = null;
+        measuring = false;
+        return snapshot;
+    }
+
+    /** Completed samples, safe to aggregate after the execution has closed. */
+    public static final class Measurements {
+        private final LongArrayList responseTimes;
+        private final long[] histogram;
+
+        private Measurements(LongArrayList responseTimes, long[] histogram) {
+            this.responseTimes = responseTimes;
+            this.histogram = histogram;
         }
-        double meanBatch = groups == 0 ? 0 : (double) queries / groups;
-        System.out.printf("QUERY_BATCHES queries=%d groups=%d mean=%.4f histogram=%s%n", queries, groups, meanBatch, Arrays.toString(histogram));
-        return List.of(
-                Metric.of("search.execution.response_mean_ms", "Loaded mean (ms)", ".3f", times.length == 0 ? 0 : sum / times.length / 1e6),
-                Metric.of("search.execution.response_p95_ms", "Loaded p95 (ms)", ".3f", percentile(times, .95)),
-                Metric.of("search.execution.response_p99_ms", "Loaded p99 (ms)", ".3f", percentile(times, .99)),
-                Metric.of("search.execution.mean_batch_size", "Mean batch", ".3f", meanBatch));
+
+        /** Sorting and formatting occur only when the owner requests reporting. */
+        public List<Metric> metrics() {
+            long[] times = responseTimes.toLongArray();
+            Arrays.sort(times);
+            double sum = 0;
+            for (long time : times) sum += time;
+            long groups = 0, queries = 0;
+            for (int i = 1; i < histogram.length; i++) {
+                groups += histogram[i];
+                queries += i * histogram[i];
+            }
+            double meanBatch = groups == 0 ? 0 : (double) queries / groups;
+            System.out.printf("QUERY_BATCHES queries=%d groups=%d mean=%.4f histogram=%s%n",
+                    queries, groups, meanBatch, Arrays.toString(histogram));
+            return List.of(
+                    Metric.of("search.execution.response_mean_ms", "Loaded mean (ms)", ".3f", times.length == 0 ? 0 : sum / times.length / 1e6),
+                    Metric.of("search.execution.response_p95_ms", "Loaded p95 (ms)", ".3f", percentile(times, .95)),
+                    Metric.of("search.execution.response_p99_ms", "Loaded p99 (ms)", ".3f", percentile(times, .99)),
+                    Metric.of("search.execution.mean_batch_size", "Mean batch", ".3f", meanBatch));
+        }
     }
 
     private static double percentile(long[] sorted, double p) {

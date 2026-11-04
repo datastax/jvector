@@ -20,6 +20,7 @@ import java.io.IOException;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.function.Supplier;
 
 import io.github.jbellis.jvector.example.Grid.ConfiguredSystem;
 import io.github.jbellis.jvector.example.benchmarks.diagnostics.BenchmarkDiagnostics;
@@ -77,6 +78,7 @@ public class QueryTester {
             int queryRuns) {
 
         List<Metric> results = new ArrayList<>();
+        List<Supplier<List<Metric>>> deferredReports = new ArrayList<>();
 
         // Capture memory and disk usage before/after running queries
         // Use NONE level to suppress logging output that would break the table
@@ -90,12 +92,13 @@ public class QueryTester {
             diagnostics.capturePrePhaseSnapshot("Query");
 
             for (var benchmark : benchmarks) {
-                var metrics = benchmark.runBenchmark(cs, topK, rerankK, usePruning, queryRuns);
+                var metrics = benchmark.runBenchmark(cs, topK, rerankK, usePruning, queryRuns, deferredReports::add);
                 results.addAll(metrics);
             }
 
             // Fold/sort queued response samples only after all query measurements.
-            cs.appendDeferredQueryMetrics(results);
+            for (var report : deferredReports) results.addAll(report.get());
+            deferredReports.clear();
 
             // Capture memory and disk usage after running queries
             diagnostics.capturePostPhaseSnapshot("Query");
@@ -133,7 +136,8 @@ public class QueryTester {
         } catch (IOException e) {
             throw new RuntimeException(e);
         } finally {
-            cs.discardDeferredQueryMetrics();
+            // Failure discards only this invocation's unreported snapshots.
+            deferredReports.clear();
         }
         return results;
     }
