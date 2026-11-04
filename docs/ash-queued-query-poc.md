@@ -1,8 +1,10 @@
-# Queued ASH query POC: review guide
+# Queued ASH query experiments and review history
 
-This branch preserves the experimental queued-query architecture for independent
-review. It has a reproducible unloaded tail-latency regression and is not a
-finished production recommendation. No Cassandra changes are included.
+This document preserves the earlier POC revisions and their measured limitations.
+The production integration and standalone benchmark protocol are documented in
+[ASH query integration](ash-query-integration.md) and the
+[reproduction guide](ash-pq-benchmark.md). The historical tables below do not
+claim final-candidate performance. No Cassandra changes are included.
 
 ## Base and scope
 
