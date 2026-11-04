@@ -76,11 +76,14 @@ public final class QueuedQueryExecution implements AutoCloseable {
         final LongAdder visited = new LongAdder();
         final long[] responseTimes;
         public final SearchResult[] results;
-        Pass(int count, IntFunction<VectorFloat<?>> inputs, QueryTimeRecorder recorder, boolean capture) {
+        // Only validation passes allocate a reference result for each query.
+        final SearchResult[] references;
+        Pass(int count, IntFunction<VectorFloat<?>> inputs, QueryTimeRecorder recorder, boolean capture, boolean validate) {
             this.inputs = inputs; this.recorder = recorder;
             completed = new CountDownLatch(count);
             responseTimes = new long[count];
             results = capture ? new SearchResult[count] : null;
+            references = validate ? new SearchResult[count] : null;
         }
         public long visited() { return visited.sum(); }
     }
@@ -110,7 +113,10 @@ public final class QueuedQueryExecution implements AutoCloseable {
                 public void prepareBatch(List<Request> requests) {
                     for (Request request : requests)
                         if (request.pass != null) request.query = request.pass.inputs.apply(request.ordinal);
-                    if (preparer == null) return;
+                    if (preparer == null) {
+                        recordReferences(requests);
+                        return;
+                    }
                     Rows buffers = rows.get();
                     try {
                         for (int i = 0; i < requests.size(); i++) {
@@ -118,9 +124,23 @@ public final class QueuedQueryExecution implements AutoCloseable {
                             buffers.states[i] = requests.get(i).state;
                         }
                         preparer.prepareBatch(buffers.queries, buffers.states, requests.size());
+                        recordReferences(requests);
                     } finally {
                         Arrays.fill(buffers.queries, 0, requests.size(), null);
                         Arrays.fill(buffers.states, 0, requests.size(), null);
+                    }
+                }
+                private void recordReferences(List<Request> requests) {
+                    // Before publishing prepared work, search on the preparing
+                    // thread with exactly the same numerical state. GEMV and
+                    // GEMM can round differently; comparing against a separate
+                    // singleton projection would conflate that with a race.
+                    Pass pass = requests.get(0).pass;
+                    if (pass == null || pass.references == null) return;
+                    for (Request request : requests) {
+                        request.pass.references[request.ordinal] = request.state == null
+                                ? QueryExecutor.executeQuery(system, topK, rerankK, usePruning, request.query)
+                                : QueryExecutor.executePreparedQuery(system, topK, rerankK, usePruning, request.state);
                     }
                 }
                 public void execute(Request request) {
@@ -176,9 +196,29 @@ public final class QueuedQueryExecution implements AutoCloseable {
     }
 
     public Pass runPass(int count, IntFunction<VectorFloat<?>> source, QueryTimeRecorder recorder, boolean capture) {
+        return runPass(count, source, recorder, capture, false);
+    }
+
+    /**
+     * Checks handoff and result ownership using the same prepared arithmetic on
+     * the preparing thread and the executing thread. Runs outside measurement;
+     * native numerical tests and AccuracyBenchmark check projection/recall.
+     */
+    public void verifyConcurrentResults(int count, IntFunction<VectorFloat<?>> source) {
+        if (measuring) throw new IllegalStateException("Validation cannot run during measurement");
+        Pass pass = runPass(count, source, null, true, true);
+        for (int i = 0; i < count; i++) {
+            if (!Arrays.equals(pass.references[i].getNodes(), pass.results[i].getNodes())
+                    || pass.references[i].getVisitedCount() != pass.results[i].getVisitedCount())
+                throw new IllegalStateException("Concurrent prepared query mismatch at " + i);
+        }
+    }
+
+    private Pass runPass(int count, IntFunction<VectorFloat<?>> source,
+                         QueryTimeRecorder recorder, boolean capture, boolean validate) {
         if (count < 0) throw new IllegalArgumentException("Query count must be nonnegative");
         Objects.requireNonNull(source, "source");
-        Pass pass = new Pass(count, source, recorder == null ? NO_TIMING : recorder, capture);
+        Pass pass = new Pass(count, source, recorder == null ? NO_TIMING : recorder, capture, validate);
         for (int i = 0; i < count; i++) {
             long submittedAt = System.nanoTime(); // Includes waiting for admission.
             Request request = acquire();

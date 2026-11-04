@@ -1,0 +1,1 @@
+BenchYAML now validates queued search handoff against the same prepared query state, avoiding false failures from rounding differences between singleton and batched projection. Numerical kernel and recall checks remain independent.

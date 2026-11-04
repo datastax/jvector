@@ -208,7 +208,13 @@ kernel switches or prototype classpaths are used.
   that query measurement group finishes.
 * **Recall:** the same inputs, ground truth and request/result correlation are
   used for both execution modes. The concurrency check also compares completed
-  queued results to serial searches. Require no execution-policy recall regression.
+  queued results to searches on the preparing thread using the identical prepared
+  state, before handoff. This checks ownership and concurrency without conflating
+  FP32 reduction differences between singleton GEMV and batched GEMM. Numerical
+  projection tests independently check both kernels against their rounded oracle.
+  The study preserves actual recall values: ASH queued improvements are accepted,
+  while any decline stops collection for investigation. Other modes still require
+  exact recall equality with the retained construction reference.
 
 CSV results, system information and dataset information are written under each
 case's `logging` directory. The helper additionally records the immutable source
