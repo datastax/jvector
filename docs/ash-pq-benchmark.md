@@ -209,7 +209,8 @@ kernel switches or prototype classpaths are used.
 * **Recall:** the same inputs, ground truth and request/result correlation are
   used for both execution modes. The concurrency check also compares completed
   queued results to searches on the preparing thread using the identical prepared
-  state, before handoff. This checks ownership and concurrency without conflating
+  state, before handoff. Direct validation runs on the concurrent caller threads
+  and repeats traversal with one prepared score provider for each query. This checks ownership and concurrency without conflating
   FP32 reduction differences between singleton GEMV and batched GEMM. Numerical
   projection tests independently check both kernels against their rounded oracle.
   The study preserves actual recall values: ASH queued improvements are accepted,

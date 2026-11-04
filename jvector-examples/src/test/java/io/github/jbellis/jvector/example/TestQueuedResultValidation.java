@@ -144,4 +144,44 @@ public class TestQueuedResultValidation {
             assertTrue(error.getMessage().startsWith("Concurrent prepared query mismatch at "));
         }
     }
+    private Grid.ConfiguredSystem directSystem(boolean corrupt, AtomicInteger preparations) {
+        List<VectorFloat<?>> queries = java.util.Collections.nCopies(97, vector(.3f));
+        var data = new SimpleDataSet("direct-validation", VectorSimilarityFunction.DOT_PRODUCT,
+                List.of(vector(1)), queries, java.util.Collections.nCopies(queries.size(), List.of(0)));
+        return new Grid.ConfiguredSystem(data, new Graph(false), null, Set.of()) {
+            @Override public SearchScoreProvider scoreProviderFor(VectorFloat<?> query, ImmutableGraphIndex.View view) {
+                preparations.incrementAndGet();
+                // Like GEMV/GEMM reduction rounding, preparation on different
+                // caller threads may produce distinct, individually valid math.
+                final float value = query.get(0) + Thread.currentThread().getId() * .00001f;
+                final int[] calls = {0};
+                return new DefaultSearchScoreProvider((ScoreFunction.ExactScoreFunction) node ->
+                        value + (corrupt && calls[0]++ > 0 ? .1f : 0));
+            }
+        };
+    }
+
+    @Test(timeout=20000)
+    public void concurrentDirectValidationPreparesOneProviderPerInput() throws Exception {
+        var preparations = new AtomicInteger();
+        try (var cs = directSystem(false, preparations)) {
+            java.util.stream.IntStream.range(0, cs.getDataSet().getQueryVectors().size()).parallel()
+                    .forEach(i -> io.github.jbellis.jvector.example.benchmarks.QueryExecutor
+                            .verifyConcurrentQuery(cs, 1, 1, false, i));
+            assertEquals(cs.getDataSet().getQueryVectors().size(), preparations.get());
+        }
+    }
+
+    @Test(timeout=10000)
+    public void directValidationStillDetectsChangedScoresFromThePreparedProvider() throws Exception {
+        var preparations = new AtomicInteger();
+        try (var cs = directSystem(true, preparations)) {
+            var error = assertThrows(IllegalStateException.class,
+                    () -> io.github.jbellis.jvector.example.benchmarks.QueryExecutor
+                            .verifyConcurrentQuery(cs, 1, 1, false, 0));
+            assertTrue(error.getMessage().startsWith("Concurrent prepared query mismatch at "));
+            assertEquals(1, preparations.get());
+        }
+    }
+
 }
