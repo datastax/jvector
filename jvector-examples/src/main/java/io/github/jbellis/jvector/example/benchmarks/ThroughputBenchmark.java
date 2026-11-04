@@ -191,18 +191,19 @@ public class ThroughputBenchmark extends AbstractQueryBenchmark {
                      ? new QueuedQueryExecution(cs, topK, rerankK, usePruning) : null) {
         if (Boolean.getBoolean("jvector.bench.verifyConcurrentResults")) {
             int count = cs.getDataSet().getQueryVectors().size();
-            SearchResult[] serial = new SearchResult[count];
-            for (int i = 0; i < count; i++)
-                serial[i] = QueryExecutor.executeQuery(cs, topK, rerankK, usePruning, i);
-            SearchResult[] queuedResults = queued == null ? null : queued.runPass(count,
-                    cs.getDataSet().getQueryVectors()::get, null, true).results;
-            queryStream(count).forEach(i -> {
-                SearchResult actual = queuedResults == null
-                        ? QueryExecutor.executeQuery(cs, topK, rerankK, usePruning, i) : queuedResults[i];
-                if (!Arrays.equals(serial[i].getNodes(), actual.getNodes())
-                        || (queued == null && serial[i].getVisitedCount() != actual.getVisitedCount()))
-                    throw new IllegalStateException("Concurrent query mismatch at " + i);
-            });
+            if (queued != null) {
+                queued.verifyConcurrentResults(count, cs.getDataSet().getQueryVectors()::get);
+            } else {
+                SearchResult[] serial = new SearchResult[count];
+                for (int i = 0; i < count; i++)
+                    serial[i] = QueryExecutor.executeQuery(cs, topK, rerankK, usePruning, i);
+                queryStream(count).forEach(i -> {
+                    SearchResult actual = QueryExecutor.executeQuery(cs, topK, rerankK, usePruning, i);
+                    if (!Arrays.equals(serial[i].getNodes(), actual.getNodes())
+                            || serial[i].getVisitedCount() != actual.getVisitedCount())
+                        throw new IllegalStateException("Concurrent query mismatch at " + i);
+                });
+            }
             System.out.printf("CONCURRENCY_VALIDATION queries=%d topK=%d rerankK=%d status=PASS%n",
                     count, topK, rerankK);
         }
