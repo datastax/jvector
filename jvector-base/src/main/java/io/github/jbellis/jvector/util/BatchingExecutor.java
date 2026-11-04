@@ -15,228 +15,380 @@
  */
 package io.github.jbellis.jvector.util;
 
+import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 import java.util.Objects;
-import java.util.concurrent.ArrayBlockingQueue;
-import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.Executor;
 import java.util.concurrent.RejectedExecutionException;
-import java.util.concurrent.Semaphore;
+import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.concurrent.atomic.AtomicLongArray;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.concurrent.locks.Condition;
 import java.util.concurrent.locks.ReentrantLock;
 
 /**
- * Bounded two-stage execution on a caller-supplied executor. Ready work is
- * prepared in groups without a batch-fill delay, then each request executes
- * independently. A worker can execute requests prepared by another worker.
+ * Bounded asynchronous execution with optional preparation of compatible requests
+ * in batches. Batches contain only requests already waiting; there is no fill timer.
+ * Prepared work takes priority, and the preparing worker executes its first request
+ * while other workers may execute the rest.
  *
- * <p>Exactly {@code workers} long-lived tasks are submitted to the executor; it
- * must have that much available execution capacity. This class creates no
- * threads and does not shut down the supplied executor. Use one instance for a
- * shared CPU budget rather than reserving worker sets for every model.
+ * <p>The supplied executor must schedule asynchronously, reject explicitly when it
+ * cannot accept work, and remain operational until this service closes. Direct
+ * executors, caller-runs rejection policies and silent-discard policies are not
+ * supported. At most {@code workerCount} reusable drain tasks are submitted at a
+ * time. Each exits when the queues are empty, releasing shared execution capacity.
+ * This class creates no threads and does not shut down the supplied executor.
  *
- * <p>Queue records, batch lists and row views are allocated at construction.
- * Each accepted request is handed back through its completion callback, which
- * may recycle it after its last use. No request is discarded on close. Close drains accepted
- * work and must precede shutting down the supplied executor.
+ * <p>Requests and their buffers remain caller-owned. An accepted request must not
+ * be modified or submitted again until its completion callback. Rejection at the
+ * admission limit leaves ownership with the caller. Accepted work completes once,
+ * including preparation or dispatch failure. Completion may run on a submitting
+ * thread if the executor rejects dispatch; successful work never runs inline.
+ * Queue arrays, worker runnables and batch lists are allocated at construction.
+ *
+ * <p>Close rejects new submissions and waits for accepted work and callbacks.
+ * Do not close from a callback or block a host executor thread needed to drain this
+ * service. The host must not cancel or discard already accepted drain tasks.
  */
 public final class BatchingExecutor<T> implements AutoCloseable {
-    /** Thread-safe operations over independently owned requests. */
+    /** Callbacks must be thread-safe. Completion must return promptly. */
     public interface Operation<T> {
-        /** Identity key for compatible preparation; null requests are prepared alone. */
+        /**
+         * Immutable identity key for compatible preparation, or null to prepare
+         * alone. Called on the submitting thread, outside internal locks.
+         */
         Object batchKey(T request);
-        /** Borrowed read-only list, valid only for this call; never retained. */
+        /** Borrowed read-only list, valid only during this call; never retain it. */
         void prepareBatch(List<T> requests) throws Exception;
-        /** Runs one prepared request, without any batch-wide completion barrier. */
+        /** Executes one prepared request, without a batch-wide completion barrier. */
         void execute(T request) throws Exception;
-        /** Called exactly once per accepted request; must not throw. */
+        /**
+         * Called exactly once for accepted work. The request may be recycled here.
+         * Exceptions are retained for inspection and close, without poisoning work.
+         */
         void complete(T request, Throwable failure);
     }
 
-    private static final long CLOSED = Long.MIN_VALUE;
-    private static final class Slot<T> { T request; }
-    private final ArrayBlockingQueue<Slot<T>> available, pending, ready;
-    private final ReentrantLock drain = new ReentrantLock();
-    private final Semaphore work = new Semaphore(0);
-    private final AtomicLong admission = new AtomicLong();
-    private final AtomicReference<Throwable> callbackFailure = new AtomicReference<>();
-    private final CountDownLatch stopped;
+    // Keep the entry on host threads but clear its value on exit. Removing it
+    // would allocate a fresh ThreadLocalMap entry for every isolated drain task.
+    private static final ThreadLocal<BatchingExecutor<?>> CURRENT = new ThreadLocal<>();
+
+    private final ReentrantLock lock = new ReentrantLock();
+    private final Condition drained = lock.newCondition();
+    private final Executor executor;
     private final Operation<T> operation;
-    private final int capacity, workerCount, batchSize;
+    private final int capacity, batchSize, workerLimit;
+    private final Object[] pending, pendingKeys, ready;
+    private final Throwable[] pendingFailures;
+    private int pendingHead, pendingTail, pendingSize;
+    private int pendingGroups, tailGroupSize;
+    private int readyHead, readyTail, readySize;
+    private final ArrayDeque<Worker> idleWorkers;
     private final List<Worker> workers;
-    private final ThreadLocal<Boolean> inWorker = new ThreadLocal<>();
+    private int activeWorkers, busyWorkers, callbacks;
+    private volatile int outstanding;
+    private volatile boolean closed;
+    private final AtomicLong callbackFailures = new AtomicLong();
+    private final AtomicReference<Throwable> firstCallbackFailure = new AtomicReference<>();
 
     /**
-     * @param capacity total accepted requests, including preparing and executing
-     * @param batchSize maximum currently available compatible requests per preparation
-     * @param executor caller-owned asynchronous execution capacity; completion
-     *                 callbacks run on these workers and must return promptly
+     * @param workerCount maximum concurrent preparation/execution drain tasks
+     * @param capacity maximum requests queued, preparing or executing; excludes callbacks
+     * @param batchSize maximum currently waiting compatible requests per preparation
+     * @param executor caller-owned asynchronous execution capacity
+     * @param operation request preparation, execution and completion operations
      */
     public BatchingExecutor(int workerCount, int capacity, int batchSize,
                             Executor executor, Operation<T> operation) {
-        if (workerCount <= 0 || capacity <= 0 || batchSize <= 0 || batchSize > capacity)
-            throw new IllegalArgumentException("Workers, capacity and batch size must be positive; batch size <= capacity");
-        this.workerCount = workerCount;
+        if (workerCount <= 0 || capacity <= 0 || batchSize <= 0
+                || batchSize > capacity || batchSize == Integer.MAX_VALUE)
+            throw new IllegalArgumentException("Workers, capacity and batch size must be positive; "
+                    + "batch size must fit its histogram and not exceed capacity");
+        this.executor = Objects.requireNonNull(executor, "executor");
+        this.operation = Objects.requireNonNull(operation, "operation");
+        if (executor instanceof ThreadPoolExecutor) {
+            var policy = ((ThreadPoolExecutor) executor).getRejectedExecutionHandler();
+            if (policy instanceof ThreadPoolExecutor.DiscardPolicy
+                    || policy instanceof ThreadPoolExecutor.DiscardOldestPolicy
+                    || policy instanceof ThreadPoolExecutor.CallerRunsPolicy)
+                throw new IllegalArgumentException("Executor must reject explicitly without discarding or running inline");
+        }
         this.capacity = capacity;
         this.batchSize = batchSize;
-        this.operation = Objects.requireNonNull(operation, "operation");
-        Objects.requireNonNull(executor, "executor");
-        available = new ArrayBlockingQueue<>(capacity);
-        pending = new ArrayBlockingQueue<>(capacity);
-        ready = new ArrayBlockingQueue<>(capacity);
-        for (int i = 0; i < capacity; i++) available.add(new Slot<>());
-        stopped = new CountDownLatch(workerCount);
-        workers = new ArrayList<>(workerCount);
-        for (int i = 0; i < workerCount; i++) workers.add(new Worker());
-        int submitted = 0;
-        try {
-            for (Worker worker : workers) { executor.execute(worker); submitted++; }
-        } catch (RuntimeException | Error failure) {
-            admission.getAndUpdate(value -> value | CLOSED);
-            for (int i = submitted; i < workerCount; i++) stopped.countDown();
-            work.release(submitted);
-            awaitStopped();
-            throw failure;
+        this.workerLimit = Math.min(workerCount, capacity);
+        pending = new Object[capacity];
+        pendingKeys = new Object[capacity];
+        pendingFailures = new Throwable[capacity];
+        ready = new Object[capacity];
+        idleWorkers = new ArrayDeque<>(workerLimit);
+        workers = new ArrayList<>(workerLimit);
+        for (int i = 0; i < workerLimit; i++) {
+            Worker worker = new Worker();
+            workers.add(worker);
+            idleWorkers.addLast(worker);
         }
     }
 
     /**
-     * Accepts without waiting, returning false at the total admission limit.
-     * Rejection leaves ownership with the caller. Close rejects further requests.
-     * Inputs must not be mutated or submitted twice before completion.
+     * Accepts without waiting for capacity. Returns false at the admission limit;
+     * throws after close. A true return transfers ownership until completion.
      */
     public boolean trySubmit(T request) {
         Objects.requireNonNull(request, "request");
-        if (callbackFailure.get() != null)
-            throw new IllegalStateException("A completion callback failed", callbackFailure.get());
-        for (;;) {
-            long count = admission.get();
-            if (count < 0) throw new RejectedExecutionException("Batching executor is closed");
-            if (count == capacity) return false;
-            if (admission.compareAndSet(count, count + 1)) break;
-        }
-        // Completion returns the slot before releasing its admission count.
-        Slot<T> slot = available.remove();
-        slot.request = request;
-        pending.add(slot);
-        work.release();
+        if (closed) throw new RejectedExecutionException("Batching executor is closed");
+        if (outstanding == capacity) return false;
+        Object key = null;
+        Throwable failure = null;
+        try { key = operation.batchKey(request); }
+        catch (Throwable error) { failure = error; }
+        Worker launches;
+        lock.lock();
+        try {
+            if (closed) throw new RejectedExecutionException("Batching executor is closed");
+            if (outstanding == capacity) return false;
+            int previousTail = pendingTail == 0 ? capacity - 1 : pendingTail - 1;
+            if (pendingSize != 0 && failure == null && key != null
+                    && pendingFailures[previousTail] == null && pendingKeys[previousTail] == key
+                    && tailGroupSize < batchSize) {
+                tailGroupSize++;
+            } else {
+                pendingGroups++;
+                tailGroupSize = 1;
+            }
+            pending[pendingTail] = request;
+            pendingKeys[pendingTail] = key;
+            pendingFailures[pendingTail] = failure;
+            pendingTail = advance(pendingTail);
+            pendingSize++;
+            outstanding++;
+            launches = reserveWorkers();
+        } finally { lock.unlock(); }
+        launch(launches);
         return true;
     }
 
-    private final class Worker implements Runnable {
-        final ArrayList<Slot<T>> slots = new ArrayList<>(batchSize);
-        final ArrayList<T> requests = new ArrayList<>(batchSize);
-        final List<T> borrowedRequests = Collections.unmodifiableList(requests);
-        final long[] histogram = new long[batchSize + 1];
+    private int advance(int position) { return position == capacity - 1 ? 0 : position + 1; }
 
-        @Override
-        public void run() {
-            inWorker.set(Boolean.TRUE);
-            try {
-                for (;;) {
-                    if (admission.get() == CLOSED) return;
-                    work.acquireUninterruptibly();
-                    Slot<T> next = ready.poll();
-                    if (next != null) {
-                        Throwable failure = null;
-                        try { operation.execute(next.request); }
-                        catch (Throwable error) { failure = error; }
-                        finish(next, failure);
-                        continue;
-                    }
-                    drain.lock();
-                    try {
-                        next = pending.poll();
-                        if (next == null) continue;
-                        slots.add(next);
-                        requests.add(next.request);
-                        Object key = operation.batchKey(next.request);
-                        while (key != null && slots.size() < batchSize) {
-                            Slot<T> head = pending.peek();
-                            if (head == null || operation.batchKey(head.request) != key) break;
-                            next = pending.remove();
-                            // Each submission signaled one pending request. This worker
-                            // already consumed the first signal; retire the additional
-                            // ones as their requests are folded into this preparation.
-                            // Another worker may already have consumed a signal and be
-                            // waiting for drain, so acquisition must never block here.
-                            work.tryAcquire();
-                            slots.add(next);
-                            requests.add(next.request);
-                        }
-                    } catch (Throwable failure) {
-                        // A key callback failure cannot strand already removed work.
-                        for (Slot<T> slot : slots) finish(slot, failure);
-                        slots.clear(); requests.clear();
-                        continue;
-                    } finally { drain.unlock(); }
-                    Throwable failure = null;
-                    try { operation.prepareBatch(borrowedRequests); histogram[slots.size()]++; }
-                    catch (Throwable error) { failure = error; }
-                    if (failure == null) {
-                        int size = slots.size();
-                        // Keep one search on the preparing worker for every
-                        // group size. Singleton and full-batch traffic use the
-                        // same execution path; other workers can take the rest.
-                        Slot<T> first = slots.get(0);
-                        for (int i = 1; i < size; i++) ready.add(slots.get(i));
-                        if (size > 1) work.release(size - 1);
-                        try { operation.execute(first.request); }
-                        catch (Throwable error) { failure = error; }
-                        finish(first, failure);
-                    } else {
-                        for (Slot<T> slot : slots) finish(slot, failure);
-                    }
-                    slots.clear(); requests.clear();
-                }
-            } finally {
-                inWorker.remove();
-                stopped.countDown();
+    /** Called under lock; links reusable tasks rather than allocating a launch list. */
+    private Worker reserveWorkers() {
+        // Track compatible groups at admission rather than scanning the queue or
+        // treating unrelated models as one batch and underutilizing the budget.
+        int target = (int) Math.min(workerLimit, (long) busyWorkers + readySize + pendingGroups);
+        Worker first = null, last = null;
+        while (activeWorkers < target) {
+            Worker worker = idleWorkers.removeFirst();
+            activeWorkers++;
+            if (last == null) first = worker;
+            else last.nextLaunch = worker;
+            last = worker;
+        }
+        return first;
+    }
+
+    /** Executor calls and operation callbacks are always outside lock. */
+    private void launch(Worker first) {
+        while (first != null) {
+            Worker worker = first;
+            first = worker.nextLaunch;
+            worker.nextLaunch = null;
+            worker.launchingThread.set(Thread.currentThread());
+            try { executor.execute(worker); }
+            catch (RuntimeException | Error failure) { dispatchFailed(worker, failure); }
+            finally {
+                // A host worker may later dequeue a task that it submitted.
+                // Only execution on the submitting call stack is inline. CAS
+                // cannot clear the marker of a reused task launched elsewhere.
+                worker.launchingThread.compareAndSet(Thread.currentThread(), null);
             }
         }
     }
 
-    private void finish(Slot<T> slot, Throwable failure) {
-        T request = slot.request;
-        slot.request = null;
-        available.add(slot);
-        long count = admission.decrementAndGet();
-        try { operation.complete(request, failure); }
-        catch (Throwable error) { callbackFailure.compareAndSet(null, error); }
-        if (count == CLOSED) work.release(workerCount);
+    private void dispatchFailed(Worker worker, Throwable failure) {
+        // Allocation is confined to dispatch failure, never ordinary submission.
+        List<T> failed = null;
+        lock.lock();
+        try {
+            worker.launchingThread.set(null);
+            activeWorkers--;
+            idleWorkers.addLast(worker);
+            if (activeWorkers == 0) {
+                failed = new ArrayList<>(pendingSize + readySize);
+                while (readySize != 0) failed.add(takeReady());
+                while (pendingSize != 0) failed.add(takePending());
+                pendingGroups = 0;
+            }
+            signalDrained();
+        } finally { lock.unlock(); }
+        if (failed != null) for (T request : failed) finish(request, failure);
+        // Another accepted drain task, if present, will process the queues.
     }
 
-    /** Snapshot of successful preparation groups; exact when all requests have completed. */
+    @SuppressWarnings("unchecked")
+    private T takePending() {
+        T value = (T) pending[pendingHead];
+        pending[pendingHead] = null;
+        pendingKeys[pendingHead] = null;
+        pendingFailures[pendingHead] = null;
+        pendingHead = advance(pendingHead);
+        pendingSize--;
+        if (pendingSize == 0) tailGroupSize = 0;
+        return value;
+    }
+
+    @SuppressWarnings("unchecked")
+    private T takeReady() {
+        T value = (T) ready[readyHead];
+        ready[readyHead] = null;
+        readyHead = advance(readyHead);
+        readySize--;
+        return value;
+    }
+
+    private final class Worker implements Runnable {
+        final ArrayList<T> requests = new ArrayList<>(batchSize);
+        final List<T> borrowedRequests = Collections.unmodifiableList(requests);
+        final AtomicLongArray histogram = new AtomicLongArray(batchSize + 1);
+        Worker nextLaunch;
+        final AtomicReference<Thread> launchingThread = new AtomicReference<>();
+        boolean busy, alreadyPrepared;
+        Throwable preparationFailure;
+
+        /** Acquires the next work, or atomically releases this task's worker lease. */
+        boolean takeWork() {
+            lock.lock();
+            try {
+                if (busy) { busyWorkers--; busy = false; }
+                requests.clear();
+                preparationFailure = null;
+                if (readySize != 0) {
+                    requests.add(takeReady());
+                    alreadyPrepared = true;
+                } else if (pendingSize != 0) {
+                    Object key = pendingKeys[pendingHead];
+                    preparationFailure = pendingFailures[pendingHead];
+                    requests.add(takePending());
+                    alreadyPrepared = false;
+                    while (preparationFailure == null && key != null
+                            && requests.size() < batchSize && pendingSize != 0
+                            && pendingKeys[pendingHead] == key && pendingFailures[pendingHead] == null)
+                        requests.add(takePending());
+                    pendingGroups--;
+                } else {
+                    activeWorkers--;
+                    idleWorkers.addLast(this);
+                    signalDrained();
+                    return false;
+                }
+                busyWorkers++;
+                busy = true;
+                return true;
+            } finally { lock.unlock(); }
+        }
+
+        @Override
+        public void run() {
+            if (Thread.currentThread() == launchingThread.get())
+                throw new RejectedExecutionException("Executor must schedule work asynchronously");
+            launchingThread.set(null);
+            BatchingExecutor<?> previous = CURRENT.get();
+            CURRENT.set(BatchingExecutor.this);
+            try {
+                while (takeWork()) {
+                    Throwable failure = preparationFailure;
+                    if (!alreadyPrepared && failure == null) {
+                        try {
+                            operation.prepareBatch(borrowedRequests);
+                            histogram.incrementAndGet(requests.size());
+                        } catch (Throwable error) { failure = error; }
+                    }
+                    if (failure != null) {
+                        for (T request : requests) finish(request, failure);
+                        continue;
+                    }
+                    if (requests.size() > 1) {
+                        Worker launches;
+                        lock.lock();
+                        try {
+                            for (int i = 1; i < requests.size(); i++) {
+                                ready[readyTail] = requests.get(i);
+                                readyTail = advance(readyTail);
+                                readySize++;
+                            }
+                            launches = reserveWorkers();
+                        } finally { lock.unlock(); }
+                        launch(launches);
+                    }
+                    T first = requests.get(0);
+                    try { operation.execute(first); }
+                    catch (Throwable error) { failure = error; }
+                    finish(first, failure);
+                }
+            } finally {
+                CURRENT.set(previous); // Do not retain the service/model on host threads.
+            }
+        }
+    }
+
+    private void finish(T request, Throwable failure) {
+        lock.lock();
+        try {
+            // Release admission before the callback may recycle the request.
+            callbacks++;
+            outstanding--;
+        } finally { lock.unlock(); }
+        BatchingExecutor<?> previous = CURRENT.get();
+        boolean entering = previous != this;
+        if (entering) CURRENT.set(this);
+        try { operation.complete(request, failure); }
+        catch (Throwable error) {
+            firstCallbackFailure.compareAndSet(null, error);
+            callbackFailures.incrementAndGet();
+        } finally {
+            if (entering) CURRENT.set(previous);
+            lock.lock();
+            try { callbacks--; signalDrained(); }
+            finally { lock.unlock(); }
+        }
+    }
+
+    private void signalDrained() {
+        if (closed && outstanding == 0 && activeWorkers == 0 && callbacks == 0)
+            drained.signalAll();
+    }
+
+    /** Atomic snapshot; exact after all accepted requests have completed. */
     public long[] batchHistogram() {
         long[] result = new long[batchSize + 1];
         for (Worker worker : workers)
-            for (int i = 1; i < result.length; i++) result[i] += worker.histogram[i];
+            for (int i = 1; i < result.length; i++) result[i] += worker.histogram.get(i);
         return result;
     }
 
-    /** Accepted requests in either queue or preparation/execution, excluding completion callbacks. */
-    public int outstanding() { return (int) (admission.get() & Long.MAX_VALUE); }
+    /** Accepted work, excluding completion callbacks. */
+    public int outstanding() { return outstanding; }
 
+    /** Number of completion callbacks that threw, without blocking later submissions. */
+    public long completionFailureCount() { return callbackFailures.get(); }
+
+    /** First callback exception for monitoring, or null when no callback failed. */
+    public Throwable firstCompletionFailure() { return firstCallbackFailure.get(); }
+
+    /** Drains accepted work, preserves interrupts, then reports any callback failure. */
     @Override
     public void close() {
-        if (Boolean.TRUE.equals(inWorker.get()))
-            throw new IllegalStateException("Cannot close a batching executor from its worker callback");
-        admission.getAndUpdate(value -> value | CLOSED);
-        work.release(workerCount);
-        awaitStopped();
-        if (callbackFailure.get() != null)
-            throw new IllegalStateException("A completion callback failed", callbackFailure.get());
-    }
-
-    private void awaitStopped() {
-        boolean interrupted = false;
-        for (;;) {
-            try { stopped.await(); break; }
-            catch (InterruptedException e) { interrupted = true; }
-        }
-        if (interrupted) Thread.currentThread().interrupt();
+        if (CURRENT.get() == this)
+            throw new IllegalStateException("Cannot close a batching executor from its operation or callback");
+        lock.lock();
+        try {
+            closed = true;
+            while (outstanding != 0 || activeWorkers != 0 || callbacks != 0)
+                drained.awaitUninterruptibly();
+        } finally { lock.unlock(); }
+        Throwable failure = firstCallbackFailure.get();
+        if (failure != null)
+            throw new IllegalStateException(completionFailureCount() + " completion callbacks failed", failure);
     }
 }
