@@ -61,7 +61,18 @@ public class SiftLoader {
         return vectors;
     }
 
-    public static List<ByteSequence<?>> readBvecs(String filePath) {
+    /// Reads a `.bvecs`-layout file whose components are **signed int8** values (-128..127).
+    ///
+    /// The layout is the same as the TexMex `.bvecs` format (a little-endian int dimension followed by
+    /// `dimension` bytes, per vector), but the payload is interpreted as signed.
+    /// **Unsigned uint8 payloads, which is what conventional `.bvecs` files such as SIFT1B/BIGANN contain
+    /// (0..255), are not supported.**
+    /// Bytes are copied as-is, so an unsigned file would be silently misread (200 becomes -56)
+    /// and distances would change. Convert unsigned data to signed int8 before loading it.
+    ///
+    /// @param filePath path to a signed-int8 `.bvecs`-layout file
+    /// @return the vectors, as signed int8 byte sequences
+    public static List<ByteSequence<?>> readInt8Bvecs(String filePath) {
         var vectors = new ArrayList<ByteSequence<?>>();
         try (var dis = new DataInputStream(new BufferedInputStream(new FileInputStream(filePath)))) {
             while (dis.available() > 0) {

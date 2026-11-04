@@ -54,7 +54,8 @@ public interface DataSetProperties {
     /// Canonical key for how benchmark loaders should treat the dataset at load time.
     String KEY_LOAD_BEHAVIOR = "load_behavior";
 
-    /// Canonical key for whether the dataset uses native int8 (signed byte) vectors ({@link Boolean}).
+    /// Canonical key for whether the dataset uses native **signed int8** (-128..127) vectors ({@link Boolean}).
+    /// Unsigned uint8 datasets (e.g. conventional SIFT1B/BIGANN `.bvecs` files) are not supported.
     String KEY_IS_INT8 = "is_int8";
 
     /**
@@ -128,18 +129,20 @@ public interface DataSetProperties {
     }
 
     /**
-     * A convenience method to capture the notion of a valid dataset.
-     * As any additional qualifiers are added to this data carrier, this method should be updated accordingly.
-     * @return true, if the dataset is known to be valid for indexing and querying.
-     */
-    /**
-     * Returns true if this dataset stores native signed int8 (byte) vectors.
-     * When true, loaders must use {@code readBvecs} and return a {@code ByteSimpleDataSet}.
+     * Returns true if this dataset stores native <b>signed int8</b> (-128..127) vectors.
+     * Unsigned uint8 data (e.g. conventional SIFT1B/BIGANN {@code .bvecs} files, 0..255) is not supported,
+     * because reading it as signed would silently change distances.
+     * When true, loaders must use {@code readInt8Bvecs} and return a {@code ByteSimpleDataSet}.
      */
     default boolean isInt8() {
         return false;
     }
 
+    /**
+     * A convenience method to capture the notion of a valid dataset.
+     * As any additional qualifiers are added to this data carrier, this method should be updated accordingly.
+     * @return true, if the dataset is known to be valid for indexing and querying.
+     */
     default boolean isValid() {
         return isZeroVectorFree() && isDuplicateVectorFree();
     }
