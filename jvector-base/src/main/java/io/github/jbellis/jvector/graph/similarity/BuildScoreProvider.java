@@ -255,6 +255,29 @@ public interface BuildScoreProvider {
         var vectorsCopy = ravv.threadLocalSupplier();
 
         return new BuildScoreProvider() {
+            /// Exact scores against `node1`.
+            ///
+            /// For a value-shared source the anchor is read on the first comparison and kept as
+            /// a private copy, so creating a score function reads nothing, later reads through the
+            /// same views can't overwrite the anchor, and each comparison reads only `node2`.
+            private ScoreFunction.ExactScoreFunction scoreFunctionFor(int node1) {
+                if (ravv.isValueShared()) {
+                    return new ScoreFunction.ExactScoreFunction() {
+                        private ByteSequence<?> anchor;
+
+                        @Override
+                        public float similarityTo(int node2) {
+                            var a = anchor;
+                            if (a == null) anchor = a = vectors.get().getVector(node1).copy();
+                            return bvsf.compare(a, vectorsCopy.get().getVector(node2));
+                        }
+                    };
+                }
+                var vector = vectors.get().getVector(node1);
+                var vc = vectorsCopy.get();
+                return node2 -> bvsf.compare(vector, vc.getVector(node2));
+            }
+
             @Override
             public boolean isExact() {
                 return true;
@@ -289,8 +312,7 @@ public interface BuildScoreProvider {
 
             @Override
             public SearchScoreProvider searchProviderFor(int node1) {
-                var v  = vectors.get().getVector(node1);
-                return searchProviderFor(v);
+                return new DefaultSearchScoreProvider(scoreFunctionFor(node1));
             }
 
             @Override
@@ -300,9 +322,7 @@ public interface BuildScoreProvider {
 
             @Override
             public ScoreFunction diversityScoreFunctionFor(int node1) {
-                var v  = vectors.get().getVector(node1);
-                var vc = vectorsCopy.get();
-                return (ScoreFunction.ExactScoreFunction) node2 -> bvsf.compare(v, vc.getVector(node2));
+                return scoreFunctionFor(node1);
             }
         };
     }
