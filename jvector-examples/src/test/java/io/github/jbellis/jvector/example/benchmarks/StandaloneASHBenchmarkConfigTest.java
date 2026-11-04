@@ -81,7 +81,8 @@ public class StandaloneASHBenchmarkConfigTest {
     @Test
     @SuppressWarnings("unchecked")
     public void allPairsMatchBytesAndUseFusedGraphsNvqAndTheSameSearchParameters() throws Exception {
-        var dimensions = Map.of("mpnet", 768, "cohere", 1024, "ada002", 1536, "openai3072", 3072);
+        var dimensions = Map.of("mpnet", 768, "cohere", 1024, "ada002", 1536, "openai3072", 3072,
+                "mpnet10m", 768, "cohere10m", 1024, "cap6m", 1536);
         for (var entry : dimensions.entrySet()) {
             for (int bits : new int[]{2, 4}) {
                 Map<String, Object> previousConstruction = null;

@@ -1,0 +1,18 @@
+# Exact normalized larger datasets. Set JVECTOR_BENCH_DATA_DIR to their common parent.
+_defaults:
+  cache_dir: ${JVECTOR_BENCH_DATA_DIR}
+
+mpnet-10m:
+  base: mpnet-10m/wiki_mpnet_embeddings_base_9997697.fvecs
+  query: mpnet-10m/wiki_mpnet_embeddings_query_10000.fvecs
+  gt: mpnet-10m/wiki_mpnet_embeddings_gt_ip_100.ivecs
+
+cohere-english-v3-10M:
+  base: cohere-10m/cohere_wiki_en_flat_base_10m_norm.fvecs
+  query: cohere-10m/cohere_wiki_en_flat_query_10k_norm.fvecs
+  gt: cohere-10m/cohere_wiki_en_flat_gt_10m_ip_k100.ivecs
+
+cap-6M:
+  base: cap-6m/Caselaw_gte-Qwen2-1.5B_embeddings_base_6m_norm_shuffle.fvecs
+  query: cap-6m/Caselaw_gte-Qwen2-1.5B_embeddings_query_10k_norm_shuffle.fvecs
+  gt: cap-6m/cap_6m_gt_norm_shuffle_ip_k100.ivecs

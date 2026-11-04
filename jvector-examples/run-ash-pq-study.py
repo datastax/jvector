@@ -39,6 +39,7 @@ parser.add_argument("--eight-core-cpus", default="0-7")
 parser.add_argument("--query-node", default="0")
 parser.add_argument("--build-repetitions", type=int, default=5)
 parser.add_argument("--query-repetitions", type=int, default=3)
+parser.add_argument("--dataset-set", choices=("1m", "large"), default="1m")
 parser.add_argument("--plan-only", action="store_true")
 args = parser.parse_args()
 if min(args.build_cores, args.build_repetitions, args.query_repetitions) <= 0:
@@ -55,7 +56,8 @@ data = args.data.resolve()
 if not data.is_dir():
     parser.error("Dataset directory does not exist")
 jobs = []
-for group, (prefix, bits) in enumerate((p, b) for p in ("openai3072", "mpnet", "cohere", "ada002") for b in (2, 4)):
+prefixes = ("openai3072", "mpnet", "cohere", "ada002") if args.dataset_set == "1m" else ("mpnet10m", "cohere10m", "cap6m")
+for group, (prefix, bits) in enumerate((p, b) for p in prefixes for b in (2, 4)):
     for repetition in range(1, args.build_repetitions + 1):
         algorithms = ("pq", "ash") if (group + repetition) % 2 else ("ash", "pq")
         for algorithm in algorithms:
@@ -76,7 +78,8 @@ for job in jobs:
     case_repetition = job["repetition"] if job["mode"] == "construction" else 1
     job["case"] = str(output / "cases" / f"{job['prefix']}-{job['bits']}bit-{job['algorithm']}-r{case_repetition}")
     job["config"] = f"{job['prefix']}-{job['bits']}bit-{job['algorithm']}.yml"
-plan = dict(source_ref=source_ref, jar_sha256=jar_sha, data=str(data), jobs=jobs,
+watchdog_minutes = {"construction": 180 if args.dataset_set == "large" else 30, "query": 30}
+plan = dict(source_ref=source_ref, jar_sha256=jar_sha, data=str(data), dataset_set=args.dataset_set, watchdog_minutes=watchdog_minutes, jobs=jobs,
             construction_jobs=sum(j["mode"] == "construction" for j in jobs),
             query_jobs=sum(j["mode"] != "construction" for j in jobs))
 if args.plan_only:
@@ -205,7 +208,8 @@ for job in jobs:
     before = set((case / "runs").glob("*")) if (case / "runs").exists() else set()
     argv = ["bash", str(helper), job["config"], job["mode"], str(job["cores"]), job["cpus"], str(case)]
     env = os.environ.copy()
-    env.update(JVECTOR_BENCH_DATA_DIR=str(data), JVECTOR_BENCH_NUMA_POLICY=job["numa"])
+    env.update(JVECTOR_BENCH_DATA_DIR=str(data), JVECTOR_BENCH_NUMA_POLICY=job["numa"],
+               JVECTOR_BENCH_CATALOG="catalog-large.yml" if args.dataset_set == "large" else "catalog-1m.yml")
     log_path = output / (job["id"] + ".log")
     print("START " + job["id"], flush=True)
     libraries = set()
@@ -214,10 +218,11 @@ for job in jobs:
         process = subprocess.Popen(argv, cwd=repo, env=env, stdout=log, stderr=subprocess.STDOUT)
         started = time.monotonic()
         while process.poll() is None:
-            if time.monotonic() - started > 1800:
+            limit_minutes = watchdog_minutes["construction" if job["mode"] == "construction" else "query"]
+            if time.monotonic() - started > limit_minutes * 60:
                 process.terminate()
                 process.wait(timeout=15)
-                raise RuntimeError("BenchYAML exceeded the 30-minute process watchdog; inspect " + str(log_path))
+                raise RuntimeError(f"BenchYAML exceeded the {limit_minutes}-minute process watchdog; inspect {log_path}")
             if run_directory is None:
                 created = set((case / "runs").glob("*")) - before
                 if len(created) == 1:
