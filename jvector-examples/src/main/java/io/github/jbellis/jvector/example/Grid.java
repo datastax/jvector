@@ -1399,12 +1399,25 @@ public class Grid {
         /** Shared across this configured index's warmups and all query measurements. */
         public synchronized java.util.concurrent.ExecutorService queryWorkers() {
             if (closed) throw new IllegalStateException("Configured system is closed");
-            if (queuedQueryWorkers == null)
-                queuedQueryWorkers = java.util.concurrent.Executors.newFixedThreadPool(queryWorkerCount());
+            if (queuedQueryWorkers == null) {
+                int count = queryWorkerCount();
+                // Drain tasks are reusable; an array queue avoids a linked queue
+                // node allocation on every isolated query activation.
+                queuedQueryWorkers = new java.util.concurrent.ThreadPoolExecutor(count, count,
+                        0L, java.util.concurrent.TimeUnit.MILLISECONDS,
+                        new java.util.concurrent.ArrayBlockingQueue<Runnable>(count),
+                        new java.util.concurrent.ThreadPoolExecutor.AbortPolicy());
+            }
             return queuedQueryWorkers;
         }
 
-        public void configureQueryExecution(String mode, int batchSize) {
+        /** Select before launching queries; workers and search-owned state are reused. */
+        public synchronized void configureQueryExecution(String mode, int batchSize) {
+            if (closed) throw new IllegalStateException("Configured system is closed");
+            if (!"direct".equals(mode) && !"queued".equals(mode))
+                throw new IllegalArgumentException("Query execution must be direct or queued");
+            if (batchSize <= 0 || batchSize == Integer.MAX_VALUE)
+                throw new IllegalArgumentException("Query batch size must be positive and fit its histogram");
             queuedExecution = "queued".equals(mode);
             queryBatchSize = batchSize;
             if (queuedExecution && queryPreparer == null)

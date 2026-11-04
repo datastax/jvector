@@ -25,9 +25,9 @@ import io.github.jbellis.jvector.vector.types.VectorFloat;
 import org.agrona.collections.LongArrayList;
 import java.util.Arrays;
 import java.util.List;
+import java.util.Objects;
 import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.CountDownLatch;
-import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Semaphore;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.concurrent.atomic.LongAdder;
@@ -44,7 +44,6 @@ public final class QueuedQueryExecution implements AutoCloseable {
     private final int topK, rerankK;
     private final boolean usePruning;
     private final QueryPreparer preparer;
-    private final ExecutorService workers;
     private final BatchingExecutor<Request> execution;
     private final ArrayBlockingQueue<Request> free;
     private LongArrayList measuredResponseTimes = new LongArrayList();
@@ -87,7 +86,10 @@ public final class QueuedQueryExecution implements AutoCloseable {
     }
 
     public QueuedQueryExecution(ConfiguredSystem system, int topK, int rerankK, boolean usePruning) {
-        this.system = system; this.topK = topK; this.rerankK = rerankK; this.usePruning = usePruning;
+        if (topK <= 0 || rerankK < topK)
+            throw new IllegalArgumentException("Require 0 < topK <= rerankK");
+        this.system = Objects.requireNonNull(system, "system");
+        this.topK = topK; this.rerankK = rerankK; this.usePruning = usePruning;
         this.preparer = system.queryPreparer();
         int cores = system.queryWorkerCount();
         int batchSize = system.queryBatchSize();
@@ -99,8 +101,8 @@ public final class QueuedQueryExecution implements AutoCloseable {
         free = new ArrayBlockingQueue<>(capacity);
         for (int i = 0; i < capacity; i++) free.add(new Request(preparer == null ? null : preparer.newState()));
         var rows = ThreadLocal.withInitial(() -> new Rows(batchSize));
-        workers = system.queryWorkers();
-            execution = new BatchingExecutor<>(cores, capacity, batchSize, workers,
+        var workers = system.queryWorkers();
+        execution = new BatchingExecutor<>(cores, capacity, batchSize, workers,
                     new BatchingExecutor.Operation<Request>() {
                 public Object batchKey(Request request) {
                     return preparer != null && preparer.supportsBatchPreparation() ? preparer : null;
@@ -162,13 +164,26 @@ public final class QueuedQueryExecution implements AutoCloseable {
         free.add(request);
     }
 
+    private void submit(Request request) {
+        boolean accepted = false;
+        try {
+            accepted = execution.trySubmit(request);
+            if (!accepted) throw new IllegalStateException("Admission accounting mismatch");
+        } finally {
+            // A throwing or rejected submission never transferred ownership.
+            if (!accepted) release(request);
+        }
+    }
+
     public Pass runPass(int count, IntFunction<VectorFloat<?>> source, QueryTimeRecorder recorder, boolean capture) {
+        if (count < 0) throw new IllegalArgumentException("Query count must be nonnegative");
+        Objects.requireNonNull(source, "source");
         Pass pass = new Pass(count, source, recorder == null ? NO_TIMING : recorder, capture);
         for (int i = 0; i < count; i++) {
             long submittedAt = System.nanoTime(); // Includes waiting for admission.
             Request request = acquire();
             request.pass = pass; request.ordinal = i; request.submittedAt = submittedAt;
-            if (!execution.trySubmit(request)) { release(request); throw new IllegalStateException("Admission accounting mismatch"); }
+            submit(request);
         }
         boolean interrupted = false;
         for (;;) {
@@ -183,10 +198,11 @@ public final class QueuedQueryExecution implements AutoCloseable {
 
     /** One submitted request with normal queue/batch capacity; not a singleton setting. */
     public SearchResult executeSingle(VectorFloat<?> query) {
+        Objects.requireNonNull(query, "query");
         long submittedAt = System.nanoTime();
         Request request = acquire();
         request.pass = null; request.query = query; request.submittedAt = submittedAt;
-        if (!execution.trySubmit(request)) { release(request); throw new IllegalStateException("Admission accounting mismatch"); }
+        submit(request);
         request.completed.acquireUninterruptibly();
         try { rethrow(request.failure); return request.result; }
         finally { release(request); }
