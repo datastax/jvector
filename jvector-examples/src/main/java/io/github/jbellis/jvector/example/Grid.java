@@ -730,8 +730,9 @@ public class Grid {
         return indexes;
     }
 
-    // avoid recomputing the compressor repeatedly (this is a relatively small memory footprint)
-    static final Map<String, VectorCompressor<?>> cachedCompressors = new IdentityHashMap<>();
+    // avoid recomputing the compressor repeatedly (this is a relatively small memory footprint);
+    // keys are formatted afresh per call, so they must compare by value
+    static final Map<String, VectorCompressor<?>> cachedCompressors = new HashMap<>();
 
     private static void testConfiguration(ConfiguredSystem cs,
                                           Map<Integer, List<Double>> topKGrid,
