@@ -13,6 +13,9 @@
     <name>Fastervector Bench</name>
     <properties>
         <fastervector.jvm.args>--enable-native-access=ALL-UNNAMED --add-modules jdk.incubator.vector -Djvector.enable_native_vectorization=false</fastervector.jvm.args>
+        <!-- For the exec runs: extra JVM options (e.g. -Xmx64g) and the runner's own arguments -->
+        <bench.jvm.args></bench.jvm.args>
+        <bench.args></bench.args>
     </properties>
     <build>
         <plugins>
@@ -33,6 +36,34 @@
                     <workingDirectory>${project.parent.basedir}</workingDirectory>
                 </configuration>
             </plugin>
+            <!-- jvector-fastervector-bench-<version>-jar-with-dependencies.jar, for running with java -cp -->
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-assembly-plugin</artifactId>
+                <version>3.6.0</version>
+                <configuration>
+                    <descriptorRefs>
+                        <descriptorRef>jar-with-dependencies</descriptorRef>
+                    </descriptorRefs>
+                    <archive>
+                        <manifest>
+                            <mainClass>io.github.jbellis.jvector.fastervector.bench.AutoBenchIvfYAML</mainClass>
+                        </manifest>
+                        <manifestEntries>
+                            <Enable-Native-Access>ALL-UNNAMED</Enable-Native-Access>
+                        </manifestEntries>
+                    </archive>
+                </configuration>
+                <executions>
+                    <execution>
+                        <id>make-assembly</id>
+                        <phase>package</phase>
+                        <goals>
+                            <goal>single</goal>
+                        </goals>
+                    </execution>
+                </executions>
+            </plugin>
             <plugin>
                 <groupId>org.apache.rat</groupId>
                 <artifactId>apache-rat-plugin</artifactId>
@@ -42,6 +73,66 @@
             </plugin>
         </plugins>
     </build>
+    <!-- Run a benchmark through Maven, from the repository root where the YAML configs resolve:
+           ./mvnw -Pfastervector,bench-ivf -pl jvector-fastervector-bench -am process-classes -Dbench.args="cap-1M"
+           ./mvnw -Pfastervector,autobench-ivf -pl jvector-fastervector-bench -am process-classes -Dbench.args="<runner arguments>"
+         (the autobench runner takes the same arguments as AutoBenchYAML; see the module README).
+         Bound to a phase in a profile rather than invoked as exec:exec@id, because with -am an exec goal
+         also runs in jvector-examples, whose jdk22 profile enables exec. -->
+    <profiles>
+        <profile>
+            <id>bench-ivf</id>
+            <build>
+                <plugins>
+                    <plugin>
+                        <groupId>org.codehaus.mojo</groupId>
+                        <artifactId>exec-maven-plugin</artifactId>
+                        <executions>
+                            <execution>
+                                <id>bench-ivf</id>
+                                <phase>process-classes</phase>
+                                <goals>
+                                    <goal>exec</goal>
+                                </goals>
+                                <configuration>
+                                    <skip>false</skip>
+                                    <executable>${java.home}/bin/java</executable>
+                                    <workingDirectory>${project.parent.basedir}</workingDirectory>
+                                    <commandlineArgs>${fastervector.jvm.args} ${bench.jvm.args} -classpath %classpath io.github.jbellis.jvector.fastervector.bench.BenchIvfYAML ${bench.args}</commandlineArgs>
+                                </configuration>
+                            </execution>
+                        </executions>
+                    </plugin>
+                </plugins>
+            </build>
+        </profile>
+        <profile>
+            <id>autobench-ivf</id>
+            <build>
+                <plugins>
+                    <plugin>
+                        <groupId>org.codehaus.mojo</groupId>
+                        <artifactId>exec-maven-plugin</artifactId>
+                        <executions>
+                            <execution>
+                                <id>autobench-ivf</id>
+                                <phase>process-classes</phase>
+                                <goals>
+                                    <goal>exec</goal>
+                                </goals>
+                                <configuration>
+                                    <skip>false</skip>
+                                    <executable>${java.home}/bin/java</executable>
+                                    <workingDirectory>${project.parent.basedir}</workingDirectory>
+                                    <commandlineArgs>${fastervector.jvm.args} ${bench.jvm.args} -classpath %classpath io.github.jbellis.jvector.fastervector.bench.AutoBenchIvfYAML ${bench.args}</commandlineArgs>
+                                </configuration>
+                            </execution>
+                        </executions>
+                    </plugin>
+                </plugins>
+            </build>
+        </profile>
+    </profiles>
     <dependencies>
         <dependency>
             <groupId>io.github.jbellis</groupId>

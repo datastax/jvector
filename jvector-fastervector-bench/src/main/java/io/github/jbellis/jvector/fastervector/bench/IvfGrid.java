@@ -18,6 +18,8 @@ package io.github.jbellis.jvector.fastervector.bench;
 
 import io.github.jbellis.jvector.example.benchmarks.Metric;
 import io.github.jbellis.jvector.example.benchmarks.datasets.DataSet;
+import io.github.jbellis.jvector.example.benchmarks.diagnostics.BenchmarkDiagnostics;
+import io.github.jbellis.jvector.example.benchmarks.diagnostics.DiagnosticLevel;
 import io.github.jbellis.jvector.fastervector.bench.IvfConfig.ConstructionPoint;
 import io.github.jbellis.jvector.fastervector.bench.IvfConfig.SearchPoint;
 import io.github.jbellis.jvector.vector.VectorSimilarityFunction;
@@ -79,15 +81,39 @@ public final class IvfGrid {
                 sink.startConstructionPoint(system);
                 List<Metric> constructionMetrics = system.constructionMetrics();
                 for (SearchPoint searchPoint : searchPoints) {
-                    List<Metric> metrics = new ArrayList<>();
-                    for (IvfQueryBenchmark benchmark : benchmarks) {
-                        metrics.addAll(benchmark.runBenchmark(system, searchPoint));
-                    }
+                    List<Metric> metrics = runBenchmarks(system, searchPoint, benchmarks);
                     metrics.addAll(constructionMetrics);
                     sink.accept(system, searchPoint, metrics);
                 }
             }
         }
         return true;
+    }
+
+    /**
+     * Runs the benchmarks for one search point and adds the JVM memory metrics the graph runner's
+     * {@code QueryTester} reports, from snapshots before and after. fastervector's own native
+     * memory isn't part of the JVM's off-heap count.
+     */
+    private static List<Metric> runBenchmarks(IvfSystem system, SearchPoint point, List<IvfQueryBenchmark> benchmarks)
+            throws IOException {
+        List<Metric> metrics = new ArrayList<>();
+        try (var diagnostics = new BenchmarkDiagnostics(DiagnosticLevel.NONE)) {
+            diagnostics.capturePrePhaseSnapshot("Query");
+            for (IvfQueryBenchmark benchmark : benchmarks) {
+                metrics.addAll(benchmark.runBenchmark(system, point));
+            }
+            diagnostics.capturePostPhaseSnapshot("Query");
+            var pre = diagnostics.getPrePhaseSystemSnapshot();
+            var post = diagnostics.getLatestSystemSnapshot();
+            if (pre != null && post != null) {
+                long heap = Math.max(pre.memoryStats.heapUsed, post.memoryStats.heapUsed);
+                long offHeap = Math.max(pre.memoryStats.getTotalOffHeapMemory(), post.memoryStats.getTotalOffHeapMemory());
+                metrics.add(Metric.of("search.system.max_heap_mb", "Max heap usage (MB)", ".1f", heap / (1024.0 * 1024.0)));
+                metrics.add(Metric.of("search.system.max_offheap_mb", "Max offheap usage (MB)", ".1f",
+                                      offHeap / (1024.0 * 1024.0)));
+            }
+        }
+        return metrics;
     }
 }

@@ -18,6 +18,8 @@ package io.github.jbellis.jvector.fastervector.bench;
 
 import io.github.jbellis.jvector.example.benchmarks.Metric;
 import io.github.jbellis.jvector.example.benchmarks.datasets.DataSet;
+import io.github.jbellis.jvector.example.benchmarks.diagnostics.BenchmarkDiagnostics;
+import io.github.jbellis.jvector.example.benchmarks.diagnostics.DiagnosticLevel;
 import io.github.jbellis.jvector.fastervector.FvecThreadPool;
 import io.github.jbellis.jvector.fastervector.IvfAshIndex;
 import io.github.jbellis.jvector.fastervector.IvfAshIndexSearcher;
@@ -30,7 +32,6 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.io.IOException;
-import java.io.UncheckedIOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
@@ -52,17 +53,32 @@ public final class IvfSystem implements AutoCloseable {
     /** Seconds spent in build(); null if the index was reopened. */
     private final Double buildSeconds;
     private final long indexBytes;
+    private final int indexFileCount;
+    private final Long buildHeapBytes;
+    private final Long buildOffHeapBytes;
     private final float[][] queries;
     private final Vecs queryVecs;
 
     private IvfSystem(DataSet ds, ConstructionPoint point, IvfAshIndex index, FvecThreadPool buildPool,
-                      Double buildSeconds, long indexBytes) {
+                      Double buildSeconds, List<Path> indexFiles) throws IOException {
         this.ds = ds;
         this.point = point;
         this.index = index;
         this.buildPool = buildPool;
         this.buildSeconds = buildSeconds;
-        this.indexBytes = indexBytes;
+        long bytes = 0;
+        for (Path file : indexFiles) {
+            bytes += Files.size(file);
+        }
+        this.indexBytes = bytes;
+        this.indexFileCount = indexFiles.size();
+        // JVM memory right after the build or open, as the graph runner records it
+        try (var diagnostics = new BenchmarkDiagnostics(DiagnosticLevel.NONE)) {
+            diagnostics.capturePostPhaseSnapshot("Build");
+            var snapshot = diagnostics.getLatestSystemSnapshot();
+            this.buildHeapBytes = snapshot == null ? null : snapshot.memoryStats.heapUsed;
+            this.buildOffHeapBytes = snapshot == null ? null : snapshot.memoryStats.getTotalOffHeapMemory();
+        }
         this.queries = toArrays(ds.getQueryVectors());
         this.queryVecs = new Array2DVecs(queries);
     }
@@ -89,7 +105,7 @@ public final class IvfSystem implements AutoCloseable {
                         .dim(ds.getDimension())
                         .buildThreadPool(pool)
                         .open();
-                return new IvfSystem(ds, point, index, pool, null, indexBytes(ssdPaths, subfolder));
+                return new IvfSystem(ds, point, index, pool, null, indexFiles(ssdPaths, subfolder));
             }
 
             for (Path ssd : ssdPaths) {
@@ -107,7 +123,7 @@ public final class IvfSystem implements AutoCloseable {
                     .buildThreadPool(pool)
                     .build();
             double seconds = (System.nanoTime() - start) / 1e9;
-            return new IvfSystem(ds, point, index, pool, seconds, indexBytes(ssdPaths, subfolder));
+            return new IvfSystem(ds, point, index, pool, seconds, indexFiles(ssdPaths, subfolder));
         } catch (IOException | RuntimeException e) {
             if (pool != null) {
                 pool.close();
@@ -133,22 +149,25 @@ public final class IvfSystem implements AutoCloseable {
     /** Total size of the regular files in each SSD path's index directory. */
     static long indexBytes(List<Path> ssdPaths, String subfolder) throws IOException {
         long total = 0;
+        for (Path file : indexFiles(ssdPaths, subfolder)) {
+            total += Files.size(file);
+        }
+        return total;
+    }
+
+    /** The regular files in each SSD path's index directory. */
+    static List<Path> indexFiles(List<Path> ssdPaths, String subfolder) throws IOException {
+        List<Path> files = new ArrayList<>();
         for (Path ssd : ssdPaths) {
             Path dir = ssd.resolve(subfolder);
             if (!Files.isDirectory(dir)) {
                 continue;
             }
-            try (Stream<Path> files = Files.walk(dir)) {
-                total += files.filter(Files::isRegularFile).mapToLong(p -> {
-                    try {
-                        return Files.size(p);
-                    } catch (IOException e) {
-                        throw new UncheckedIOException(e);
-                    }
-                }).sum();
+            try (Stream<Path> walk = Files.walk(dir)) {
+                walk.filter(Files::isRegularFile).forEach(files::add);
             }
         }
-        return total;
+        return files;
     }
 
     private static void deleteRecursively(Path dir) throws IOException {
@@ -179,14 +198,24 @@ public final class IvfSystem implements AutoCloseable {
         return index.searcherBuilder().topk(topK).nprobe(nprobe).searchThreadPool(pool).build();
     }
 
-    /** Construction metrics, keyed like the graph benchmarks'. Build time is absent for a reopened index. */
+    /**
+     * Construction and disk metrics, keyed like the graph benchmarks' so run-config.yml's
+     * {@code construction} and {@code disk} selections apply. Build time is absent for a reopened index.
+     */
     public List<Metric> constructionMetrics() {
         List<Metric> out = new ArrayList<>();
+        double mb = indexBytes / 1024.0 / 1024.0;
         if (buildSeconds != null) {
             out.add(Metric.of("construction.index_build_time_s", "Index build time (s)", ".2f", buildSeconds));
         }
-        out.add(Metric.of("construction.index_file_size_mb", "Index file size (MB)", ".2f",
-                          indexBytes / 1024.0 / 1024.0));
+        out.add(Metric.of("construction.index_file_size_mb", "Index file size (MB)", ".2f", mb));
+        out.add(Metric.of("search.disk.total_file_size_mb", "Total file size (MB)", ".1f", mb));
+        out.add(Metric.of("search.disk.file_count", "File count", ".0f", indexFileCount));
+        if (buildHeapBytes != null) {
+            out.add(Metric.of("construction.build_heap_mb", "Build heap used (MB)", ".1f", buildHeapBytes / 1024.0 / 1024.0));
+            out.add(Metric.of("construction.build_offheap_mb", "Build off-heap (MB)", ".1f",
+                              buildOffHeapBytes / 1024.0 / 1024.0));
+        }
         return out;
     }
 

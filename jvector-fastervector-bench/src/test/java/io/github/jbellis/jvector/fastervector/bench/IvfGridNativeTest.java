@@ -110,6 +110,8 @@ class IvfGridNativeTest {
             assertTrue(m.containsKey(recallKey), "missing " + recallKey);
             assertTrue(m.containsKey("construction.index_build_time_s"));
             assertTrue(m.get("construction.index_file_size_mb") > 0);
+            assertTrue(m.get("search.disk.file_count") > 0);
+            assertTrue(m.containsKey("search.system.max_heap_mb"));
             if (row.point().nprobe() == CLUSTERS) {
                 assertTrue(m.get(recallKey) >= MIN_RECALL, recallKey + " = " + m.get(recallKey));
             }
@@ -133,11 +135,58 @@ class IvfGridNativeTest {
         }
     }
 
+    @Test
+    void timingBenchmarksReportPositiveValues() throws IOException {
+        List<IvfQueryBenchmark> benchmarks = List.of(
+                IvfThroughputBenchmark.createEmpty(IvfThroughputBenchmark.Mode.BATCHED, 1, 2).displayAvgQps(),
+                IvfThroughputBenchmark.createEmpty(IvfThroughputBenchmark.Mode.PER_QUERY, 1, 2).displayAvgQps(),
+                IvfLatencyBenchmark.createEmpty(1).displayAvgLatency().displayP999Latency());
+        // Each measured run starts with a 500 ms GC pause, so keep this grid to one point per thread count
+        IvfConfig config = config(false);
+        config.construction.storageFactor = List.of(1.0f);
+        config.search.topKNprobe = Map.of(10, List.of(CLUSTERS));
+        var rows = run(config, benchmarks);
+        assertEquals(2, rows.size());
+        assertFalse(rows.isEmpty());
+        for (Row row : rows) {
+            for (String key : List.of("search.throughput.avg_qps", "search.throughput.per_query.avg_qps",
+                                      "search.latency.mean_ms", "search.latency.p999_ms")) {
+                assertTrue(row.metrics().get(key) > 0, key + " = " + row.metrics().get(key) + " at " + row.point());
+            }
+        }
+    }
+
+    @Test
+    void regressionOutputHasOneCsvRowPerDataset() throws IOException {
+        // The regression benchmarks run 3 + 3 throughput passes per mode, so keep this to one row
+        IvfConfig config = config(false);
+        config.construction.storageFactor = List.of(1.0f);
+        config.search.topKNprobe = Map.of(10, List.of(CLUSTERS));
+        config.search.searchThreads = List.of(2);
+        List<io.github.jbellis.jvector.example.BenchResult> results = new ArrayList<>();
+        IvfGrid.run(ds, config, AutoBenchIvfYAML.defaultBenchmarks(),
+                    (system, point, metrics) -> results.add(AutoBenchIvfYAML.toBenchResult(system, config, point, metrics)));
+        assertEquals(1, results.size());
+        assertEquals(16, results.get(0).parameters.get("nlist"));
+        assertTrue((Double) results.get(0).metrics.get("QPS") > 0);
+        assertTrue((Double) results.get(0).metrics.get("Per-query QPS") > 0);
+
+        Path csv = dir.resolve("ivf.csv");
+        AutoBenchIvfYAML.writeCsv(results, csv);
+        List<String> lines = Files.readAllLines(csv);
+        assertEquals(2, lines.size());
+        assertTrue(lines.get(1).startsWith("synthetic,"), lines.get(1));
+    }
+
     private record Row(SearchPoint point, Map<String, Double> metrics) {}
 
     private List<Row> run(IvfConfig config) throws IOException {
+        return run(config, List.of(IvfAccuracyBenchmark.createDefault().displayMAP()));
+    }
+
+    private List<Row> run(IvfConfig config, List<IvfQueryBenchmark> benchmarks) throws IOException {
         List<Row> rows = new ArrayList<>();
-        assertTrue(IvfGrid.run(ds, config, List.of(IvfAccuracyBenchmark.createDefault().displayMAP()),
+        assertTrue(IvfGrid.run(ds, config, benchmarks,
                 (system, point, metrics) -> rows.add(new Row(point, metrics.stream()
                         .collect(Collectors.toMap(Metric::getKey, Metric::getValue))))));
         return rows;
