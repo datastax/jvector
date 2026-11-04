@@ -139,6 +139,22 @@ public class TestDeferredQueryReporting {
         }
     }
 
+    @Test(timeout=10000)
+    public void rejectedSubmissionReturnsItsPooledRequestAndInputGuardsPrecedeAllocation() throws Exception {
+        try (var cs = system()) {
+            assertThrows(IllegalArgumentException.class, () -> new QueuedQueryExecution(cs, 0, 1, false));
+            assertThrows(IllegalArgumentException.class, () -> new QueuedQueryExecution(cs, 2, 1, false));
+            var queued = new QueuedQueryExecution(cs, 1, 1, false);
+            assertThrows(IllegalArgumentException.class, () -> queued.runPass(-1, i -> null, null, false));
+            assertThrows(NullPointerException.class, () -> queued.runPass(0, null, null, false));
+            assertThrows(NullPointerException.class, () -> queued.executeSingle(null));
+            queued.close();
+            var query = cs.getDataSet().getQueryVectors().get(0);
+            for (int i = 0; i < 100; i++)
+                assertThrows(java.util.concurrent.RejectedExecutionException.class, () -> queued.executeSingle(query));
+        }
+    }
+
     @Test
     public void completedSnapshotSurvivesExecutorCloseAndCanOnlyBeTransferredOnce() throws Exception {
         try (var cs = system()) {
