@@ -178,15 +178,15 @@ public final class BatchingExecutor<T> implements AutoCloseable {
                     catch (Throwable error) { failure = error; }
                     if (failure == null) {
                         int size = slots.size();
-                        if (size == 1) {
-                            Slot<T> slot = slots.get(0);
-                            try { operation.execute(slot.request); }
-                            catch (Throwable error) { failure = error; }
-                            finish(slot, failure);
-                        } else {
-                            for (Slot<T> slot : slots) ready.add(slot);
-                            work.release(size);
-                        }
+                        // Keep one search on the preparing worker for every
+                        // group size. Singleton and full-batch traffic use the
+                        // same execution path; other workers can take the rest.
+                        Slot<T> first = slots.get(0);
+                        for (int i = 1; i < size; i++) ready.add(slots.get(i));
+                        if (size > 1) work.release(size - 1);
+                        try { operation.execute(first.request); }
+                        catch (Throwable error) { failure = error; }
+                        finish(first, failure);
                     } else {
                         for (Slot<T> slot : slots) finish(slot, failure);
                     }

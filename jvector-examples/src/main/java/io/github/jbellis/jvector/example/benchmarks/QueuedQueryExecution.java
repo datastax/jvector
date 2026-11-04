@@ -109,11 +109,6 @@ public final class QueuedQueryExecution implements AutoCloseable {
                     for (Request request : requests)
                         if (request.pass != null) request.query = request.pass.inputs.apply(request.ordinal);
                     if (preparer == null) return;
-                    if (requests.size() == 1) {
-                        var request = requests.get(0);
-                        preparer.prepare(request.query, request.state);
-                        return;
-                    }
                     Rows buffers = rows.get();
                     try {
                         for (int i = 0; i < requests.size(); i++) {
