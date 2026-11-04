@@ -54,8 +54,11 @@ final class FusedPQProvider implements FeatureProvider {
 
     @Override
     public void checkCompressedBuild(PQVectors buildPQ) {
-        if (buildPQ == null) {
-            throw new IllegalArgumentException("FusedPQ requires PQ build compression with 256 clusters");
+        // The same limit the core FusedPQ constructor enforces, checked here so a rejected build
+        // fails before any index writer is opened.
+        if (buildPQ == null || buildPQ.getCompressor().getClusterCount() != 256) {
+            throw new IllegalArgumentException("FusedPQ requires PQ build compression with 256 clusters"
+                    + (buildPQ == null ? "" : ", not " + buildPQ.getCompressor().getClusterCount()));
         }
     }
 }
