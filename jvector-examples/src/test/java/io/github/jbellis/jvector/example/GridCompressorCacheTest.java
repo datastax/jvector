@@ -38,10 +38,13 @@ import java.util.List;
 import java.util.Random;
 import java.util.function.Function;
 
+import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertSame;
 import static org.junit.Assert.assertTrue;
 
 /// Grid's compressor cache, exercised through the same private entry point the benchmarks use:
-/// a compressor saved under its cache key must load back as the type that saved it.
+/// a compressor saved under its cache key must load back as the type that saved it, and the
+/// in-memory memo must hand back the same instance for the same key.
 public class GridCompressorCacheTest {
     private final List<Path> cacheFiles = new ArrayList<>();
 
@@ -66,6 +69,19 @@ public class GridCompressorCacheTest {
         var loaded = compressor(params, ds);
         assertTrue("Loaded " + loaded.getClass().getSimpleName() + " where NVQuantization was saved",
                 loaded instanceof NVQuantization);
+    }
+
+    @Test
+    public void sameKeyReturnsTheMemoizedCompressor() throws Exception {
+        var ds = dataset("grid-cache-memo-" + System.nanoTime(), 8, 64);
+        Function<DataSet, CompressorParameters> params = d -> new CompressorParameters.NVQParameters(2);
+        cacheFile(params, ds);
+
+        Grid.cachedCompressors.clear();
+        var first = compressor(params, ds);
+        var second = compressor(params, ds);
+        assertSame("The same cache key must hit the in-memory memo instead of reloading", first, second);
+        assertEquals("One entry per key", 1, Grid.cachedCompressors.size());
     }
 
     private Path cacheFile(Function<DataSet, CompressorParameters> params, DataSet ds) {
