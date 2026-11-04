@@ -729,6 +729,15 @@ public class GraphIndexBuilder implements Closeable, Accountable {
     }
 
     /**
+     * Retained for binary compatibility with callers compiled against the float-only signature.
+     * Equivalent to {@link #build(VectorValues)}.
+     */
+    public ImmutableGraphIndex build(RandomAccessVectorValues ravv) {
+        return build((VectorValues<?>) ravv);
+    }
+
+
+    /**
      * Builds the graph from any {@link VectorValues} source — works for both
      * {@link RandomAccessVectorValues} (float32) and {@link RandomAccessByteVectorValues} (int8).
      * The score provider supplied at construction time determines how vectors are compared.

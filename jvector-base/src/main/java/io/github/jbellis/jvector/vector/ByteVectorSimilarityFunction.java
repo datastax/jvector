@@ -28,16 +28,19 @@ import io.github.jbellis.jvector.vector.types.ByteSequence;
 public enum ByteVectorSimilarityFunction {
 
     /**
-     * Euclidean similarity normalised to {@code (0, 1]}.
-     * Raw squared L2 is divided by {@code n * 255^2} (the maximum possible squared distance
-     * between two signed int8 vectors) before the {@code 1 / (1 + x)} mapping, so the result
-     * is always in (0, 1] regardless of dimension.
+     * Euclidean similarity in {@code (0, 1]}: {@code 1 / (1 + squaredL2)}, the same mapping as
+     * {@link VectorSimilarityFunction#EUCLIDEAN}.
      */
     EUCLIDEAN {
         @Override
         public float compare(ByteSequence<?> v1, ByteSequence<?> v2) {
-            float maxSquaredDist = v1.length() * (255.0f * 255.0f);
-            return 1.0f / (1.0f + VectorUtil.squareL2Distance(v1, v2) / maxSquaredDist);
+            // Do not divide the squared distance by a dimension-dependent maximum (e.g. n * 255^2) here.
+            // That squeezes every score into a band just below 1.0 and, in float32, collapses nearby
+            // distances to the same value (at 1024 dimensions squared distances 0, 1, 2 and 3 all score 1.0).
+            // Graph construction prunes with `similarity(other) > score * alpha`, which relies on scores
+            // keeping their relative spacing, so collapsed scores erase ranking distinctions and break
+            // pruning of longer links.
+            return 1.0f / (1.0f + VectorUtil.squareL2Distance(v1, v2));
         }
     },
 
