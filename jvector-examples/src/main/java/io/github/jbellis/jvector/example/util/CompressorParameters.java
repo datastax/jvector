@@ -16,11 +16,14 @@
 
 package io.github.jbellis.jvector.example.util;
 
+import io.github.jbellis.jvector.disk.RandomAccessReader;
 import io.github.jbellis.jvector.example.benchmarks.datasets.DataSet;
 import io.github.jbellis.jvector.quantization.BinaryQuantization;
 import io.github.jbellis.jvector.quantization.NVQuantization;
 import io.github.jbellis.jvector.quantization.ProductQuantization;
 import io.github.jbellis.jvector.quantization.VectorCompressor;
+
+import java.io.IOException;
 
 public abstract class CompressorParameters {
     public static final CompressorParameters NONE = new NoCompressionParameters();
@@ -35,6 +38,15 @@ public abstract class CompressorParameters {
     }
 
     public abstract VectorCompressor<?> computeCompressor(DataSet ds);
+
+    /**
+     * Reads back a compressor that {@link #computeCompressor} produced and the benchmark cached.
+     * Each compressor type has its own on-disk format, so the parameters that saved it read it.
+     */
+    public VectorCompressor<?> loadCompressor(RandomAccessReader in) throws IOException {
+        // only required when supportsCaching() is true
+        throw new UnsupportedOperationException();
+    }
 
     public static class PQParameters extends CompressorParameters {
         private final int m;
@@ -57,6 +69,11 @@ public abstract class CompressorParameters {
         @Override
         public String idStringFor(DataSet ds) {
             return String.format("PQ_%s_%d_%d_%s_%s", ds.getName(), m, k, isCentered, anisotropicThreshold);
+        }
+
+        @Override
+        public VectorCompressor<?> loadCompressor(RandomAccessReader in) throws IOException {
+            return ProductQuantization.load(in);
         }
 
         @Override
@@ -87,6 +104,11 @@ public abstract class CompressorParameters {
         @Override
         public String idStringFor(DataSet ds) {
             return String.format("NVQ_%s_%d", ds.getName(), nSubVectors);
+        }
+
+        @Override
+        public VectorCompressor<?> loadCompressor(RandomAccessReader in) throws IOException {
+            return NVQuantization.load(in);
         }
 
         @Override
