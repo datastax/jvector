@@ -1391,6 +1391,20 @@ public class Grid {
         private io.github.jbellis.jvector.graph.similarity.QueryPreparer queryPreparer;
         private java.util.concurrent.ExecutorService queuedQueryWorkers;
         private boolean closed;
+        private final List<Supplier<List<Metric>>> deferredQueryMetrics = new ArrayList<>();
+
+        /** Reporting work must not compile or allocate between timed query benchmarks. */
+        public void deferQueryMetrics(Supplier<List<Metric>> supplier) {
+            deferredQueryMetrics.add(Objects.requireNonNull(supplier));
+        }
+
+        public void appendDeferredQueryMetrics(List<Metric> target) {
+            try {
+                for (var supplier : deferredQueryMetrics) target.addAll(supplier.get());
+            } finally { deferredQueryMetrics.clear(); }
+        }
+
+        public void discardDeferredQueryMetrics() { deferredQueryMetrics.clear(); }
 
         public int queryWorkerCount() {
             return Math.max(1, Math.min(Runtime.getRuntime().availableProcessors(), PhysicalCoreExecutor.getPhysicalCoreCount()));
@@ -1456,6 +1470,7 @@ public class Grid {
         @Override
         public synchronized void close() throws Exception {
             closed = true;
+            deferredQueryMetrics.clear();
             try {
                 if (queuedQueryWorkers != null) {
                     queuedQueryWorkers.shutdown();

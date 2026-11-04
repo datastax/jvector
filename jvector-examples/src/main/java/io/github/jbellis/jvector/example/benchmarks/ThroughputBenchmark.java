@@ -350,7 +350,7 @@ public class ThroughputBenchmark extends AbstractQueryBenchmark {
                         formatMaxQps,
                         minQps));
             }
-            if (queued != null) list.addAll(queued.measuredMetrics());
+            if (queued != null) cs.deferQueryMetrics(queued::measuredMetrics);
             return list;
         }
         catch (IOException e) {
