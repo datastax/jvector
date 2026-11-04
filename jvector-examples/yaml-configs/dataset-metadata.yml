@@ -131,3 +131,7 @@ esmc-600-1M:
 esmc-600-6M:
   similarity_function: DOT_PRODUCT
   load_behavior: NO_SCRUB
+
+mpnet-10m:
+  similarity_function: DOT_PRODUCT
+  load_behavior: NO_SCRUB

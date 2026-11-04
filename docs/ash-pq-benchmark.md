@@ -231,6 +231,55 @@ There is no compiler-quiescence gate or special warmup of measured query inputs.
 Hardware, OS scheduling and parallel graph construction cause run variation;
 reproduction means the same protocol and comparable distributions.
 
+## Larger-dataset comparison
+
+The same index parameters, native defaults, matched 2-bit/4-bit budgets, JDK 22,
+48-core construction and 1-/8-core query protocol apply to the larger inputs.
+The checked-in `catalog-large.yml` uses relative local paths under
+`JVECTOR_BENCH_DATA_DIR`; no credentials or server-specific paths are required.
+MPNet 10M uses 101/197 code bytes, Cohere 10M 133/261, and CAP 6M 197/389.
+
+| Dataset | Base vectors | Dimensions | Queries |
+| --- | ---: | ---: | ---: |
+| MPNet 10M | 9,997,697 | 768 | 10,000 |
+| Cohere 10M | 10,000,000 | 1024 | 10,000 |
+| CAP 6M | 6,070,488 | 1536 | 10,000 |
+
+Use the exact base, query and top-100 ground-truth files named in the catalog.
+All use `DOT_PRODUCT` and `NO_SCRUB`; replacing a base file with a deduplicated
+variant without rebuilding its ground truth would change the experiment.
+
+```bash
+python3 jvector-examples/run-ash-pq-study.py --dataset-set large \
+  --data /data/normalized-large-vector-datasets \
+  --output /data/jvector-bench/large-study
+```
+
+Large construction invocations use a three-hour process watchdog, while query
+invocations retain the 30-minute watchdog. These only detect an invocation that
+failed to finish; their wall clock does not supply benchmark measurements.
+
+The large study has 60 fresh construction JVMs and 144 query JVMs: five builds
+and three query repetitions per configuration, with both overquery levels
+reported by each query JVM. It runs after the four-dataset 1M study, without
+sharing CPUs with another measurement. Only the first graph per configuration
+is retained for queries; redundant construction caches are released after
+recording their results. Reserve sufficient storage for twelve retained
+indexes plus one additional construction, and record the output volume.
+
+For a single case, select the same local catalog explicitly:
+
+```bash
+JVECTOR_BENCH_CATALOG=catalog-large.yml \
+JVECTOR_BENCH_NUMA_POLICY=interleave:0,1 \
+  bash jvector-examples/run-ash-pq-benchmark.sh \
+  mpnet10m-2bit-ash.yml construction 48 0-47 /data/jvector-bench/mpnet10m-2bit-ash-r1
+```
+
+The helper copies the selected checked-in catalog into the case directory and
+records it alongside the index/run YAML and full standalone command. Use that
+same catalog selection for subsequent direct/queued invocations.
+
 ## Unloaded-latency warmup correction
 
 Unloaded latency has its own warmup through the same single-request execution

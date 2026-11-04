@@ -72,6 +72,10 @@ SOURCE_REF="$(git -C "$REPO_ROOT" rev-parse HEAD)"
 JAVA_BIN="$(command -v java)"
 CONFIG="$REPO_ROOT/jvector-examples/yaml-configs/ash-pq/$CONFIG_NAME"
 RUN_CONFIG="$REPO_ROOT/jvector-examples/yaml-configs/ash-pq/run-$MODE.yml"
+CATALOG_NAME="${JVECTOR_BENCH_CATALOG:-catalog-1m.yml}"
+case "$CATALOG_NAME" in catalog-1m.yml|catalog-large.yml) ;; *) echo "Unknown dataset catalog: $CATALOG_NAME" >&2; exit 2;; esac
+CATALOG="$REPO_ROOT/jvector-examples/yaml-configs/ash-pq/$CATALOG_NAME"
+[[ -f "$CATALOG" ]] || { echo "Dataset catalog not found: $CATALOG" >&2; exit 2; }
 [[ -f "$CONFIG" && "$CONFIG_NAME" != run-* && "$CONFIG_NAME" != catalog-* && "$CONFIG_NAME" != */* ]] || {
   echo "Unknown index config: $CONFIG_NAME" >&2; exit 2;
 }
@@ -110,12 +114,15 @@ CASE_CONFIG="$CASE_DIRECTORY/jvector-examples/yaml-configs"
 mkdir -p "$CASE_CONFIG/dataset-catalogs"
 cp "$REPO_ROOT/jvector-examples/yaml-configs/dataset-metadata.yml" "$CASE_CONFIG/"
 cp "$REPO_ROOT/jvector-examples/yaml-configs/datasets.yml" "$CASE_CONFIG/"
-cp "$REPO_ROOT/jvector-examples/yaml-configs/ash-pq/catalog-1m.yml" "$CASE_CONFIG/dataset-catalogs/ash-pq-1m.yml"
+# Remove only the catalog name created by the original version of this recipe.
+rm -f "$CASE_CONFIG/dataset-catalogs/ash-pq-1m.yml"
+cp "$CATALOG" "$CASE_CONFIG/dataset-catalogs/ash-pq-local.yml"
 printf '%s\n' "$CASE_ID" > "$CASE_DIRECTORY/case-id.txt"
 mkdir -p "$CASE_DIRECTORY/runs"
 RUN_DIRECTORY="$(mktemp -d "$CASE_DIRECTORY/runs/$MODE-c$CORES-XXXXXX")"
 cp "$CONFIG" "$RUN_DIRECTORY/index.yml"
 cp "$RUN_CONFIG" "$RUN_DIRECTORY/run.yml"
+cp "$CATALOG" "$RUN_DIRECTORY/catalog.yml"
 printf '%s\n' "$SOURCE_REF" > "$RUN_DIRECTORY/source-ref.txt"
 sha256sum "$JAR" > "$RUN_DIRECTORY/jar.sha256"
 "$JAVA_BIN" -version > "$RUN_DIRECTORY/java-version.txt" 2>&1

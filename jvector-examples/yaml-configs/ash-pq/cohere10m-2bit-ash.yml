@@ -1,0 +1,38 @@
+# cohere-english-v3-10M: 1024 input dimensions, 133 code bytes per vector.
+# The 2-bit label describes the ASH budget; PQ uses 133 8-bit subspaces.
+# ASH uses C=1 and D/2 projected dimensions, including its five-byte header.
+# See docs/ash-pq-benchmark.md for construction, direct and queued run commands.
+yamlSchemaVersion: 2
+onDiskIndexVersion: 7
+dataset: cohere-english-v3-10M
+
+construction:
+  outDegree: [32]
+  efConstruction: [100]
+  neighborOverflow: [1.2f]
+  addHierarchy: [Yes]
+  refineFinalGraph: [Yes]
+  fusedGraph: [Yes]
+  compression:
+    - type: ASH
+      parameters:
+        encodedBits: 1064
+        optimizer: ITQ
+        landmarkCount: 1
+        bitsPerDimension: 2
+  reranking: [NVQ]
+  # A fresh case directory measures training/encoding/construction. Later JVMs
+  # in that directory reuse exactly the same model and index for querying.
+  useSavedIndexIfExists: Yes
+
+search:
+  topKOverquery:
+    10: [1.0, 2.0]
+  useSearchPruning: [No]
+  compression:
+    - type: ASH
+      parameters:
+        encodedBits: 1064
+        optimizer: ITQ
+        landmarkCount: 1
+        bitsPerDimension: 2
