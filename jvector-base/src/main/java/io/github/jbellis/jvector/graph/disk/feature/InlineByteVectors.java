@@ -16,6 +16,7 @@
 
 package io.github.jbellis.jvector.graph.disk.feature;
 
+import io.github.jbellis.jvector.annotations.Experimental;
 import io.github.jbellis.jvector.disk.IndexWriter;
 import io.github.jbellis.jvector.disk.RandomAccessReader;
 import io.github.jbellis.jvector.graph.disk.CommonHeader;
@@ -36,6 +37,7 @@ import java.io.IOException;
  * Use {@link io.github.jbellis.jvector.graph.disk.OnDiskGraphIndex.View#getByteVector(int)}
  * to retrieve a stored vector at search time.
  */
+@Experimental
 public class InlineByteVectors extends AbstractFeature {
     private static final VectorTypeSupport vts = VectorizationProvider.getInstance().getVectorTypeSupport();
 

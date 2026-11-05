@@ -16,6 +16,7 @@
 
 package io.github.jbellis.jvector.graph;
 
+import io.github.jbellis.jvector.annotations.Experimental;
 import io.github.jbellis.jvector.util.ExplicitThreadLocal;
 
 import java.util.function.Supplier;
@@ -28,6 +29,7 @@ import java.util.logging.Logger;
  * (see {@link RandomAccessVectorValues}) and {@code ByteSequence<?>} for int8 vectors
  * (see {@link RandomAccessByteVectorValues}).
  */
+@Experimental
 public interface VectorValues<V> {
     Logger LOG = Logger.getLogger(VectorValues.class.getName());
 
