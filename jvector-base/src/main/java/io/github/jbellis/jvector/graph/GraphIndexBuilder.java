@@ -752,12 +752,16 @@ public class GraphIndexBuilder implements Closeable, Accountable {
                     addGraphNode(node, vv.get().getVector(node));
                 });
             }).join();
-        } else {
+        } else if (ravv instanceof RandomAccessByteVectorValues) {
+            // Same for int8 sources: read the supplied vectors rather than assuming the score provider's match.
+            var vv = ((RandomAccessByteVectorValues) ravv).threadLocalSupplier();
             simdExecutor.submit(() -> {
                 IntStream.range(0, size).parallel().forEach(node -> {
-                    addGraphNode(node, scoreProvider.searchProviderFor(node));
+                    addGraphNode(node, vv.get().getVector(node));
                 });
             }).join();
+        } else {
+            throw new IllegalArgumentException("Unsupported VectorValues type: " + ravv.getClass().getName());
         }
 
         cleanup();
