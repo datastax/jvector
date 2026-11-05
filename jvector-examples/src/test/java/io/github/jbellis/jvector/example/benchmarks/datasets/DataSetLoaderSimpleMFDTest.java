@@ -114,8 +114,8 @@ public class DataSetLoaderSimpleMFDTest {
         assertEquals("test-ds", info.get().getName());
 
         var ds = info.get().getDataSet();
-        assertEquals(5, ds.getBaseVectors().size());
-        assertEquals(2, ds.getQueryVectors().size());
+        assertEquals(5, ds.size());
+        assertEquals(2, ds.getQueryCount());
         assertEquals(2, ds.getGroundTruth().size());
         assertEquals(4, ds.getDimension());
     }
@@ -126,7 +126,7 @@ public class DataSetLoaderSimpleMFDTest {
         writeTestDataFiles(cacheDir);
         var loader = new DataSetLoaderSimpleMFD(null, cacheDir.toString(), false, testMetadata);
         var info = DataSets.loadDataSet("test-ds", java.util.List.of(loader), BaseVectorLoading.BUFFERED).orElseThrow();
-        var ds = info.getDataSet();
+        DataSet ds = info.getDataSet();
         assertSame(ds, info.getDataSet());
         var values = ds.getBaseRavv();
         var file = assertInstanceOf(io.github.jbellis.jvector.disk.FvecFileVectorValues.class, values);
@@ -135,7 +135,7 @@ public class DataSetLoaderSimpleMFDTest {
         ds.getBaseVectors().get(1);
         assertEquals(1f, retained.get(0));
         assertEquals(0f, retained.get(1));
-        try (ds; var preload = loader.loadDataSet("test-ds").orElseThrow().getDataSet()) {
+        try (ds; var preload = (DataSet) loader.loadDataSet("test-ds").orElseThrow().getDataSet()) {
             assertEquals(preload.getGroundTruth(), ds.getGroundTruth());
             assertEquals(preload.getSimilarityFunction(), ds.getSimilarityFunction());
             var consumers = java.util.concurrent.Executors.newFixedThreadPool(4);
@@ -145,7 +145,7 @@ public class DataSetLoaderSimpleMFDTest {
                     tasks.add(() -> {
                         try (var view = file.copy()) {
                             for (int pass = 0; pass < 20; pass++) {
-                                for (int ordinal = 0; ordinal < ds.getBaseVectors().size(); ordinal++) {
+                                for (int ordinal = 0; ordinal < ds.size(); ordinal++) {
                                     var expected = preload.getBaseVectors().get(ordinal);
                                     var actual = view.getVector(ordinal);
                                     for (int col = 0; col < expected.length(); col++)
@@ -300,7 +300,7 @@ public class DataSetLoaderSimpleMFDTest {
         );
 
         var ds = loader.loadDataSet("test-ds").orElseThrow().getDataSet();
-        assertEquals(5, ds.getBaseVectors().size());
+        assertEquals(5, ds.size());
     }
 
     @Test
@@ -343,7 +343,7 @@ public class DataSetLoaderSimpleMFDTest {
         );
 
         var ds = loader.loadDataSet("test-ds").orElseThrow().getDataSet();
-        assertEquals(5, ds.getBaseVectors().size());
+        assertEquals(5, ds.size());
     }
 
     @Test
@@ -356,7 +356,7 @@ public class DataSetLoaderSimpleMFDTest {
         );
 
         var ds = loader.loadDataSet("test-ds").orElseThrow().getDataSet();
-        assertEquals(5, ds.getBaseVectors().size());
+        assertEquals(5, ds.size());
     }
 
     @Test
@@ -410,8 +410,8 @@ public class DataSetLoaderSimpleMFDTest {
             assertTrue(Files.exists(cacheDir.resolve("catalog_entries.yaml")));
 
             var ds = loader.loadDataSet("test-ds").orElseThrow().getDataSet();
-            assertEquals(5, ds.getBaseVectors().size());
-            assertEquals(2, ds.getQueryVectors().size());
+            assertEquals(5, ds.size());
+            assertEquals(2, ds.getQueryCount());
             assertEquals(2, ds.getGroundTruth().size());
             assertEquals(4, ds.getDimension());
 
@@ -537,7 +537,7 @@ public class DataSetLoaderSimpleMFDTest {
 
         // data files should resolve relative to subDir, not cacheDir
         var ds = loader.loadDataSet("sub-ds").orElseThrow().getDataSet();
-        assertEquals(5, ds.getBaseVectors().size());
+        assertEquals(5, ds.size());
     }
 
     @Test
@@ -563,7 +563,7 @@ public class DataSetLoaderSimpleMFDTest {
         // should load without error — whichever catalog wins, the dataset is valid
         var ds = loader.loadDataSet("test-ds").orElseThrow().getDataSet();
         assertNotNull(ds);
-        assertEquals(5, ds.getBaseVectors().size());
+        assertEquals(5, ds.size());
     }
 
     @Test
@@ -669,7 +669,7 @@ public class DataSetLoaderSimpleMFDTest {
         );
 
         var ds = loader.loadDataSet("private-ds").orElseThrow().getDataSet();
-        assertEquals(5, ds.getBaseVectors().size());
+        assertEquals(5, ds.size());
     }
 
     @Test
@@ -711,7 +711,7 @@ public class DataSetLoaderSimpleMFDTest {
 
         // should load fine — base_url is normalized with trailing slash
         var ds = loader.loadDataSet("private-ds").orElseThrow().getDataSet();
-        assertEquals(5, ds.getBaseVectors().size());
+        assertEquals(5, ds.size());
     }
 
     @Test
@@ -737,7 +737,7 @@ public class DataSetLoaderSimpleMFDTest {
         );
 
         var ds = loader.loadDataSet("test-ds").orElseThrow().getDataSet();
-        assertEquals(5, ds.getBaseVectors().size());
+        assertEquals(5, ds.size());
         assertEquals(4, ds.getDimension());
     }
 
@@ -783,7 +783,7 @@ public class DataSetLoaderSimpleMFDTest {
 
         // files exist locally so base_url isn't hit, but the entry should load fine
         var ds = loader.loadDataSet("test-ds").orElseThrow().getDataSet();
-        assertEquals(5, ds.getBaseVectors().size());
+        assertEquals(5, ds.size());
     }
 
     @Test
@@ -804,7 +804,7 @@ public class DataSetLoaderSimpleMFDTest {
         );
 
         var ds = loader.loadDataSet("test-ds").orElseThrow().getDataSet();
-        assertEquals(5, ds.getBaseVectors().size());
+        assertEquals(5, ds.size());
     }
 
     @Test
@@ -852,7 +852,7 @@ public class DataSetLoaderSimpleMFDTest {
         );
 
         var ds = loader.loadDataSet("test-ds").orElseThrow().getDataSet();
-        assertEquals(5, ds.getBaseVectors().size());
+        assertEquals(5, ds.size());
     }
 
     @Test
@@ -873,7 +873,7 @@ public class DataSetLoaderSimpleMFDTest {
         );
 
         var ds = loader.loadDataSet("test-ds").orElseThrow().getDataSet();
-        assertEquals(5, ds.getBaseVectors().size());
+        assertEquals(5, ds.size());
     }
 
     @Test
@@ -897,7 +897,7 @@ public class DataSetLoaderSimpleMFDTest {
         );
 
         var ds = loader.loadDataSet("test-ds").orElseThrow().getDataSet();
-        assertEquals(5, ds.getBaseVectors().size());
+        assertEquals(5, ds.size());
     }
 
     @Test
@@ -969,7 +969,7 @@ public class DataSetLoaderSimpleMFDTest {
         );
 
         var ds = loader.loadDataSet("test-ds").orElseThrow().getDataSet();
-        assertEquals(5, ds.getBaseVectors().size());
+        assertEquals(5, ds.size());
     }
 
     // ========================================================================
@@ -994,7 +994,7 @@ public class DataSetLoaderSimpleMFDTest {
 
         // files exist locally so the expanded base_url isn't hit, but parsing should succeed
         var ds = loader.loadDataSet("test-ds").orElseThrow().getDataSet();
-        assertEquals(5, ds.getBaseVectors().size());
+        assertEquals(5, ds.size());
     }
 
     @Test
@@ -1015,7 +1015,7 @@ public class DataSetLoaderSimpleMFDTest {
         );
 
         var ds = loader.loadDataSet("test-ds").orElseThrow().getDataSet();
-        assertEquals(5, ds.getBaseVectors().size());
+        assertEquals(5, ds.size());
     }
 
     @Test
@@ -1036,7 +1036,7 @@ public class DataSetLoaderSimpleMFDTest {
         );
 
         var ds = loader.loadDataSet("test-ds").orElseThrow().getDataSet();
-        assertEquals(5, ds.getBaseVectors().size());
+        assertEquals(5, ds.size());
     }
 
     @Test
@@ -1070,7 +1070,7 @@ public class DataSetLoaderSimpleMFDTest {
         );
 
         var ds = loader.loadDataSet("test-ds").orElseThrow().getDataSet();
-        assertEquals(5, ds.getBaseVectors().size());
+        assertEquals(5, ds.size());
     }
 
     @Test
@@ -1147,7 +1147,7 @@ public class DataSetLoaderSimpleMFDTest {
 
         // local entry should still work
         var ds = loader.loadDataSet("test-ds").orElseThrow().getDataSet();
-        assertEquals(5, ds.getBaseVectors().size());
+        assertEquals(5, ds.size());
     }
 
     @Test
@@ -1181,7 +1181,7 @@ public class DataSetLoaderSimpleMFDTest {
         );
 
         var ds = loader.loadDataSet("test-ds").orElseThrow().getDataSet();
-        assertEquals(5, ds.getBaseVectors().size());
+        assertEquals(5, ds.size());
     }
 
     @Test
@@ -1204,7 +1204,7 @@ public class DataSetLoaderSimpleMFDTest {
 
         // local entry should work — the failed include shouldn't prevent it
         var ds = loader.loadDataSet("test-ds").orElseThrow().getDataSet();
-        assertEquals(5, ds.getBaseVectors().size());
+        assertEquals(5, ds.size());
     }
 
     @Test
@@ -1398,7 +1398,7 @@ public class DataSetLoaderSimpleMFDTest {
             );
 
             var onlineDs = onlineLoader.loadDataSet("test-ds").orElseThrow().getDataSet();
-            assertEquals(5, onlineDs.getBaseVectors().size());
+            assertEquals(5, onlineDs.size());
             assertTrue(Files.exists(cachedDataDir.resolve("test_base.fvecs")));
             assertTrue(Files.exists(cachedDataDir.resolve("test_query.fvecs")));
             assertTrue(Files.exists(cachedDataDir.resolve("test_gt.ivecs")));
@@ -1413,8 +1413,8 @@ public class DataSetLoaderSimpleMFDTest {
         );
 
         var offlineDs = offlineLoader.loadDataSet("test-ds").orElseThrow().getDataSet();
-        assertEquals(5, offlineDs.getBaseVectors().size());
-        assertEquals(2, offlineDs.getQueryVectors().size());
+        assertEquals(5, offlineDs.size());
+        assertEquals(2, offlineDs.getQueryCount());
         assertEquals(2, offlineDs.getGroundTruth().size());
         assertEquals(4, offlineDs.getDimension());
     }
@@ -1456,7 +1456,7 @@ public class DataSetLoaderSimpleMFDTest {
             );
 
             var onlineDs = onlineLoader.loadDataSet("test-ds").orElseThrow().getDataSet();
-            assertEquals(1, onlineDs.getBaseVectors().size());
+            assertEquals(1, onlineDs.size());
         } finally {
             server.stop(0);
         }
@@ -1467,8 +1467,8 @@ public class DataSetLoaderSimpleMFDTest {
         );
 
         var offlineDs = offlineLoader.loadDataSet("test-ds").orElseThrow().getDataSet();
-        assertEquals(1, offlineDs.getBaseVectors().size());
-        assertEquals(1, offlineDs.getQueryVectors().size());
+        assertEquals(1, offlineDs.size());
+        assertEquals(1, offlineDs.getQueryCount());
         assertEquals(1, offlineDs.getGroundTruth().size());
         assertEquals(4, offlineDs.getDimension());
     }

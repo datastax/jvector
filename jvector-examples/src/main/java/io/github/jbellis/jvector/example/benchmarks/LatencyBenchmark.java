@@ -104,7 +104,7 @@ public class LatencyBenchmark extends AbstractQueryBenchmark {
             throw new IllegalArgumentException("At least one parameter must be set to true");
         }
 
-        int totalQueries = cs.getDataSet().getQueryVectors().size();
+        int totalQueries = cs.getDataSet().getQueryCount();
         double mean = 0.0;
         double m2 = 0.0;
         int count = 0;

@@ -17,6 +17,7 @@
 package io.github.jbellis.jvector.example;
 
 import io.github.jbellis.jvector.example.benchmarks.datasets.BaseVectorLoading;
+import io.github.jbellis.jvector.example.benchmarks.datasets.ByteDataSet;
 import io.github.jbellis.jvector.example.benchmarks.datasets.DataSets;
 import io.github.jbellis.jvector.example.reporting.RunArtifacts;
 import io.github.jbellis.jvector.example.reporting.SearchReportingCatalog;
@@ -127,6 +128,10 @@ public class BenchYAML {
                 // Register dataset info the first time we actually load the dataset for benchmarking
                 artifacts.registerDataset(datasetName, ds);
 
+                if (ds instanceof ByteDataSet) {
+                    config.validateForInt8Dataset();
+                }
+
                 Grid.runAll(ds,
                         config.construction.useSavedIndexIfExists,
                         config.construction.outDegree,
@@ -134,7 +139,7 @@ public class BenchYAML {
                         config.construction.neighborOverflow,
                         config.construction.addHierarchy,
                         config.construction.refineFinalGraph,
-                        config.construction.getFeatureSets(),
+                        ds instanceof ByteDataSet ? config.construction.getInt8FeatureSets() : config.construction.getFeatureSets(),
                         config.construction.getCompressorParameters(),
                         config.search.getCompressorParameters(),
                         config.search.topKOverquery,

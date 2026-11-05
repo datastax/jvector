@@ -28,6 +28,8 @@ import io.github.jbellis.jvector.example.benchmarks.QueryTester;
 import io.github.jbellis.jvector.example.benchmarks.ThroughputBenchmark;
 import io.github.jbellis.jvector.example.benchmarks.diagnostics.BenchmarkDiagnostics;
 import io.github.jbellis.jvector.example.benchmarks.diagnostics.DiagnosticLevel;
+import io.github.jbellis.jvector.example.benchmarks.datasets.BaseDataSet;
+import io.github.jbellis.jvector.example.benchmarks.datasets.ByteDataSet;
 import io.github.jbellis.jvector.example.benchmarks.datasets.DataSet;
 import io.github.jbellis.jvector.example.reporting.*;
 import io.github.jbellis.jvector.example.reporting.RunArtifacts;
@@ -38,6 +40,7 @@ import io.github.jbellis.jvector.example.yaml.MetricSelection;
 import io.github.jbellis.jvector.management.GraphIndexBuilderConfig;
 import io.github.jbellis.jvector.graph.ImmutableGraphIndex;
 import io.github.jbellis.jvector.graph.GraphIndexBuilder;
+import io.github.jbellis.jvector.graph.RandomAccessByteVectorValues;
 import io.github.jbellis.jvector.graph.VectorAccess;
 import io.github.jbellis.jvector.graph.GraphSearcher;
 import io.github.jbellis.jvector.graph.RandomAccessVectorValues;
@@ -45,6 +48,7 @@ import io.github.jbellis.jvector.graph.disk.*;
 import io.github.jbellis.jvector.graph.disk.feature.Feature;
 import io.github.jbellis.jvector.graph.disk.feature.FeatureId;
 import io.github.jbellis.jvector.graph.disk.feature.FusedPQ;
+import io.github.jbellis.jvector.graph.disk.feature.InlineByteVectors;
 import io.github.jbellis.jvector.graph.disk.feature.InlineVectors;
 import io.github.jbellis.jvector.graph.disk.feature.NVQ;
 import io.github.jbellis.jvector.graph.similarity.BuildScoreProvider;
@@ -59,6 +63,8 @@ import io.github.jbellis.jvector.quantization.ProductQuantization;
 import io.github.jbellis.jvector.quantization.VectorCompressor;
 import io.github.jbellis.jvector.util.ExplicitThreadLocal;
 import io.github.jbellis.jvector.util.PhysicalCoreExecutor;
+import io.github.jbellis.jvector.vector.ByteVectorSimilarityFunction;
+import io.github.jbellis.jvector.vector.types.ByteSequence;
 import io.github.jbellis.jvector.vector.types.VectorFloat;
 
 import java.io.FileNotFoundException;
@@ -97,7 +103,7 @@ public class Grid {
         return indexBuildTimes.get(datasetName);
     }
 
-    static void runAll(DataSet ds,
+    static void runAll(BaseDataSet ds,
                        boolean enableIndexCache,
                        List<Integer> mGrid,
                        List<Integer> efConstructionGrid,
@@ -161,7 +167,7 @@ public class Grid {
     }
 
     // Overload for legacy callers that do not use yaml-configs
-    static void runAll(DataSet ds,
+    static void runAll(BaseDataSet ds,
                        boolean enableIndexCache,
                        List<Integer> mGrid,
                        List<Integer> efConstructionGrid,
@@ -226,7 +232,7 @@ public class Grid {
                             Map<Integer, List<Double>> topKGrid,
                             List<Boolean> usePruningGrid,
                             RunArtifacts artifacts,
-                            DataSet ds,
+                            BaseDataSet ds,
                             Path workDirectory) throws IOException
     {
         // Prepare to collect index construction metrics for reporting....
@@ -237,16 +243,22 @@ public class Grid {
             diagnostics.startMonitoring("testDirectory", workDirectory);
             diagnostics.startMonitoring("indexCache", Paths.get(indexCacheDir));
             diagnostics.capturePrePhaseSnapshot("Graph Build");
-            System.out.printf("%s: Dataset similarity function is %s%n", ds.getName(), ds.getSimilarityFunction());
+            String sfLabel = (ds instanceof ByteDataSet)
+                    ? ((ByteDataSet) ds).getSimilarityFunction().toString()
+                    : ((DataSet) ds).getSimilarityFunction().toString();
+            System.out.printf("%s: Dataset similarity function is %s%n", ds.getName(), sfLabel);
 
             // Resolve build compressor (and label quant type) so we can record compute time
             VectorCompressor<?> buildCompressorObj = null;
             String buildQuantType = null;
 
-            if (buildCompressor != null) {
-                var buildParams = buildCompressor.apply(ds);
+            // Int8 datasets only support compression type "None" (enforced by MultiConfig.validateForInt8Dataset),
+            // so there is no build compressor for them.
+            if (buildCompressor != null && !(ds instanceof ByteDataSet)) {
+                var floatDs = (DataSet) ds;
+                var buildParams = buildCompressor.apply(floatDs);
                 buildQuantType = quantTypeOf(buildParams); // "PQ", "BQ", or null
-                buildCompressorObj = getCompressor(buildCompressor, ds, constructionMetrics, Phase.INDEX, buildQuantType);
+                buildCompressorObj = getCompressor(buildCompressor, floatDs, constructionMetrics, Phase.INDEX, buildQuantType);
             }
 
             // Used in logging
@@ -317,24 +329,30 @@ public class Grid {
                         } else {
                             constructionMetrics.resetSearch(); // per (index, cpSupplier) config
 
-                            var searchParams = cpSupplier.apply(ds);
-                            String searchQuantType = quantTypeOf(searchParams); // "PQ", "BQ", or null
-                            var compressor = getCompressor(cpSupplier, ds, constructionMetrics, Phase.SEARCH, searchQuantType);
-
-                            if (compressor == null) {
+                            if (ds instanceof ByteDataSet) {
                                 cv = null;
                                 System.out.format("%s: No search compressor configured, FULL PRECISION vectors will be used for search%n", ds.getName());
                             } else {
-                                long start = System.nanoTime();
-                                cv = constructionMetrics.search(searchQuantType)
-                                        .timeEncode(() -> compressor.encodeAll(ds.getBaseRavv()));
-                                double encodingTimeS = (System.nanoTime() - start) / 1_000_000_000.0;
-                                if (cv == null) {
-                                    throw new IllegalStateException(String.format(
-                                            "Compressor '%s' was provided but failed to encode vectors for dataset '%s'. " +
-                                                    "Aborting to prevent false recall results.", compressor, ds.getName()));
+                                var floatDs = (DataSet) ds;
+                                var searchParams = cpSupplier.apply(floatDs);
+                                String searchQuantType = quantTypeOf(searchParams); // "PQ", "BQ", or null
+                                var compressor = getCompressor(cpSupplier, floatDs, constructionMetrics, Phase.SEARCH, searchQuantType);
+
+                                if (compressor == null) {
+                                    cv = null;
+                                    System.out.format("%s: No search compressor configured, FULL PRECISION vectors will be used for search%n", ds.getName());
+                                } else {
+                                    long start = System.nanoTime();
+                                    cv = constructionMetrics.search(searchQuantType)
+                                            .timeEncode(() -> compressor.encodeAll(floatDs.getBaseRavv()));
+                                    double encodingTimeS = (System.nanoTime() - start) / 1_000_000_000.0;
+                                    if (cv == null) {
+                                        throw new IllegalStateException(String.format(
+                                                "Compressor '%s' was provided but failed to encode vectors for dataset '%s'. " +
+                                                        "Aborting to prevent false recall results.", compressor, ds.getName()));
+                                    }
+                                    System.out.format("%s: %s encoded %d vectors [%.2f MB] in %.2fs%n", ds.getName(), compressor, ds.size(), (cv.ramBytesUsed() / 1024f / 1024f), encodingTimeS);
                                 }
-                                System.out.format("%s: %s encoded %d vectors [%.2f MB] in %.2fs%n", ds.getName(), compressor, ds.getBaseVectors().size(), (cv.ramBytesUsed() / 1024f / 1024f), encodingTimeS);
                             }
                         }
 
@@ -388,7 +406,7 @@ public class Grid {
                                                                         float neighborOverflow,
                                                                         boolean addHierarchy,
                                                                         boolean refineFinalGraph,
-                                                                        DataSet ds,
+                                                                        BaseDataSet ds,
                                                                         Path outputDir,
                                                                         VectorCompressor<?> buildCompressor,
                                                                         Map<Set<FeatureId>, OnDiskGraphIndexCache.WriteHandle> handles,
@@ -396,7 +414,8 @@ public class Grid {
     {
         Files.createDirectories(outputDir);
 
-        var floatVectors = ds.getBaseRavv();
+        var floatDs = (DataSet) ds;
+        var floatVectors = floatDs.getBaseRavv();
 
         // Record the encoding time if asked for....
         var encoded = (constructionMetrics != null)
@@ -409,7 +428,7 @@ public class Grid {
         if (pq == null && featureSets.stream().anyMatch(fs -> fs.contains(FeatureId.FUSED_PQ)))
             throw new IllegalArgumentException("FusedPQ requires PQ build compression with 256 clusters");
         var bsp = pq != null
-                ? BuildScoreProvider.pqBuildScoreProvider(ds.getSimilarityFunction(), pq)
+                ? BuildScoreProvider.pqBuildScoreProvider(floatDs.getSimilarityFunction(), pq)
                 : BuildScoreProvider.bqBuildScoreProvider((BQVectors) encoded);
         GraphIndexBuilder builder = new GraphIndexBuilder(bsp, floatVectors.dimension(), M, efConstruction, neighborOverflow, 1.2f, addHierarchy, refineFinalGraph);
 
@@ -676,14 +695,67 @@ public class Grid {
                                                                           float neighborOverflow,
                                                                           boolean addHierarchy,
                                                                           boolean refineFinalGraph,
-                                                                          DataSet ds,
+                                                                          BaseDataSet ds,
                                                                           Path testDirectory)
             throws IOException
     {
-        var floatVectors = ds.getBaseRavv();
         Map<Set<FeatureId>, ImmutableGraphIndex> indexes = new HashMap<>();
         long start;
-        var bsp = BuildScoreProvider.randomAccessScoreProvider(floatVectors, ds.getSimilarityFunction());
+
+        // ── Int8 path ────────────────────────────────────────────────────────
+        if (ds instanceof ByteDataSet) {
+            ByteDataSet byteDs = (ByteDataSet) ds;
+            RandomAccessByteVectorValues byteVectors = byteDs.getBaseRavv();
+            ByteVectorSimilarityFunction bvsf = byteDs.getSimilarityFunction();
+            var bsp = BuildScoreProvider.byteVectorScoreProvider(byteVectors, bvsf);
+            GraphIndexBuilder builder = new GraphIndexBuilder(bsp,
+                                                              byteVectors.dimension(),
+                                                              M,
+                                                              efConstruction,
+                                                              neighborOverflow,
+                                                              1.2f,
+                                                              addHierarchy,
+                                                              refineFinalGraph,
+                                                              PhysicalCoreExecutor.pool(),
+                                                              FilteredForkJoinPool.createFilteredPool());
+            start = System.nanoTime();
+            var onHeapGraph = builder.build(byteVectors);
+            double buildTimeS = (System.nanoTime() - start) / 1_000_000_000.0;
+            System.out.format("Build (int8) M=%d overflow=%.2f ef=%d in %.2fs%n",
+                              M, neighborOverflow, efConstruction, buildTimeS);
+            for (int i = 0; i <= onHeapGraph.getMaxLevel(); i++) {
+                System.out.format("  L%d: %d nodes, %.2f avg degree%n",
+                                  i, onHeapGraph.size(i), onHeapGraph.getAverageDegree(i));
+            }
+            int n = 0;
+            for (var features : featureSets) {
+                if (features.contains(FeatureId.FUSED_PQ)) {
+                    System.out.println("Skipping Fused ADC feature when building in memory");
+                    continue;
+                }
+                var graphPath = testDirectory.resolve("graph" + n++);
+                var identityMapper = new OrdinalMapper.IdentityMapper(byteVectors.size() - 1);
+                var writerBuilder = new RandomAccessOnDiskGraphIndexWriter.Builder(onHeapGraph, graphPath)
+                        .withParallelWorkerThreads(PhysicalCoreExecutor.getPhysicalCoreCount())
+                        .withMapper(identityMapper)
+                        .with(new InlineByteVectors(byteVectors.dimension()));
+                try (var writer = writerBuilder.build()) {
+                    start = System.nanoTime();
+                    writer.write(Map.of(
+                            FeatureId.INLINE_BYTE_VECTORS,
+                            ordinal -> new InlineByteVectors.State(byteVectors.getVector(ordinal))));
+                    System.out.format("Wrote %s in %.2fs%n", features, (System.nanoTime() - start) / 1_000_000_000.0);
+                }
+                indexes.put(features, OnDiskGraphIndex.load(ReaderSupplierFactory.open(graphPath)));
+            }
+            indexBuildTimes.put(ds.getName(), buildTimeS);
+            return indexes;
+        }
+
+        // ── Float path ───────────────────────────────────────────────────────
+        var floatDs = (DataSet) ds;
+        var floatVectors = floatDs.getBaseRavv();
+        var bsp = BuildScoreProvider.randomAccessScoreProvider(floatVectors, floatDs.getSimilarityFunction());
         GraphIndexBuilder builder = new GraphIndexBuilder(bsp,
                                                           floatVectors.dimension(),
                                                           M,
@@ -932,7 +1004,7 @@ public class Grid {
     }
 
     public static List<BenchResult> runAllAndCollectResults(
-            DataSet ds,
+            BaseDataSet ds,
             boolean enableIndexCache,
             List<Integer> mGrid,
             List<Integer> efConstructionGrid,
@@ -969,8 +1041,13 @@ public class Grid {
                                             Map<Set<FeatureId>, ImmutableGraphIndex> indexes = new HashMap<>();
                                             Map<Set<FeatureId>, Long> indexFileSizes = new HashMap<>();
 
-                                            var compressor = getCompressor(buildCompressor, ds);
-                                            var searchCompressorObj = getCompressor(searchCompressor, ds);
+                                            VectorCompressor<?> compressor = null;
+                                            VectorCompressor<?> searchCompressorObj = null;
+                                            if (ds instanceof DataSet) {
+                                                var floatDs = (DataSet) ds;
+                                                compressor = getCompressor(buildCompressor, floatDs);
+                                                searchCompressorObj = getCompressor(searchCompressor, floatDs);
+                                            }
                                             // Encode vectors for reranking if a compressor is provided
                                             CompressedVectors cvArg;
                                             if (features.contains(FeatureId.FUSED_PQ)) {
@@ -982,7 +1059,8 @@ public class Grid {
                                                     System.out.format("%s: No search compressor configured, " +
                                                             "FULL PRECISION vectors will be used for search%n", ds.getName());
                                                 } else {
-                                                    cvArg = searchCompressorObj.encodeAll(ds.getBaseRavv());
+                                                    var floatDs = (DataSet) ds;
+                                                    cvArg = searchCompressorObj.encodeAll(floatDs.getBaseRavv());
                                                     if (cvArg == null) {
                                                         throw new IllegalStateException(String.format(
                                                                 "Compressor '%s' was provided but failed to encode vectors for dataset '%s'. " +
@@ -990,7 +1068,7 @@ public class Grid {
                                                                 searchCompressorObj, ds.getName()));
                                                     }
                                                     System.out.format("%s: %s encoded %d vectors [%.2f MB] for search%n",
-                                                            ds.getName(), searchCompressorObj, ds.getBaseVectors().size(),
+                                                            ds.getName(), searchCompressorObj, ds.size(),
                                                             (cvArg.ramBytesUsed() / 1024f / 1024f));
                                                 }
                                             }
@@ -1220,7 +1298,7 @@ public class Grid {
     }
 
     public static class ConfiguredSystem implements AutoCloseable {
-        DataSet ds;
+        BaseDataSet ds;
         ImmutableGraphIndex index;
         CompressedVectors cv;
         Set<FeatureId> features;
@@ -1230,37 +1308,49 @@ public class Grid {
             return new GraphSearcher(index);
         });
 
-        ConfiguredSystem(DataSet ds, ImmutableGraphIndex index, CompressedVectors cv, Set<FeatureId> features) {
+        ConfiguredSystem(BaseDataSet ds, ImmutableGraphIndex index, CompressedVectors cv, Set<FeatureId> features) {
             this.ds = ds;
             this.index = index;
             this.cv = cv;
             this.features = features;
             // File-backed sources borrow scratch storage; concurrent scorers need separate views.
-            this.exactVectors = ds.getBaseRavv().threadLocalSupplier();
+            // Int8 datasets do not have float base vectors — leave exactVectors null.
+            this.exactVectors = ds instanceof DataSet ? ((DataSet) ds).getBaseRavv().threadLocalSupplier() : null;
         }
 
+        /** Score provider for float query vectors (float datasets). */
         public SearchScoreProvider scoreProviderFor(VectorFloat<?> queryVector, ImmutableGraphIndex.View view) {
+            var floatDs = (DataSet) ds;
             var scoringView = (ImmutableGraphIndex.ScoringView) view;
             ScoreFunction.ApproximateScoreFunction asf;
             if (features.contains(FeatureId.FUSED_PQ)) {
-                asf = scoringView.approximateScoreFunctionFor(queryVector, ds.getSimilarityFunction());
+                asf = scoringView.approximateScoreFunctionFor(queryVector, floatDs.getSimilarityFunction());
             } else {
                 // if we're not compressing then just use the exact score function
                 if (cv == null) {
-                    return DefaultSearchScoreProvider.exact(queryVector, ds.getSimilarityFunction(), exactVectors.get());
+                    return DefaultSearchScoreProvider.exact(queryVector, floatDs.getSimilarityFunction(), exactVectors.get());
                 }
 
-                asf = cv.precomputedScoreFunctionFor(queryVector, ds.getSimilarityFunction());
+                asf = cv.precomputedScoreFunctionFor(queryVector, floatDs.getSimilarityFunction());
             }
-            var rr = scoringView.rerankerFor(queryVector, ds.getSimilarityFunction());
+            var rr = scoringView.rerankerFor(queryVector, floatDs.getSimilarityFunction());
             return new DefaultSearchScoreProvider(asf, rr);
+        }
+
+        /** Score provider for int8 byte query vectors (int8 datasets). */
+        public SearchScoreProvider scoreProviderFor(ByteSequence<?> queryBytes, ImmutableGraphIndex.View view) {
+            var byteDs = (ByteDataSet) ds;
+            ByteVectorSimilarityFunction bvsf = byteDs.getSimilarityFunction();
+            var diskView = (OnDiskGraphIndex.View) view;
+            ScoreFunction.ExactScoreFunction sf = diskView.byteVectorRerankerFor(queryBytes, bvsf);
+            return new DefaultSearchScoreProvider(sf);
         }
 
         public GraphSearcher getSearcher() {
             return searchers.get();
         }
 
-        public DataSet getDataSet() {
+        public BaseDataSet getDataSet() {
             return ds;
         }
 

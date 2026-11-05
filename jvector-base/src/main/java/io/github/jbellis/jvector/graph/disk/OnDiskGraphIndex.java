@@ -27,6 +27,7 @@ import io.github.jbellis.jvector.graph.disk.feature.FeatureId;
 import io.github.jbellis.jvector.graph.disk.feature.FeatureSource;
 import io.github.jbellis.jvector.graph.disk.feature.FusedPQ;
 import io.github.jbellis.jvector.graph.disk.feature.FusedFeature;
+import io.github.jbellis.jvector.graph.disk.feature.InlineByteVectors;
 import io.github.jbellis.jvector.graph.disk.feature.InlineVectors;
 import io.github.jbellis.jvector.graph.disk.feature.NVQ;
 import io.github.jbellis.jvector.graph.disk.feature.SeparatedFeature;
@@ -36,8 +37,10 @@ import org.agrona.collections.Int2ObjectHashMap;
 import java.util.ArrayList;
 import io.github.jbellis.jvector.util.Bits;
 import io.github.jbellis.jvector.util.RamUsageEstimator;
+import io.github.jbellis.jvector.vector.ByteVectorSimilarityFunction;
 import io.github.jbellis.jvector.vector.VectorSimilarityFunction;
 import io.github.jbellis.jvector.vector.VectorizationProvider;
+import io.github.jbellis.jvector.vector.types.ByteSequence;
 import io.github.jbellis.jvector.vector.types.VectorFloat;
 import io.github.jbellis.jvector.vector.types.VectorTypeSupport;
 
@@ -576,6 +579,64 @@ public class OnDiskGraphIndex implements ImmutableGraphIndex, AutoCloseable, Acc
             } catch (IOException e) {
                 throw new UncheckedIOException(e);
             }
+        }
+
+        /**
+         * Returns the signed int8 vector stored for {@code node} via the
+         * {@link FeatureId#INLINE_BYTE_VECTORS} feature.
+         *
+         * @throws UnsupportedOperationException if the graph was not written with
+         *         {@link InlineByteVectors}
+         */
+        public ByteSequence<?> getByteVector(int node) {
+            ByteSequence<?> vec = vectorTypeSupport.createByteSequence(dimension);
+            getByteVectorInto(node, vec);
+            return vec;
+        }
+
+        /**
+         * Reads the signed int8 vector stored for {@code node} into {@code destination}, which must have
+         * exactly {@link #dimension()} elements. Use this instead of {@link #getByteVector(int)} on hot paths
+         * to avoid allocating a new vector per read.
+         *
+         * @throws UnsupportedOperationException if the graph was not written with
+         *         {@link InlineByteVectors}
+         */
+        public void getByteVectorInto(int node, ByteSequence<?> destination) {
+            if (!features.containsKey(FeatureId.INLINE_BYTE_VECTORS)) {
+                throw new UnsupportedOperationException("No inline byte vectors in this graph");
+            }
+            try {
+                long diskOffset = offsetFor(node, FeatureId.INLINE_BYTE_VECTORS);
+                reader.seek(diskOffset);
+                vectorTypeSupport.readByteSequence(reader, destination);
+            } catch (IOException e) {
+                throw new UncheckedIOException(e);
+            }
+        }
+
+        /**
+         * Returns a {@link ScoreFunction.ExactScoreFunction} that scores candidates by reading
+         * their int8 vectors from disk and comparing them byte×byte against {@code queryBytes}.
+         * The resulting function reuses a single scratch vector and is NOT thread-safe.
+         *
+         * @throws UnsupportedOperationException if the graph was not written with
+         *         {@link InlineByteVectors}
+         */
+        public ScoreFunction.ExactScoreFunction byteVectorRerankerFor(ByteSequence<?> queryBytes,
+                                                                       ByteVectorSimilarityFunction bvsf) {
+            if (!features.containsKey(FeatureId.INLINE_BYTE_VECTORS)) {
+                throw new UnsupportedOperationException("No inline byte vectors in this graph");
+            }
+            return new ScoreFunction.ExactScoreFunction() {
+                private final ByteSequence<?> scratch = vectorTypeSupport.createByteSequence(dimension);
+
+                @Override
+                public float similarityTo(int node) {
+                    getByteVectorInto(node, scratch);
+                    return bvsf.compare(queryBytes, scratch);
+                }
+            };
         }
 
         public NodesIterator getNeighborsIterator(int level, int node) {
