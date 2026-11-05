@@ -839,8 +839,10 @@ public class TestOnDiskGraphIndex extends RandomizedTest {
 
                 for (var ns : result.getNodes()) {
                     float score = ns.score;
-                    assertTrue(bvsf + " score out of [0,1] for node " + ns.node + ": " + score,
-                            score >= 0f && score <= 1.0f);
+                    // DOT_PRODUCT is positive but unbounded above; the others are in [0,1]
+                    float max = bvsf == ByteVectorSimilarityFunction.DOT_PRODUCT ? Float.MAX_VALUE : 1.0f;
+                    assertTrue(bvsf + " score out of range for node " + ns.node + ": " + score,
+                            score > 0f && score <= max);
                 }
             }
         }
