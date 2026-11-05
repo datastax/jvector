@@ -20,6 +20,7 @@ import io.github.jbellis.jvector.annotations.VisibleForTesting;
 import io.github.jbellis.jvector.disk.IndexWriter;
 import io.github.jbellis.jvector.disk.RandomAccessReader;
 import io.github.jbellis.jvector.graph.RandomAccessVectorValues;
+import io.github.jbellis.jvector.graph.VectorAccess;
 import io.github.jbellis.jvector.graph.disk.OnDiskGraphIndex;
 import io.github.jbellis.jvector.util.Accountable;
 import io.github.jbellis.jvector.util.CallerBatchProcessor;
@@ -1559,22 +1560,28 @@ public class AsymmetricHashing implements VectorCompressor<AsymmetricHashing.Qua
         int[] ordinals = new int[capacity];
         double[] absNorm = new double[quantizedDim];
         int count = 0;
-        for (int i = start; i < end; i++) {
-            VectorFloat<?> vector = source.getVector(i);
-            QuantizedVector dest = QuantizedVector.createEmpty(quantizedDim, bitsPerDimension);
-            out[i] = dest;
-            if (vector == null) {
-                if (symmetricOffsets != null) symmetricOffsets[i] = centeredOffset(dest);
-                continue;
+        try (var cursor = VectorAccess.openRange(source, start, end)) {
+            int expected = start;
+            while (cursor.next()) {
+                int i = cursor.ordinal();
+                if (i != expected++) throw new IllegalStateException("Unexpected encoding ordinal");
+                VectorFloat<?> vector = cursor.vector();
+                QuantizedVector dest = QuantizedVector.createEmpty(quantizedDim, bitsPerDimension);
+                out[i] = dest;
+                if (vector == null) {
+                    if (symmetricOffsets != null) symmetricOffsets[i] = centeredOffset(dest);
+                    continue;
+                }
+                float residualNorm = prepareEncoding(vector, dest);
+                normalizeResidual(vector, landmarks[dest.landmark & 0xFF], residualNorm, inputs[count]);
+                residualNorms[count] = residualNorm;
+                ordinals[count] = i;
+                if (++count == capacity) {
+                    encodeBatch(inputs, projected, residualNorms, ordinals, count, absNorm, out, symmetricOffsets);
+                    count = 0;
+                }
             }
-            float residualNorm = prepareEncoding(vector, dest);
-            normalizeResidual(vector, landmarks[dest.landmark & 0xFF], residualNorm, inputs[count]);
-            residualNorms[count] = residualNorm;
-            ordinals[count] = i;
-            if (++count == capacity) {
-                encodeBatch(inputs, projected, residualNorms, ordinals, count, absNorm, out, symmetricOffsets);
-                count = 0;
-            }
+            if (expected != end) throw new IllegalStateException("Incomplete encoding range");
         }
         if (count != 0) encodeBatch(inputs, projected, residualNorms, ordinals, count, absNorm, out, symmetricOffsets);
     }

@@ -39,6 +39,7 @@ import io.github.jbellis.jvector.management.GraphIndexBuilderConfig;
 import io.github.jbellis.jvector.graph.ImmutableGraphIndex;
 import io.github.jbellis.jvector.graph.GraphIndexBuilder;
 import io.github.jbellis.jvector.graph.VectorAccess;
+import io.github.jbellis.jvector.graph.VectorMean;
 import io.github.jbellis.jvector.graph.GraphSearcher;
 import io.github.jbellis.jvector.graph.RandomAccessVectorValues;
 import io.github.jbellis.jvector.graph.disk.*;
@@ -430,9 +431,15 @@ public class Grid {
             }
         }
 
+        // Collect original-coordinate statistics during bulk encoding, before any
+        // compressor-specific transformation. No loader or quantizer mean contract.
+        VectorMean mean = featureSets.stream().anyMatch(f -> f.contains(FeatureId.NVQ_VECTORS))
+                ? new VectorMean(floatVectors.size(), floatVectors.dimension()) : null;
+        var encodingVectors = mean == null ? floatVectors : mean.duringScan(floatVectors);
         CompressedVectors buildCv = (constructionMetrics != null)
-                ? constructionMetrics.index(buildQuantType).timeEncode(() -> buildCompressor.encodeAll(floatVectors))
-                : buildCompressor.encodeAll(floatVectors);
+                ? constructionMetrics.index(buildQuantType).timeEncode(() -> buildCompressor.encodeAll(encodingVectors))
+                : buildCompressor.encodeAll(encodingVectors);
+        VectorFloat<?> inputMean = mean != null && mean.isComplete() ? mean.mean() : null;
 
         // Optional ASH symmetric-vs-asymmetric debug (off by default)
         // Enable with: -Djvector.ash.debugSymmetric=true
@@ -505,6 +512,7 @@ public class Grid {
                     floatVectors,
                     pqCompressorForFeatures,
                     ashVectors,
+                    inputMean,
                     constructionMetrics);
             var writer = bws.builder.build();
             writers.put(features, writer);
@@ -682,6 +690,7 @@ public class Grid {
                                                              RandomAccessVectorValues floatVectors,
                                                              ProductQuantization pq,
                                                              ASHVectors ashVectors,
+                                                             VectorFloat<?> inputMean,
                                                              ConstructionMetrics constructionMetrics)
             throws FileNotFoundException
     {
@@ -719,9 +728,12 @@ public class Grid {
                     break;
                 case NVQ_VECTORS:
                     int nSubVectors = floatVectors.dimension() == 2 ? 1 : 2;
+                    Supplier<NVQuantization> trainNVQ = () -> inputMean == null
+                            ? NVQuantization.compute(floatVectors, nSubVectors)
+                            : NVQuantization.create(inputMean, nSubVectors);
                     var nvq = (constructionMetrics != null)
-                            ? constructionMetrics.index("NVQ").timeCompute(() -> NVQuantization.compute(floatVectors, nSubVectors))
-                            : NVQuantization.compute(floatVectors, nSubVectors);
+                            ? constructionMetrics.index("NVQ").timeCompute(trainNVQ)
+                            : trainNVQ.get();
                     builder.with(new NVQ(nvq));
                     inputSuppliers.put(FeatureId.NVQ_VECTORS, vector -> new NVQ.State(nvq.encode(vector)));
                     suppliers.put(FeatureId.NVQ_VECTORS, ordinal -> new NVQ.State(nvq.encode(writerVectors.get().getVector(ordinal))));
@@ -823,7 +835,7 @@ public class Grid {
                 continue;
             }
             var graphPath = testDirectory.resolve("graph" + n++);
-            var bws = builderWithSuppliers(features, onHeapGraph, graphPath, floatVectors, null, null, null);
+            var bws = builderWithSuppliers(features, onHeapGraph, graphPath, floatVectors, null, null, null, null);
             try (var writer = bws.builder.build()) {
                 start = System.nanoTime();
                 writer.write(bws.suppliers);
