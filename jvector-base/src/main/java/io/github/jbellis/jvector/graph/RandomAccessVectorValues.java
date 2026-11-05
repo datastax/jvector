@@ -76,6 +76,7 @@ public interface RandomAccessVectorValues extends VectorValues<VectorFloat<?>> {
      * @param destinationVector the vector to store the result in
      * @param offset the offset in the destination vector to store the result
      */
+    @Override
     default void getVectorInto(int node, VectorFloat<?> destinationVector, int offset) {
         destinationVector.copyFrom(getVector(node), 0, offset, dimension());
     }
