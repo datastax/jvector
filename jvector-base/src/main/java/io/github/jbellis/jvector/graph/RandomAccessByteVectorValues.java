@@ -16,6 +16,7 @@
 
 package io.github.jbellis.jvector.graph;
 
+import io.github.jbellis.jvector.annotations.Experimental;
 import io.github.jbellis.jvector.util.ExplicitThreadLocal;
 import io.github.jbellis.jvector.vector.types.ByteSequence;
 
@@ -29,6 +30,7 @@ import java.util.function.Supplier;
  * It is used by graph-based index builders and searchers that operate natively
  * on int8 vectors without a float32 round-trip.
  */
+@Experimental
 public interface RandomAccessByteVectorValues extends VectorValues<ByteSequence<?>> {
 
     /**

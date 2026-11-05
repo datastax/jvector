@@ -16,6 +16,7 @@
 
 package io.github.jbellis.jvector.graph;
 
+import io.github.jbellis.jvector.annotations.Experimental;
 import io.github.jbellis.jvector.vector.types.ByteSequence;
 
 import java.util.List;
@@ -28,6 +29,7 @@ import java.util.List;
  * <p>
  * This will be as threadsafe as the provided List.
  */
+@Experimental
 public class ListRandomAccessByteVectorValues implements RandomAccessByteVectorValues {
     private final List<ByteSequence<?>> vectors;
     private final int dimension;
