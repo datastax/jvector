@@ -167,8 +167,6 @@ public final class QueuedQueryExecution implements AutoCloseable {
                     }
                 }
             });
-        System.out.printf("QUERY_EXECUTION mode=queued workers=%d capacity=%d max_batch_size=%d optimized_batch=%s%n",
-                cores, capacity, batchSize, preparer != null && preparer.supportsBatchPreparation());
     }
 
     private Request acquire() {
