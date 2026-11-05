@@ -52,11 +52,11 @@ import io.github.jbellis.jvector.vector.types.VectorTypeSupport;
  *
  * <p><b>How to run:</b>
  * <pre>
- *   # 1. Download the siftsmall dataset from http://corpus-texmex.irisa.fr/
- *   #    and unzip it so that siftsmall/siftsmall_base.fvecs is present
- *   #    in the directory you run the command from.
+ *   # The siftsmall dataset is checked into the repository root, so run from the
+ *   # repository root (siftsmall/siftsmall_base.fvecs must be present relative to
+ *   # the working directory).
  *
- *   # 2. Build and run — jdk22 is the default profile (active when no -P flag is given):
+ *   # Build and run — jdk22 is the default profile (active when no -P flag is given):
  *   ./mvnw compile -pl jvector-examples -am
  *   ./mvnw exec:exec@tutorial -pl jvector-examples -Dtutorial=int8
  *
@@ -73,9 +73,8 @@ import io.github.jbellis.jvector.vector.types.VectorTypeSupport;
  *   <li>Generate random int8 query vectors and search, scoring directly from disk byte vectors.</li>
  * </ol>
  *
- * <p>The siftsmall dataset must be present at {@code siftsmall/siftsmall_base.fvecs}
- * relative to the working directory. Download it from
- * <a href="http://corpus-texmex.irisa.fr/">http://corpus-texmex.irisa.fr/</a>.
+ * <p>The siftsmall dataset ships with the repository at {@code siftsmall/siftsmall_base.fvecs};
+ * the working directory must be the repository root (or pass the dataset directory as the first argument).
  */
 public class Int8Example {
 
