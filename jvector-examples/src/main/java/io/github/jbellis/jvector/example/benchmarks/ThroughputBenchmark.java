@@ -155,7 +155,6 @@ public class ThroughputBenchmark extends AbstractQueryBenchmark {
         if (cs.usesQueuedExecution()) return runConfiguredBenchmark(cs, topK, rerankK, usePruning, queryRuns, deferredReports);
         int threads = Integer.getInteger("jvector.bench.queryThreads", 0);
         if (threads < 0) throw new IllegalArgumentException("queryThreads must be nonnegative");
-        System.out.printf("QUERY_CONCURRENCY threads=%s%n", threads == 0 ? "common-pool" : threads);
         if (threads > 1) {
             var pool = new java.util.concurrent.ForkJoinPool(threads);
             try {
@@ -200,8 +199,11 @@ public class ThroughputBenchmark extends AbstractQueryBenchmark {
                 queryStream(count).forEach(i ->
                         QueryExecutor.verifyConcurrentQuery(cs, topK, rerankK, usePruning, i));
             }
-            System.out.printf("CONCURRENCY_VALIDATION queries=%d topK=%d rerankK=%d status=PASS%n",
-                    count, topK, rerankK);
+            if (diagnosticLevel != DiagnosticLevel.NONE) {
+                diagnostics.console(String.format(java.util.Locale.ROOT,
+                        "[Validation] Passed concurrent-result checks for %,d queries (topK=%d, rerankK=%d)",
+                        count, topK, rerankK));
+            }
         }
 
 
@@ -298,13 +300,13 @@ public class ThroughputBenchmark extends AbstractQueryBenchmark {
                     } while (System.nanoTime() - startTime < minSampleNanos);
                     SINK += visitedAdder.sum();
                     double elapsedSec = (System.nanoTime() - startTime) / 1e9;
-                    System.out.printf(java.util.Locale.ROOT,
-                            "THROUGHPUT_SAMPLE phase=%s queries=%d seconds=%.6f%n",
-                            testPhase, completedQueries, elapsedSec);
+                    if (diagnosticLevel != DiagnosticLevel.NONE) {
+                        diagnostics.console(String.format(java.util.Locale.ROOT,
+                                "[%s] Completed %,d queries in %.3f s (%,.1f QPS)",
+                                testPhase, completedQueries, elapsedSec, completedQueries / elapsedSec));
+                    }
                     return completedQueries / elapsedSec;
                 });
-
-                diagnostics.console("Test Run " + testRun + ": " + qpsSamples[testRun] + " QPS\n");
             }
 
             // Performance variance analysis

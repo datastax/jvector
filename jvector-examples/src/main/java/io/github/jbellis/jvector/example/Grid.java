@@ -880,6 +880,19 @@ public class Grid {
         for (var usePruning : usePruningGrid) {
             BenchmarkTablePrinter printer = new BenchmarkTablePrinter();
 
+            var queryParams = ordered("usePruning", usePruning,
+                    "executionMode", cs.usesQueuedExecution() ? "queued" : "direct");
+            if (cs.usesQueuedExecution()) {
+                queryParams.put("workers", cs.queryWorkerCount());
+                queryParams.put("queueCapacity", Math.multiplyExact(Math.max(8, cs.queryBatchSize()), cs.queryWorkerCount()));
+                queryParams.put("maxBatchSize", cs.queryBatchSize());
+                var preparer = cs.queryPreparer();
+                queryParams.put("batchPreparation", preparer != null && preparer.supportsBatchPreparation());
+            } else {
+                int threads = Integer.getInteger("jvector.bench.queryThreads", 0);
+                queryParams.put("callerThreads", threads == 0 ? "common pool" : threads);
+            }
+
             // Print the config once per index and query configuration (not per topK)
             printer.printConfig(
                     ordered( // Index configuration
@@ -890,9 +903,7 @@ public class Grid {
                         "addHierarchy",       addHierarchy,
                         "refineFinalGraph",   refineFinalGraph
                     ),
-                    ordered( // Query configuration
-                            "usePruning",         usePruning
-                    )
+                    queryParams
             );
 
             for (var topK : topKGrid.keySet()) {
@@ -903,6 +914,9 @@ public class Grid {
                 // Force header to re-print for this topK (columns change)
                 printer.resetTable();
 
+                // Complete measurements and optional diagnostics before printing the table.
+                // Otherwise the next overquery's messages appear between its rows.
+                List<List<Metric>> displayRows = new ArrayList<>();
                 for (var overquery : topKGrid.get(topK)) {
                     int rerankK = (int) (topK * overquery);
 
@@ -916,7 +930,7 @@ public class Grid {
 
                     // Apply console selection and print
                     var displayResults = consoleSel.apply(results, consoleResolved);
-                    printer.printRow(overquery, displayResults);
+                    displayRows.add(displayResults);
 
                     // Apply log selection and write CSV row
                     String searchCompressorString = (cs.cv == null) ? "None" : String.valueOf(cs.cv.getCompressor());
@@ -937,6 +951,10 @@ public class Grid {
                             rerankK,
                             logOutputs
                     );
+                }
+                var overqueries = topKGrid.get(topK);
+                for (int i = 0; i < overqueries.size(); i++) {
+                    printer.printRow(overqueries.get(i), displayRows.get(i));
                 }
                 printer.printFooter();
             }
