@@ -154,7 +154,7 @@ public class AutoBenchYAML {
                             config.validateForInt8Dataset();
                         }
 
-                        List<BenchResult> datasetResults = Grid.runAndCollectResults(ds, GridSpec.fromConfig(config));
+                        List<BenchResult> datasetResults = Grid.runAndCollectResults(ds, GridSpec.fromConfig(config, ds));
                         results.addAll(datasetResults);
 
                         logger.info("Benchmark completed for dataset: {}", datasetName);

@@ -132,7 +132,7 @@ public class BenchYAML {
                     config.validateForInt8Dataset();
                 }
 
-                Grid.run(ds, GridSpec.fromConfig(config), artifacts);
+                Grid.run(ds, GridSpec.fromConfig(config, ds), artifacts);
             }
         }
     }
