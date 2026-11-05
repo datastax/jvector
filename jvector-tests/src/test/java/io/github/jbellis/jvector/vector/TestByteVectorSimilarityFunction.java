@@ -27,6 +27,19 @@ public class TestByteVectorSimilarityFunction extends RandomizedTest {
 
     private static final VectorTypeSupport vts = VectorizationProvider.getInstance().getVectorTypeSupport();
 
+    /**
+     * Fills {@code raw} with random bytes, guaranteeing it is not the zero vector (cosine is undefined for it).
+     * RandomizedTest's generator is biased toward runs of 0, so all-zero draws do happen.
+     */
+    private void nextNonZeroBytes(byte[] raw) {
+        getRandom().nextBytes(raw);
+        boolean allZero = true;
+        for (byte b : raw) {
+            if (b != 0) { allZero = false; break; }
+        }
+        if (allZero) raw[0] = 1;
+    }
+
     private ByteSequence<?> seq(byte... values) {
         return vts.createByteSequence(values);
     }
@@ -173,8 +186,8 @@ public class TestByteVectorSimilarityFunction extends RandomizedTest {
         for (int trial = 0; trial < 50; trial++) {
             byte[] raw1 = new byte[32];
             byte[] raw2 = new byte[32];
-            getRandom().nextBytes(raw1);
-            getRandom().nextBytes(raw2);
+            nextNonZeroBytes(raw1);
+            nextNonZeroBytes(raw2);
             float score = ByteVectorSimilarityFunction.COSINE.compare(seq(raw1), seq(raw2));
             assertTrue("COSINE score out of [0,1]: " + score, score >= 0f && score <= 1.0f);
         }
@@ -184,8 +197,8 @@ public class TestByteVectorSimilarityFunction extends RandomizedTest {
     public void testCosineSymmetry() {
         byte[] raw1 = new byte[16];
         byte[] raw2 = new byte[16];
-        getRandom().nextBytes(raw1);
-        getRandom().nextBytes(raw2);
+        nextNonZeroBytes(raw1);
+        nextNonZeroBytes(raw2);
         assertEquals(
                 ByteVectorSimilarityFunction.COSINE.compare(seq(raw1), seq(raw2)),
                 ByteVectorSimilarityFunction.COSINE.compare(seq(raw2), seq(raw1)),
@@ -299,7 +312,11 @@ public class TestByteVectorSimilarityFunction extends RandomizedTest {
                 String msg = "length=" + length + " offsets=" + offsets[0] + "," + offsets[1];
                 assertEquals(msg, (float) dot, VectorUtil.dotProduct(a, b), 0f);
                 assertEquals(msg, (float) sq, VectorUtil.squareL2Distance(a, b), 0f);
-                assertEquals(msg, (float) (dot / Math.sqrt((double) normA * normB)), VectorUtil.cosine(a, b), 1e-5f);
+                // RandomizedTest's nextBytes is biased toward 0/-1 runs, so a short slice can be all zeros;
+                // cosine is undefined for zero vectors (VectorUtil.cosine asserts on them), so skip it then.
+                if (normA != 0 && normB != 0) {
+                    assertEquals(msg, (float) (dot / Math.sqrt((double) normA * normB)), VectorUtil.cosine(a, b), 1e-5f);
+                }
             }
         }
     }
