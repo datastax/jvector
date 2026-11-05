@@ -161,7 +161,7 @@ public class AutoBenchYAML {
                                 config.construction.neighborOverflow,
                                 config.construction.addHierarchy,
                                 config.construction.refineFinalGraph,
-                                config.construction.getFeatureSets(),
+                                ds instanceof ByteDataSet ? config.construction.getInt8FeatureSets() : config.construction.getFeatureSets(),
                                 config.construction.getCompressorParameters(),
                                 config.search.getCompressorParameters(),
                                 config.search.topKOverquery,
