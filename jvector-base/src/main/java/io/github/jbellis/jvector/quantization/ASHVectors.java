@@ -53,6 +53,10 @@ public class ASHVectors implements CompressedVectors {
     final ASHScorer scorer;
     private final long vectorDataBytes;
     private final long containerBytes;
+    // Immutable, optional construction cache produced by the bounded encoding workers.
+    // Raw input vectors are never retained. Loaded/individually encoded collections use
+    // the scorer's existing on-demand preparation instead.
+    final float[] symmetricOffsets;
     private final java.util.concurrent.atomic.AtomicLong projectionCacheBytes = new java.util.concurrent.atomic.AtomicLong();
 
     // Conservatively include a key, node and initial-sized table per cached layout.
@@ -125,6 +129,14 @@ public class ASHVectors implements CompressedVectors {
      */
     public ASHVectors(AsymmetricHashing ash,
                       AsymmetricHashing.QuantizedVector[] compressedVectors) {
+        this(ash, compressedVectors, null);
+    }
+
+    ASHVectors(AsymmetricHashing ash, AsymmetricHashing.QuantizedVector[] compressedVectors,
+               float[] symmetricOffsets) {
+        if (symmetricOffsets != null && symmetricOffsets.length != compressedVectors.length)
+            throw new IllegalArgumentException("Symmetric offsets must match encoded vector count");
+        this.symmetricOffsets = symmetricOffsets;
         this.ash = ash;
         this.compressedVectors = compressedVectors;
         this.scorer = new ASHScorer(ash);
@@ -154,7 +166,9 @@ public class ASHVectors implements CompressedVectors {
                        float[] scales,
                        float[] offsets,
                        byte[] landmarks,
-                       long vectorDataBytes) {
+                       long vectorDataBytes,
+                       float[] symmetricOffsets) {
+        this.symmetricOffsets = symmetricOffsets;
         this.ash = ash;
         this.compressedVectors = compressedVectors;
         this.scorer = new ASHScorer(ash);
@@ -999,6 +1013,7 @@ public class ASHVectors implements CompressedVectors {
         final AsymmetricHashing.QuantizedVector[] newVecs = new AsymmetricHashing.QuantizedVector[n];
         final float[] newScales = new float[n];
         final float[] newOffsets = new float[n];
+        final float[] newSymmetricOffsets = symmetricOffsets == null ? null : new float[n];
         final byte[] newLandmarks = new byte[n];
         final int[] newToOld = new int[n];
 
@@ -1010,6 +1025,7 @@ public class ASHVectors implements CompressedVectors {
             newVecs[newOrd] = this.compressedVectors[oldOrd];
             newScales[newOrd] = this.scales[oldOrd];
             newOffsets[newOrd] = this.offsets[oldOrd];
+            if (newSymmetricOffsets != null) newSymmetricOffsets[newOrd] = symmetricOffsets[oldOrd];
             newLandmarks[newOrd] = this.landmarks[oldOrd];
 
             newToOld[newOrd] = oldOrd;
@@ -1020,7 +1036,7 @@ public class ASHVectors implements CompressedVectors {
             oldToNew[newToOld[newOrd]] = newOrd;
         }
 
-        ASHVectors reordered = new ASHVectors(ash, newVecs, newScales, newOffsets, newLandmarks, vectorDataBytes);
+        ASHVectors reordered = new ASHVectors(ash, newVecs, newScales, newOffsets, newLandmarks, vectorDataBytes, newSymmetricOffsets);
         return new LandmarkOrder(reordered, newToOld, oldToNew, landmarkOffsets);
     }
 
@@ -1142,6 +1158,7 @@ public class ASHVectors implements CompressedVectors {
                 + RamUsageEstimator.shallowSizeOf(compressedVectors)
                 + RamUsageEstimator.sizeOf(scales) + RamUsageEstimator.sizeOf(offsets)
                 + RamUsageEstimator.sizeOf(landmarks) + RamUsageEstimator.shallowSizeOf(scorer)
+                + RamUsageEstimator.shallowSizeOf(symmetricOffsets)
                 + RamUsageEstimator.shallowSizeOf(projectionBlocks)
                 + RamUsageEstimator.shallowSizeOf(projectionCacheBytes);
     }

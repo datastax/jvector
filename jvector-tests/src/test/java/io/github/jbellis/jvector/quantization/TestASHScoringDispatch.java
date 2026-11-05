@@ -58,8 +58,16 @@ public class TestASHScoringDispatch {
                 for (int i = 0; i < dimensions; i++) query[i] = random.nextFloat() - 0.5f;
                 random.nextBytes(code);
                 float expected = AsymmetricHashing.dotProjectionCode(query, code, dimensions, bits);
-                assertEquals("bits=" + bits + " dimensions=" + dimensions, expected,
-                        backend.ashProjectionDot(query, code, dimensions, bits), 0.0002f);
+                float actual;
+                if (bits == 2 && backend.supportsNativeAshCanonicalLutScoring()) {
+                    int groups = FusedASHLayout.codeGroups(dimensions, bits);
+                    float[] lut = new float[groups * 16];
+                    FusedASHLayout.buildQueryLut(query, dimensions, bits, lut);
+                    actual = backend.ashCanonicalLutDot(code, groups, lut);
+                } else {
+                    actual = backend.ashProjectionDot(query, code, dimensions, bits);
+                }
+                assertEquals("bits=" + bits + " dimensions=" + dimensions, expected, actual, 0.0002f);
             }
         }
     }

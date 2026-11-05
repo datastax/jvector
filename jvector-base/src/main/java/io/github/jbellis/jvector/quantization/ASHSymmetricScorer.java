@@ -61,14 +61,18 @@ public final class ASHSymmetricScorer {
             }
         }
         if (AsymmetricHashing.usesFastScanProjectionCode(bits)) {
-            centeredOffsets = new float[vectors.count()];
-            for (int i = 0; i < centeredOffsets.length; i++) centeredOffsets[i] = centeredOffset(vectors.get(i));
+            if (vectors.symmetricOffsets != null) {
+                centeredOffsets = vectors.symmetricOffsets;
+            } else {
+                centeredOffsets = new float[vectors.count()];
+                for (int i = 0; i < centeredOffsets.length; i++) centeredOffsets[i] = centeredOffset(vectors.get(i));
+            }
         } else {
             centeredOffsets = null;
         }
         retainedBytes = RamUsageEstimator.shallowSizeOfInstance(ASHSymmetricScorer.class)
                 + AsymmetricHashing.estimateArray2DBytes(landmarkDots)
-                + RamUsageEstimator.shallowSizeOf(centeredOffsets);
+                + (vectors.symmetricOffsets == null ? RamUsageEstimator.shallowSizeOf(centeredOffsets) : 0);
     }
 
     /** Owned cache storage only; the shared compressor and vectors are charged by ASHVectors. */
@@ -84,11 +88,7 @@ public final class ASHSymmetricScorer {
     public String description() { return "symmetric " + (simd ? "SIMD" : "scalar") + ", bits=" + bits + ", C=" + landmarks; }
 
     private float centeredOffset(AsymmetricHashing.QuantizedVector vector) {
-        int c = vector.landmark & 255;
-        if (c >= landmarks) throw new IllegalArgumentException("Invalid landmark " + c);
-        if (!AsymmetricHashing.usesFastScanProjectionCode(bits)) return vector.offset;
-        return vector.offset + vector.scale * AsymmetricHashing.dotProjectionCode(
-                ash.landmarkProj[c], vector.extraBits, dimensions, bits);
+        return ash.centeredOffset(vector);
     }
 
     private float offset(int node) { return centeredOffsets == null ? vectors.get(node).offset : centeredOffsets[node]; }
