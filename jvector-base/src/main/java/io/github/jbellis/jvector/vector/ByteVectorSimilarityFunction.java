@@ -16,6 +16,7 @@
 
 package io.github.jbellis.jvector.vector;
 
+import io.github.jbellis.jvector.annotations.Experimental;
 import io.github.jbellis.jvector.vector.types.ByteSequence;
 
 /**
@@ -25,6 +26,7 @@ import io.github.jbellis.jvector.vector.types.ByteSequence;
  * Bytes are treated as signed int8 values (Java's {@code byte} is already signed, range −128..127).
  * Return-value conventions match {@link VectorSimilarityFunction}: higher is more similar.
  */
+@Experimental
 public enum ByteVectorSimilarityFunction {
 
     /**
