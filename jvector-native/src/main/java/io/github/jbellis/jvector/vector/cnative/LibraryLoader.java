@@ -17,7 +17,6 @@
 package io.github.jbellis.jvector.vector.cnative;
 
 import java.io.File;
-import java.io.IOException;
 import java.nio.file.Files;
 
 /**
@@ -78,19 +77,15 @@ public class LibraryLoader {
                     return false; // couldn't find library
                 }
                 File tmpLibFile = File.createTempFile(baseName, ext);
-                try {
-                    try (var out = Files.newOutputStream(tmpLibFile.toPath())) {
-                        in.transferTo(out);
-                    }
-                    System.load(tmpLibFile.getAbsolutePath());
-                    return true;
-                } finally {
-                    try {
-                        Files.deleteIfExists(tmpLibFile.toPath());
-                    } catch (IOException | SecurityException e) {
-                        // Best effort: cleanup failure must not invalidate a loaded library.
-                    }
+                // Keep the file until JVM exit instead of deleting it right after loading: profilers
+                // (perf, async-profiler) resolve native symbols from the mapped file, which shows up as
+                // "(deleted)" and can't be read if it is unlinked while the library is mapped.
+                tmpLibFile.deleteOnExit();
+                try (var out = Files.newOutputStream(tmpLibFile.toPath())) {
+                    in.transferTo(out);
                 }
+                System.load(tmpLibFile.getAbsolutePath());
+                return true;
             }
         } catch (Exception | UnsatisfiedLinkError e) {
             // ignore
