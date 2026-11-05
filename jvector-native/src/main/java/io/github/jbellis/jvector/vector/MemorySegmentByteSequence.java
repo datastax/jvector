@@ -19,7 +19,6 @@ package io.github.jbellis.jvector.vector;
 import io.github.jbellis.jvector.util.RamUsageEstimator;
 import io.github.jbellis.jvector.vector.types.ByteSequence;
 
-import java.lang.foreign.MemoryLayout;
 import java.lang.foreign.MemorySegment;
 import java.lang.foreign.ValueLayout;
 import java.nio.Buffer;
@@ -29,13 +28,25 @@ import java.nio.ByteOrder;
  * ByteSequence implementation backed by an on-heap MemorySegment.
  */
 public class MemorySegmentByteSequence implements ByteSequence<MemorySegment> {
+    private static final long SHALLOW_BYTES = RamUsageEstimator.shallowSizeOfInstance(MemorySegmentByteSequence.class);
+    private static final long SEGMENT_AND_SCOPE_BYTES;
+    static {
+        // All instances are byte-array heap segments, including slices. Resolve their JVM
+        // layouts once, without retaining the probe or creating Optionals during reporting.
+        var probe = MemorySegment.ofArray(new byte[0]);
+        SEGMENT_AND_SCOPE_BYTES = RamUsageEstimator.shallowSizeOf(probe)
+                + RamUsageEstimator.shallowSizeOf(probe.scope());
+    }
+
     private final MemorySegment segment;
-    private final int length;
+    // Reuse the original int slot: slices need the full retained array length, while
+    // their visible length is already available from segment.byteSize().
+    private final int backingLength;
 
     private static final ValueLayout.OfShort LITTLE_ENDIAN_SHORT_LAYOUT_UNALIGNED = ValueLayout.JAVA_SHORT_UNALIGNED.withOrder(ByteOrder.LITTLE_ENDIAN);
 
     MemorySegmentByteSequence(int length) {
-        this.length = length;
+        this.backingLength = length;
         segment = MemorySegment.ofArray(new byte[length]);
     }
 
@@ -46,19 +57,20 @@ public class MemorySegmentByteSequence implements ByteSequence<MemorySegment> {
 
     MemorySegmentByteSequence(byte[] data) {
         this.segment = MemorySegment.ofArray(data);
-        this.length = data.length;
+        this.backingLength = data.length;
     }
 
-    private MemorySegmentByteSequence(MemorySegment segment) {
+    private MemorySegmentByteSequence(MemorySegment segment, int backingLength) {
         this.segment = segment;
-        this.length = Math.toIntExact(segment.byteSize());
+        this.backingLength = backingLength;
     }
 
     @Override
     public long ramBytesUsed() {
-        int OH_BYTES = RamUsageEstimator.NUM_BYTES_OBJECT_HEADER;
-        int REF_BYTES = RamUsageEstimator.NUM_BYTES_OBJECT_REF;
-        return OH_BYTES + REF_BYTES + Integer.BYTES + MemoryLayout.sequenceLayout(length, ValueLayout.JAVA_BYTE).byteSize();
+        // All constructors create a heap byte-array segment. A slice retains the full array,
+        // not just its visible range. Its scope is a per-buffer keep-alive object.
+        return SHALLOW_BYTES + SEGMENT_AND_SCOPE_BYTES
+                + RamUsageEstimator.alignObjectSize((long) RamUsageEstimator.NUM_BYTES_ARRAY_HEADER + backingLength);
     }
 
     @Override
@@ -106,11 +118,12 @@ public class MemorySegmentByteSequence implements ByteSequence<MemorySegment> {
 
     @Override
     public MemorySegmentByteSequence slice(int offset, int length) {
-        return new MemorySegmentByteSequence(segment.asSlice(offset, length));
+        return new MemorySegmentByteSequence(segment.asSlice(offset, length), backingLength);
     }
 
     @Override
     public String toString() {
+        int length = length();
         StringBuilder sb = new StringBuilder();
         sb.append("[");
         for (int i = 0; i < Math.min(length, 25); i++) {

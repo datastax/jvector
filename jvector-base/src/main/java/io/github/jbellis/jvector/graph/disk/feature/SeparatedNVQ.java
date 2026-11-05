@@ -18,6 +18,7 @@ package io.github.jbellis.jvector.graph.disk.feature;
 
 import io.github.jbellis.jvector.disk.IndexWriter;
 import io.github.jbellis.jvector.disk.RandomAccessReader;
+import io.github.jbellis.jvector.util.RamUsageEstimator;
 import io.github.jbellis.jvector.graph.disk.CommonHeader;
 import io.github.jbellis.jvector.graph.disk.OnDiskGraphIndex;
 import io.github.jbellis.jvector.graph.similarity.ScoreFunction;
@@ -50,6 +51,12 @@ public class SeparatedNVQ extends AbstractSeparatedFeature {
     @Override
     public long getOffset() {
         return offset;
+    }
+
+    /** This feature and its scorer; the NVQ model is accounted separately. */
+    @Override
+    public long ramBytesUsed() {
+        return RamUsageEstimator.shallowSizeOf(this) + RamUsageEstimator.shallowSizeOf(scorer);
     }
 
     @Override

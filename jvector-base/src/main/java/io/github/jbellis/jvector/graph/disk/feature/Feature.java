@@ -17,6 +17,7 @@
 package io.github.jbellis.jvector.graph.disk.feature;
 
 import io.github.jbellis.jvector.disk.IndexWriter;
+import io.github.jbellis.jvector.util.RamUsageEstimator;
 
 import java.io.IOException;
 import java.util.EnumMap;
@@ -40,6 +41,14 @@ public interface Feature extends Comparable<Feature> {
 
     default void writeInline(IndexWriter out, State state) throws IOException {
         // default no-op
+    }
+
+    /**
+     * Heap retained by this feature's own objects once loaded: by default its shallow size.
+     * Compressor models and per-thread scratch are accounted separately and must not be included.
+     */
+    default long ramBytesUsed() {
+        return RamUsageEstimator.shallowSizeOf(this);
     }
 
     // Feature implementations should implement a State as well for use with writeInline/writeSeparately
