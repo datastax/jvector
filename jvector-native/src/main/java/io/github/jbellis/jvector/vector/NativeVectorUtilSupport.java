@@ -134,8 +134,15 @@ class NativeVectorUtilSupport extends PanamaVectorUtilSupport
         return NativeSimdOps.assemble_and_sum_f32(((MemorySegmentVectorFloat) data).get(), dataBase, ((MemorySegmentByteSequence) baseOffsets).get(), baseOffsetsOffset, (long) baseOffsetsLength);
     }
 
+    private static void checkSameLength(VectorFloat<?> v1, VectorFloat<?> v2) {
+        if (v1.length() != v2.length()) {
+            throw new IllegalArgumentException("Vectors must have the same length");
+        }
+    }
+
     @Override
     public void addInPlace(VectorFloat<?> v1, VectorFloat<?> v2) {
+        checkSameLength(v1, v2);
         NativeSimdOps.add_in_place_f32(((MemorySegmentVectorFloat) v1).get(), ((MemorySegmentVectorFloat) v2).get(), v1.length());
     }
 
@@ -151,6 +158,7 @@ class NativeVectorUtilSupport extends PanamaVectorUtilSupport
 
     @Override
     public void subInPlace(VectorFloat<?> v1, VectorFloat<?> v2) {
+        checkSameLength(v1, v2);
         NativeSimdOps.sub_in_place_f32(((MemorySegmentVectorFloat) v1).get(), ((MemorySegmentVectorFloat) v2).get(), v1.length());
     }
 
@@ -204,6 +212,7 @@ class NativeVectorUtilSupport extends PanamaVectorUtilSupport
 
     @Override
     public void minInPlace(VectorFloat<?> v1, VectorFloat<?> v2) {
+        checkSameLength(v1, v2);
         NativeSimdOps.min_in_place_f32(((MemorySegmentVectorFloat) v1).get(), ((MemorySegmentVectorFloat) v2).get(), v1.length());
     }
 
