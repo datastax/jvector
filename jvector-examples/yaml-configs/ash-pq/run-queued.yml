@@ -15,6 +15,7 @@ console:
     accuracy: [recall]
     count: [visited]
   metrics:
+    construction: [index_build_time_s, index_quant_time_s, search_quant_time_s]
     execution: [response_mean_ms, response_p95_ms, response_p99_ms, mean_batch_size]
 logging:
   dir: logging
@@ -27,4 +28,5 @@ logging:
     accuracy: [recall]
     count: [visited]
   metrics:
+    construction: [index_build_time_s, index_quant_time_s, search_quant_time_s]
     execution: [response_mean_ms, response_p95_ms, response_p99_ms, mean_batch_size]
