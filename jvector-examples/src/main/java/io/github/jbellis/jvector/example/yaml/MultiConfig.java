@@ -187,7 +187,7 @@ public class MultiConfig {
 
     /**
      * Int8 datasets are stored and scored natively as bytes; reranking and compression are not supported.
-     * Fails with an explicit error unless reranking is absent and every compression type is "None".
+     * Fails with an explicit error unless reranking is absent and every compression type is "None" and fusedGraph is not enabled.
      */
     public void validateForInt8Dataset() {
         String name = dataset;
@@ -195,6 +195,10 @@ public class MultiConfig {
             if (construction.reranking != null && !construction.reranking.isEmpty()) {
                 throw new IllegalArgumentException("Int8 dataset '" + name + "' does not support construction.reranking "
                         + construction.reranking + "; remove 'reranking' from the YAML config.");
+            }
+            if (construction.fusedGraph != null && construction.fusedGraph.contains(true)) {
+                throw new IllegalArgumentException("Int8 dataset '" + name + "' does not support construction.fusedGraph: "
+                        + "fused graphs require compression; use [No] or remove 'fusedGraph' from the YAML config.");
             }
             requireNoCompression(name, "construction", construction.compression);
         }
