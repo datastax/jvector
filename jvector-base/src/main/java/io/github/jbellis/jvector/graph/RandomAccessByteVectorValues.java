@@ -34,6 +34,16 @@ import java.util.function.Supplier;
 public interface RandomAccessByteVectorValues extends VectorValues<ByteSequence<?>> {
 
     /**
+     * Retrieve the vector associated with a given node, and store it in the destination vector at the given offset.
+     * The default implementation copies from {@link #getVector}; implementations that can read directly into the
+     * destination (e.g. from disk) should override it.
+     */
+    @Override
+    default void getVectorInto(int node, ByteSequence<?> destinationVector, int offset) {
+        destinationVector.copyFrom(getVector(node), 0, offset, dimension());
+    }
+
+    /**
      * Creates a new copy of this {@link RandomAccessByteVectorValues}.
      * Un-shared implementations may simply return {@code this}.
      */

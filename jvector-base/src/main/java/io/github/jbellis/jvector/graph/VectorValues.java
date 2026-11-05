@@ -50,6 +50,17 @@ public interface VectorValues<V> {
     V getVector(int nodeId);
 
     /**
+     * Retrieve the vector associated with a given node, and store it in the destination vector at the given offset.
+     * Unlike {@link #getVector}, the result is owned by the caller, so this is the way to take a private copy
+     * (and, for sources that read from disk, to avoid an intermediate allocation).
+     *
+     * @param node the node to retrieve
+     * @param destinationVector the vector to store the result in
+     * @param offset the offset in the destination vector to store the result
+     */
+    void getVectorInto(int node, V destinationVector, int offset);
+
+    /**
      * @return true iff the vector returned by {@link #getVector} is shared across calls.
      * A shared vector is only valid until the next call to {@link #getVector} overwrites it.
      */

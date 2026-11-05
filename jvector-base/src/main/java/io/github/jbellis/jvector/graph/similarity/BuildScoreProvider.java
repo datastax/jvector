@@ -142,7 +142,10 @@ public interface BuildScoreProvider {
                         @Override
                         public float similarityTo(int node2) {
                             var a = anchor;
-                            if (a == null) anchor = a = vectors.get().getVector(node1).copy();
+                            if (a == null) {
+                                anchor = a = vts.createFloatVector(ravv.dimension());
+                                vectors.get().getVectorInto(node1, a, 0);
+                            }
                             return similarityFunction.compare(a, vectorsCopy.get().getVector(node2));
                         }
                     };
@@ -268,7 +271,10 @@ public interface BuildScoreProvider {
                         @Override
                         public float similarityTo(int node2) {
                             var a = anchor;
-                            if (a == null) anchor = a = vectors.get().getVector(node1).copy();
+                            if (a == null) {
+                                anchor = a = vts.createByteSequence(ravv.dimension());
+                                vectors.get().getVectorInto(node1, a, 0);
+                            }
                             return bvsf.compare(a, vectorsCopy.get().getVector(node2));
                         }
                     };
