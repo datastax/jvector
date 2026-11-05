@@ -101,11 +101,12 @@ public class TestByteVectorSimilarityFunction extends RandomizedTest {
     @Test
     public void testDotProductKnownValue() {
         // v1=[1,0], v2=[0,1]  dot = 0
-        // maxMag = 2 * 128^2 = 32768
-        // expected = (1 + 0/32768) / 2 = 0.5
+        // expected = dot + 1 = 1
         var v1 = seq((byte) 1, (byte) 0);
         var v2 = seq((byte) 0, (byte) 1);
-        assertEquals(0.5f, ByteVectorSimilarityFunction.DOT_PRODUCT.compare(v1, v2), 1e-6f);
+        assertEquals(1.0f, ByteVectorSimilarityFunction.DOT_PRODUCT.compare(v1, v2), 1e-6f);
+        // negative dot = -2: 1 / (1 + 2)
+        assertEquals(1f / 3f, ByteVectorSimilarityFunction.DOT_PRODUCT.compare(seq((byte) 1, (byte) 1), seq((byte) -1, (byte) -1)), 1e-6f);
     }
 
     @Test
@@ -116,7 +117,23 @@ public class TestByteVectorSimilarityFunction extends RandomizedTest {
             getRandom().nextBytes(raw1);
             getRandom().nextBytes(raw2);
             float score = ByteVectorSimilarityFunction.DOT_PRODUCT.compare(seq(raw1), seq(raw2));
-            assertTrue("DOT_PRODUCT score out of [0,1]: " + score, score >= 0f && score <= 1.0f);
+            assertTrue("DOT_PRODUCT score not positive: " + score, score > 0f);
+        }
+    }
+
+    @Test
+    public void testDotProductKeepsDistinctScoresAtHighDimension() {
+        // At 1,024 dimensions, adjacent integer dot products must not collapse to the same float score.
+        int dim = 1024;
+        byte[] q = new byte[dim];
+        java.util.Arrays.fill(q, (byte) 1);
+        float prev = Float.NEGATIVE_INFINITY;
+        for (int dot = -3; dot <= 3; dot++) {
+            byte[] v = new byte[dim];
+            v[0] = (byte) dot;
+            float score = ByteVectorSimilarityFunction.DOT_PRODUCT.compare(seq(q), seq(v));
+            assertTrue("scores must strictly increase with dot product: " + prev + " -> " + score, score > prev);
+            prev = score;
         }
     }
 
@@ -202,12 +219,12 @@ public class TestByteVectorSimilarityFunction extends RandomizedTest {
 
     @Test
     public void testAllMaxValues() {
-        // All -128 vectors — EUCLIDEAN identity = 1, DOT_PRODUCT = 1, COSINE = 1
+        // All -128 vectors — EUCLIDEAN identity = 1, DOT_PRODUCT = n*128^2 + 1, COSINE = 1
         byte[] rawMin = new byte[8];
         java.util.Arrays.fill(rawMin, (byte) -128);
         var vMin = seq(rawMin);
         assertEquals(1.0f, ByteVectorSimilarityFunction.EUCLIDEAN.compare(vMin, vMin), 1e-5f);
-        assertEquals(1.0f, ByteVectorSimilarityFunction.DOT_PRODUCT.compare(vMin, vMin), 1e-5f);
+        assertEquals(8 * 128f * 128f + 1f, ByteVectorSimilarityFunction.DOT_PRODUCT.compare(vMin, vMin), 1e-3f);
         assertEquals(1.0f, ByteVectorSimilarityFunction.COSINE.compare(vMin, vMin), 1e-5f);
 
         // All 127 vectors — EUCLIDEAN identity = 1, COSINE = 1
@@ -215,8 +232,8 @@ public class TestByteVectorSimilarityFunction extends RandomizedTest {
         java.util.Arrays.fill(rawMax, (byte) 127);
         var vMax = seq(rawMax);
         assertEquals(1.0f, ByteVectorSimilarityFunction.EUCLIDEAN.compare(vMax, vMax), 1e-5f);
-        float expectedDot = (1.0f + (127.0f * 127.0f) / (128.0f * 128.0f)) / 2.0f;
-        assertEquals(expectedDot, ByteVectorSimilarityFunction.DOT_PRODUCT.compare(vMax, vMax), 1e-5f);
+        float expectedDot = 8 * 127f * 127f + 1f;
+        assertEquals(expectedDot, ByteVectorSimilarityFunction.DOT_PRODUCT.compare(vMax, vMax), 1e-3f);
         assertEquals(1.0f, ByteVectorSimilarityFunction.COSINE.compare(vMax, vMax), 1e-5f);
     }
 
