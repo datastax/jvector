@@ -26,6 +26,8 @@ import java.util.Arrays;
  */
 final public class ArrayByteSequence implements ByteSequence<byte[]>
 {
+    private static final long SHALLOW_BYTES = RamUsageEstimator.shallowSizeOfInstance(ArrayByteSequence.class);
+
     private final byte[] data;
 
     ArrayByteSequence(int length) {
@@ -81,8 +83,7 @@ final public class ArrayByteSequence implements ByteSequence<byte[]>
 
     @Override
     public long ramBytesUsed() {
-        int OH_BYTES = RamUsageEstimator.NUM_BYTES_OBJECT_HEADER;
-        return OH_BYTES + RamUsageEstimator.sizeOf(data);
+        return SHALLOW_BYTES + RamUsageEstimator.sizeOf(data);
     }
 
     @Override

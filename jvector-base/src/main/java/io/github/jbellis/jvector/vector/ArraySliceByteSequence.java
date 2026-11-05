@@ -24,6 +24,8 @@ import java.util.Arrays;
  * A {@link ByteSequence} implementation that represents a slice of another {@link ByteSequence}.
  */
 public class ArraySliceByteSequence implements ByteSequence<byte[]> {
+    private static final long SHALLOW_BYTES = RamUsageEstimator.shallowSizeOfInstance(ArraySliceByteSequence.class);
+
     private final ByteSequence<byte[]> data;
     private final int offset;
     private final int length;
@@ -88,11 +90,9 @@ public class ArraySliceByteSequence implements ByteSequence<byte[]> {
 
     @Override
     public long ramBytesUsed() {
-        // Only count the overhead of this slice object, not the underlying array
-        // since that's shared and counted elsewhere
-        return RamUsageEstimator.NUM_BYTES_OBJECT_HEADER +
-                data.ramBytesUsed() +
-                (2 * Integer.BYTES); // offset, length
+        // The slice keeps the entire backing sequence alive. Aggregates containing multiple
+        // slices must deduplicate their shared backing objects by identity.
+        return SHALLOW_BYTES + data.ramBytesUsed();
     }
 
     @Override
