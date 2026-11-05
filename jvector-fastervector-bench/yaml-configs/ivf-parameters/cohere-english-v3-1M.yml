@@ -1,0 +1,25 @@
+yamlSchemaVersion: 1
+
+# Regression config, matched to the graph's
+# jvector-examples/yaml-configs/index-parameters/cohere-english-v3-1M.yml so AutoBenchIvfYAML and AutoBenchYAML
+# results compare directly:
+#   - one search point, topK 10, like the graph's topKOverquery 10: [1.0];
+#   - storageFactor 1.0 (32x), the same compression as the graph's PQ with mFactor 8;
+#   - a fresh build every run (the graph's useSavedIndexIfExists: No), so build time is measured;
+#   - all CPUs for search, as the graph's QPS uses.
+# nprobe is set at the equal-recall point: the smallest value whose Recall@10 reaches the graph's
+# Recall@10 on this dataset. PROVISIONAL until the calibration run:
+# nlist and nprobe are starting estimates (nprobe about 3% of nlist).
+dataset: cohere-english-v3-1M
+
+construction:
+  nlist: [1024]               # about sqrt(N) for 1M vectors
+  storageFactor: [1.0]
+  buildThreads: 0             # all CPUs; override with -Divf.buildThreads
+  ssdPaths: [ivf_cache]       # override with -Divf.ssdPaths
+  useSavedIndexIfExists: No
+
+search:
+  topKNprobe:
+    10: [32]
+  searchThreads: [0]          # 0 = all CPUs; override with -Divf.searchThreads

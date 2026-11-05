@@ -1,0 +1,25 @@
+yamlSchemaVersion: 1
+
+# Regression config, matched to the graph's
+# jvector-examples/yaml-configs/index-parameters/dpr-gemma-10m.yml so AutoBenchIvfYAML and AutoBenchYAML
+# results compare directly:
+#   - one search point, topK 10, like the graph's topKOverquery 10: [1.0];
+#   - storageFactor 1.0 (32x), the same compression as the graph's PQ with mFactor 8;
+#   - a fresh build every run (the graph's useSavedIndexIfExists: No), so build time is measured;
+#   - all CPUs for search, as the graph's QPS uses.
+# nprobe is set at the equal-recall point: the smallest value whose Recall@10 reaches the graph's
+# Recall@10 on this dataset. PROVISIONAL until the calibration run:
+# nlist and nprobe are starting estimates (nprobe about 3% of nlist).
+dataset: dpr-gemma-10m
+
+construction:
+  nlist: [4096]               # about sqrt(N), rounded up to a power of two, for 10M vectors
+  storageFactor: [1.0]
+  buildThreads: 0             # all CPUs; override with -Divf.buildThreads
+  ssdPaths: [ivf_cache]       # override with -Divf.ssdPaths
+  useSavedIndexIfExists: No
+
+search:
+  topKNprobe:
+    10: [128]
+  searchThreads: [0]          # 0 = all CPUs; override with -Divf.searchThreads

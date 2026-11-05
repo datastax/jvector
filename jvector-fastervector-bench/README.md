@@ -35,9 +35,13 @@ and reporting as the graph index. That makes IVF results directly comparable wit
 Everything `jvector-fastervector` needs (JDK 22+, staged native libraries, MKL at run time; see its
 README), plus disk space for the indexes under `ssdPaths`.
 
-Run every command from the **repository root**: configuration paths resolve from there, as in
-`jvector-examples`. Run a benchmark in a JVM of its own, never in the same JVM as a graph benchmark:
-fastervector's `libjvector.so.0` clashes with jvector-native's.
+The commands below use the environment variables from the `jvector-fastervector` README
+(`JVECTOR_HOME`, `ONEAPI_SETVARS`, and `FASTERVECTOR_PINNED` for staging), set to the paths on your
+machine.
+
+Run every command from the **repository root**, `cd "$JVECTOR_HOME"`: configuration paths
+resolve from there, as in `jvector-examples`. Run a benchmark in a JVM of its own, never in the
+same JVM as a graph benchmark: fastervector's `libjvector.so.0` clashes with jvector-native's.
 
 ## Configuration
 
@@ -57,7 +61,7 @@ search:
   topKNprobe:                 # topK -> nprobe values, like topKOverquery
     10: [8, 16, 32, 64]
     100: [16, 64]
-  searchThreads: [1, 8]
+  searchThreads: [1, 8]       # 0 = all CPUs
 ```
 
 Each construction point builds into `<ssdPaths[i]>/<dataset>/nlist<N>-sf<F>/`. Unknown fields and
@@ -68,11 +72,17 @@ serve every machine:
 
 | Property | Replaces |
 |---|---|
-| `-Divf.ssdPaths=/mnt/nvme/ivf_cache` | `construction.ssdPaths` (comma-separated) |
+| `-Divf.ssdPaths=/data/ssd0/ivf_cache` | `construction.ssdPaths` (comma-separated) |
 | `-Divf.buildThreads=16` | `construction.buildThreads` |
 | `-Divf.searchThreads=1,16,48` | `search.searchThreads` (comma-separated) |
 
 Each applied override is printed. Through Maven, pass them in `-Dbench.jvm.args`.
+
+The dataset files for the six `regression-tests` datasets (`cap-1M.yml`, `cap-6M.yml`,
+`cohere-english-v3-1M.yml`, `cohere-english-v3-10M.yml`, `dpr-gemma-1m.yml`, `dpr-gemma-10m.yml`)
+are matched to the graph's regression configs; see [Comparing with the graph
+index](#comparing-with-the-graph-index). Their names must match `datasets.yml` exactly, case
+included, or the lookup falls back to `default.yml` on Linux.
 
 `yaml-configs/ivf-experiments/` holds one-off experiment configs, such as
 `cap-1M-calibration.yml`, the sweep the per-dataset files are set from. Pass one to `BenchIvfYAML`
@@ -101,18 +111,27 @@ because fastervector scores by inner product only; COSINE datasets are normalize
 
 ### As a Java program
 
-Build the runnable jar. It bundles the native libraries if they're staged when you build. With
-`-am`, Maven also builds `jvector-examples` and `jvector-native`, including jvector-native's meson
-build on Linux, so skip the tests:
+Build the runnable jar, `target/jvector-fastervector-bench-<version>-jar-with-dependencies.jar`.
+Any `package` that includes this module builds it; see the build table in the
+[`jvector-fastervector` README](../jvector-fastervector/README.md#build-and-test). It bundles the
+native libraries if they're staged when you build. Either command also builds `jvector-examples`
+and `jvector-native`, including jvector-native's meson build on Linux, so skip the tests:
 
 ```bash
-source /opt/intel/oneapi/setvars.sh >/dev/null 2>&1 || true
+cd "$JVECTOR_HOME"
+source "$ONEAPI_SETVARS" >/dev/null 2>&1 || true
+./mvnw -Pfastervector clean package -DskipTests
+# or only this module and what it depends on:
 ./mvnw -Pfastervector -pl jvector-fastervector-bench -am package -DskipTests
 ```
+
+A build without `-Pfastervector` doesn't touch this module, so an older jar stays in `target/`. If
+`java -cp` then reports `ClassNotFoundException` for a runner, rebuild with `-Pfastervector`.
 
 Regression run:
 
 ```bash
+cd "$JVECTOR_HOME"
 java --enable-native-access=ALL-UNNAMED --add-modules=jdk.incubator.vector \
      -Djvector.enable_native_vectorization=false \
      -Xmx<half-of-RAM>g \
@@ -132,7 +151,15 @@ Interactive run: the same command with the main class
 matched against every dataset in `datasets.yml`, and/or IVF config files (`*.yml`).
 
 If the jar was built without staged libraries, add
-`-Djvector.fastervector.native.dir=$PWD/jvector-fastervector/native/linux-x86_64`.
+`-Djvector.fastervector.native.dir=$JVECTOR_HOME/jvector-fastervector/native/linux-x86_64`.
+
+### Progress output
+
+Both runners log each search point as it starts and ends (`Search point cap-1M/nlist1024-sf1.0
+[3/12] topK=10 nprobe=32 searchThreads=48`), each benchmark's duration, and every throughput run
+and latency pass with its result. A heartbeat logs the current phase every 60 seconds, so a long
+single-threaded phase isn't silent; `-Divf.heartbeatSeconds=<n>` changes the interval, and `0`
+turns it off.
 
 ### Through Maven
 
@@ -140,6 +167,7 @@ Each runner is a profile that runs it after compiling. `bench.args` holds the ru
 and `bench.jvm.args` any extra JVM options:
 
 ```bash
+cd "$JVECTOR_HOME"
 ./mvnw -Pfastervector,bench-ivf -pl jvector-fastervector-bench -am process-classes \
     -Dbench.args="cap-1M"
 ./mvnw -Pfastervector,autobench-ivf -pl jvector-fastervector-bench -am process-classes \
@@ -154,6 +182,7 @@ goal would also run in `jvector-examples`, whose default profile turns `exec` on
 Run `AutoBenchYAML` on the same machine and datasets, in its own JVM, as CI's `run-bench.yml` does:
 
 ```bash
+cd "$JVECTOR_HOME"
 ./mvnw -pl jvector-examples -am package -DskipTests
 java --enable-native-access=ALL-UNNAMED --add-modules=jdk.incubator.vector \
      -Djvector.enable_native_vectorization=true \
@@ -164,6 +193,32 @@ java --enable-native-access=ALL-UNNAMED --add-modules=jdk.incubator.vector \
 ```
 
 Use different `--output` prefixes: each runner keeps its checkpoint in `<prefix>.checkpoint.json`.
+
+### How the regression configs are matched
+
+Each IVF regression config mirrors the graph's config for the same dataset in
+`jvector-examples/yaml-configs/index-parameters/`:
+
+| Graph | IVF | Why |
+|---|---|---|
+| `topKOverquery: 10: [1.0]`, one search point | `topKNprobe: 10: [<nprobe>]`, one search point | `BenchmarkSummarizer` averages every configuration of a dataset, so both sides need the same number of points with the same topK. |
+| PQ, `mFactor: 8` (32x) | `storageFactor: [1.0]` (32x) | The same compressed size per vector. |
+| `useSavedIndexIfExists: No` | `useSavedIndexIfExists: No` | Both report a fresh build time. |
+| QPS on all CPUs | `searchThreads: [0]` (all CPUs) | The same concurrency. Compare the graph's `QPS` with IVF's `Per-query QPS`, which has the same shape; IVF's batched `QPS` is extra. |
+
+`nprobe` is chosen for **equal recall**: the smallest value whose `Recall@10` reaches the graph's
+`Recall@10` on that dataset, so the comparison is QPS at the same recall. Until the calibration
+run, `nlist` and `nprobe` in these files are provisional estimates, and the files say so.
+
+These differences remain, and the comparison should state them:
+
+- **Reranking.** The graph reranks its candidates with NVQ vectors; IVF-ASH scores from its 32x
+  codes alone. IVF reaches the graph's recall through a larger `nprobe`.
+- **Storage.** The graph's index is read through the page cache and is usually memory-resident at
+  1M; IVF-ASH reads its lists from the SSD paths on every query. Use the same disk for both.
+- **Build threads.** The graph builds on the physical core count; IVF's `buildThreads: 0` uses
+  all CPUs. Set `-Divf.buildThreads=<physical cores>` to match.
+- **Native memory.** fastervector's native memory isn't in the off-heap figures.
 
 `ivf-bench-results.csv` and `graph-bench-results.csv` share their first 11 columns:
 

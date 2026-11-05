@@ -53,16 +53,44 @@ src/main/java/.../fastervector/ffi/    jextract-generated bindings (don't edit)
 src/test/java/.../fastervector/        tests, and example/IvfAshExample
 ```
 
-## Build and test
+## Environment variables
 
-Everything runs from the jvector repository root. Every Maven command on this module needs
-`-Pfastervector` (so Maven knows about the module) and `-am` (so it builds `jvector-base`
-first).
+The commands below use these, set to the paths on your machine:
 
 ```bash
+export JVECTOR_HOME=/path/to/jvector                       # this jvector checkout
+export FASTERVECTOR_HOME=/path/to/FasterVector             # fastervector checkout (only read)
+export FASTERVECTOR_PINNED="$FASTERVECTOR_HOME-pinned"     # pinned worktree of it, with submodules initialized
+export ONEAPI_SETVARS=/opt/intel/oneapi/setvars.sh         # ~/intel/oneapi/setvars.sh for a user install
+export JEXTRACT_BIN=/path/to/jextract-22/bin/jextract      # only to regenerate the FFI bindings
+```
+
+Create the pinned worktree with
+`git -C "$FASTERVECTOR_HOME" worktree add --detach "$FASTERVECTOR_PINNED" origin/java-bindings`, then
+`git -C "$FASTERVECTOR_PINNED" submodule update --init --recursive`.
+
+## Build and test
+
+Everything runs from the jvector repository root, `$JVECTOR_HOME`. This module and
+`jvector-fastervector-bench` are in the parent's opt-in `fastervector` profile, not its default
+modules, so Maven only builds them with `-Pfastervector`:
+
+| Command (from `$JVECTOR_HOME`) | Builds the fastervector modules? |
+|---|---|
+| `./mvnw clean package` | No. They aren't in the parent's default `<modules>`. |
+| `./mvnw -Pfastervector clean package` | Yes, both, including the bench module's `jar-with-dependencies`. The normal way to build them. |
+| `./mvnw -Pfastervector -pl <module> -am package` | Yes, that module and what it depends on. A shortcut for working on one module; `-am` is required because the parent skips `install`, so `jvector-base` only resolves from the same build. |
+
+`package` runs this module's tests; add `-DskipTests` to skip them. `clean` doesn't remove the
+staged libraries in `native/`.
+
+```bash
+cd "$JVECTOR_HOME"
+source "$ONEAPI_SETVARS" >/dev/null 2>&1 || true
+
 # 1. Build fastervector's native libraries and stage them into native/linux-x86_64/.
-#    Use a pinned worktree with submodules initialized; --no-build stages an existing build.
-jvector-fastervector/scripts/stage-fastervector-native.sh /path/to/FasterVector-pinned
+#    --no-build stages an existing build.
+jvector-fastervector/scripts/stage-fastervector-native.sh "$FASTERVECTOR_PINNED"
 
 # 2. Build, and run all tests. The native tests skip when the libraries can't load;
 #    requireNative makes that a failure instead.
@@ -71,6 +99,21 @@ jvector-fastervector/scripts/stage-fastervector-native.sh /path/to/FasterVector-
 
 # 3. Run the example
 ./mvnw -Pfastervector -pl jvector-fastervector -am test-compile exec:exec@example
+```
+
+To run the example with `java` directly, write out the classpath first. `IvfAshExample` is test
+code, so it is in `target/test-classes`, not the module jar:
+
+```bash
+cd "$JVECTOR_HOME"
+./mvnw -q -Pfastervector -pl jvector-fastervector -am test-compile dependency:build-classpath \
+    -Dmdep.outputFile=target/classpath.txt -Dmdep.includeScope=test
+
+java --enable-native-access=ALL-UNNAMED \
+     -Djvector.enable_native_vectorization=false \
+     -Djvector.fastervector.native.dir="$JVECTOR_HOME/jvector-fastervector/native/linux-x86_64" \
+     -cp "jvector-fastervector/target/test-classes:jvector-fastervector/target/classes:$(cat jvector-fastervector/target/classpath.txt)" \
+     io.github.jbellis.jvector.fastervector.example.IvfAshExample
 ```
 
 A jar built after staging bundles the two libraries, and the loader extracts them at run
@@ -142,19 +185,21 @@ builds never run jextract. Regenerate when the header changes, for example when 
 script warns that the staged header differs:
 
 ```bash
-export JEXTRACT_BIN=/path/to/jextract-22/bin/jextract   # must be jextract 22
+cd "$JVECTOR_HOME"
+"$JEXTRACT_BIN" --version     # must report 22
 ./mvnw -Pfastervector,fastervector.jextract -pl jvector-fastervector -am compile
 ```
 
 The script regenerates `ffi/`, adds the license header, and updates
-`src/main/native/fvec_capi.h`. Set `FVEC_CAPI_H` to generate from a header that isn't
-staged. Commit `ffi/` and the header together, and update `FASTERVECTOR_SOURCE`. Don't use a
+`src/main/native/fvec_capi.h`. To generate from a header that isn't staged, set `FVEC_CAPI_H`,
+for example `export FVEC_CAPI_H="$FASTERVECTOR_PINNED/fvec_capi.h"`. Commit `ffi/` and the header together, and update `FASTERVECTOR_SOURCE`. Don't use a
 jextract newer than 22: its output calls `SymbolLookup.findOrThrow`, which doesn't exist
 before JDK 23.
 
 ## Updating from fastervector
 
-1. Pin the new fastervector commit in a worktree and run `scripts/stage-fastervector-native.sh`.
+1. Point `$FASTERVECTOR_PINNED` at the new fastervector commit and run
+   `jvector-fastervector/scripts/stage-fastervector-native.sh "$FASTERVECTOR_PINNED"`.
 2. If it warns that the header changed, regenerate the bindings (above).
 3. Copy over any changed Java code from fastervector, keeping this module's package names
    and its edits to `FastervectorLibrary` and `IvfAshIndex`.

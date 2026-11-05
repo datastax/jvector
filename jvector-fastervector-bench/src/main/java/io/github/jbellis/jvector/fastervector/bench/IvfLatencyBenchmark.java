@@ -21,6 +21,8 @@ import io.github.jbellis.jvector.fastervector.IvfAshIndexSearcher;
 import io.github.jbellis.jvector.fastervector.Vecs;
 import io.github.jbellis.jvector.fastervector.bench.IvfConfig.SearchPoint;
 import io.github.jbellis.jvector.fastervector.utils.FlatArrayVecs;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -32,6 +34,7 @@ import java.util.List;
  * metric keys. {@code searchThreads} doesn't apply, since a single query runs on one thread.
  */
 public class IvfLatencyBenchmark implements IvfQueryBenchmark {
+    private static final Logger log = LoggerFactory.getLogger(IvfLatencyBenchmark.class);
     private static final String DEFAULT_FORMAT = ".3f";
 
     private final int queryRuns;
@@ -91,11 +94,14 @@ public class IvfLatencyBenchmark implements IvfQueryBenchmark {
         try (IvfAshIndexSearcher searcher = system.searcher(point.topK(), point.nprobe(), null)) {
             int n = 0;
             for (int run = 0; run < queryRuns; run++) {
+                long passStart = System.nanoTime();
                 for (Vecs query : queries) {
                     long start = System.nanoTime();
                     IvfThroughputBenchmark.consume(searcher.search(query));
                     latencies[n++] = System.nanoTime() - start;
                 }
+                log.info("    {} pass {}/{}: {} ms mean", getBenchmarkName(), run + 1, queryRuns,
+                         String.format("%.3f", (System.nanoTime() - passStart) / 1e6 / nq));
             }
         }
         return metrics(latencies);

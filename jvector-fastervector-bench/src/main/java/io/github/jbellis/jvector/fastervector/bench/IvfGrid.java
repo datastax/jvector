@@ -30,6 +30,9 @@ import java.io.IOException;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.TimeUnit;
 
 /**
  * The IVF counterpart of jvector-examples' {@code Grid}: for each construction point in an
@@ -75,15 +78,27 @@ public final class IvfGrid {
             log.warn("Skipping dataset {}: {}", ds.getName(), reason.get());
             return false;
         }
+        List<ConstructionPoint> constructionPoints = config.constructionPoints();
         List<SearchPoint> searchPoints = config.searchPoints();
-        for (ConstructionPoint point : config.constructionPoints()) {
-            try (IvfSystem system = IvfSystem.buildOrOpen(ds, config, point)) {
-                sink.startConstructionPoint(system);
-                List<Metric> constructionMetrics = system.constructionMetrics();
-                for (SearchPoint searchPoint : searchPoints) {
-                    List<Metric> metrics = runBenchmarks(system, searchPoint, benchmarks);
-                    metrics.addAll(constructionMetrics);
-                    sink.accept(system, searchPoint, metrics);
+        int total = constructionPoints.size() * searchPoints.size();
+        int n = 0;
+        try (Heartbeat heartbeat = Heartbeat.start(ds.getName())) {
+            for (ConstructionPoint point : constructionPoints) {
+                String index = point.subfolder(ds.getName());
+                heartbeat.phase("building or opening " + index);
+                try (IvfSystem system = IvfSystem.buildOrOpen(ds, config, point)) {
+                    sink.startConstructionPoint(system);
+                    List<Metric> constructionMetrics = system.constructionMetrics();
+                    for (SearchPoint searchPoint : searchPoints) {
+                        String label = String.format("%s [%d/%d] topK=%d nprobe=%d searchThreads=%d", index, ++n, total,
+                                                     searchPoint.topK(), searchPoint.nprobe(), searchPoint.searchThreads());
+                        long start = System.nanoTime();
+                        log.info("Search point {}", label);
+                        List<Metric> metrics = runBenchmarks(system, searchPoint, benchmarks, heartbeat, label);
+                        log.info("Search point {} done in {}s", label, secondsSince(start));
+                        metrics.addAll(constructionMetrics);
+                        sink.accept(system, searchPoint, metrics);
+                    }
                 }
             }
         }
@@ -95,13 +110,16 @@ public final class IvfGrid {
      * {@code QueryTester} reports, from snapshots before and after. fastervector's own native
      * memory isn't part of the JVM's off-heap count.
      */
-    private static List<Metric> runBenchmarks(IvfSystem system, SearchPoint point, List<IvfQueryBenchmark> benchmarks)
-            throws IOException {
+    private static List<Metric> runBenchmarks(IvfSystem system, SearchPoint point, List<IvfQueryBenchmark> benchmarks,
+                                              Heartbeat heartbeat, String label) throws IOException {
         List<Metric> metrics = new ArrayList<>();
         try (var diagnostics = new BenchmarkDiagnostics(DiagnosticLevel.NONE)) {
             diagnostics.capturePrePhaseSnapshot("Query");
             for (IvfQueryBenchmark benchmark : benchmarks) {
+                heartbeat.phase(label + ": " + benchmark.getBenchmarkName());
+                long start = System.nanoTime();
                 metrics.addAll(benchmark.runBenchmark(system, point));
+                log.info("  {} done in {}s", benchmark.getBenchmarkName(), secondsSince(start));
             }
             diagnostics.capturePostPhaseSnapshot("Query");
             var pre = diagnostics.getPrePhaseSystemSnapshot();
@@ -115,5 +133,53 @@ public final class IvfGrid {
             }
         }
         return metrics;
+    }
+
+    static String secondsSince(long startNanos) {
+        return String.format("%.1f", (System.nanoTime() - startNanos) / 1e9);
+    }
+
+    /**
+     * Logs the current phase every {@code ivf.heartbeatSeconds} seconds (default 60; 0 turns it
+     * off), so a long phase, such as a single-threaded pass over the query set, isn't silent.
+     */
+    static final class Heartbeat implements AutoCloseable {
+        static final String INTERVAL_PROPERTY = "ivf.heartbeatSeconds";
+
+        private final ScheduledExecutorService timer;
+        private final long start = System.nanoTime();
+        private volatile String phase = "starting";
+        private volatile long phaseStart = start;
+
+        private Heartbeat(String name, long intervalSeconds) {
+            if (intervalSeconds <= 0) {
+                timer = null;
+                return;
+            }
+            timer = Executors.newSingleThreadScheduledExecutor(r -> {
+                Thread t = new Thread(r, "ivf-heartbeat");
+                t.setDaemon(true);
+                return t;
+            });
+            timer.scheduleAtFixedRate(() -> log.info("Still running {}: {} ({}s in this phase, {}s in total)",
+                                                     name, phase, secondsSince(phaseStart), secondsSince(start)),
+                                      intervalSeconds, intervalSeconds, TimeUnit.SECONDS);
+        }
+
+        static Heartbeat start(String name) {
+            return new Heartbeat(name, Long.getLong(INTERVAL_PROPERTY, 60));
+        }
+
+        void phase(String phase) {
+            this.phaseStart = System.nanoTime();
+            this.phase = phase;
+        }
+
+        @Override
+        public void close() {
+            if (timer != null) {
+                timer.shutdownNow();
+            }
+        }
     }
 }

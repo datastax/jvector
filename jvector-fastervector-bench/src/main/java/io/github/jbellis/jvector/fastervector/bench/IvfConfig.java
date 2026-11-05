@@ -60,6 +60,7 @@ public class IvfConfig {
     public static class Search {
         /** topK to the nprobe values to run with it. */
         public Map<Integer, List<Integer>> topKNprobe;
+        /** Search thread counts; 0 uses all CPUs, as the graph benchmark's QPS does. */
         public List<Integer> searchThreads;
     }
 
@@ -198,7 +199,11 @@ public class IvfConfig {
             nprobes.forEach(p -> requirePositive(source, "search.topKNprobe[" + topK + "] nprobe", p));
         });
         requireNonEmpty(source, "search.searchThreads", search.searchThreads);
-        search.searchThreads.forEach(t -> requirePositive(source, "search.searchThreads", t));
+        search.searchThreads.forEach(t -> {
+            if (t == null || t < 0) {
+                fail(source, "search.searchThreads values must be 0 (all CPUs) or positive, got " + t);
+            }
+        });
     }
 
     /** Every {@code nlist} x {@code storageFactor} combination, in config order. */
@@ -212,13 +217,16 @@ public class IvfConfig {
         return points;
     }
 
-    /** Every {@code topK} x {@code nprobe} x {@code searchThreads} combination, in config order. */
+    /**
+     * Every {@code topK} x {@code nprobe} x {@code searchThreads} combination, in config order,
+     * with a {@code searchThreads} of 0 resolved to the number of CPUs.
+     */
     public List<SearchPoint> searchPoints() {
         List<SearchPoint> points = new ArrayList<>();
         search.topKNprobe.forEach((topK, nprobes) -> {
             for (int nprobe : nprobes) {
                 for (int threads : search.searchThreads) {
-                    points.add(new SearchPoint(topK, nprobe, threads));
+                    points.add(new SearchPoint(topK, nprobe, threads == 0 ? Runtime.getRuntime().availableProcessors() : threads));
                 }
             }
         });

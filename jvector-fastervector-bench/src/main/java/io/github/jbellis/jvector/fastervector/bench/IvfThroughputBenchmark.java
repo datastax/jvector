@@ -25,6 +25,8 @@ import io.github.jbellis.jvector.fastervector.bench.IvfConfig.SearchPoint;
 import io.github.jbellis.jvector.fastervector.utils.Array2DVecs;
 import io.github.jbellis.jvector.fastervector.utils.FlatArrayVecs;
 import org.apache.commons.math3.stat.StatUtils;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -49,6 +51,7 @@ import java.util.concurrent.atomic.AtomicInteger;
  * runs get no help from caches warmed by the real queries, and each measured run follows a GC pause.
  */
 public class IvfThroughputBenchmark implements IvfQueryBenchmark {
+    private static final Logger log = LoggerFactory.getLogger(IvfThroughputBenchmark.class);
     private static final String DEFAULT_FORMAT = ".1f";
     private static volatile long SINK;
 
@@ -125,13 +128,16 @@ public class IvfThroughputBenchmark implements IvfQueryBenchmark {
             try (FvecThreadPool pool = FvecThreadPool.create(point.searchThreads());
                  IvfAshIndexSearcher searcher = system.searcher(point.topK(), point.nprobe(), pool)) {
                 for (int i = 0; i < numWarmupRuns; i++) {
+                    long start = System.nanoTime();
                     consume(searcher.search(warmupVecs));
+                    logRun("warm-up", i, numWarmupRuns, nq / ((System.nanoTime() - start) / 1e9));
                 }
                 for (int i = 0; i < numTestRuns; i++) {
                     gcPause();
                     long start = System.nanoTime();
                     consume(searcher.search(system.queryVecs()));
                     qps[i] = nq / ((System.nanoTime() - start) / 1e9);
+                    logRun("run", i, numTestRuns, qps[i]);
                 }
             }
         } else {
@@ -149,13 +155,16 @@ public class IvfThroughputBenchmark implements IvfQueryBenchmark {
                     searchers.add(system.searcher(point.topK(), point.nprobe(), null));
                 }
                 for (int i = 0; i < numWarmupRuns; i++) {
+                    long start = System.nanoTime();
                     runPerQuery(executor, searchers, warmupQueries);
+                    logRun("warm-up", i, numWarmupRuns, nq / ((System.nanoTime() - start) / 1e9));
                 }
                 for (int i = 0; i < numTestRuns; i++) {
                     gcPause();
                     long start = System.nanoTime();
                     runPerQuery(executor, searchers, queries);
                     qps[i] = nq / ((System.nanoTime() - start) / 1e9);
+                    logRun("run", i, numTestRuns, qps[i]);
                 }
             } finally {
                 executor.shutdownNow();
@@ -163,6 +172,10 @@ public class IvfThroughputBenchmark implements IvfQueryBenchmark {
             }
         }
         return metrics(qps);
+    }
+
+    private void logRun(String kind, int i, int of, double qps) {
+        log.info("    {} {} {}/{}: {} QPS", getBenchmarkName(), kind, i + 1, of, String.format("%.1f", qps));
     }
 
     /** Each worker owns one searcher and pulls query indexes from a shared counter. */

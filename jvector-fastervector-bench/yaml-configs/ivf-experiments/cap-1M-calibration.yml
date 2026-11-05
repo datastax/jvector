@@ -21,4 +21,4 @@ construction:
 search:
   topKNprobe:
     10: [4, 8, 16, 32, 64, 128, 256]
-  searchThreads: [48]         # all vCPUs on the high-end machine; override with -Divf.searchThreads
+  searchThreads: [0]          # 0 = all CPUs, as the graph benchmark's QPS uses; override with -Divf.searchThreads

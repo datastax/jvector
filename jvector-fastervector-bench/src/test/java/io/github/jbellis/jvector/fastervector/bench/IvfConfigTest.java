@@ -16,6 +16,7 @@
 
 package io.github.jbellis.jvector.fastervector.bench;
 
+import io.github.jbellis.jvector.example.yaml.DatasetCollection;
 import io.github.jbellis.jvector.fastervector.bench.IvfConfig.ConstructionPoint;
 import io.github.jbellis.jvector.fastervector.bench.IvfConfig.SearchPoint;
 import org.junit.jupiter.api.Test;
@@ -27,6 +28,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -62,6 +64,41 @@ class IvfConfigTest {
         assertFalse(config.construction.useSavedIndexIfExists);
         assertEquals(Map.of(10, List.of(8, 16, 32, 64), 100, List.of(16, 64)), config.search.topKNprobe);
         assertEquals(List.of(1, 8), config.search.searchThreads);
+    }
+
+    @Test
+    void shippedConfigsAreValid() throws IOException {
+        for (String dir : List.of(IvfConfig.DEFAULT_DIRECTORY, "jvector-fastervector-bench/yaml-configs/ivf-experiments/")) {
+            try (var files = Files.list(Path.of(dir))) {
+                for (Path file : files.filter(f -> f.toString().endsWith(".yml")).toList()) {
+                    assertDoesNotThrow(() -> IvfConfig.getConfig(file.toString()), file.toString());
+                }
+            }
+        }
+    }
+
+    // Matched by exact file name, as on Linux: a name differing only in case falls back to default.yml there
+    @Test
+    void everyRegressionDatasetHasMatchingIvfAndGraphConfigs() throws IOException {
+        List<String> ivfFiles = fileNames(IvfConfig.DEFAULT_DIRECTORY);
+        List<String> graphFiles = fileNames("jvector-examples/yaml-configs/index-parameters/");
+        for (String dataset : DatasetCollection.load().getSection("regression-tests")) {
+            assertTrue(ivfFiles.contains(dataset + ".yml"), "no IVF config for " + dataset);
+            assertTrue(graphFiles.contains(dataset + ".yml"), "no graph config for " + dataset);
+            IvfConfig config = IvfConfig.getDefaultConfig(dataset);
+            assertEquals(dataset, config.dataset);
+            // One topK-10 point on all CPUs, like the graph's topKOverquery 10: [1.0]
+            assertEquals(Set.of(10), config.search.topKNprobe.keySet(), dataset);
+            assertEquals(1, config.searchPoints().size(), dataset);
+            assertEquals(List.of(0), config.search.searchThreads, dataset);
+            assertEquals(List.of(1.0f), config.construction.storageFactor, dataset);
+        }
+    }
+
+    private static List<String> fileNames(String dir) throws IOException {
+        try (var files = Files.list(Path.of(dir))) {
+            return files.map(f -> f.getFileName().toString()).toList();
+        }
     }
 
     @Test
@@ -124,7 +161,15 @@ class IvfConfigTest {
         assertInvalid(VALID.replace("ssdPaths: [/mnt/ssd0, /mnt/ssd1]", "ssdPaths: []"), "ssdPaths");
         assertInvalid(VALID.replace("10: [8, 16]", "10: [0]"), "nprobe");
         assertInvalid(VALID.replace("10: [8, 16]", "10: []"), "topKNprobe[10]");
-        assertInvalid(VALID.replace("searchThreads: [1, 4]", "searchThreads: [0]"), "searchThreads");
+        assertInvalid(VALID.replace("searchThreads: [1, 4]", "searchThreads: [-1]"), "searchThreads");
+    }
+
+    @Test
+    void zeroSearchThreadsMeansAllCpus() throws IOException {
+        IvfConfig config = IvfConfig.getConfig(write(VALID.replace("searchThreads: [1, 4]", "searchThreads: [0]")).toString());
+        assertEquals(List.of(0), config.search.searchThreads);
+        int cpus = Runtime.getRuntime().availableProcessors();
+        assertTrue(config.searchPoints().stream().allMatch(p -> p.searchThreads() == cpus));
     }
 
     @Test
@@ -164,7 +209,7 @@ class IvfConfigTest {
     @Test
     void overridesApplyWhenLoadingAndAreValidated() throws IOException {
         Path file = write(VALID);
-        System.setProperty("ivf.searchThreads", "0");
+        System.setProperty("ivf.searchThreads", "-1");
         try {
             assertThrows(IllegalArgumentException.class, () -> IvfConfig.getConfig(file.toString()));
             System.setProperty("ivf.searchThreads", "32");
