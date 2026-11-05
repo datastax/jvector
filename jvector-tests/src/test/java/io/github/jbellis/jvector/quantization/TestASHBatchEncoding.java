@@ -80,7 +80,12 @@ public class TestASHBatchEncoding {
         private final VectorFloat<?>[] vectors;
         private final boolean shared;
         private final VectorFloat<?> scratch;
+        private final AtomicInteger reads;
         Values(VectorFloat<?>[] vectors, boolean shared) {
+            this(vectors, shared, null);
+        }
+        Values(VectorFloat<?>[] vectors, boolean shared, AtomicInteger reads) {
+            this.reads = reads;
             this.vectors = vectors;
             this.shared = shared;
             scratch = VectorizationProvider.getInstance().getVectorTypeSupport().createFloatVector(DIMENSION);
@@ -88,8 +93,9 @@ public class TestASHBatchEncoding {
         @Override public int size() { return vectors.length; }
         @Override public int dimension() { return DIMENSION; }
         @Override public boolean isValueShared() { return shared; }
-        @Override public RandomAccessVectorValues copy() { return new Values(vectors, shared); }
+        @Override public RandomAccessVectorValues copy() { return new Values(vectors, shared, reads); }
         @Override public VectorFloat<?> getVector(int ordinal) {
+            if (reads != null) reads.incrementAndGet();
             VectorFloat<?> vector = vectors[ordinal];
             if (vector == null || !shared) return vector;
             for (int d = 0; d < DIMENSION; d++) scratch.set(d, vector.get(d));
@@ -142,6 +148,49 @@ public class TestASHBatchEncoding {
                     }
                 }
             }
+        }
+    }
+
+    @Test
+    public void correctionsAreComputedInTheEncodingPassAndSharedWithoutChangingCodesOrScores() throws Exception {
+        for (int bits : new int[]{2,4}) for (int landmarks : new int[]{1,3}) {
+            var ash = model(bits, landmarks);
+            var input = vectors(97);
+            input[31] = null;
+            input[96] = ash.landmarks[0].copy();
+            AtomicInteger reads = new AtomicInteger();
+            var source = new Values(input, true, reads);
+            ForkJoinPool pool = new ForkJoinPool(3);
+            try {
+                var bulk = ash.encodeAll(source, pool);
+                assertEquals("Read each raw vector exactly once", input.length, reads.get());
+                assertNotNull(bulk.symmetricOffsets);
+                AsymmetricHashing.QuantizedVector[] codes = new AsymmetricHashing.QuantizedVector[input.length];
+                for (int i = 0; i < codes.length; i++) {
+                    codes[i] = input[i] == null ? AsymmetricHashing.QuantizedVector.createEmpty(ash.quantizedDim, bits) : ash.encode(input[i]);
+                    assertCode(codes[i], bulk.get(i));
+                    float expected = bulk.get(i).offset + bulk.get(i).scale * AsymmetricHashing.dotProjectionCode(
+                            ash.landmarkProj[bulk.get(i).landmark & 255], bulk.get(i).extraBits, ash.quantizedDim, bits);
+                    assertEquals(Float.floatToRawIntBits(expected), Float.floatToRawIntBits(bulk.symmetricOffsets[i]));
+                }
+                var uncached = new ASHVectors(ash, codes);
+                var prepared = new ASHSymmetricScorer(bulk);
+                var reference = new ASHSymmetricScorer(uncached);
+                var offsets = ASHSymmetricScorer.class.getDeclaredField("centeredOffsets");
+                offsets.setAccessible(true);
+                assertSame(bulk.symmetricOffsets, offsets.get(prepared));
+                assertSame(bulk.symmetricOffsets, offsets.get(new ASHSymmetricScorer(bulk)));
+                assertEquals(io.github.jbellis.jvector.util.RamUsageEstimator.shallowSizeOf(bulk.symmetricOffsets),
+                        bulk.ramBytesUsed() - uncached.ramBytesUsed());
+                var reordered = bulk.reorderByLandmarkFast();
+                var reorderedScorer = new ASHSymmetricScorer(reordered.vectors);
+                for (int i = 0; i < codes.length; i++) for (int j = 0; j < codes.length; j++) {
+                    assertEquals(reference.dotProduct(i, j), prepared.dotProduct(i, j), 0f);
+                    assertEquals(prepared.dotProduct(reordered.newToOld[i], reordered.newToOld[j]),
+                            reorderedScorer.dotProduct(i, j), 0f);
+                }
+                assertEquals("Scorer creation/reordering must not reread raw input", input.length, reads.get());
+            } finally { pool.shutdown(); }
         }
     }
 

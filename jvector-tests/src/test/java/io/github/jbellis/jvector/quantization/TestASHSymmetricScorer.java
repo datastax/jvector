@@ -71,7 +71,17 @@ public class TestASHSymmetricScorer {
                     assertEquals("symmetric SIMD bits=" + bits + " d=" + d, actual,
                             backend.ashSymmetricDot(a.binaryVector, a.extraBits, b.binaryVector, b.extraBits, d, bits), 0f);
                 }
-                if ((bits == 2 || bits == 4) && backend.supportsAshProjectionScoring()) {
+                if (bits == 2 && backend.supportsNativeAshCanonicalLutScoring()) {
+                    // Native b=2 deliberately requires prepared state; keep its raw-entry guard.
+                    if ("native".equalsIgnoreCase(System.getProperty("jvector.vectorization_provider", "").trim())) {
+                        assertThrows(IllegalStateException.class,
+                                () -> backend.ashProjectionDot(unpacked, b.extraBits, unpacked.length, 2));
+                    }
+                    int groups = FusedASHLayout.codeGroups(d, bits);
+                    float[] lut = new float[groups * 16];
+                    FusedASHLayout.buildQueryLut(unpacked, d, bits, lut);
+                    assertEquals(actual, backend.ashCanonicalLutDot(b.extraBits, groups, lut), 0f);
+                } else if ((bits == 2 || bits == 4) && backend.supportsAshProjectionScoring()) {
                     assertEquals(actual, backend.ashProjectionDot(unpacked, b.extraBits, d, bits), 0f);
                 }
             }

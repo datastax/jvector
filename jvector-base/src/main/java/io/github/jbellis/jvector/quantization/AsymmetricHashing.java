@@ -765,6 +765,15 @@ public class AsymmetricHashing implements VectorCompressor<AsymmetricHashing.Qua
         return sum;
     }
 
+    /** Header-calibrated correction for symmetric scoring, using the stored code/header. */
+    float centeredOffset(QuantizedVector vector) {
+        int c = vector.landmark & 255;
+        if (c >= landmarkCount) throw new IllegalArgumentException("Invalid landmark " + c);
+        if (!usesFastScanProjectionCode(bitsPerDimension)) return vector.offset;
+        return vector.offset + vector.scale * dotProjectionCode(
+                landmarkProj[c], vector.extraBits, quantizedDim, bitsPerDimension);
+    }
+
     // ---------------------------------------------------------------------
     // Quantization strategies
     // ---------------------------------------------------------------------
@@ -1512,6 +1521,8 @@ public class AsymmetricHashing implements VectorCompressor<AsymmetricHashing.Qua
         final int parallelism = Math.max(1, simdExecutor.getParallelism());
         final int chunkSize = (int) (((long) n + parallelism - 1) / parallelism);
         final QuantizedVector[] out = new QuantizedVector[n];
+        // Fill while each encoded vector is hot; never reread the raw input for setup.
+        final float[] symmetricOffsets = usesFastScanProjectionCode(bitsPerDimension) ? new float[n] : null;
         final var ravvSupplier = ravv.threadLocalSupplier();
         var tasks = new java.util.ArrayList<java.util.concurrent.ForkJoinTask<?>>(parallelism);
         Throwable failure = null;
@@ -1519,7 +1530,7 @@ public class AsymmetricHashing implements VectorCompressor<AsymmetricHashing.Qua
             for (int start = 0; start < n;) {
                 final int first = start;
                 final int end = (int) Math.min((long) n, (long) first + chunkSize);
-                tasks.add(simdExecutor.submit(() -> encodeRange(ravvSupplier.get(), out, first, end)));
+                tasks.add(simdExecutor.submit(() -> encodeRange(ravvSupplier.get(), out, symmetricOffsets, first, end)));
                 start = end;
             }
         } catch (RuntimeException | Error error) {
@@ -1536,10 +1547,11 @@ public class AsymmetricHashing implements VectorCompressor<AsymmetricHashing.Qua
         }
         if (failure instanceof Error) throw (Error) failure;
         if (failure != null) throw (RuntimeException) failure;
-        return new ASHVectors(this, out);
+        return new ASHVectors(this, out, symmetricOffsets);
     }
 
-    private void encodeRange(RandomAccessVectorValues source, QuantizedVector[] out, int start, int end) {
+    private void encodeRange(RandomAccessVectorValues source, QuantizedVector[] out,
+                             float[] symmetricOffsets, int start, int end) {
         int capacity = Math.min(ENCODING_BATCH_SIZE, end - start);
         float[][] inputs = new float[capacity][originalDimension];
         float[][] projected = new float[capacity][quantizedDim];
@@ -1551,27 +1563,32 @@ public class AsymmetricHashing implements VectorCompressor<AsymmetricHashing.Qua
             VectorFloat<?> vector = source.getVector(i);
             QuantizedVector dest = QuantizedVector.createEmpty(quantizedDim, bitsPerDimension);
             out[i] = dest;
-            if (vector == null) continue;
+            if (vector == null) {
+                if (symmetricOffsets != null) symmetricOffsets[i] = centeredOffset(dest);
+                continue;
+            }
             float residualNorm = prepareEncoding(vector, dest);
             normalizeResidual(vector, landmarks[dest.landmark & 0xFF], residualNorm, inputs[count]);
             residualNorms[count] = residualNorm;
             ordinals[count] = i;
             if (++count == capacity) {
-                encodeBatch(inputs, projected, residualNorms, ordinals, count, absNorm, out);
+                encodeBatch(inputs, projected, residualNorms, ordinals, count, absNorm, out, symmetricOffsets);
                 count = 0;
             }
         }
-        if (count != 0) encodeBatch(inputs, projected, residualNorms, ordinals, count, absNorm, out);
+        if (count != 0) encodeBatch(inputs, projected, residualNorms, ordinals, count, absNorm, out, symmetricOffsets);
     }
 
     private void encodeBatch(float[][] inputs, float[][] projected, float[] residualNorms,
-                             int[] ordinals, int count, double[] absNorm, QuantizedVector[] out) {
+                             int[] ordinals, int count, double[] absNorm, QuantizedVector[] out,
+                             float[] symmetricOffsets) {
         stiefelTransform.projectBatch(inputs, projected, count);
         for (int i = 0; i < count; i++) {
             QuantizedVector dest = out[ordinals[i]];
             float codeNorm = RandomBinaryQuantizer.quantizeProjected(projected[i], bitsPerDimension,
                     dest.binaryVector, dest.extraBits, absNorm);
-            finishEncoding(dest, residualNorms[i], codeNorm);
+            float correction = finishEncoding(dest, residualNorms[i], codeNorm);
+            if (symmetricOffsets != null) symmetricOffsets[ordinals[i]] = correction;
         }
     }
 
@@ -1656,17 +1673,19 @@ public class AsymmetricHashing implements VectorCompressor<AsymmetricHashing.Qua
     }
 
     /** Applies the existing code-dependent header adjustment and FP16 storage rounding. */
-    private void finishEncoding(QuantizedVector dest, float residualNorm, float codeNorm) {
+    /** Returns the symmetric correction using the same dot product and stored half headers. */
+    private float finishEncoding(QuantizedVector dest, float residualNorm, float codeNorm) {
         final int c = dest.landmark & 0xFF;
         final float rawOffset = dest.offset;
         final float scale = codeNorm > 0f ? residualNorm / codeNorm : 0f;
 
         float finalOffset = rawOffset;
+        float landmarkDot = 0f;
         if (usesFastScanProjectionCode(bitsPerDimension)) {
             // C++ projection-mode optimization:
             //   offset = <x, μ> - ||μ||² - scale * <Aμ, code>
             // so query-time scoring can use Aq instead of A(q - μ).
-            float landmarkDot = dotProjectionCode(
+            landmarkDot = dotProjectionCode(
                     landmarkProj[c],
                     dest.extraBits,
                     quantizedDim,
@@ -1676,6 +1695,8 @@ public class AsymmetricHashing implements VectorCompressor<AsymmetricHashing.Qua
 
         dest.scale = roundToFloat16(scale);
         dest.offset = roundToFloat16(finalOffset);
+        return usesFastScanProjectionCode(bitsPerDimension)
+                ? dest.offset + dest.scale * landmarkDot : dest.offset;
     }
 
     // ---------------------------------------------------------------------
