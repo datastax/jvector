@@ -52,7 +52,6 @@ import io.github.jbellis.jvector.vector.types.ByteSequence;
 import io.github.jbellis.jvector.vector.types.FloatArray;
 import io.github.jbellis.jvector.util.BoundedLongHeap;
 import io.github.jbellis.jvector.util.NumericUtils;
-import org.agrona.collections.Int2IntHashMap;
 import org.agrona.collections.IntHashSet;
 
 import org.slf4j.Logger;
@@ -210,7 +209,7 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
     // Merged before the ordinals exist (they define the cells), written after level 0.
     private int[][] mergedSrc, mergedNode, mergedNbrSrc, mergedNbrNode;
     private HubMap cellMap;                   // the merged upper layers, resident through level 0
-    private int[] cellWalkPosition;           // hub node id -> cell (walk position); MAX_VALUE if not level 1
+    private int[] cellWalkPosition;           // level-1 position -> cell (walk position)
     private int[] cellToPosition;             // cell -> level-1 position in the hub map
     private int[][] cellStart;                // [source][cell] -> first new ordinal of that source's nodes in the cell
     private int cellCount;
@@ -891,6 +890,15 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
                     log.info("Wide code: {} candidate scores from the wide cache", l0WideScores.sum());
                     candidateStore = null;   // the strategy unmaps it with its own cache
                 }
+                if (cellMap != null) {
+                    // the cells served the walk; the upper layers are written from the merged arrays, so the
+                    // hub map's mapping and vectors and the cell tables go before the upper-layer pass
+                    cellMap.close();
+                    cellMap = null;
+                    cellWalkPosition = null;
+                    cellToPosition = null;
+                    cellStart = null;
+                }
                 writer.offsetAfterInline();
 
             } else {
@@ -1098,6 +1106,10 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
                 }
                 return out;
             }), all::addAll);
+            // ascending (source, node): the hub map resolves ids by binary search over this order, and the
+            // order fixes the level-1 positions, so the cells and region ordinals no longer depend on which
+            // batch finished first
+            all.sort(Comparator.comparingInt((RawUpper r) -> r.src).thenComparingInt(r -> r.node));
             int n = all.size(), degree = maxDegrees.get(level);
             int[] ms = new int[n], mn = new int[n], ns = new int[n * degree], nn = new int[n * degree];
             Arrays.fill(ns, -1); Arrays.fill(nn, -1);
@@ -1132,19 +1144,34 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
             int n = ms.length, degree = maxDegrees.get(level);
             int[] nodes = new int[n];
             for (int i = 0; i < n; i++) nodes[i] = idOffset[ms[i]] + mn[i];
+            for (int i = 1; i < n; i++) if (nodes[i] <= nodes[i - 1]) throw new IllegalStateException("merged level " + level + " is not in ascending id order");
             h.nodes[level] = nodes;
-            if (level == 1) {
-                h.level1Position = new int[idOffset[numSources]];
-                Arrays.fill(h.level1Position, -1);
-                for (int i = 0; i < n; i++) h.level1Position[nodes[i]] = i;
-            } else {
-                h.upperPosition[level] = new Int2IntHashMap(n * 2, 0.65f, -1);
-                for (int i = 0; i < n; i++) h.upperPosition[level].put(nodes[i], i);
-            }
             h.degree[level] = degree;
-            int[] adj = new int[n * degree];
-            int[] ns = mergedNbrSrc[level], nn = mergedNbrNode[level];
-            for (int e = 0; e < n * degree; e++) adj[e] = ns[e] < 0 ? -1 : idOffset[ns[e]] + nn[e];
+            // adjacency as positions in the level: a neighbour absent from the level (-1) ends the row, as
+            // the merged rows are written; resolved once here, in parallel, so the beams walk positions
+            final int[] adj = new int[n * degree];
+            final int[] ns = mergedNbrSrc[level], nn = mergedNbrNode[level];
+            {
+                int rows = Math.max(1024, n / (4 * taskWindowSize) + 1);
+                List<Callable<Void>> resolve = new ArrayList<>();
+                for (int from = 0; from < n; from += rows) {
+                    final int lo = from, hi = Math.min(n, from + rows);
+                    resolve.add(() -> {
+                        for (int i = lo; i < hi; i++) {
+                            int w = i * degree;
+                            for (int j = 0; j < degree; j++) {
+                                int e = i * degree + j;
+                                if (ns[e] < 0) break;
+                                int at = Arrays.binarySearch(nodes, idOffset[ns[e]] + nn[e]);
+                                if (at >= 0) adj[w++] = at;
+                            }
+                            for (; w < (i + 1) * degree; w++) adj[w] = -1;
+                        }
+                        return null;
+                    });
+                }
+                joinAll(resolve);
+            }
             final boolean mapped = level == 1;   // level 1: vectors to a file instead of the heap
             if (!mapped && (long) n * dimension > Integer.MAX_VALUE - 8) throw new IllegalStateException("merged hub map: level " + level + " too large");
             final VectorFloat<?> levelVectors = mapped ? null : vectorTypeSupport.createFloatVector(n * dimension);
@@ -1589,21 +1616,22 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
         if (scratch.l1Visited == null) {
             scratch.l1Visited = new IntHashSet(2 * beamScoredCapacity(CELL_PROBE_EF, stride));
             scratch.scoredKeys = new long[beamScoredCapacity(CELL_PROBE_EF, stride)];
+            scratch.beamState = new BeamState(CELL_PROBE_EF, stride);
         }
         long[] scored = scratch.scoredKeys;
-        int scoredCount = beam(cellMap, scorer, 1, startPos, CELL_PROBE_EF, scratch.l1Visited, scored);
+        int scoredCount = beam(cellMap, scorer, 1, startPos, CELL_PROBE_EF, scratch.l1Visited, scored, scratch.beamState);
         Arrays.sort(scored, 0, scoredCount);
         int n = 0;
         for (int i = scoredCount - 1; i >= 0; i--) {   // best first
-            int cell = cellWalkPosition[cellMap.nodes[1][(int) scored[i]]];
+            int cell = cellWalkPosition[(int) scored[i]];
             if (cell >= 0 && cell < cellCount) scratch.probeCells[n++] = cell;
         }
         scratch.probeCount = n;
     }
 
     /** The best-scoring level-1 position a beam of width {@code ef} from {@code startPos} scores. */
-    private static int bestLevel1ByBeam(HubMap map, HubMap.Scorer scorer, int startPos, int ef, IntHashSet visited, long[] scored) {
-        int count = beam(map, scorer, 1, startPos, ef, visited, scored);
+    private static int bestLevel1ByBeam(HubMap map, HubMap.Scorer scorer, int startPos, int ef, IntHashSet visited, long[] scored, BeamState state) {
+        int count = beam(map, scorer, 1, startPos, ef, visited, scored, state);
         long best = scored[0];
         for (int i = 1; i < count; i++) if (scored[i] > best) best = scored[i];
         return (int) best;
@@ -1616,17 +1644,33 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
      * expansions are capped at {@code 2 * ef} (the beam has converged long before) and the caller
      * sizes {@code scored} for that bound ({@link #beamScoredCapacity}).
      */
-    private static int beam(HubMap map, HubMap.Scorer scorer, int level, int startPos, int ef, IntHashSet visited, long[] scored) {
+    /** A beam's working arrays, allocated once per thread and reused across calls. */
+    static final class BeamState {
+        final int[] pos;
+        final float[] sc;
+        final boolean[] expanded;
+        final int[] nbPos;
+
+        BeamState(int ef, int stride) {
+            pos = new int[ef];
+            sc = new float[ef];
+            expanded = new boolean[ef];
+            nbPos = new int[stride];
+        }
+    }
+
+    private static int beam(HubMap map, HubMap.Scorer scorer, int level, int startPos, int ef, IntHashSet visited, long[] scored, BeamState state) {
         final int stride = map.degree[level];
-        final int[] adj = map.adjacency[level];
-        int[] pos = new int[ef];
-        float[] sc = new float[ef];
-        boolean[] expanded = new boolean[ef];
-        int[] nbPos = new int[stride];
+        final int[] adj = map.adjacency[level];   // positions in the level
+        final int[] pos = state.pos;
+        final float[] sc = state.sc;
+        final boolean[] expanded = state.expanded;
+        final int[] nbPos = state.nbPos;
         visited.clear();
         int size = 0, scoredCount = 0;
+        int worst = -1;                      // index of the beam's worst entry once the beam is full; -1 = unknown
         float s0 = scorer.score(level, startPos);
-        pos[0] = startPos; sc[0] = s0; size = 1;
+        pos[0] = startPos; sc[0] = s0; expanded[0] = false; size = 1;
         visited.add(startPos);
         scored[scoredCount++] = packScored(s0, startPos);
         for (int expansions = 0; expansions < 2 * ef; expansions++) {
@@ -1653,11 +1697,15 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
                 float score = unpackScore(key);
                 if (size < ef) {
                     pos[size] = np; sc[size] = score; expanded[size] = false; size++;
+                    worst = -1;
                 } else {
-                    int wi = 0;
-                    for (int i = 1; i < size; i++) if (sc[i] < sc[wi]) wi = i;
-                    if (score > sc[wi]) {
-                        pos[wi] = np; sc[wi] = score; expanded[wi] = false;
+                    if (worst < 0) {   // the worst slot is cached and only rescanned after it was replaced
+                        worst = 0;
+                        for (int i = 1; i < size; i++) if (sc[i] < sc[worst]) worst = i;
+                    }
+                    if (score > sc[worst]) {
+                        pos[worst] = np; sc[worst] = score; expanded[worst] = false;
+                        worst = -1;
                     }
                 }
             }
@@ -2223,7 +2271,7 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
             cellStart = new int[numSources][];
             cellToPosition = new int[cellCount];
             for (int pos = 0; pos < cellCount; pos++) {
-                int w = walkPosition[hubMap.nodes[1][pos]];
+                int w = walkPosition[pos];
                 if (w >= 0 && w < cellCount) cellToPosition[w] = pos;
             }
         }
@@ -2252,6 +2300,7 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
                     HubMap.Scorer scorer = regionMode ? hubMapRef.scorer() : null;
                     IntHashSet beamVisited = regionMode ? new IntHashSet(2 * beamScoredCapacity(CELL_ASSIGN_EF, hubMapRef.degree[1])) : null;
                     long[] beamScored = regionMode ? new long[beamScoredCapacity(CELL_ASSIGN_EF, hubMapRef.degree[1])] : null;
+                    BeamState beamState = regionMode ? new BeamState(CELL_ASSIGN_EF, hubMapRef.degree[1]) : null;
                     try (var view = (OnDiskGraphIndex.View) source.getView()) {
                         for (int node = lo; node < hi; node++) {
                             if (!alive.get(node)) continue;
@@ -2263,9 +2312,9 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
                                 int landing = hubMapRef.descend(scorer);
                                 int lp = hubMapRef.position(1, landing);
                                 if (lp >= 0) {
-                                    landing = hubMapRef.nodes[1][bestLevel1ByBeam(hubMapRef, scorer, lp, CELL_ASSIGN_EF, beamVisited, beamScored)];
+                                    lp = bestLevel1ByBeam(hubMapRef, scorer, lp, CELL_ASSIGN_EF, beamVisited, beamScored, beamState);
                                 }
-                                int pos = landing >= 0 && landing < walkPositionRef.length ? walkPositionRef[landing] : Integer.MAX_VALUE;
+                                int pos = lp >= 0 ? walkPositionRef[lp] : Integer.MAX_VALUE;
                                 key = pos & 0xFFFFFFFFL;
                             } else {
                                 key = 0;
@@ -2622,6 +2671,7 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
         int probeCount;
         long[] scoredKeys;      // positions scored by the current probe beam, packed with their scores
         IntHashSet l1Visited;   // visited set for the probe beam
+        BeamState beamState;    // the probe beam's working arrays
         int probeNode = -1, probeSrc = -1;
         int[] finalizeOrds;     // full-precision merge: the batch's candidate rows, for the ordered prefetch
 
