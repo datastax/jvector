@@ -127,19 +127,7 @@ public class BenchYAML {
                 // Register dataset info the first time we actually load the dataset for benchmarking
                 artifacts.registerDataset(datasetName, ds);
 
-                Grid.runAll(ds,
-                        config.construction.useSavedIndexIfExists,
-                        config.construction.outDegree,
-                        config.construction.efConstruction,
-                        config.construction.neighborOverflow,
-                        config.construction.addHierarchy,
-                        config.construction.refineFinalGraph,
-                        config.construction.getFeatureSets(),
-                        config.construction.getCompressorParameters(),
-                        config.search.getCompressorParameters(),
-                        config.search.topKOverquery,
-                        config.search.useSearchPruning,
-                        artifacts);
+                Grid.run(ds, GridSpec.fromConfig(config), artifacts);
             }
         }
     }

@@ -26,6 +26,7 @@ import io.github.jbellis.jvector.graph.disk.feature.FeatureId;
 import java.io.IOException;
 import java.io.UncheckedIOException;
 import java.nio.file.Paths;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
@@ -183,13 +184,12 @@ public final class RunArtifacts {
     /**
      * Append one experiments.csv row for a single (index config × query config) measurement.
      * No-op if experiments logging is not enabled.
+     *
+     * @param buildParameters construction parameters by name; see {@link ExperimentsSchemaV1#fixedValues}
+     *                        for which ones become columns
      */
     public void logRow(String datasetName,
-                       int M,
-                       int efConstruction,
-                       float neighborOverflow,
-                       boolean addHierarchy,
-                       boolean refineFinalGraph,
+                       Map<String, ?> buildParameters,
                        Set<FeatureId> featureSetForIndex,
                        String buildCompressorString,
                        String searchCompressorString,
@@ -205,11 +205,7 @@ public final class RunArtifacts {
         var fixed = ExperimentsSchemaV1.fixedValues(
                 run,
                 datasetName,
-                M,
-                efConstruction,
-                neighborOverflow,
-                addHierarchy,
-                refineFinalGraph,
+                buildParameters,
                 featureSetForIndex,
                 buildCompressorString,
                 searchCompressorString,
@@ -224,6 +220,35 @@ public final class RunArtifacts {
         } catch (IOException e) {
             throw new UncheckedIOException("Failed to append experiments.csv row", e);
         }
+    }
+
+    /**
+     * @deprecated Use {@link #logRow(String, Map, Set, String, String, boolean, int, double, int, List)},
+     * which takes the construction parameters by name.
+     */
+    @Deprecated
+    public void logRow(String datasetName,
+                       int M,
+                       int efConstruction,
+                       float neighborOverflow,
+                       boolean addHierarchy,
+                       boolean refineFinalGraph,
+                       Set<FeatureId> featureSetForIndex,
+                       String buildCompressorString,
+                       String searchCompressorString,
+                       boolean usePruning,
+                       int topK,
+                       double overquery,
+                       int rerankK,
+                       List<Metric> logOutputs) {
+        Map<String, Object> buildParameters = new LinkedHashMap<>();
+        buildParameters.put("M", M);
+        buildParameters.put("efConstruction", efConstruction);
+        buildParameters.put("neighborOverflow", neighborOverflow);
+        buildParameters.put("addHierarchy", addHierarchy);
+        buildParameters.put("refineFinalGraph", refineFinalGraph);
+        logRow(datasetName, buildParameters, featureSetForIndex, buildCompressorString, searchCompressorString,
+                usePruning, topK, overquery, rerankK, logOutputs);
     }
 
     public RunContext run() { return run; }

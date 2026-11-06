@@ -16,11 +16,14 @@
 
 package io.github.jbellis.jvector.example.util;
 
+import io.github.jbellis.jvector.disk.RandomAccessReader;
 import io.github.jbellis.jvector.example.benchmarks.datasets.DataSet;
 import io.github.jbellis.jvector.quantization.BinaryQuantization;
 import io.github.jbellis.jvector.quantization.NVQuantization;
 import io.github.jbellis.jvector.quantization.ProductQuantization;
 import io.github.jbellis.jvector.quantization.VectorCompressor;
+
+import java.io.IOException;
 
 public abstract class CompressorParameters {
     public static final CompressorParameters NONE = new NoCompressionParameters();
@@ -31,6 +34,14 @@ public abstract class CompressorParameters {
 
     public String idStringFor(DataSet ds) {
         // only required when supportsCaching() is true
+        throw new UnsupportedOperationException();
+    }
+
+    /**
+     * Reads back a compressor that {@link #computeCompressor} produced and that was saved with
+     * {@link VectorCompressor#write}. Only required when {@link #supportsCaching()} is true.
+     */
+    public VectorCompressor<?> loadCompressor(RandomAccessReader in) throws IOException {
         throw new UnsupportedOperationException();
     }
 
@@ -60,6 +71,11 @@ public abstract class CompressorParameters {
         }
 
         @Override
+        public VectorCompressor<?> loadCompressor(RandomAccessReader in) throws IOException {
+            return ProductQuantization.load(in);
+        }
+
+        @Override
         public boolean supportsCaching() {
             return true;
         }
@@ -86,7 +102,12 @@ public abstract class CompressorParameters {
 
         @Override
         public String idStringFor(DataSet ds) {
-            return String.format("NVQ_%s_%d_%s", ds.getName(), nSubVectors);
+            return String.format("NVQ_%s_%d", ds.getName(), nSubVectors);
+        }
+
+        @Override
+        public VectorCompressor<?> loadCompressor(RandomAccessReader in) throws IOException {
+            return NVQuantization.load(in);
         }
 
         @Override
