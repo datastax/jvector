@@ -82,9 +82,9 @@ Not supported: incremental insertion and deletes, which stay on the CPU path, an
 ## Requirements
 
 * An NVIDIA GPU with tensor cores, Ampere (sm_80) or newer, and its driver.
-* JDK 22 or newer, and the [TornadoVM](https://github.com/beehive-lab/TornadoVM) SDK 8.0.0 with the CUDA
-  backend (`tornadovm-8.0.0-jdk22plus-cuda`, the released SDK), with its `bin/` on the
-  `PATH`. The build takes `tornado-api` and `tornado-cuvs` 8.0.0 from Maven Central.
+* JDK 22 or newer, and the [TornadoVM](https://github.com/beehive-lab/TornadoVM) SDK 8.1.0 with the CUDA
+  backend (`tornadovm-8.1.0-jdk22plus-cuda`, the released SDK), with its `bin/` on the
+  `PATH`. The build takes `tornado-api` and `tornado-cuvs` 8.1.0 from Maven Central.
 * NVIDIA cuVS 26.08. `jvector-gpu/cuvs-env.sh` downloads it (2.1 GB of wheels, including the CUDA libraries it needs)
   into `~/.jvector-gpu/cuvs` the first time and puts it on `LD_LIBRARY_PATH`; any `python3` with `pip` will do.
 

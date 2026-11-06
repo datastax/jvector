@@ -29,8 +29,10 @@ CUVS_DIR="${1:-$HOME/.jvector-gpu/cuvs}"
 if [ ! -s "$CUVS_DIR/ld_library_path" ]; then
     echo "Installing cuVS $CUVS_VERSION into $CUVS_DIR" >&2
     mkdir -p "$CUVS_DIR/wheels"
+    # the wheels for this machine: x86_64 or aarch64 (e.g. Grace or Ampere servers)
+    CUVS_ARCH="$(uname -m)"
     python3 -m pip download --quiet --timeout 120 --retries 10 --only-binary=:all: --python-version 3.12 \
-        --platform manylinux_2_28_x86_64 --platform manylinux_2_27_x86_64 --platform manylinux_2_17_x86_64 --platform manylinux2014_x86_64 \
+        --platform "manylinux_2_28_$CUVS_ARCH" --platform "manylinux_2_27_$CUVS_ARCH" --platform "manylinux_2_17_$CUVS_ARCH" --platform "manylinux2014_$CUVS_ARCH" \
         --extra-index-url https://pypi.nvidia.com -d "$CUVS_DIR/wheels" "libcuvs-cu12==$CUVS_VERSION" \
         || { echo "cuvs-env.sh: downloading the cuVS wheels failed" >&2; return 1 2>/dev/null || exit 1; }
     for wheel in "$CUVS_DIR"/wheels/*.whl; do
