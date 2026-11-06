@@ -12,8 +12,9 @@ public `e5-small-v2-100k` dataset (downloaded and cached automatically):
 - [HelloASHWorldFp16](src/main/java/io/github/jbellis/jvector/example/HelloASHWorldFp16.java):
   native FP16 query projection for Intel Sapphire Rapids and newer FP16 processors.
 
-Both teach the same five steps: load vectors, train/encode ASH, construct the graph,
-write fused ASH neighborhoods with NVQ reranking vectors, then reopen and search.
+Both teach the same six steps: load vectors, train/encode ASH, construct the graph,
+write fused ASH neighborhoods with NVQ reranking vectors, reopen and search
+synchronously, then submit individual queries through the queued API.
 They use ASH(b=2,d=192) for 384-dimensional inputs. Stored-code precision (`b`)
 is independent of query-projection precision; training and encoding remain FP32.
 NVQ's mean is collected during ASH encoding, avoiding another input scan.
@@ -34,13 +35,25 @@ java --add-modules=jdk.incubator.vector --enable-native-access=ALL-UNNAMED -Xmx8
 
 Run the program matching your CPU; explicit unsupported precisions fail instead
 of silently changing precision. Each saves `ash-int8.graph` or `ash-fp16.graph`
-and prints the top ten vector ordinals, similarity scores and visited-node count
-for the first held-out query. An optional argument selects a new output path;
+and prints top-ten vector ordinals, similarity scores and visited-node counts
+for the first held-out query using both synchronous and queued search. An optional
+argument selects a new output path;
 existing files are never overwritten. Original vectors are not needed to reopen
 the finished index.
 
-The examples use a single query to introduce the search API. For a service with
-concurrent requests, see [bounded query batching and state ownership](../docs/ash-query-integration.md).
+The synchronous section introduces preparation and graph search for one query.
+The queued section submits eight independent queries using two application-assigned
+workers, admission 16 and maximum preparation batch 8. The shared
+[HelloASHQueuedSearch](src/main/java/io/github/jbellis/jvector/example/HelloASHQueuedSearch.java)
+shows the host integration explicitly: compatible-query preparation, worker-owned
+searchers, completion futures, admission rejection and orderly shutdown. Callers
+submit individual requests; the queue prepares currently waiting compatible work
+together, without a fill timer. Batch sizes depend on what is waiting at that moment.
+Each request owns its input snapshot and prepared state through completion.
+
+For clarity, this small example allocates request records and preparation arrays.
+Services can reuse bounded storage as described in
+[bounded query batching and state ownership](../docs/ash-query-integration.md).
 For more hardware choices, see [projection precision](../docs/ash-projection-precision.md).
 
 ### Batched file-backed vectors
