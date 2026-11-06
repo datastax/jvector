@@ -16,6 +16,13 @@
 
 package io.github.jbellis.jvector.gpu;
 
+import java.lang.foreign.MemorySegment;
+import java.lang.foreign.ValueLayout;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.concurrent.CompletableFuture;
+import java.util.stream.IntStream;
+
 import uk.ac.manchester.tornado.api.GridScheduler;
 import uk.ac.manchester.tornado.api.KernelContext;
 import uk.ac.manchester.tornado.api.TaskGraph;
@@ -89,50 +96,100 @@ final class GpuPrune implements AutoCloseable {
         return this;
     }
 
+    /** One batch's lists in host arrays, laid out as the kernels read them. */
+    private static final class Staging {
+        final int[] ids = new int[BATCH * PruneKernels.SLOTS];
+        final float[] scores = new float[BATCH * PruneKernels.SLOTS];
+        final float[] norms = new float[BATCH * PruneKernels.SLOTS];
+        final int[] counts = new int[BATCH];
+        int size;
+    }
+
     /**
      * Prunes the given lists in place. {@code ids/scores} hold {@link PruneKernels#SLOTS} entries per node, sorted by
      * decreasing score and {@code -1} padded; {@code sizes} holds the number of valid entries. On return each list
      * keeps only the selected entries, compacted in order, and {@code sizes} is updated.
+     * <p>
+     * The batches are pipelined: while the GPU prunes one batch, other threads lay out the next one and apply the
+     * previous one's result, so the host work overlaps the GPU's. A node appears in one batch only, so the batches
+     * touch disjoint rows of {@code ids/scores/sizes}.
      *
-     * @param nodes the nodes (rows of ids/scores/sizes) to prune
+     * @param nodes the nodes (rows of ids/scores/sizes) to prune; each at most once
      */
     void prune(int[] ids, float[] scores, int[] sizes, int[] nodes) {
-        int slots = PruneKernels.SLOTS;
-        for (int from = 0; from < nodes.length; from += BATCH) {
-            int size = Math.min(BATCH, nodes.length - from);
-            for (int b = 0; b < size; b++) {
-                int node = nodes[from + b];
-                for (int s = 0; s < slots; s++) {
-                    int id = ids[node * slots + s];
-                    candIds.set(b * slots + s, id);
-                    candScores.set(b * slots + s, scores[node * slots + s]);
-                    if (squaredNorms != null) {
-                        candNorms.set(b * slots + s, id >= 0 ? squaredNorms[id] : 0);
-                    }
-                }
-                counts.set(b, sizes[node]);
+        int batches = (nodes.length + BATCH - 1) / BATCH;
+        if (batches == 0) {
+            return;
+        }
+        Staging[] staging = {new Staging(), new Staging()};
+        CompletableFuture<Staging> next = CompletableFuture.supplyAsync(() -> stage(staging[0], ids, scores, sizes, nodes, 0));
+        List<CompletableFuture<Void>> applied = new ArrayList<>(batches);
+        for (int b = 0; b < batches; b++) {
+            Staging current = next.join();
+            if (b + 1 < batches) {
+                int from = (b + 1) * BATCH;
+                Staging other = staging[(b + 1) % 2];
+                next = CompletableFuture.supplyAsync(() -> stage(other, ids, scores, sizes, nodes, from));
             }
+            int size = current.size;
+            int n = size * PruneKernels.SLOTS;
+            MemorySegment.copy(current.ids, 0, candIds.getSegment(), ValueLayout.JAVA_INT, 0, n);
+            MemorySegment.copy(current.scores, 0, candScores.getSegment(), ValueLayout.JAVA_FLOAT, 0, n);
+            if (squaredNorms != null) {
+                MemorySegment.copy(current.norms, 0, candNorms.getSegment(), ValueLayout.JAVA_FLOAT, 0, n);
+            }
+            MemorySegment.copy(current.counts, 0, counts.getSegment(), ValueLayout.JAVA_INT, 0, size);
             params.set(PruneKernels.P_NODES, size);
             gramGrid.setGlobalWork((long) size * PruneKernels.MMA_WARPS * 32, 1, 1);
-            pruneGrid.setGlobalWork((long) size * slots, 1, 1);
+            pruneGrid.setGlobalWork((long) size * PruneKernels.SLOTS, 1, 1);
             plan.withGridScheduler(scheduler).execute();
-            for (int b = 0; b < size; b++) {
-                int node = nodes[from + b];
-                int w = 0;
-                for (int s = 0; s < sizes[node]; s++) {
-                    if (keep.get(b * slots + s) == 1) {
-                        ids[node * slots + w] = ids[node * slots + s];
-                        scores[node * slots + w] = scores[node * slots + s];
-                        w++;
-                    }
-                }
-                for (int s = w; s < slots; s++) {
-                    ids[node * slots + s] = -1;
-                    scores[node * slots + s] = -1;
-                }
-                sizes[node] = w;
-            }
+            int[] kept = new int[n];
+            MemorySegment.copy(keep.getSegment(), ValueLayout.JAVA_INT, 0, kept, 0, n);
+            int from = b * BATCH;
+            applied.add(CompletableFuture.runAsync(() -> apply(kept, ids, scores, sizes, nodes, from, size)));
         }
+        CompletableFuture.allOf(applied.toArray(CompletableFuture[]::new)).join();
+    }
+
+    /** Lays out the lists of {@code nodes[from ..]} (one batch) in {@code s}. */
+    private Staging stage(Staging s, int[] ids, float[] scores, int[] sizes, int[] nodes, int from) {
+        int slots = PruneKernels.SLOTS;
+        int size = Math.min(BATCH, nodes.length - from);
+        IntStream.range(0, size).parallel().forEach(r -> {
+            int node = nodes[from + r];
+            System.arraycopy(ids, node * slots, s.ids, r * slots, slots);
+            System.arraycopy(scores, node * slots, s.scores, r * slots, slots);
+            if (squaredNorms != null) {
+                for (int c = 0; c < slots; c++) {
+                    int id = s.ids[r * slots + c];
+                    s.norms[r * slots + c] = id >= 0 ? squaredNorms[id] : 0;
+                }
+            }
+            s.counts[r] = sizes[node];
+        });
+        s.size = size;
+        return s;
+    }
+
+    /** Keeps the flagged entries of each list of {@code nodes[from .. from + size)}, compacted in order. */
+    private static void apply(int[] kept, int[] ids, float[] scores, int[] sizes, int[] nodes, int from, int size) {
+        int slots = PruneKernels.SLOTS;
+        IntStream.range(0, size).parallel().forEach(r -> {
+            int node = nodes[from + r];
+            int w = 0;
+            for (int c = 0; c < sizes[node]; c++) {
+                if (kept[r * slots + c] == 1) {
+                    ids[node * slots + w] = ids[node * slots + c];
+                    scores[node * slots + w] = scores[node * slots + c];
+                    w++;
+                }
+            }
+            for (int c = w; c < slots; c++) {
+                ids[node * slots + c] = -1;
+                scores[node * slots + c] = -1;
+            }
+            sizes[node] = w;
+        });
     }
 
     @Override

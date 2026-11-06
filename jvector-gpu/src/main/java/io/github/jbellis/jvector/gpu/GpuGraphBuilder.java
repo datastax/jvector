@@ -85,26 +85,39 @@ final class GpuGraphBuilder {
     /** @return the nodes whose lists gained reverse edges, from the lists of nodes {@code firstSource} and up */
     private static int[] mergeReverseEdges(int n, int[] ids, float[] scores, int[] sizes, int firstSource) {
         int slots = PruneKernels.SLOTS;
-        int[] inDegree = new int[n];
-        for (int i = firstSource; i < n; i++) {
+        // in-degrees and the reverse lists, built in parallel: a slot per edge is claimed with an atomic increment,
+        // then each node's reverse list is sorted by source so the result does not depend on thread timing
+        var inDegreeCount = new java.util.concurrent.atomic.AtomicIntegerArray(n);
+        IntStream.range(firstSource, n).parallel().forEach(i -> {
             for (int s = 0; s < sizes[i]; s++) {
-                inDegree[ids[i * slots + s]]++;
+                inDegreeCount.incrementAndGet(ids[i * slots + s]);
             }
-        }
+        });
+        int[] inDegree = new int[n];
         int[] start = new int[n + 1];
         for (int i = 0; i < n; i++) {
+            inDegree[i] = inDegreeCount.get(i);
             start[i + 1] = start[i] + inDegree[i];
         }
+        // each reverse edge as (source << 32 | slot in the source's list), sorted by source per target: the order
+        // the sequential loop produced, whatever the thread timing
+        long[] rev = new long[start[n]];
+        var fill = new java.util.concurrent.atomic.AtomicIntegerArray(Arrays.copyOf(start, n));
+        IntStream.range(firstSource, n).parallel().forEach(i -> {
+            for (int s = 0; s < sizes[i]; s++) {
+                rev[fill.getAndIncrement(ids[i * slots + s])] = ((long) i << 32) | s;
+            }
+        });
         int[] revIds = new int[start[n]];
         float[] revScores = new float[start[n]];
-        int[] fill = Arrays.copyOf(start, n);
-        for (int i = firstSource; i < n; i++) {
-            for (int s = 0; s < sizes[i]; s++) {
-                int j = ids[i * slots + s];
-                revIds[fill[j]] = i;
-                revScores[fill[j]++] = scores[i * slots + s];
+        IntStream.range(0, n).parallel().forEach(j -> {
+            Arrays.sort(rev, start[j], start[j + 1]);
+            for (int r = start[j]; r < start[j + 1]; r++) {
+                int i = (int) (rev[r] >>> 32);
+                revIds[r] = i;
+                revScores[r] = scores[i * slots + (int) rev[r]];
             }
-        }
+        });
         return IntStream.range(0, n).parallel().filter(i -> {
             int forward = sizes[i];
             int[] mIds = new int[forward + inDegree[i]];
