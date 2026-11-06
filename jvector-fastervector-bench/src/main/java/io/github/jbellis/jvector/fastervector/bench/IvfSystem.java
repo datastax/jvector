@@ -46,6 +46,11 @@ import java.util.stream.Stream;
 public final class IvfSystem implements AutoCloseable {
     private static final Logger log = LoggerFactory.getLogger(IvfSystem.class);
 
+    /** Resident memory the open added: the index's in-memory footprint. */
+    static final String INDEX_RSS_KEY = "construction.index_rss_mb";
+    /** Peak resident memory during the build, above the memory before it. */
+    static final String BUILD_PEAK_RSS_KEY = "construction.build_peak_rss_mb";
+
     private final DataSet ds;
     private final ConstructionPoint point;
     private final IvfAshIndex index;
@@ -56,16 +61,28 @@ public final class IvfSystem implements AutoCloseable {
     private final int indexFileCount;
     private final Long buildHeapBytes;
     private final Long buildOffHeapBytes;
+    private final Memory memory;
     private final float[][] queries;
     private final Vecs queryVecs;
 
+    /**
+     * Process resident memory (RSS) around the index, in bytes; each is null where it couldn't be
+     * measured (not Linux, or the peak couldn't be reset).
+     *
+     * @param baselineBytes  RSS just before the index was opened
+     * @param indexBytes     RSS the open added: the index's own in-memory footprint
+     * @param buildPeakBytes peak RSS during the build, above the RSS before it; null if reopened
+     */
+    record Memory(Long baselineBytes, Long indexBytes, Long buildPeakBytes) {}
+
     private IvfSystem(DataSet ds, ConstructionPoint point, IvfAshIndex index, FvecThreadPool buildPool,
-                      Double buildSeconds, List<Path> indexFiles) throws IOException {
+                      Double buildSeconds, List<Path> indexFiles, Memory memory) throws IOException {
         this.ds = ds;
         this.point = point;
         this.index = index;
         this.buildPool = buildPool;
         this.buildSeconds = buildSeconds;
+        this.memory = memory;
         long bytes = 0;
         for (Path file : indexFiles) {
             bytes += Files.size(file);
@@ -86,7 +103,8 @@ public final class IvfSystem implements AutoCloseable {
     /**
      * Builds the index for {@code point}, or reopens it if {@code useSavedIndexIfExists} is set
      * and a complete earlier build is on disk. A rebuild first deletes that construction point's
-     * own index directories.
+     * own index directories. A built index is closed and reopened, so its resident memory is
+     * measured from a fresh open either way, as a server would load it.
      */
     public static IvfSystem buildOrOpen(DataSet ds, IvfConfig config, ConstructionPoint point) throws IOException {
         List<Path> ssdPaths = config.ssdPaths();
@@ -99,13 +117,7 @@ public final class IvfSystem implements AutoCloseable {
             boolean saved = Files.exists(manifest) && devPaths.stream().allMatch(Files::exists);
             if (config.construction.useSavedIndexIfExists && saved) {
                 log.info("Reopening {} for {}", manifest, point);
-                IvfAshIndex index = IvfAshIndex.prepareOpen()
-                        .manifestPath(manifest.toString())
-                        .devPaths(devPaths.stream().map(Path::toString).toList())
-                        .dim(ds.getDimension())
-                        .buildThreadPool(pool)
-                        .open();
-                return new IvfSystem(ds, point, index, pool, null, indexFiles(ssdPaths, subfolder));
+                return open(ds, point, manifest, devPaths, pool, null, null, indexFiles(ssdPaths, subfolder));
             }
 
             for (Path ssd : ssdPaths) {
@@ -113,8 +125,11 @@ public final class IvfSystem implements AutoCloseable {
             }
             log.info("Building {} for {} ({} vectors, dim {})",
                      subfolder, point, ds.getBaseRavv().size(), ds.getDimension());
+            ResidentMemory.trim();
+            var beforeBuild = ResidentMemory.snapshot();
+            boolean peakReset = ResidentMemory.resetPeak();
             long start = System.nanoTime();
-            IvfAshIndex index = IvfAshIndex.builder()
+            IvfAshIndex built = IvfAshIndex.builder()
                     .nlist(point.nlist())
                     .storageFactor(point.storageFactor())
                     .vectors(new RandomAccessVectorValuesVecs(ds.getBaseRavv()))
@@ -123,13 +138,38 @@ public final class IvfSystem implements AutoCloseable {
                     .buildThreadPool(pool)
                     .build();
             double seconds = (System.nanoTime() - start) / 1e9;
-            return new IvfSystem(ds, point, index, pool, seconds, indexFiles(ssdPaths, subfolder));
+            var afterBuild = ResidentMemory.snapshot();
+            Long buildPeak = peakReset && beforeBuild.isPresent() && afterBuild.isPresent()
+                    ? afterBuild.get().peakRssBytes() - beforeBuild.get().rssBytes()
+                    : null;
+            built.close();
+            return open(ds, point, manifest, devPaths, pool, seconds, buildPeak, indexFiles(ssdPaths, subfolder));
         } catch (IOException | RuntimeException e) {
             if (pool != null) {
                 pool.close();
             }
             throw e;
         }
+    }
+
+    /** Opens the index, measuring the resident memory the open adds. */
+    private static IvfSystem open(DataSet ds, ConstructionPoint point, Path manifest, List<Path> devPaths,
+                                  FvecThreadPool pool, Double buildSeconds, Long buildPeakBytes,
+                                  List<Path> indexFiles) throws IOException {
+        ResidentMemory.trim();
+        var before = ResidentMemory.snapshot();
+        IvfAshIndex index = IvfAshIndex.prepareOpen()
+                .manifestPath(manifest.toString())
+                .devPaths(devPaths.stream().map(Path::toString).toList())
+                .dim(ds.getDimension())
+                .buildThreadPool(pool)
+                .open();
+        var after = ResidentMemory.snapshot();
+        Memory memory = new Memory(before.map(ResidentMemory.Snapshot::rssBytes).orElse(null),
+                                   before.isPresent() && after.isPresent()
+                                           ? after.get().rssBytes() - before.get().rssBytes() : null,
+                                   buildPeakBytes);
+        return new IvfSystem(ds, point, index, pool, buildSeconds, indexFiles, memory);
     }
 
     /** Manifest location for a build into {@code ssdPaths}: beside device file 0. */
@@ -216,7 +256,19 @@ public final class IvfSystem implements AutoCloseable {
             out.add(Metric.of("construction.build_offheap_mb", "Build off-heap (MB)", ".1f",
                               buildOffHeapBytes / 1024.0 / 1024.0));
         }
+        if (memory.indexBytes() != null) {
+            out.add(Metric.of(INDEX_RSS_KEY, "Index memory (MB)", ".1f", ResidentMemory.mb(memory.indexBytes())));
+        }
+        if (memory.buildPeakBytes() != null) {
+            out.add(Metric.of(BUILD_PEAK_RSS_KEY, "Build peak memory (MB)", ".1f",
+                              ResidentMemory.mb(memory.buildPeakBytes())));
+        }
         return out;
+    }
+
+    /** RSS just before the index was opened, in bytes; null where it couldn't be measured. */
+    Long rssBaselineBytes() {
+        return memory.baselineBytes();
     }
 
     public DataSet dataSet() {

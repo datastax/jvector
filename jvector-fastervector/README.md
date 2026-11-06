@@ -174,7 +174,12 @@ try (FvecThreadPool pool = FvecThreadPool.create(8);
   ```
 - **Results.** Similarity is inner product. Each query gets up to `topk` results, best
   first; empty slots are dropped, so a row can be shorter than `topk`.
-- **Thread pools.** Without a pool, a build uses all CPUs, while a searcher uses one thread.
+- **Thread pools.** Without a pool, a build and a searcher both use all CPUs. (`fvec_capi.h`
+  says a searcher without a pool uses 1 thread, but the pinned fastervector code uses
+  `num_procs()`.) Pass a pool to set the thread count.
+- **Concurrency.** Search a batch of queries per call. At the pinned fastervector commit,
+  concurrent single-query calls on separate searchers share the same I/O rings and scan pool,
+  so they barely scale with threads.
 - **Lifetime.** Close searchers and indexes (both are `AutoCloseable`). Closing an index
   closes its searchers; using either after `close()` throws `IllegalStateException`.
 

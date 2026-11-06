@@ -33,7 +33,8 @@ import java.util.List;
  * {@code AccuracyBenchmark}'s, so run-config.yml selections apply unchanged.
  */
 public class IvfAccuracyBenchmark implements IvfQueryBenchmark {
-    private static final String DEFAULT_FORMAT = ".2f";
+    // Four decimals: recall near its plateau moves by less than 0.01 between search points
+    private static final String DEFAULT_FORMAT = ".4f";
 
     private boolean computeRecall;
     private boolean computeMAP;

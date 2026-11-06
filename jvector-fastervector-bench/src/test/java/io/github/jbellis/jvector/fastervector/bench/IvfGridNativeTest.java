@@ -112,6 +112,9 @@ class IvfGridNativeTest {
             assertTrue(m.get("construction.index_file_size_mb") > 0);
             assertTrue(m.get("search.disk.file_count") > 0);
             assertTrue(m.containsKey("search.system.max_heap_mb"));
+            // Native tests run only on Linux, where /proc/self/status gives resident memory
+            assertTrue(m.containsKey(IvfSystem.INDEX_RSS_KEY), "missing " + IvfSystem.INDEX_RSS_KEY);
+            assertTrue(m.containsKey(IvfGrid.SEARCH_PEAK_RSS_KEY), "missing " + IvfGrid.SEARCH_PEAK_RSS_KEY);
             if (row.point().nprobe() == CLUSTERS) {
                 assertTrue(m.get(recallKey) >= MIN_RECALL, recallKey + " = " + m.get(recallKey));
             }

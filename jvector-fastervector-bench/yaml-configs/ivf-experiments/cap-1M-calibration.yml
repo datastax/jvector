@@ -1,24 +1,27 @@
 yamlSchemaVersion: 1
 
-# Calibration sweep for the per-dataset IVF configs: how recall@10 and QPS move with nlist,
-# storageFactor and nprobe on real embeddings. Recall doesn't depend on the machine, so this runs
-# once (on the high-end machine) and its results set the dataset files for every machine.
+# Calibration sweep for the per-dataset IVF configs: how recall@10 and QPS move with nlist and
+# nprobe on real embeddings. Recall doesn't depend on the machine, so this runs once (on the
+# high-end machine) and its results set the dataset files for every machine.
 #
-#   java ... io.github.jbellis.jvector.fastervector.bench.BenchIvfYAML \
+#   java ... -Divf.perQuery=false io.github.jbellis.jvector.fastervector.bench.BenchIvfYAML \
 #       jvector-fastervector-bench/yaml-configs/ivf-experiments/cap-1M-calibration.yml
 #
-# 4 builds (nlist x storageFactor) x 7 nprobe values = 28 rows, each with batched and per-query
-# throughput, latency and recall. topK 10 only, matching the graph's cap-1M regression config.
+# The graph's regression point (topK 10, overquery 1.0) reaches Recall@10 0.6595 on cap-1M, and
+# 0.56-0.79 on the other regression datasets, so the sweep is dense at low nprobe, where IVF
+# crosses those values. The 2026-11-05 run already covered nprobe 4-256: recall flattens at about
+# 0.86 (32x) and 0.89 (16x), so higher nprobe and storageFactor 2.0 add nothing at these targets.
+# 2 builds (nlist) x 9 nprobe values = 18 rows. topK 10 only, matching the graph's config.
 dataset: cap-1M
 
 construction:
   nlist: [1024, 4096]         # ~sqrt(N) and ~4 sqrt(N) for 1M vectors
-  storageFactor: [1.0, 2.0]   # 32x and 16x compression
+  storageFactor: [1.0]        # 32x, the graph's PQ compression
   buildThreads: 0             # all CPUs; override with -Divf.buildThreads
   ssdPaths: [ivf_cache]       # override with -Divf.ssdPaths
-  useSavedIndexIfExists: Yes  # reruns reuse the 4 indexes and only repeat the searches
+  useSavedIndexIfExists: Yes  # reruns reuse the indexes and only repeat the searches
 
 search:
   topKNprobe:
-    10: [4, 8, 16, 32, 64, 128, 256]
+    10: [1, 2, 3, 4, 6, 8, 12, 16, 32]
   searchThreads: [0]          # 0 = all CPUs, as the graph benchmark's QPS uses; override with -Divf.searchThreads

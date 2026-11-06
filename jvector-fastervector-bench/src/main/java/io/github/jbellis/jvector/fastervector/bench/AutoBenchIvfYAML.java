@@ -65,7 +65,8 @@ public class AutoBenchIvfYAML {
     /** AutoBenchYAML's columns, then the IVF-only ones. */
     static final String CSV_HEADER = "dataset,QPS,QPS StdDev,Mean Latency,Recall@10,Index Construction Time,Avg Nodes Visited,"
             + "Build Heap Used (MB),Build Off-Heap (MB),Search Heap Used (MB),Search Off-Heap (MB),"
-            + "Per-query QPS,Per-query QPS StdDev,Index Size (MB)";
+            + "Per-query QPS,Per-query QPS StdDev,Index Size (MB),Index Memory (MB),Search Peak Memory (MB),"
+            + "Build Peak Memory (MB)";
 
     /** Metric keys to the BenchResult names BenchmarkSummarizer reads; anything else keeps its header. */
     private static final Map<String, String> RESULT_NAMES = Map.ofEntries(
@@ -82,7 +83,10 @@ public class AutoBenchIvfYAML {
             Map.entry("construction.build_offheap_mb", "Total Off-Heap (MB)"),
             Map.entry("search.disk.total_file_size_mb", ""),   // same value as Disk Usage (MB)
             Map.entry("search.system.max_heap_mb", "Max heap usage (MB)"),
-            Map.entry("search.system.max_offheap_mb", "Max offheap usage (MB)"));
+            Map.entry("search.system.max_offheap_mb", "Max offheap usage (MB)"),
+            Map.entry(IvfSystem.INDEX_RSS_KEY, "Index Memory (MB)"),
+            Map.entry(IvfGrid.SEARCH_PEAK_RSS_KEY, "Search Peak Memory (MB)"),
+            Map.entry(IvfSystem.BUILD_PEAK_RSS_KEY, "Build Peak Memory (MB)"));
 
     record Args(String output, String config, List<String> regexes) {}
 
@@ -182,12 +186,22 @@ public class AutoBenchIvfYAML {
         return results;
     }
 
-    /** Fixed, as AutoBenchYAML's are: average QPS in both modes, mean latency, recall. */
+    /**
+     * Fixed, as AutoBenchYAML's are: average QPS in both modes (per-query unless
+     * {@code -Divf.perQuery=false}), mean latency, recall.
+     */
     static List<IvfQueryBenchmark> defaultBenchmarks() {
-        return List.of(IvfThroughputBenchmark.createDefault(Mode.BATCHED),
-                       IvfThroughputBenchmark.createDefault(Mode.PER_QUERY),
-                       IvfLatencyBenchmark.createDefault(),
-                       IvfAccuracyBenchmark.createDefault());
+        return defaultBenchmarks(IvfBenchmarks.perQueryEnabled());
+    }
+
+    static List<IvfQueryBenchmark> defaultBenchmarks(boolean perQuery) {
+        List<IvfQueryBenchmark> out = new ArrayList<>();
+        for (Mode mode : IvfBenchmarks.throughputModes(perQuery)) {
+            out.add(IvfThroughputBenchmark.createDefault(mode));
+        }
+        out.add(IvfLatencyBenchmark.createDefault());
+        out.add(IvfAccuracyBenchmark.createDefault());
+        return out;
     }
 
     static BenchResult toBenchResult(IvfSystem system, IvfConfig config, SearchPoint point, List<Metric> metrics) {
@@ -243,7 +257,10 @@ public class AutoBenchIvfYAML {
                         Double.toString(s.getAvgSearchOffHeapMB()),
                         average(rows, "Per-query QPS"),
                         average(rows, "Per-query QPS StdDev"),
-                        average(rows, "Disk Usage (MB)")) + "\n");
+                        average(rows, "Disk Usage (MB)"),
+                        average(rows, "Index Memory (MB)"),
+                        average(rows, "Search Peak Memory (MB)"),
+                        average(rows, "Build Peak Memory (MB)")) + "\n");
             }
         }
     }

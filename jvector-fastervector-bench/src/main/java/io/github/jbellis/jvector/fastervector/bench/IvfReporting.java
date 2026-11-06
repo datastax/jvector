@@ -133,19 +133,26 @@ final class IvfReporting {
         experiments.appendRow(fixed, results);
     }
 
-    /** Keeps metrics the selection matches, plus per-query throughput wherever its batched counterpart matches. */
+    /**
+     * Keeps metrics the selection matches, plus per-query throughput wherever its batched
+     * counterpart matches, and always the resident-memory metrics.
+     */
     static List<Metric> select(List<Metric> results, ResolvedSelection resolved) {
         if (resolved.keys().isEmpty() && resolved.prefixes().isEmpty()) {
             return results;
         }
         List<Metric> out = new ArrayList<>(results.size());
         for (Metric m : results) {
-            if (selected(m.getKey(), resolved)) {
+            if (selected(m.getKey(), resolved) || MEMORY_KEYS.contains(m.getKey())) {
                 out.add(m);
             }
         }
         return out;
     }
+
+    /** Resident-memory metrics: the footprint comparison is a reason to run IVF, so they're always shown and logged. */
+    static final List<String> MEMORY_KEYS = List.of(IvfSystem.INDEX_RSS_KEY, IvfGrid.SEARCH_PEAK_RSS_KEY,
+                                                    IvfSystem.BUILD_PEAK_RSS_KEY);
 
     private static boolean selected(String key, ResolvedSelection resolved) {
         if (key.startsWith(PER_QUERY_PREFIX)) {
@@ -156,7 +163,7 @@ final class IvfReporting {
 
     /**
      * Metric columns for experiments.csv, in a fixed order: every IVF metric the logging selection
-     * picks for any of {@code topKs}. Build time and index size are always logged.
+     * picks for any of {@code topKs}. Build time, index size and resident memory are always logged.
      */
     static List<String> loggingColumns(SearchSelection logSelection, Set<Integer> topKs) {
         Set<String> columns = new LinkedHashSet<>();
@@ -170,6 +177,7 @@ final class IvfReporting {
         }
         columns.add("construction.index_build_time_s");
         columns.add("construction.index_file_size_mb");
+        columns.addAll(MEMORY_KEYS);
         return List.copyOf(columns);
     }
 

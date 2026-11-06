@@ -52,6 +52,20 @@ class IvfReportingTest {
     }
 
     @Test
+    void perQueryThroughputCanBeTurnedOff() {
+        assertEquals(List.of("IvfThroughputBenchmark", "IvfLatencyBenchmark", "IvfRecallBenchmark"),
+                     IvfBenchmarks.fromSpec(null, false).stream().map(IvfQueryBenchmark::getBenchmarkName).toList());
+        assertEquals(List.of("IvfThroughputBenchmark", "IvfLatencyBenchmark", "IvfRecallBenchmark"),
+                     AutoBenchIvfYAML.defaultBenchmarks(false).stream().map(IvfQueryBenchmark::getBenchmarkName).toList());
+        System.setProperty(IvfBenchmarks.PER_QUERY_PROPERTY, "nope");
+        try {
+            assertThrows(IllegalArgumentException.class, IvfBenchmarks::perQueryEnabled);
+        } finally {
+            System.clearProperty(IvfBenchmarks.PER_QUERY_PROPERTY);
+        }
+    }
+
+    @Test
     void unknownStatIsRejected() {
         assertThrows(IllegalArgumentException.class,
                      () -> IvfBenchmarks.fromSpec(Map.of("throughput", List.of("P50"))));
@@ -85,8 +99,26 @@ class IvfReportingTest {
                         "search.throughput.per_query.avg_qps", "search.throughput.per_query.stddev_qps",
                         "search.throughput.per_query.cv_pct",
                         "search.accuracy.recall_at_10", "search.accuracy.recall_at_100",
-                        "construction.index_build_time_s", "construction.index_file_size_mb"),
+                        "construction.index_build_time_s", "construction.index_file_size_mb",
+                        "construction.index_rss_mb", "search.system.peak_rss_mb", "construction.build_peak_rss_mb"),
                      IvfReporting.loggingColumns(selection, Set.of(10, 100)));
+    }
+
+    @Test
+    void memoryMetricsAreAlwaysShown() {
+        var selection = SearchSelection.forConsole(Map.of("accuracy", List.of("recall")), null);
+        List<Metric> results = Stream.of("search.accuracy.recall_at_10", "search.latency.mean_ms",
+                                         "construction.index_rss_mb", "search.system.peak_rss_mb")
+                .map(k -> Metric.of(k, k, ".1f", 1)).collect(Collectors.toList());
+        assertEquals(List.of("search.accuracy.recall_at_10", "construction.index_rss_mb", "search.system.peak_rss_mb"),
+                     IvfReporting.select(results, selection.resolveForTopK(10)).stream().map(Metric::getKey).toList());
+    }
+
+    @Test
+    void residentMemoryIsReadFromProcStatus() {
+        var snapshot = ResidentMemory.parse(List.of("Name:\tjava", "VmHWM:\t  2048 kB", "VmRSS:\t  1024 kB"));
+        assertEquals(new ResidentMemory.Snapshot(1024L * 1024, 2048L * 1024), snapshot.orElseThrow());
+        assertTrue(ResidentMemory.parse(List.of("Name:\tjava")).isEmpty());
     }
 
     @Test
@@ -117,7 +149,8 @@ class IvfReportingTest {
         assertTrue(header.startsWith(String.join(",", IvfReporting.FIXED_COLUMNS)), header);
         assertTrue(header.contains("index_type") && header.contains("nprobe"), header);
         assertTrue(header.endsWith("search.accuracy.recall_at_10,search.accuracy.recall_at_100,"
-                                   + "construction.index_build_time_s,construction.index_file_size_mb"), header);
+                                   + "construction.index_build_time_s,construction.index_file_size_mb,"
+                                   + "construction.index_rss_mb,search.system.peak_rss_mb,construction.build_peak_rss_mb"), header);
     }
 
     @Test

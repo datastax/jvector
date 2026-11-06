@@ -8,8 +8,9 @@ yamlSchemaVersion: 1
 #   - a fresh build every run (the graph's useSavedIndexIfExists: No), so build time is measured;
 #   - all CPUs for search, as the graph's QPS uses.
 # nprobe is set at the equal-recall point: the smallest value whose Recall@10 reaches the graph's
-# Recall@10 on this dataset. PROVISIONAL until the calibration run:
-# nlist and nprobe are starting estimates (nprobe about 3% of nlist).
+# Recall@10 on this dataset.
+# Graph target (main, 2026-10-30): Recall@10 0.5566.
+# PROVISIONAL nprobe (estimate: about 0.4% of nlist, as at 1M); set from the calibration run.
 dataset: cohere-english-v3-10M
 
 construction:
@@ -21,5 +22,5 @@ construction:
 
 search:
   topKNprobe:
-    10: [128]
+    10: [16]
   searchThreads: [0]          # 0 = all CPUs; override with -Divf.searchThreads

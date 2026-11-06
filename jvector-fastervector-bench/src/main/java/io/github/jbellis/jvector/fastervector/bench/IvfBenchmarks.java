@@ -21,24 +21,55 @@ import io.github.jbellis.jvector.fastervector.bench.IvfThroughputBenchmark.Mode;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 
 /**
  * Turns run-config.yml's {@code benchmarks} section into IVF benchmarks, the way the graph
- * {@code Grid} turns it into its own. Throughput is always measured both batched and per-query.
- * {@code count} has no IVF meaning and is skipped with a warning.
+ * {@code Grid} turns it into its own. Throughput is measured batched and, unless
+ * {@code -Divf.perQuery=false}, per-query. {@code count} has no IVF meaning and is skipped with a
+ * warning.
  */
 final class IvfBenchmarks {
+    static final String PER_QUERY_PROPERTY = "ivf.perQuery";
+
     private IvfBenchmarks() {}
 
+    /**
+     * Whether to measure per-query throughput: {@code -Divf.perQuery=false} turns it off. At the
+     * pinned fastervector commit, concurrent single-query searchers share one scan pool and one set
+     * of I/O rings, so per-query QPS barely scales with threads and takes most of a run's time.
+     */
+    static boolean perQueryEnabled() {
+        String value = System.getProperty(PER_QUERY_PROPERTY, "true").trim().toLowerCase(Locale.ROOT);
+        return switch (value) {
+            case "true" -> true;
+            case "false" -> false;
+            default -> throw new IllegalArgumentException(PER_QUERY_PROPERTY + " must be true or false, got " + value);
+        };
+    }
+
+    /** The throughput modes to measure. */
+    static List<Mode> throughputModes(boolean perQuery) {
+        if (!perQuery) {
+            System.out.println("Per-query throughput off (-D" + PER_QUERY_PROPERTY + "=false)");
+            return List.of(Mode.BATCHED);
+        }
+        return List.of(Mode.values());
+    }
+
     static List<IvfQueryBenchmark> fromSpec(Map<String, List<String>> spec) {
+        return fromSpec(spec, perQueryEnabled());
+    }
+
+    static List<IvfQueryBenchmark> fromSpec(Map<String, List<String>> spec, boolean perQuery) {
         if (spec == null || spec.isEmpty()) {
             spec = SearchReportingCatalog.defaultComputeBenchmarks();
         }
         List<IvfQueryBenchmark> out = new ArrayList<>();
         // Fixed order regardless of how the YAML lists them, as in Grid
         if (spec.containsKey("throughput")) {
-            for (Mode mode : Mode.values()) {
+            for (Mode mode : throughputModes(perQuery)) {
                 var bench = IvfThroughputBenchmark.createEmpty(mode, 3, 3);
                 for (String stat : spec.get("throughput")) {
                     switch (stat) {

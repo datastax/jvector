@@ -102,7 +102,10 @@ class AutoBenchIvfYAMLTest {
         assertEquals("", cap[6], "Avg Nodes Visited is blank for IVF");
         assertEquals(1000.0, Double.parseDouble(cap[11]), 1e-9);
         assertEquals(40.0, Double.parseDouble(cap[13]), 1e-9);
-        assertEquals(14, cap.length);
+        assertEquals(10.0, Double.parseDouble(cap[14]), 1e-9, "Index Memory (MB)");
+        assertEquals(20.0, Double.parseDouble(cap[15]), 1e-9, "Search Peak Memory (MB)");
+        assertEquals("", cap[16], "Build Peak Memory (MB) is blank when no row has it");
+        assertEquals(17, cap.length);
         assertTrue(lines.get(2).startsWith("dpr-gemma-1m,50.0,"), lines.get(2));
     }
 
@@ -117,6 +120,8 @@ class AutoBenchIvfYAMLTest {
         metrics.put("Recall@10", recall);
         metrics.put("Index Build Time", buildSeconds);
         metrics.put("Disk Usage (MB)", diskMb);
+        metrics.put("Index Memory (MB)", diskMb / 4);
+        metrics.put("Search Peak Memory (MB)", diskMb / 2);
         return new BenchResult(dataset, Map.of("nprobe", 16), metrics);
     }
 }

@@ -42,6 +42,9 @@ import java.util.concurrent.TimeUnit;
 public final class IvfGrid {
     private static final Logger log = LoggerFactory.getLogger(IvfGrid.class);
 
+    /** Peak resident memory during a search point, above the memory before the index was opened. */
+    static final String SEARCH_PEAK_RSS_KEY = "search.system.peak_rss_mb";
+
     private IvfGrid() {}
 
     /** Receives one row per construction point and search point. */
@@ -108,11 +111,15 @@ public final class IvfGrid {
     /**
      * Runs the benchmarks for one search point and adds the JVM memory metrics the graph runner's
      * {@code QueryTester} reports, from snapshots before and after. fastervector's own native
-     * memory isn't part of the JVM's off-heap count.
+     * memory isn't part of the JVM's off-heap count, so the peak resident memory (RSS) during the
+     * point is added too: the index plus the search's working memory, measured from before the
+     * index was opened. It also includes any JVM heap the search newly touched.
      */
     private static List<Metric> runBenchmarks(IvfSystem system, SearchPoint point, List<IvfQueryBenchmark> benchmarks,
                                               Heartbeat heartbeat, String label) throws IOException {
         List<Metric> metrics = new ArrayList<>();
+        ResidentMemory.trim();
+        boolean peakReset = ResidentMemory.resetPeak();
         try (var diagnostics = new BenchmarkDiagnostics(DiagnosticLevel.NONE)) {
             diagnostics.capturePrePhaseSnapshot("Query");
             for (IvfQueryBenchmark benchmark : benchmarks) {
@@ -131,6 +138,12 @@ public final class IvfGrid {
                 metrics.add(Metric.of("search.system.max_offheap_mb", "Max offheap usage (MB)", ".1f",
                                       offHeap / (1024.0 * 1024.0)));
             }
+        }
+        var after = ResidentMemory.snapshot();
+        Long baseline = system.rssBaselineBytes();
+        if (peakReset && after.isPresent() && baseline != null) {
+            metrics.add(Metric.of(SEARCH_PEAK_RSS_KEY, "Search peak memory (MB)", ".1f",
+                                  ResidentMemory.mb(after.get().peakRssBytes() - baseline)));
         }
         return metrics;
     }

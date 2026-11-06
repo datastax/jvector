@@ -75,6 +75,7 @@ serve every machine:
 | `-Divf.ssdPaths=/data/ssd0/ivf_cache` | `construction.ssdPaths` (comma-separated) |
 | `-Divf.buildThreads=16` | `construction.buildThreads` |
 | `-Divf.searchThreads=1,16,48` | `search.searchThreads` (comma-separated) |
+| `-Divf.perQuery=false` | Skips per-query throughput (see below) |
 
 Each applied override is printed. Through Maven, pass them in `-Dbench.jvm.args`.
 
@@ -97,11 +98,25 @@ average QPS, mean latency and recall.
 | Metric | How |
 |---|---|
 | `QPS` (batched) | The whole query set as one `search` call on a pool of `searchThreads`; 3 warm-up and 3 measured runs. How fastervector is meant to be used. |
-| `Per-query QPS` | One query per call over `searchThreads` Java threads, each with its own searcher. The shape of the graph benchmark's QPS. |
+| `Per-query QPS` | One query per call over `searchThreads` Java threads, each with its own searcher. The shape of the graph benchmark's QPS, but not usable yet (below). Off with `-Divf.perQuery=false`. |
 | `Mean Latency` | One thread, one query per call, over the query set twice. |
 | `Recall@k`, `MAP@k` | Against the dataset's ground truth, with jvector-examples' `AccuracyMetrics`. |
-| Build time, index size, file count | Per construction point. |
+| Build time, index size (`Index Size (MB)`), file count | Per construction point. Index size is the total size of the index files on disk. |
 | Heap and off-heap | JVM figures, as for the graph. fastervector's native memory isn't included. |
+| `Index Memory (MB)` | Resident memory (RSS) the index open adds: the index's in-memory footprint. A built index is closed and reopened to measure it the same way. Linux only. |
+| `Search Peak Memory (MB)` | Peak RSS during a search point, above the RSS before the index was opened: the index plus the search's working memory, and any JVM heap the search newly touched. Linux only. |
+| `Build Peak Memory (MB)` | Peak RSS during a build, above the RSS before it. Linux only. |
+
+**Batched vs per-query.** Both modes run the same queries over the same index. *Batched* passes
+the whole query set (10,000 queries) to fastervector in one `search` call: one crossing of the
+Java/native boundary in each direction. fastervector then spreads the queries over its own
+threads, and reads each probed list once for every query in the batch that probes it. *Per-query*
+makes one `search` call per query from `searchThreads` Java threads, as the graph benchmark and a
+server answering one request at a time do. At the pinned fastervector commit, per-query calls
+barely scale: each call starts its own I/O threads on io_uring rings that all searchers share,
+and all searchers share one scan pool. On `cap-1M`, 48 threads gave about 376 QPS against
+56,699 batched. Until fastervector changes that, compare batched QPS, and turn per-query off
+(`-Divf.perQuery=false`), since it takes most of a run's time.
 
 Warm-up runs use random unit vectors, and each measured run follows a GC pause, as in the graph
 benchmark. Graph node counts don't apply to IVF. Datasets with EUCLIDEAN similarity are skipped,
@@ -204,7 +219,7 @@ Each IVF regression config mirrors the graph's config for the same dataset in
 | `topKOverquery: 10: [1.0]`, one search point | `topKNprobe: 10: [<nprobe>]`, one search point | `BenchmarkSummarizer` averages every configuration of a dataset, so both sides need the same number of points with the same topK. |
 | PQ, `mFactor: 8` (32x) | `storageFactor: [1.0]` (32x) | The same compressed size per vector. |
 | `useSavedIndexIfExists: No` | `useSavedIndexIfExists: No` | Both report a fresh build time. |
-| QPS on all CPUs | `searchThreads: [0]` (all CPUs) | The same concurrency. Compare the graph's `QPS` with IVF's `Per-query QPS`, which has the same shape; IVF's batched `QPS` is extra. |
+| QPS on all CPUs | `searchThreads: [0]` (all CPUs) | The same concurrency. Compare the graph's `QPS` with IVF's batched `QPS`. `Per-query QPS` has the graph's shape, but doesn't scale yet (see [What is measured](#what-is-measured)). |
 
 `nprobe` is chosen for **equal recall**: the smallest value whose `Recall@10` reaches the graph's
 `Recall@10` on that dataset, so the comparison is QPS at the same recall. Until the calibration
@@ -218,6 +233,8 @@ These differences remain, and the comparison should state them:
   1M; IVF-ASH reads its lists from the SSD paths on every query. Use the same disk for both.
 - **Build threads.** The graph builds on the physical core count; IVF's `buildThreads: 0` uses
   all CPUs. Set `-Divf.buildThreads=<physical cores>` to match.
+- **Batching.** IVF's batched QPS reads each probed list once for all the queries in the batch
+  that probe it; the graph answers each query on its own.
 - **Native memory.** fastervector's native memory isn't in the off-heap figures.
 
 `ivf-bench-results.csv` and `graph-bench-results.csv` share their first 11 columns:
@@ -229,6 +246,10 @@ Build Heap Used (MB),Build Off-Heap (MB),Search Heap Used (MB),Search Off-Heap (
 
 They're computed by the same `BenchmarkSummarizer`, so each is an average over the dataset's
 configurations, by the same rules. `Avg Nodes Visited` is blank for IVF. The IVF file adds
-`Per-query QPS,Per-query QPS StdDev,Index Size (MB)`. Compare IVF's `QPS` (batched) and
-`Per-query QPS` against the graph's `QPS` at similar `Recall@10`; the `.json` files have every
-configuration's numbers, which is where to look for the recall-throughput tradeoff.
+`Per-query QPS,Per-query QPS StdDev,Index Size (MB),Index Memory (MB),Search Peak Memory (MB),Build Peak Memory (MB)`;
+the per-query columns are blank when it was turned off, and the memory columns off Linux.
+The graph's CSV has no footprint columns: its `Disk Usage (MB)` and memory-mapped
+`Off-Heap Mapped (MB)` are in `AutoBenchYAML`'s JSON, and the mapped figure is the whole mapping,
+not what's resident. Compare IVF's `QPS` (batched) against the graph's `QPS` at similar `Recall@10`;
+the `.json` files have every configuration's numbers, which is where to look for the
+recall-throughput tradeoff.
