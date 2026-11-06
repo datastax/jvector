@@ -43,6 +43,45 @@ public class RunConfig {
     public int yamlSchemaVersion;
     public int onDiskIndexVersion;
 
+    /** Optional ASH run settings; omission preserves JVM properties and library defaults. */
+    public Ash ash;
+
+    public static class Ash {
+        public String queryProjection;
+    }
+
+    public static final String ASH_QUERY_PROJECTION_PROPERTY = "jvector.ash.queryProjection";
+
+    /** Applies only the optional setting for this invocation and restores it on exit. */
+    public static final class AshQueryProjectionSetting implements AutoCloseable {
+        private final String original = System.getProperty(ASH_QUERY_PROJECTION_PROPERTY);
+        private boolean applied;
+
+        public void apply(RunConfig config) {
+            String yaml = config.ash == null ? null : config.ash.queryProjection;
+            if (yaml != null) validatePrecision(yaml);
+            String selected = original != null ? original : yaml;
+            if (selected != null) validatePrecision(selected);
+            if (original == null && yaml != null) {
+                System.setProperty(ASH_QUERY_PROJECTION_PROPERTY, yaml);
+                applied = true;
+            }
+        }
+
+        private static void validatePrecision(String value) {
+            if (!List.of("auto", "fp32", "fp16", "int8").contains(value))
+                throw new IllegalArgumentException("ash.queryProjection must be auto, fp32, fp16 or int8: " + value);
+        }
+
+        @Override
+        public void close() {
+            if (applied) {
+                System.clearProperty(ASH_QUERY_PROJECTION_PROPERTY);
+                applied = false;
+            }
+        }
+    }
+
     /** Query delivery policy; omitted settings preserve the synchronous benchmark. */
     public QueryExecution queryExecution = new QueryExecution();
 

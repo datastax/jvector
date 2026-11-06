@@ -321,10 +321,12 @@ class NativeASHFP16ProjectionTest {
         assertInstanceOf(NativeASHFP16Projection.class, explicit);
         var automatic = view(original, null);
         assertInstanceOf(NativeASHFP16Projection.class, automatic);
+        assertEquals("fp16", automatic.operandPrecision());
         float[] query = {70000, 2}, out = new float[1], expected = new float[1];
         original.project(query, expected);
         automatic.project(query, out);
         assertArrayEquals(expected, out);
+        assertEquals("fp16+fp32", automatic.operandPrecision());
         var largeMatrix = new NativeASHProjection(new float[][]{{70000}});
         assertSame(largeMatrix, view(largeMatrix, "auto"));
         assertThrows(IllegalArgumentException.class, () -> view(largeMatrix, "fp16"));

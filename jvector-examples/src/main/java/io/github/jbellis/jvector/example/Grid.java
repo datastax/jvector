@@ -962,6 +962,7 @@ public class Grid {
                             topK,
                             overquery,
                             rerankK,
+                            cs.ashQueryProjectionModel(),
                             logOutputs
                     );
                 }
@@ -1470,6 +1471,15 @@ public class Grid {
             this.features = features;
             // File-backed sources borrow scratch storage; concurrent scorers need separate views.
             this.exactVectors = ds.getBaseRavv().threadLocalSupplier();
+        }
+
+        /** Metadata from the same ASH model used for query scoring. */
+        public AsymmetricHashing ashQueryProjectionModel() {
+            if (features.contains(FeatureId.FUSED_ASH) && index instanceof OnDiskGraphIndex) {
+                var feature = ((OnDiskGraphIndex) index).getFeatures().get(FeatureId.FUSED_ASH);
+                return feature instanceof FusedASH ? ((FusedASH) feature).getASH() : null;
+            }
+            return cv instanceof ASHVectors ? ((ASHVectors) cv).getCompressor() : null;
         }
 
         public SearchScoreProvider scoreProviderFor(VectorFloat<?> queryVector, ImmutableGraphIndex.View view) {

@@ -94,6 +94,8 @@ final class NativeASHFP16Projection implements VectorUtilSupport.AshProjection {
     private final int rows, columns;
     private volatile long retainedBytes;
     private volatile boolean batchAvailable;
+    // Set only on the existing automatic FP32 range-fallback branch.
+    private volatile boolean fp32FallbackUsed;
     private static final java.lang.invoke.VarHandle RETAINED_BYTES;
     static {
         try {
@@ -176,6 +178,9 @@ final class NativeASHFP16Projection implements VectorUtilSupport.AshProjection {
     public long ramBytesUsed() { return retainedBytes; }
 
     @Override
+    public String operandPrecision() { return fp32FallbackUsed ? "fp16+fp32" : "fp16"; }
+
+    @Override
     public boolean supportsBatchProjection() { return batchAvailable; }
 
     /** Shares prepared FP16 weights; bounded native tiles handle arbitrary batch lengths. */
@@ -239,6 +244,7 @@ final class NativeASHFP16Projection implements VectorUtilSupport.AshProjection {
                     context, buffers.input, buffers.output, buffers.status);
             if (status == RANGE && fallback != null) {
                 fallback.project(query, out);
+                fp32FallbackUsed = true;
                 return;
             }
             if (status != OK) throw failure(status, buffers.status);

@@ -33,6 +33,10 @@ Projection settings and processor recommendations are documented in
 [Choosing ASH query-projection precision](ash-projection-precision.md).
 An explicitly requested INT8/FP32 comparison is a precision override to the
 FP16 benchmark configuration below; record it with the command and CSV evidence.
+BenchYAML also accepts `ash.queryProjection` (`auto`, `fp16`, `fp32`, `int8`) in
+its run YAML. An explicit JVM precision property overrides YAML; omission keeps
+the existing defaults. ASH CSV rows record `ash_query_projection_requested` and
+`ash_query_projection_effective`; see the precision guide for fallback labels.
 
 ## Build the checkout
 

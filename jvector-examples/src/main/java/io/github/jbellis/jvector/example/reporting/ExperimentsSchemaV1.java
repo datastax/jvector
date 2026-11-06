@@ -64,7 +64,9 @@ public final class ExperimentsSchemaV1 {
                 "usePruning",
                 "topK",
                 "overquery",
-                "rerankK"
+                "rerankK",
+                "ash_query_projection_requested",
+                "ash_query_projection_effective"
         );
     }
 
