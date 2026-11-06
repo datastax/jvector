@@ -2,6 +2,47 @@
 
 JVector comes with the following sample programs to try:
 
+### Hello ASH world
+
+Two self-contained introductions build and query a fused ASH disk index over the
+public `e5-small-v2-100k` dataset (downloaded and cached automatically):
+
+- [HelloASHWorldInt8](src/main/java/io/github/jbellis/jvector/example/HelloASHWorldInt8.java):
+  INT8 query projection for Intel Ice Lake and other supported INT8 processors.
+- [HelloASHWorldFp16](src/main/java/io/github/jbellis/jvector/example/HelloASHWorldFp16.java):
+  native FP16 query projection for Intel Sapphire Rapids and newer FP16 processors.
+
+Both teach the same five steps: load vectors, train/encode ASH, construct the graph,
+write fused ASH neighborhoods with NVQ reranking vectors, then reopen and search.
+They use ASH(b=2,d=192) for 384-dimensional inputs. Stored-code precision (`b`)
+is independent of query-projection precision; training and encoding remain FP32.
+NVQ's mean is collected during ASH encoding, avoiding another input scan.
+
+Build the examples with the native provider and oneDNN support described in the
+[native build guide](../jvector-native/src/main/native/README.md#recommended-onednn-build-and-package).
+From the repository root, using JDK 22 or newer:
+
+```bash
+mvn package -DskipTests
+java --add-modules=jdk.incubator.vector --enable-native-access=ALL-UNNAMED -Xmx8g \
+  -cp jvector-examples/target/jvector-examples-4.0.3-SNAPSHOT-jar-with-dependencies.jar \
+  io.github.jbellis.jvector.example.HelloASHWorldInt8
+java --add-modules=jdk.incubator.vector --enable-native-access=ALL-UNNAMED -Xmx8g \
+  -cp jvector-examples/target/jvector-examples-4.0.3-SNAPSHOT-jar-with-dependencies.jar \
+  io.github.jbellis.jvector.example.HelloASHWorldFp16
+```
+
+Run the program matching your CPU; explicit unsupported precisions fail instead
+of silently changing precision. Each saves `ash-int8.graph` or `ash-fp16.graph`
+and prints the top ten vector ordinals, similarity scores and visited-node count
+for the first held-out query. An optional argument selects a new output path;
+existing files are never overwritten. Original vectors are not needed to reopen
+the finished index.
+
+The examples use a single query to introduce the search API. For a service with
+concurrent requests, see [bounded query batching and state ownership](../docs/ash-query-integration.md).
+For more hardware choices, see [projection precision](../docs/ash-projection-precision.md).
+
 ### Batched file-backed vectors
 
 Two hello-world programs use public-catalog `e5-small-v2-100k`, or accept an existing
