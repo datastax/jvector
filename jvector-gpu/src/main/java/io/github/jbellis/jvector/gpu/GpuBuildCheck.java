@@ -24,17 +24,29 @@ import java.nio.ByteOrder;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Random;
 import java.util.stream.IntStream;
 
+import io.github.jbellis.jvector.disk.ReaderSupplier;
+import io.github.jbellis.jvector.disk.ReaderSupplierFactory;
 import io.github.jbellis.jvector.graph.GraphIndexBuilder;
 import io.github.jbellis.jvector.graph.GraphSearcher;
 import io.github.jbellis.jvector.graph.ImmutableGraphIndex;
 import io.github.jbellis.jvector.graph.ListRandomAccessVectorValues;
 import io.github.jbellis.jvector.graph.RandomAccessVectorValues;
+import io.github.jbellis.jvector.graph.disk.OnDiskGraphIndex;
+import io.github.jbellis.jvector.graph.disk.OnDiskGraphIndexCompactor;
+import io.github.jbellis.jvector.graph.disk.OrdinalMapper;
+import io.github.jbellis.jvector.util.DocIdSetIterator;
+import io.github.jbellis.jvector.quantization.PQVectors;
+import io.github.jbellis.jvector.quantization.ProductQuantization;
 import io.github.jbellis.jvector.util.Bits;
+import io.github.jbellis.jvector.util.FixedBitSet;
+import io.github.jbellis.jvector.util.PhysicalCoreExecutor;
 import io.github.jbellis.jvector.vector.VectorSimilarityFunction;
 import io.github.jbellis.jvector.vector.VectorizationProvider;
 import io.github.jbellis.jvector.vector.types.VectorFloat;
@@ -48,6 +60,9 @@ import io.github.jbellis.jvector.vector.types.VectorFloat;
  * <li>{@code base.fvecs query.fvecs gt.ivecs COSINE|DOT_PRODUCT|EUCLIDEAN}: a real dataset, build times and recall
  * of both (skip the CPU build with {@code -Dcpu=false}).</li>
  * </ul>
+ * The no-argument run also checks {@link GpuProductQuantization} (encoding with JVector's codebooks reproduces
+ * JVector's codes; GPU-trained codes are as accurate) and {@link GpuCompaction} (4 segments with 10% of the nodes
+ * deleted: the rebuilt merged graph is as accurate as {@code OnDiskGraphIndexCompactor}'s).
  */
 public final class GpuBuildCheck {
 
@@ -74,9 +89,145 @@ public final class GpuBuildCheck {
                 ok &= recall[0] >= recall[1] - TOLERANCE;
             }
         }
+        var data = clustered(20_000 + 200, 128, VectorSimilarityFunction.COSINE, new Random(11));
+        ok &= checkPq(data.subList(0, 20_000), data.subList(20_000, data.size()));
+        ok &= checkCompaction(data.subList(0, 20_000), data.subList(20_000, data.size()));
         System.out.println(ok ? "OK" : "FAILED: GPU recall below the CPU's");
         if (!ok) {
             System.exit(1);
+        }
+    }
+
+    /** GPU product quantization against JVector's, M=16, K=256. */
+    static boolean checkPq(List<VectorFloat<?>> base, List<VectorFloat<?>> queries) {
+        var similarity = VectorSimilarityFunction.COSINE;
+        RandomAccessVectorValues vectors = new ListRandomAccessVectorValues(base, base.get(0).length());
+        List<int[]> gt = exact(base, queries, similarity, 10);
+        long t0 = System.nanoTime();
+        var cpu = ProductQuantization.compute(vectors, 16, 256, false);
+        var cpuCodes = cpu.encodeAll(vectors, PhysicalCoreExecutor.pool());
+        long t1 = System.nanoTime();
+        var gpu = GpuProductQuantization.compute(vectors, 16, 256, false);
+        var gpuCodes = GpuProductQuantization.encodeAll(gpu, vectors);
+        long t2 = System.nanoTime();
+        var sameBooks = GpuProductQuantization.encodeAll(cpu, vectors);
+        long identical = IntStream.range(0, base.size()).filter(i -> cpuCodes.get(i).equals(sameBooks.get(i))).count();
+        double cpuRecall = pqRecall(cpuCodes, queries, gt, similarity);
+        double gpuRecall = pqRecall(gpuCodes, queries, gt, similarity);
+        System.out.printf("PQ M=16 K=256 %5d x %4d   GPU %7.2f s  recall@10 %.4f   CPU %7.2f s  recall@10 %.4f   identical codes with CPU codebooks %d/%d%n",
+                base.size(), vectors.dimension(), (t2 - t1) / 1e9, gpuRecall, (t1 - t0) / 1e9, cpuRecall, identical, base.size());
+        return identical == base.size() && gpuRecall >= cpuRecall - 2 * TOLERANCE;
+    }
+
+    /** Recall@10 of an exhaustive scan by PQ score. */
+    static double pqRecall(PQVectors codes, List<VectorFloat<?>> queries, List<int[]> gt, VectorSimilarityFunction similarity) {
+        return IntStream.range(0, queries.size()).parallel().mapToDouble(q -> {
+            var score = codes.precomputedScoreFunctionFor(queries.get(q), similarity);
+            Integer[] order = IntStream.range(0, codes.count()).boxed().toArray(Integer[]::new);
+            float[] scores = new float[order.length];
+            for (int i = 0; i < order.length; i++) {
+                scores[i] = score.similarityTo(i);
+            }
+            java.util.Arrays.sort(order, (a, b) -> Float.compare(scores[b], scores[a]));
+            var truth = new HashSet<Integer>();
+            for (int k = 0; k < 10; k++) {
+                truth.add(gt.get(q)[k]);
+            }
+            return IntStream.range(0, 10).filter(k -> truth.contains(order[k])).count() / 10.0;
+        }).average().orElse(0);
+    }
+
+    /** 4 CPU-built on-disk segments, every 10th node deleted, merged by the GPU rebuild and by JVector's compactor. */
+    static boolean checkCompaction(List<VectorFloat<?>> base, List<VectorFloat<?>> queries) throws IOException {
+        var similarity = VectorSimilarityFunction.COSINE;
+        int dim = base.get(0).length();
+        int parts = 4;
+        int per = base.size() / parts;
+        Path dir = Files.createTempDirectory("jvector-gpu-compaction");
+        List<ReaderSupplier> suppliers = new ArrayList<>();
+        List<OnDiskGraphIndex> sources = new ArrayList<>();
+        List<FixedBitSet> live = new ArrayList<>();
+        // The live vectors in source order, then node order: ground truth is computed over them, and
+        // each compacted graph's results are mapped back to this order through its ordinalMappers().
+        List<VectorFloat<?>> mergedList = new ArrayList<>();
+        List<int[]> keys = new ArrayList<>();
+        try {
+            for (int s = 0; s < parts; s++) {
+                var vectors = new ListRandomAccessVectorValues(base.subList(s * per, (s + 1) * per), dim);
+                Path path = dir.resolve("segment-" + s);
+                OnDiskGraphIndex.write(new GraphIndexBuilder(vectors, similarity, 32, 100, 1.2f, 1.2f, true).build(vectors), vectors, path);
+                var rs = ReaderSupplierFactory.open(path);
+                suppliers.add(rs);
+                sources.add(OnDiskGraphIndex.load(rs));
+                var bits = new FixedBitSet(per);
+                int[] key = new int[per];
+                java.util.Arrays.fill(key, -1);
+                for (int i = 0; i < per; i++) {
+                    if (i % 10 != 0) {
+                        bits.set(i);
+                        key[i] = mergedList.size();
+                        mergedList.add(base.get(s * per + i));
+                    }
+                }
+                live.add(bits);
+                keys.add(key);
+            }
+            List<int[]> gt = exact(mergedList, queries, similarity, 10);
+            long t0 = System.nanoTime();
+            var cpu = new OnDiskGraphIndexCompactor(sources, live, similarity, null);
+            cpu.compact(dir.resolve("cpu"));
+            long t1 = System.nanoTime();
+            var gpu = new GpuCompaction(sources, live, similarity);
+            gpu.compact(dir.resolve("gpu"));
+            long t2 = System.nanoTime();
+            double cpuRecall = onDiskRecall(dir.resolve("cpu"), toKeys(cpu.ordinalMappers(), live, keys, mergedList.size()), queries, gt, similarity);
+            double gpuRecall = onDiskRecall(dir.resolve("gpu"), toKeys(gpu.ordinalMappers(), live, keys, mergedList.size()), queries, gt, similarity);
+            System.out.printf("compaction    %5d x %4d   GPU %7.2f s  recall@10 %.4f   CPU %7.2f s  recall@10 %.4f   (%d segments, 10%% deleted)%n",
+                    mergedList.size(), dim, (t2 - t1) / 1e9, gpuRecall, (t1 - t0) / 1e9, cpuRecall, parts);
+            return gpuRecall >= cpuRecall - TOLERANCE;
+        } finally {
+            for (var g : sources) {
+                g.close();
+            }
+            for (var rs : suppliers) {
+                rs.close();
+            }
+            try (var files = Files.walk(dir)) {
+                files.sorted(java.util.Comparator.reverseOrder()).forEach(f -> f.toFile().delete());
+            }
+        }
+    }
+
+    /** For each new ordinal of a compacted graph, the position of its vector in the live list ({@code keys}). */
+    static int[] toKeys(List<OrdinalMapper> mappers, List<FixedBitSet> live, List<int[]> keys, int total) {
+        int[] newToKey = new int[total];
+        for (int s = 0; s < live.size(); s++) {
+            var bits = live.get(s);
+            for (int node = bits.nextSetBit(0); node != DocIdSetIterator.NO_MORE_DOCS; node = bits.nextSetBit(node + 1)) {
+                newToKey[mappers.get(s).oldToNew(node)] = keys.get(s)[node];
+            }
+        }
+        return newToKey;
+    }
+
+    /** Recall@10 of an on-disk graph, searched with its own vectors, its ordinals mapped back through {@code newToKey}. */
+    static double onDiskRecall(Path path, int[] newToKey, List<VectorFloat<?>> queries, List<int[]> gt,
+                               VectorSimilarityFunction similarity) throws IOException {
+        try (var rs = ReaderSupplierFactory.open(path); var graph = OnDiskGraphIndex.load(rs); var view = graph.getView()) {
+            double hits = 0;
+            for (int q = 0; q < queries.size(); q++) {
+                var result = GraphSearcher.search(queries.get(q), 10, 50, view, similarity, graph, Bits.ALL);
+                var truth = new HashSet<Integer>();
+                for (int k = 0; k < 10; k++) {
+                    truth.add(gt.get(q)[k]);
+                }
+                for (var ns : result.getNodes()) {
+                    if (truth.contains(newToKey[ns.node])) {
+                        hits++;
+                    }
+                }
+            }
+            return hits / (10.0 * queries.size());
         }
     }
 

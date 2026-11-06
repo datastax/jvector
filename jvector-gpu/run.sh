@@ -20,9 +20,13 @@
 #   jvector-gpu/run.sh cpu   <dataset regex> [-Dprop=value ...]   the same Bench without the accelerator (baseline)
 #   jvector-gpu/run.sh check [base.fvecs query.fvecs gt.ivecs COSINE|DOT_PRODUCT|EUCLIDEAN] [-Dprop=value ...]
 #                                                                  GPU build vs JVector's build (GpuBuildCheck)
+#   jvector-gpu/run.sh pq      <dataset> [M] [K]                    product quantization, JVector vs GPU (PqBench)
+#   jvector-gpu/run.sh compact <dataset> [segments] [workDir]       compaction, JVector vs GPU (CompactionBench)
 #   jvector-gpu/run.sh wikipedia <dir> gpu|cpu                      graph build on Cohere Wikipedia 1M/10M x 1024, prepared
 #                                                                  by jvector-gpu/datasets/wikipedia.sh (WikipediaBench)
 #   jvector-gpu/run.sh groundtruth base.f32 query.f32 dim out.ivecs [k]   exact top-k by inner product on the GPU
+#   jvector-gpu/run.sh nvq     <dataset>                            NVQ encoding, JVector vs GPU (NvqBench)
+#   jvector-gpu/run.sh phases  <dataset> [workDir]                  where an on-disk build's time goes (WritePhases)
 #
 # jvector-gpu/preflight.sh [dataset] checks the JDK, TornadoVM, GPU, cuVS, build, memory, disk and dataset first.
 #
@@ -41,9 +45,13 @@ case "$MODE" in
     bench) ACCELERATOR="-Djvector.graph.accelerator=tornadovm"; MAIN=io.github.jbellis.jvector.example.Bench ;;
     cpu)   MAIN=io.github.jbellis.jvector.example.Bench ;;
     check) MAIN=io.github.jbellis.jvector.gpu.GpuBuildCheck ;;
+    pq) MAIN=io.github.jbellis.jvector.gpu.bench.PqBench ;;
+    compact) MAIN=io.github.jbellis.jvector.gpu.bench.CompactionBench ;;
     wikipedia) MAIN=io.github.jbellis.jvector.gpu.bench.WikipediaBench ;;
     groundtruth) MAIN=io.github.jbellis.jvector.gpu.bench.GroundTruth ;;
-    *) sed -n '19,27p' "$0"; exit 1 ;;
+    nvq) MAIN=io.github.jbellis.jvector.gpu.bench.NvqBench ;;
+    phases) MAIN=io.github.jbellis.jvector.gpu.bench.WritePhases ;;
+    *) sed -n '19,32p' "$0"; exit 1 ;;
 esac
 
 command -v tornado >/dev/null || { echo "run.sh: 'tornado' is not on the PATH (install the TornadoVM SDK and add its bin/)" >&2; exit 1; }

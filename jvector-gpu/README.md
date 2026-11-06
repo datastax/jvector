@@ -78,6 +78,48 @@ other case `supports()` returns false and JVector builds on the CPU as usual.
 
 Not supported: incremental insertion and deletes, which stay on the CPU path, and non-NVIDIA GPUs.
 
+## Also on the GPU: compaction and product quantization
+
+**Compaction by rebuilding.** `GpuCompaction` takes the same inputs as `OnDiskGraphIndexCompactor`: on-disk sources
+with inline vectors and their live nodes. It reads the live vectors back and builds the merged graph from scratch on the
+GPU. As with `OnDiskGraphIndexCompactor`, the compaction assigns the new ordinals and `ordinalMappers()` returns them
+afterwards (on the GPU the live nodes are numbered in source order). When the GPU build isn't available, it falls back
+to `OnDiskGraphIndexCompactor`.
+
+```java
+var compaction = new GpuCompaction(sources, liveNodes, VectorSimilarityFunction.COSINE);
+compaction.compact(outputPath);
+List<OrdinalMapper> newOrdinals = compaction.ordinalMappers();   // as OnDiskGraphIndexCompactor.ordinalMappers()
+```
+
+ada002-1M, 4 segments built by JVector on the CPU (M=32, hierarchy):
+
+| | time | p50 search latency at equal recall@10 |
+|---|---|---|
+| `OnDiskGraphIndexCompactor` | 291.6 s | baseline |
+| `GpuCompaction` (read 0.4 s, build 14.4 s, write 4.4 s) | **19.2 s (15.2x)** | 5-17% lower (0.86-0.99 recall) |
+
+The rebuilt graph is a fresh build rather than a stitched one, so at the same beam it has slightly higher recall.
+
+**Product quantization.** `GpuProductQuantization.compute` trains PQ codebooks the way `ProductQuantization.compute`
+does (unweighted): the same subspaces, training sample, k-means++ seeding and Lloyd iterations. `encodeAll`
+encodes with any unweighted `ProductQuantization`, including one trained on the CPU. Both return JVector's own
+`ProductQuantization` and `PQVectors`. Both use JVector's CPU code when TornadoVM isn't present, or when a subspace
+is wider than 32 dimensions.
+
+ada002-1M, M=192, K=256:
+
+| | train | encode | total | recall@10 of a PQ scan |
+|---|---|---|---|---|
+| JVector (CPU) | 10.01 s | 3.55 s | 13.56 s | 0.8037 |
+| GPU | 2.85 s | 0.95 s | **3.80 s (3.6x)** | 0.8071 |
+
+Encoding with JVector's own codebooks on the GPU gives JVector's codes except exact ties: 23 of 188,695,680 codes, where two centroids are equally close up to float rounding (relative difference ≤ 1.5e-7) and the GPU picks the other one.
+
+`jvector-gpu/run.sh check` covers both:
+* compaction: 4 segments with 10% of the nodes deleted;
+* PQ: JVector's codes, and recall within tolerance.
+
 ## Requirements
 
 * An NVIDIA GPU with tensor cores, Ampere (sm_80) or newer, and its driver.
@@ -103,7 +145,7 @@ mvn -Pgpu -pl jvector-gpu,jvector-examples -am package -DskipTests
 sized to the GPU:
 
 ```bash
-jvector-gpu/run.sh check                     # GPU vs JVector: build (every similarity); prints OK
+jvector-gpu/run.sh check                     # GPU vs JVector: build (every similarity), PQ and compaction; prints OK
 jvector-gpu/run.sh bench ada002-100k         # JVector's Bench, graphs built on the GPU
 jvector-gpu/run.sh cpu ada002-100k           # the same Bench on the CPU, for comparison
 jvector-gpu/run.sh check base.fvecs query.fvecs gt.ivecs COSINE   # any dataset
@@ -130,3 +172,21 @@ Options (system properties):
 `run.sh groundtruth base.f32 query.f32 dim out.ivecs [k]` computes exact top-k ground truth with cuVS brute
 force over chunks of the base file. Wikipedia 10M × 1024 takes **24.5 s against numpy's 681 s**, with 99.997%
 top-10 agreement with the CPU (ties among duplicate passages).
+
+## More on the GPU (2026-10-09)
+
+Measured on an RTX 4090 against an i9-13900K (32 threads).
+
+- **NVQ encoding** (`GpuNvq.encodeAll`): JVector's 8-bit NVQ with the same growth-rate search, one work-group
+  per (vector, sub-vector). It returns JVector's own `NVQVectors`. On ada002-1M it takes **1.34 s against 4.06 s
+  (3.0×)**, with identical recall@10 of an NVQ-scored scan (0.9974). 99.995% of the code bytes and 96.9% of the
+  growth rates are identical; the rest are near-ties, because the GPU sums each loss in a different order.
+  `run.sh nvq <dataset>`.
+- **Exact ground truth** (`run.sh groundtruth`): cuVS brute force over base chunks. Wikipedia 10M × 1024 takes
+  **24.5 s against numpy's 681 s**, with 99.997% top-10 agreement with the CPU (ties among duplicate passages).
+- **Where an on-disk build's time goes** (`run.sh phases <dataset>`, ada002-1M): GPU build 11.2 s, NVQ encode
+  4.3 s a pass (JVector's `Bench` encodes twice), inline writes 2.8–7.0 s a format (`writeInline` is
+  synchronized), fused-PQ final write 5.6 s.
+- **Fused PQ is not a GPU job.** Its write copies each neighbour's PQ code into a new array (`compressed.copy()`)
+  and writes it: about 31M small allocations at 1M, and no computation. The fix is on the CPU, in JVector core,
+  by writing slices without the copy.

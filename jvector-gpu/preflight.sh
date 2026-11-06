@@ -214,10 +214,10 @@ else
         else
             ok heap-fit "$DATASET fits the ${heap_gb} GB heap (~${need_heap_gb} GB)"
         fi
-        # graphs and PQ caches are written next to the repository
+        # graphs, compaction segments and PQ caches are written next to the repository
         need_disk_kb=$(( bytes * 4 / 1024 ))
         if [ "$DISK_FREE_KB" -lt "$need_disk_kb" ]; then
-            warn disk "$(gb $((DISK_FREE_KB * 1024))) free in $ROOT; indexes may need ~$(gb $((need_disk_kb * 1024)))"
+            warn disk "$(gb $((DISK_FREE_KB * 1024))) free in $ROOT; indexes and compaction segments may need ~$(gb $((need_disk_kb * 1024)))"
         else
             ok disk "$(gb $((DISK_FREE_KB * 1024))) free in $ROOT"
         fi
