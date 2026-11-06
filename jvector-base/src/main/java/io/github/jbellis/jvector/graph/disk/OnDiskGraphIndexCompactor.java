@@ -751,9 +751,13 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
         int upperMaxCandidateSize = upperMaxPerSourceTopK * sources.size();
         int maxCandidateSize = Math.max(baseMaxCandidateSize, upperMaxCandidateSize);
         int scratchDegree = Math.max(maxDegrees.get(0), Math.max(1, maxUpperDegree));
-        final ThreadLocal<Scratch> threadLocalScratch = ThreadLocal.withInitial(() ->
-            new Scratch(maxCandidateSize, scratchDegree, dimension, sources, pq)
-        );
+        // every worker's scratch is recorded so all of them, not only the calling thread's, are closed at the end
+        final List<Scratch> openedScratch = Collections.synchronizedList(new ArrayList<>());
+        final ThreadLocal<Scratch> threadLocalScratch = ThreadLocal.withInitial(() -> {
+            Scratch sc = new Scratch(maxCandidateSize, scratchDegree, dimension, sources, pq);
+            openedScratch.add(sc);
+            return sc;
+        });
         scratchLocal = threadLocalScratch;
 
         setupCrossLink();
@@ -907,8 +911,7 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
             }
         }
 
-        Scratch s = threadLocalScratch.get();
-        s.close();
+        for (Scratch sc : openedScratch) sc.close();
         threadLocalScratch.remove();
     }
 
