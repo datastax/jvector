@@ -474,7 +474,8 @@ public class Grid {
         }
 
         System.out.printf("Build score provider setup: %.6f seconds%n", (System.nanoTime()-providerStart)/1e9);
-        final boolean allSymmetric = ashVectors != null && "symmetric-all".equals(System.getProperty("jvector.bench.ashConstruction"));
+        final boolean allSymmetric = ashVectors != null && "symmetric-all".equals(
+                System.getProperty("jvector.bench.ashConstruction", "symmetric-all"));
         final PQVectors pqFinal = pq;
         final ASHVectors ashVectorsFinal = ashVectors;
 

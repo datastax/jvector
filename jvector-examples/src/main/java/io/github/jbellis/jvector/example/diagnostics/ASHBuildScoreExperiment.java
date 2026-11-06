@@ -29,7 +29,7 @@ public final class ASHBuildScoreExperiment {
     private ASHBuildScoreExperiment() {}
     public static BuildScoreProvider create(VectorSimilarityFunction vsf, ASHVectors encoded,
                                             RandomAccessVectorValues raw) {
-        String mode=System.getProperty("jvector.bench.ashConstruction","symmetric");
+        String mode=System.getProperty("jvector.bench.ashConstruction","symmetric-all");
         System.out.println("ASH construction scoring mode: " + mode);
         if (mode.equals("symmetric") || mode.equals("symmetric-all")) {
             return BuildScoreProvider.ashBuildScoreProvider(vsf,encoded);
