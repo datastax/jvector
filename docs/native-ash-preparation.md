@@ -42,6 +42,12 @@ Java validates shapes, array bounds and output aliasing before passing pointers
 to native code. Native kernels do not allocate, retain pointers or call Java.
 Scorer diagnostics identify whether each operation is Highway or Java.
 
+## Query-projection precision
+
+See [Choosing ASH query-projection precision](ash-projection-precision.md) for hardware recommendations and selection behavior. Explicit INT8 uses the existing immutable query-view interface, batch validation, caller-owned scheduling and Java thread-local staging. Its model-owned native context holds quantized weights, scales and distinct oneDNN packed layouts; compatible batch shapes share packed weights. Calling-thread scratch retains no model.
+
+The optional oneDNN ABI and status structure are shared with FP16. INT8 checks ABI compatibility before binding, distinguishes unsupported hardware, invalid operands/ranges, allocation failures and runtime failures, and never silently substitutes another precision. Full-range integer dot products require a qualified VNNI or AMX implementation; legacy intermediate saturation is rejected. Scales, quantization and output rescaling retain the prototype’s FP32 arithmetic. Nonfinite operands and a nonzero operand whose scale rounds to zero are rejected before integer conversion. Output rescaling retains ordinary FP32 overflow behavior. INT8 has no unconditional native console output. The original FP16 and FP32 implementations and automatic-selection policy are unchanged.
+
 ## Direct-node scoring and query scratch
 
 Fused 2-bit direct-node scoring uses `ash_canonical_lut_dot_f32` and reuses the
@@ -80,7 +86,7 @@ it does not claim an allocation-free search API.
 `StiefelTransform.project()` in FP32, and apply the existing code quantizer and
 header adjustment. This uses the prepared Highway projection with the native
 provider and Panama SIMD with the Panama provider. Encoding never requests the
-query-only FP16 view. Header scale and offset retain their existing FP16 storage
+query-only FP16 or INT8 view. Header scale and offset retain their existing FP16 storage
 format; database projection precision remains FP32.
 
 `encodeAll()` replaces per-vector projection with bounded batches on each worker
@@ -357,7 +363,7 @@ This structural change does not select a different BLAS/LAPACK backend.
 auxiliary landmark arrays, the Stiefel matrices (including row/outer arrays),
 model objects, provider-owned native FP32 backing and its adapter/delegate objects,
 optional Highway batch backing,
-and a distinct FP16 query representation when initialized. Immutable Java sizes
+and a distinct FP16 or INT8 query representation when initialized. Immutable Java sizes
 are cached during construction; reading the estimate does not scan matrices or
 create them. FP32 query selection and automatic FP16 fallback preserve the
 original projection view's identity, so shared FP32 backing is charged once.

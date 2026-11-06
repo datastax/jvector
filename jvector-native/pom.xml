@@ -16,7 +16,7 @@
         <native.jextract.skip>true</native.jextract.skip>
         <!-- Set to true via -Dnative.crossarch to also cross-compile for the other arch -->
         <native.crossarch>false</native.crossarch>
-        <!-- Preferred self-contained ASH FP32 encoding / FP16 query projection. -->
+        <!-- Preferred self-contained ASH FP32 encoding / FP16/INT8 query projection. -->
         <native.onednn>true</native.onednn>
     </properties>
     <build>

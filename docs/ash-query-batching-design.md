@@ -21,13 +21,13 @@ They do not need to know or configure the coordination described here.
 
 ## Projection and policy are separate
 
-`NativeASHFP16Projection.projectBatch` accepts independent FP32 query rows and
-caller-owned FP32 output rows. The native implementation converts inputs to FP16,
-uses FP16 weights with strict FP32 accumulation/output, and executes true oneDNN
-matrix multiplication. The API accepts arbitrary batch counts; its internal
-micro-tiles of at most eight rows are an implementation choice, not an API limit.
-Singletons use the existing direct kernel. Training and base-vector encoding
-continue through the separate FP32 projection object.
+The selected `AshProjection` receives independent FP32 query rows and caller-owned
+FP32 output rows. FP16 uses converted FP16 operands with FP32 accumulation/output;
+explicit INT8 uses quantized operands with integer accumulation and FP32 output.
+Both native query backends use oneDNN, accept arbitrary batch counts and execute
+bounded tiles of up to eight rows. Training and base-vector encoding continue
+through the separate FP32 projection object. Precision selection belongs to the
+[precision guide](ash-projection-precision.md), not to batching policy.
 
 `CallerBatchProcessor` is a generic synchronous computation combiner, independent
 of ASH, FFM and oneDNN. Its `Operation` accepts borrowed input/output objects and
@@ -101,7 +101,9 @@ A projection explicitly advertises bulk support. Providers without a real batch
 kernel bypass coordination. A missing batch ABI preserves compatibility with
 older native libraries. A native UNSUPPORTED response disables subsequent batch
 attempts on that FP16 projection and uses the existing singleton fallback.
-Other failures remain errors rather than being silently hidden.
+Explicit INT8 requires its batch ABI and a qualified exact-integer primitive;
+unsupported INT8 calls remain errors rather than changing precision. Other
+failures remain errors rather than being silently hidden.
 
 The query-specific projection and coordinator are initialized together on first
 query use and published through the volatile query projection. Encoding/training
@@ -124,7 +126,9 @@ combining, FIFO progress, bounded operation counts, repeated record reuse,
 interruption, reentry, batch/direct failures, completion/park races, and steady
 state allocation. Native tests compare singleton and batch results with an
 independent FP16-rounded reference, including tails and counts above eight,
-aliasing, validation, fallback and retained-memory growth.
+aliasing, validation, fallback and retained-memory growth. INT8 uses an independent
+integer oracle and tests concurrent first use, model switching, numeric range
+checks and missing/unsupported add-ons.
 
 Use BenchYAML for graph measurements. Compare batch size 1 and the default under
 matched affinity, CPU budget, callers, index/query data and warmup. Check isolated,

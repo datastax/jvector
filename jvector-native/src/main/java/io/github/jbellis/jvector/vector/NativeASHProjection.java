@@ -54,13 +54,13 @@ final class NativeASHProjection implements VectorUtilSupport.AshProjection {
                     FunctionDescriptor.ofVoid(ADDRESS, ADDRESS, JAVA_INT, JAVA_INT, JAVA_INT, ADDRESS)))
             .orElse(null);
 
-    // Calling-thread storage is shared across models and FP32/FP16 views. It
+    // Calling-thread storage is shared across models and FP32/FP16/INT8 views. It
     // holds no model reference, grows only when necessary and dies with the thread.
     private static final ThreadLocal<Buffers> BUFFERS = ThreadLocal.withInitial(Buffers::new);
 
     static final class Buffers {
         MemorySegment input = MemorySegment.NULL, output = MemorySegment.NULL;
-        // Allocated only by the FP16 view; carries errors without native thread affinity.
+        // Allocated only by the FP16/INT8 views; carries errors without native thread affinity.
         MemorySegment status = MemorySegment.NULL;
 
         void ensure(long inputBytes, long outputBytes) {
@@ -200,10 +200,11 @@ final class NativeASHProjection implements VectorUtilSupport.AshProjection {
         String mode = System.getProperty("jvector.ash.queryProjection", "auto");
         switch (mode) {
             case "fp32": return this;
+            case "int8": return NativeASHInt8Projection.prepare(matrix, rows, columns);
             case "auto": return NativeASHFP16Projection.prepare(matrix, rows, columns, this, false);
             case "fp16": return NativeASHFP16Projection.prepare(matrix, rows, columns, this, true);
             default: throw new IllegalArgumentException(
-                    "jvector.ash.queryProjection must be auto, fp32 or fp16: " + mode);
+                    "jvector.ash.queryProjection must be auto, fp32, fp16 or int8: " + mode);
         }
     }
 

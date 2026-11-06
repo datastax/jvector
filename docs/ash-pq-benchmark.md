@@ -23,6 +23,11 @@ run configurations and local dataset catalog are in
 No separate query harness, source overlay, profiling agent, manually linked
 library, or dataset-specific projection setting is required.
 
+Projection settings and processor recommendations are documented in
+[Choosing ASH query-projection precision](ash-projection-precision.md).
+An explicitly requested INT8/FP32 comparison is a precision override to the
+FP16 benchmark configuration below; record it with the command and CSV evidence.
+
 ## Build the checkout
 
 Use JDK 22 for performance measurements. Follow the repository's

@@ -145,6 +145,8 @@ add-on with the native JAR. Deploy that JAR with the native provider; no separat
 oneDNN runtime installation or per-machine library symlinks are required.
 Use `-Dnative.onednn=false` to build a Highway-only package with FP32 fallback.
 See the [oneDNN installation and fallback details](./jvector-native/src/main/native/README.md#recommended-onednn-build-and-package).
+For explicit INT8 query projection and processor-family recommendations, see
+[Choosing ASH query-projection precision](./docs/ash-projection-precision.md).
 
 
 The native SIMD library (`libjvector.so`) is built with [Meson](https://mesonbuild.com/) + [Ninja](https://ninja-build.org/)

@@ -61,7 +61,7 @@ public class LibraryLoader {
     /// blocks loading (`SecurityException`). The bundled copy isn't retried after access denial.
     public static boolean loadJvector() { return loadLibrary("jvector"); }
 
-    /** Loads the optional oneDNN add-on for FP32 base batches and FP16 queries; Highway stays independent. */
+    /** Loads the optional oneDNN add-on for FP32 base batches and FP16/INT8 queries; Highway stays independent. */
     public static boolean loadAshFp16() { return loadLibrary("jvector_ash_fp16"); }
 
     private static boolean loadLibrary(String library) {

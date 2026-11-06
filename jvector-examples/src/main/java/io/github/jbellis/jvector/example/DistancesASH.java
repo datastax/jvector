@@ -418,6 +418,159 @@ public class DistancesASH {
         return sum;
     }
 
+
+    private static volatile double projectionSink;
+
+    /** Paired projection comparison; optional recall uses the normal full-scan scorers. */
+    private static void benchmarkInt8Projection(ASHVectors encoded, List<VectorFloat<?>> queries,
+            List<List<Integer>> truth, int[] newToOld, ForkJoinPool executor) throws IOException {
+        var outputDir=java.nio.file.Path.of(System.getProperty("jvector.bench.outputDir", "."));
+        java.nio.file.Files.createDirectories(outputDir);
+        var model=outputDir.resolve("model-b"+encoded.getCompressor().bitsPerDimension+".ash");
+        try(var writer=new io.github.jbellis.jvector.disk.SimpleWriter(model)) {
+            encoded.getCompressor().write(writer,io.github.jbellis.jvector.graph.disk.OnDiskGraphIndex.CURRENT_VERSION);
+        }
+        final AsymmetricHashing copy;
+        try(var reader=new io.github.jbellis.jvector.disk.SimpleReader(model)) {copy=AsymmetricHashing.load(reader);}
+        if(!java.util.Arrays.deepEquals(copy.stiefelTransform.AFloat,encoded.getCompressor().stiefelTransform.AFloat))
+            throw new AssertionError("Projection matrix changed on model round trip");
+        var sharedCodes=new AsymmetricHashing.QuantizedVector[encoded.count()];
+        for(int i=0;i<sharedCodes.length;i++)sharedCodes[i]=encoded.get(i);
+        ASHVectors[] arms={encoded,new ASHVectors(copy,sharedCodes)};
+        String[] names={"fp32","int8"};
+        var projections=new AsymmetricHashing.StiefelTransform[]{encoded.getCompressor().stiefelTransform,copy.stiefelTransform};
+        // Each independent model caches its own selected query view. Base codes are shared by reference.
+        for(int mode=0;mode<2;mode++) {
+            System.setProperty("jvector.ash.queryProjection",names[mode]);
+            projections[mode].projectQueryDirect(new float[copy.originalDimension],new float[copy.quantizedDim]);
+            arms[mode].blockScorerFor(queries.get(0),VectorSimilarityFunction.DOT_PRODUCT,32);
+        }
+        System.out.printf(java.util.Locale.ROOT,
+            "PROJECTION_FIXTURE vectors=%d queries=%d D=%d d=%d b=%d model_identical=true base_codes_shared=true%n",
+            encoded.count(),queries.size(),copy.originalDimension,copy.quantizedDim,copy.bitsPerDimension);
+        float[][] inputs=new float[queries.size()][copy.originalDimension];
+        for(int q=0;q<inputs.length;q++)for(int d=0;d<inputs[q].length;d++)inputs[q][d]=queries.get(q).get(d);
+        // Validate dequantized outputs against an independent exact integer-dot oracle.
+        float[][] matrix=copy.stiefelTransform.AFloat;
+        double squared=0,referenceSquared=0,maxError=0,maxOracleError=0;
+        float[][] outputs={new float[copy.quantizedDim],new float[copy.quantizedDim]};
+        for(int q=0;q<inputs.length;q++) {
+            for(int mode=0;mode<2;mode++)projections[mode].projectQueryDirect(inputs[q],outputs[mode]);
+            for(int row=0;row<copy.quantizedDim;row++) {
+                double error=outputs[1][row]-outputs[0][row];squared+=error*error;
+                referenceSquared+=(double)outputs[0][row]*outputs[0][row];maxError=Math.max(maxError,Math.abs(error));
+                if(!Float.isFinite(outputs[1][row]))throw new AssertionError("Nonfinite INT8 output");
+            }
+            if(q<8) {
+                float qmax=0;for(float x:inputs[q])qmax=Math.max(qmax,Math.abs(x));
+                float qs=qmax==0?1:qmax/127;
+                for(int row=0;row<matrix.length;row++) {
+                    float wmax=0;for(float x:matrix[row])wmax=Math.max(wmax,Math.abs(x));
+                    float ws=wmax==0?1:wmax/127;
+                    long sum=0;
+                    for(int col=0;col<inputs[q].length;col++) {
+                        int a=Math.max(-127,Math.min(127,(int)Math.rint(inputs[q][col]/qs)));
+                        int b=Math.max(-127,Math.min(127,(int)Math.rint(matrix[row][col]/ws)));
+                        sum+=(long)a*b;
+                    }
+                    float oracle=(float)sum*qs*ws;
+                    double difference=Math.abs(outputs[1][row]-oracle);maxOracleError=Math.max(maxOracleError,difference);
+                    if(difference>1e-6+Math.abs(oracle)*1e-5)throw new AssertionError("VNNI integer-dot oracle mismatch");
+                }
+            }
+        }
+        System.out.printf(java.util.Locale.ROOT,
+            "PROJECTION_ACCURACY queries=%d relative_l2_error=%.9f max_absolute_error=%.9f max_integer_oracle_error=%.9f%n",
+            inputs.length,Math.sqrt(squared/referenceSquared),maxError,maxOracleError);
+        try(var csv=new java.io.PrintWriter(outputDir.resolve("projection-b"+copy.bitsPerDimension+".csv").toFile())) {
+            csv.println("mode,batch,sample,queries,seconds,queries_per_second,ns_per_query,checksum");
+            if(Boolean.parseBoolean(System.getProperty("jvector.bench.projectionTiming","true"))) {
+                long minimum=(long)(Double.parseDouble(System.getProperty("jvector.bench.projectionSeconds","3"))*1e9);
+                for(int batch:new int[]{1,2,4,8}) {
+                    float[][] in=new float[batch][],out=new float[batch][copy.quantizedDim];
+                    // Batch/single quantization must produce the same projected state.
+                    for(int i=0;i<batch;i++)in[i]=inputs[i];
+                    projections[1].projectQueryBatch(in,out,batch);
+                    for(int i=0;i<batch;i++) {
+                        projections[1].projectQueryDirect(in[i],outputs[1]);
+                        for(int d=0;d<out[i].length;d++)if(Math.abs(out[i][d]-outputs[1][d])>1e-6)
+                            throw new AssertionError("INT8 batch/single mismatch");
+                    }
+                    for(int pass=-1;pass<3;pass++)for(int order=0;order<2;order++) {
+                        int mode=(order+Math.max(0,pass))%2;
+                        long start=System.nanoTime(),elapsed;long count=0;int position=0;double checksum=0;
+                        do {
+                            for(int chunk=0;chunk<128;chunk++) {
+                                for(int i=0;i<batch;i++)in[i]=inputs[(position+i)%inputs.length];
+                                if(batch==1)projections[mode].projectQueryDirect(in[0],out[0]);
+                                else projections[mode].projectQueryBatch(in,out,batch);
+                                checksum+=out[batch-1][position%copy.quantizedDim];
+                                position=(position+batch)%inputs.length;count+=batch;
+                            }
+                            elapsed=System.nanoTime()-start;
+                        }while(elapsed<minimum);
+                        projectionSink=checksum;
+                        if(pass>=0) {
+                            double seconds=elapsed/1e9;
+                            csv.printf(java.util.Locale.ROOT,"%s,%d,%d,%d,%.9f,%.6f,%.3f,%.9f%n",
+                                names[mode],batch,pass+1,count,seconds,count/seconds,(double)elapsed/count,checksum);csv.flush();
+                            System.out.printf(java.util.Locale.ROOT,"PROJECTION_THROUGHPUT mode=%s batch=%d sample=%d queries_per_second=%.3f ns_per_query=%.3f%n",
+                                names[mode],batch,pass+1,count/seconds,(double)elapsed/count);
+                        }
+                    }
+                }
+            }
+        }
+        // Recall is optional, as in the other DistancesASH modes. Projection
+        // timing still uses every selected query when exhaustive scans are off.
+        if (!truth.isEmpty()) {
+        // Every selected query scans ALL encoded base vectors; no ANN traversal or reranking.
+        int[] atValues={10,20};int capacity=20;
+        try(var csv=new java.io.PrintWriter(outputDir.resolve("scan-b"+copy.bitsPerDimension+".csv").toFile())) {
+            csv.println("mode,bits,dimensions,threads,base_vectors,queries,seconds,scan_queries_per_second,recall10_at10,recall10_at20");
+            // Warm the actual fused full-scan and top-k code on both arms.
+            for(int mode=0;mode<2;mode++)scanProjectionRecall(arms[mode],queries,truth,newToOld,Math.min(32,queries.size()),executor);
+            for(int mode=0;mode<2;mode++) {
+                long start=System.nanoTime();
+                double[] totals=scanProjectionRecall(arms[mode],queries,truth,newToOld,queries.size(),executor);
+                double seconds=(System.nanoTime()-start)/1e9;
+                csv.printf(java.util.Locale.ROOT,"%s,%d,%d,%d,%d,%d,%.9f,%.6f,%.9f,%.9f%n",
+                    names[mode],copy.bitsPerDimension,copy.quantizedDim,executor.getParallelism(),encoded.count(),queries.size(),
+                    seconds,queries.size()/seconds,totals[0]/queries.size(),totals[1]/queries.size());csv.flush();
+                System.out.printf(java.util.Locale.ROOT,"PROJECTION_SCAN mode=%s queries=%d vectors=%d seconds=%.3f recall10_at10=%.6f recall10_at20=%.6f%n",
+                    names[mode],queries.size(),encoded.count(),seconds,totals[0]/queries.size(),totals[1]/queries.size());
+            }
+        }
+        }
+        System.out.println("PROJECTION_TIMING one calling thread; INT8 quantization, FFM staging, matmul and rescaling included; immutable matrix packing excluded");
+    }
+
+    private static double[] scanProjectionRecall(ASHVectors vectors,List<VectorFloat<?>> queries,
+            List<List<Integer>> truth,int[] newToOld,int count,ForkJoinPool executor) {
+        var tasks=new ArrayList<ForkJoinTask<double[]>>();
+        for(int worker=0;worker<executor.getParallelism();worker++) {
+            final int first=worker;
+            tasks.add(executor.submit(()->{
+                double[] totals=new double[2];float[] scores=new float[32];
+                for(int q=first;q<count;q+=executor.getParallelism()) {
+                    var scorer=vectors.blockScorerFor(queries.get(q),VectorSimilarityFunction.DOT_PRODUCT,32);
+                    var heap=new java.util.PriorityQueue<long[]>((a,b)->Float.compare(Float.intBitsToFloat((int)a[0]),Float.intBitsToFloat((int)b[0])));
+                    for(int start=0;start<vectors.count();start+=32) {
+                        int n=Math.min(32,vectors.count()-start);scorer.scoreRange(start,n,scores);
+                        for(int lane=0;lane<n;lane++)offerTop(heap,20,scores[lane],start+lane);
+                    }
+                    int[] gt=truth.get(q).stream().mapToInt(Integer::intValue).toArray();
+                    addRecall(rankedOrdinals(heap),gt,newToOld,10,new int[]{10,20},totals,0);
+                    if((q+1)%1000==0)System.out.printf("\tFull scan progress: %d/%d queries%n",q+1,count);
+                }
+                return totals;
+            }));
+        }
+        double[] totals=new double[2];
+        for(var task:tasks){var local=task.join();totals[0]+=local[0];totals[1]+=local[1];}
+        return totals;
+    }
+
     public static void testASHEncodings(String filenameBase, String filenameQueries, String filenameGT) throws IOException {
         // ------------------------------------------------------------
         // Benchmark configuration (runtime flags)
@@ -610,6 +763,16 @@ public class DistancesASH {
             ashVectorsFinal = ashVectors;
             ashVecsFinal = ashVectors;
             newToOldFinal = null;
+        }
+
+        if (Boolean.getBoolean("jvector.bench.int8-projection")) {
+            var executor = new ForkJoinPool(Integer.getInteger("jvector.bench.scoringThreads", 8));
+            try {
+                benchmarkInt8Projection(ashVectorsFinal, queries, groundTruth, newToOldFinal, executor);
+            } finally {
+                executor.shutdown();
+            }
+            return;
         }
 
         {

@@ -69,7 +69,7 @@ third_party/highway/          - Google Highway header-only library (git submodul
 > Clang ≥ 22 or use GCC to get full SVE/SVE2 acceleration.
 
 For ASH, include oneDNN: it is the preferred projection implementation for FP32
-encoding batches and FP16 queries where supported. It is built from the pinned
+encoding batches and FP16/INT8 queries where supported. It is built from the pinned
 source and bundled; users do not need a separately installed `libdnnl`.
 A first online build needs access to the source URL in `subprojects/onednn.wrap`;
 offline builds can populate that exact revision beforehand. On Ubuntu, install
@@ -93,7 +93,7 @@ Parameters (all optional):
 |-----------|---------|-------------|
 | `buildtype` | `release` | `release`, `debug`, or `debugoptimized` |
 | `crossarch` | `false` | Set to `true` to also cross-compile for the other arch |
-| `onednn` | `true` | Bundle FP32 batch and FP16 query projection support; set to `false` for Highway-only builds |
+| `onednn` | `true` | Bundle FP32 batch and FP16/INT8 query projection support; set to `false` for Highway-only builds |
 
 The default ASH build includes oneDNN:
 
@@ -853,39 +853,58 @@ When changing the native interface:
    support by itself.
 
 
-## ASH FP16 query projection
+<a id="ash-fp16-query-projection"></a>
+## ASH query projection
 
-ASH base-vector encoding retains FP32; batch projection prefers oneDNN and
-single-vector projection uses Highway. Training uses the BLAS/LAPACK provider. Query scoring
-lazily prepares a separate immutable FP16 representation of the same trained
-matrix. Incoming query operands are converted to FP16; accumulation and output
-are strictly FP32. The serialized model and graph format do not change.
+ASH base-vector encoding retains FP32: batch projection prefers oneDNN and
+single-vector projection uses Highway. Training uses the BLAS/LAPACK provider.
+Query scoring can prepare a separate immutable FP16 or explicit INT8 view of
+the same trained projection matrix. Model and graph formats do not change.
 
-The runtime property `jvector.ash.queryProjection` selects the query arithmetic:
+Use [Choosing ASH query-projection precision](../../../../docs/ash-projection-precision.md)
+for processor-family recommendations, settings and when selection takes effect.
+This section describes native build, arithmetic, ownership and diagnostics.
 
-| Value | Behavior |
-|-------|----------|
-| `auto` (default) | Prefer optimized native FP16; use the original FP32 projection if the optional library, CPU/model kernel or operand range is unsupported. |
-| `fp32` | Keep the original provider's FP32 projection. |
-| `fp16` | Require native FP16; report unsupported configurations or operands explicitly. |
+### FP16 behavior
 
-The setting is read when each model's query projection is first prepared. Set it
-before searching; changing it does not mutate an already prepared model. Other
-providers retain their original projection in automatic mode. Explicit FP16
-requires the native provider. Input shape/aliasing errors, allocation failures
-and execution errors are reported rather than silently converted to fallback.
-In automatic mode an individual query outside the finite FP16 range uses FP32.
-Strict FP16 accepts only finite matrix/query values with magnitude at most
-65504. Underflow and rounding follow IEEE binary16 arithmetic. Reduced operand
-precision can change scores and rankings slightly; compare recall for the target
-workload when selecting a precision.
+FP16 uses FP16 operands with strict FP32 accumulation/output. The existing
+`auto` policy prefers optimized FP16 and retains its FP32 fallback. An individual
+query outside the finite FP16 range uses FP32 in automatic mode. Required `fp16`
+accepts only finite matrix/query values with magnitude at most 65504; underflow
+and rounding follow IEEE binary16 arithmetic. Input shape/aliasing errors,
+allocation failures and execution errors are reported rather than hidden.
+
+### INT8 behavior
+
+Required `int8` prepares symmetric signed weights per output row and quantizes
+each query independently. oneDNN computes unsigned-input/signed-weight products
+with signed 32-bit accumulation. Correcting the input offset and dequantizing
+produces FP32 output. Scales, quantization and rescaling use FP32 arithmetic. A nonzero operand whose
+scale rounds to zero is rejected before integer conversion. Nonfinite operands
+are rejected; output rescaling retains ordinary FP32 overflow behavior.
+
+On x86, only the INT8 quantization and batch-projection functions use an AVX2
+compiler target. The generic model-creation guard runs first and requires a
+qualified VNNI/AMX backend, whose ISA includes AVX2. This keeps rounding in native
+instructions without changing FP16/FP32 or library-wide compiler settings.
+
+The qualified VNNI/AMX kernels preserve full-range integer dot products. Legacy
+kernels can saturate at a 16-bit intermediate; INT8 rejects them rather than
+silently changing the quantization range. Both the effective oneDNN ISA and the
+selected primitive are checked. CPU vendor names do not control dispatch.
+The 65535-column bound prevents signed 32-bit accumulation overflow.
+
+Explicit INT8 reports unsupported backends without substituting another
+precision. The loader validates the existing add-on ABI before binding its
+symbols. Invalid operands, numeric range failures, allocation failures and
+unexpected execution failures retain distinct error categories across FFM.
 
 ### Recommended oneDNN build and package
 
 Native Maven and direct-script builds include oneDNN by default on the supported
 Linux platforms. Use JDK 22 or newer. It is
 **automatically preferred** for FP32 encoding batches and supported FP16 queries;
-there is no additional runtime opt-in. Highway stays independent and supplies
+INT8 is available through explicit selection. Highway stays independent and supplies
 FP32 fallback when the add-on or the requested operation is unavailable:
 
 
@@ -911,7 +930,7 @@ this library and the upstream license/third-party notices beside the Highway
 resource. The existing architecture-aware loader first tries the system library
 path, then extracts the matching classpath resource. No external `libdnnl` or
 benchmark-specific path is required. The resource keeps its existing FP16 name
-for binary compatibility but supplies both FP32 and FP16 projection. Passing
+for binary compatibility but supplies FP32 batch and FP16/INT8 query projection. Passing
 `-Dnative.onednn=false` (or `false` as the script's third argument) leaves oneDNN
 projection out of the package and removes
 stale add-on resources from previous builds; Highway FP32 is then used.
@@ -923,13 +942,13 @@ oneDNN SGEMM without converting database operands to FP16. Single-vector encodin
 continues to use Highway FP32. The FP32 loader validates the same ABI as FP16;
 missing/older add-ons and unsupported operations keep Highway. FP16 automatic
 mode additionally falls back for operands outside FP16's finite range. Explicit
-`fp16` mode requires support; invalid inputs, allocation failures and execution
+`fp16` and `int8` modes require support; invalid inputs, allocation failures and execution
 errors propagate. See [implementation and measured encoding scope](../../../../docs/native-ash-preparation.md#preferred-onednn-fp32-encoding-projection-november-1-2026).
 
 ### Ownership, parallelism and tests
 
-Each model owns its immutable prepared FP16 weights and a single-query execution
-plan. Java automatic arenas release the native context when it becomes
+Each model owns its immutable prepared low-precision weights and execution
+plans. Java automatic arenas release the native context when it becomes
 unreachable. Each calling thread reuses its conversion, staging and scratch
 buffers; neither thread-local cache retains the model or weights. Calls use
 ordinary FFM downcalls. oneDNN starts no search workers or nested thread pool.
@@ -938,18 +957,41 @@ Concurrent callers use the same immutable model with separate workspaces.
 The native-module Java tests retain FP32 coverage and check FP16 against an
 independent rounded-operand oracle, irregular and large dimensions, numeric
 boundaries, input guards, model switching, concurrent platform/virtual threads,
-query-only precision and loading without the optional library. On a machine
+query-only precision and loading without the optional library. INT8 tests additionally
+cover full-range integer accumulation, FP32 scale underflow/overflow guards, batch tails,
+concurrent model switching, lazy packed-weight accounting, ABI compatibility and
+required-mode rejection of legacy integer kernels. On a machine
 known to support FP16, require both oneDNN paths rather than capability skips with:
 
 ```bash
 mvn -pl jvector-native -am test -Dnative.onednn=true -Djvector.test.requireFp16=true -Djvector.test.requireFp32OneDnn=true
 ```
 
+On VNNI/AMX hardware, require INT8 execution instead of capability skips:
+
+```bash
+mvn -pl jvector-native -am test -Djvector.test.requireInt8=true
+```
+
+No INT8 diagnostics are printed unconditionally. For a separate diagnostic run,
+use oneDNN's standard verbose mode to inspect the selected primitive:
+
+```text
+ONEDNN_VERBOSE=1 java ... -Djvector.ash.queryProjection=int8 ...
+```
+
+Keep verbose diagnostics out of reported timing runs.
+
 With Google Test installed, Meson also builds `test_ash_fp16`; run it with
 `meson test -C <build-directory> --suite ash_fp16 --print-errorlogs`.
 
+For projection throughput, use the built-in `DistancesASH` comparison with
+`-Djvector.bench.int8-projection=true`. The existing `jvector.bench.recall`
+setting controls optional exhaustive scans; leave it false for projection-only
+measurements. Graph recall and latency are measured separately with BenchYAML.
+
 For performance validation, use the standard BenchYAML query path on identical
-saved graphs for `fp32` and `auto`/`fp16`. Include normal query preparation in
+saved graphs for `fp32`, `auto`/`fp16` or explicit `int8`. Include normal query preparation in
 its timers and compare recall@10 as well as QPS. Control CPU affinity and NUMA
 memory placement consistently across runs; otherwise projection locality can
 obscure the precision comparison. Do not include compilation or another active
@@ -958,8 +1000,9 @@ benchmark in the query measurement interval.
 
 ### Concurrent query integration
 
-ASH can combine independent query projections into true FP16 oneDNN matrix
-multiplication while retaining the direct singleton path. Applications continue
+ASH can combine independent queries when the selected projection advertises
+batch support. FP16 and INT8 use true oneDNN matrix multiplication while
+retaining a singleton path. Applications continue
 to issue synchronous searches; no query executor or nested native thread pool
 is created. Base-vector encoding and training remain FP32.
 
