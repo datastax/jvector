@@ -28,6 +28,8 @@ ordering, FP32 encoding/training, or the existing automatic FP16/FP32 precision 
 
 See [Choosing ASH query-projection precision](ash-projection-precision.md) for
 processor-family recommendations and projection settings.
+The [ASH configuration reference](ash-configuration.md) lists model parameters,
+construction modes, runtime flags and their defaults.
 
 ## Recommended asynchronous allocation
 

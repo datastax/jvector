@@ -63,13 +63,16 @@ after initialization does not reconfigure an existing view.
 
 ## Effect on graph construction
 
-Default graph construction projects an inserted base vector when it searches
-for neighbors. The query-projection setting can therefore affect construction
-as well as application queries.
+BenchYAML defaults to `symmetric-all` construction: insertion and diversity use
+encoded symmetric scoring, without dense query projection for insertion. Query
+precision therefore affects application queries, not insertion under this default.
 
-BenchYAML's `-Djvector.bench.ashConstruction=symmetric-all` uses encoded symmetric
-scoring for insertion and diversity. It does not use dense query projection
-for insertion.
+Use `-Djvector.bench.ashConstruction=symmetric` to restore mixed construction:
+insertion projects the original vector as an asymmetric query, while diversity
+uses symmetric scoring. Query precision can then affect construction too.
+Library callers explicitly choose an encoded node score provider or an
+original-vector insertion overload; the BenchYAML flag does not globally
+reconfigure library builders. See [ASH configuration and defaults](ash-configuration.md#graph-construction).
 
 Neither construction mode changes training or base-encoding precision. To
 measure query-projection effects independently, query the same saved graph

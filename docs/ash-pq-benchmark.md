@@ -16,6 +16,12 @@ limitations under the License.
 
 # Reproducing fused PQ versus fused ASH with BenchYAML
 
+BenchYAML's default ASH construction mode is `symmetric-all`. The JVM property
+`-Djvector.bench.ashConstruction=symmetric` restores the earlier mixed policy.
+Use fresh graph caches when changing construction mode. See the general
+[ASH configuration and defaults guide](ash-configuration.md) for parameters,
+supported values, scope and defaults.
+
 This comparison uses the branch's ordinary packaged JVector code and
 `io.github.jbellis.jvector.example.BenchYAML`. The fixed index configurations,
 run configurations and local dataset catalog are in
