@@ -23,6 +23,7 @@ import io.github.jbellis.jvector.example.reporting.SearchReportingCatalog;
 import io.github.jbellis.jvector.example.yaml.DatasetCollection;
 import io.github.jbellis.jvector.example.yaml.MultiConfig;
 import io.github.jbellis.jvector.example.yaml.RunConfig;
+import io.github.jbellis.jvector.example.yaml.SearchParameters;
 
 import java.io.IOException;
 import java.security.InvalidParameterException;
@@ -36,12 +37,12 @@ import java.util.stream.Collectors;
 public class BenchYAML {
 
     public static void main(String[] args) throws IOException {
-        try (var projectionSetting = new RunConfig.AshQueryProjectionSetting()) {
+        try (var projectionSetting = new SearchParameters.AshQueryProjectionSetting()) {
             run(args, projectionSetting);
         }
     }
 
-    private static void run(String[] args, RunConfig.AshQueryProjectionSetting projectionSetting) throws IOException {
+    private static void run(String[] args, SearchParameters.AshQueryProjectionSetting projectionSetting) throws IOException {
         // args is one of:
         // - a list of regexes, possibly needing to be split by whitespace.
         // - a list of YAML files
@@ -99,11 +100,12 @@ public class BenchYAML {
             return;
         }
 
+        projectionSetting.apply(allConfigs);
+
         // Set up reporting for run
         RunArtifacts artifacts;
         try {
             RunConfig runCfg = RunConfig.loadDefault();
-            projectionSetting.apply(runCfg);
             artifacts = RunArtifacts.open(runCfg, allConfigs);
         } catch (java.io.FileNotFoundException e) {
             if (System.getProperty("jvector.bench.runConfig") != null) throw e;

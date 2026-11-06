@@ -19,6 +19,7 @@ package io.github.jbellis.jvector.example.benchmarks;
 import io.github.jbellis.jvector.example.benchmarks.datasets.SimpleDataSet;
 import io.github.jbellis.jvector.example.reporting.*;
 import io.github.jbellis.jvector.example.yaml.RunConfig;
+import io.github.jbellis.jvector.example.yaml.SearchParameters;
 import io.github.jbellis.jvector.graph.disk.feature.FeatureId;
 import io.github.jbellis.jvector.quantization.AsymmetricHashing;
 import io.github.jbellis.jvector.vector.VectorSimilarityFunction;
@@ -33,7 +34,7 @@ import static org.junit.Assert.*;
 public class AshProjectionReportingTest {
     @Rule public final TemporaryFolder temporary = new TemporaryFolder();
     @Test public void csvAddsOnlyTwoColumnsAndReportsPreparedViewWithoutInitializingIt() throws Exception {
-        String key = RunConfig.ASH_QUERY_PROJECTION_PROPERTY, previous = System.getProperty(key);
+        String key = SearchParameters.ASH_QUERY_PROJECTION_PROPERTY, previous = System.getProperty(key);
         System.setProperty(key, "fp32");
         try {
             assertEquals(List.of("schema_version","run_id","run_uuid","system_id","dataset_name",
