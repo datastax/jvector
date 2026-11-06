@@ -1,6 +1,9 @@
 # Used by standalone BenchYAML via -Djvector.bench.runConfig=<this file>.
 yamlSchemaVersion: 1
 onDiskIndexVersion: 7
+# Optional ASH precision; omission preserves JVM settings and the auto default.
+# ash:
+#   queryProjection: int8  # auto, fp16, fp32, int8; explicit -D overrides YAML
 queryExecution:
   mode: queued
 benchmarks:

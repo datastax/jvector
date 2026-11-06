@@ -267,7 +267,9 @@ class NativeASHInt8ProjectionTest {
             float[] query = matrix(1,64,7)[0], before = new float[32], after = new float[32];
             original.project(query, before);
             System.setProperty(PROPERTY, "int8");
-            assertInstanceOf(NativeASHInt8Projection.class, original.forQueryScoring());
+            var int8 = original.forQueryScoring();
+            assertInstanceOf(NativeASHInt8Projection.class, int8);
+            assertEquals("int8", int8.operandPrecision());
             original.project(query, after);
             assertArrayEquals(before, after);
             System.setProperty(PROPERTY, "fp32");

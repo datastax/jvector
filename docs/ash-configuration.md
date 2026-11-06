@@ -90,6 +90,23 @@ processor guidance and FP16/INT8 requirements. Under `symmetric-all`, query
 precision affects application queries, not insertion search. Under mixed or
 asymmetric construction, it can affect insertion too.
 
+### BenchYAML precision selection
+
+The run YAML can select the same precision without a JVM option:
+
+```yaml
+ash:
+  queryProjection: int8  # auto, fp16, fp32, or int8
+```
+
+An explicit `-Djvector.ash.queryProjection=...` overrides YAML. Omitting the
+setting preserves the existing JVM setting or `auto` default. Use one precision
+per BenchYAML JVM. ASH CSV rows record `ash_query_projection_requested` and
+`ash_query_projection_effective`; the latter is read from the prepared view,
+with `fp16+fp32` indicating observed automatic FP32 range fallback. Non-ASH
+rows have blank precision columns; an unused projection has blank effective
+precision. See the [precision guide](ash-projection-precision.md#benchyaml-runs).
+
 ## Providers, CPU budgets and serialization
 
 | Setting | Default | Optional values and definition |

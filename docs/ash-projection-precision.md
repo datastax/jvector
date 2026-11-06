@@ -61,6 +61,32 @@ when a virtual machine does not expose the needed hardware features.
 The model caches its query-projection view on first use. Changing the property
 after initialization does not reconfigure an existing view.
 
+## BenchYAML runs
+
+Select precision in the **run configuration**, independently of the index YAML:
+
+```yaml
+ash:
+  queryProjection: int8  # auto, fp16, fp32, or int8
+```
+
+Select that run file with `-Djvector.bench.runConfig=/path/to/run.yml`.
+An explicit `-Djvector.ash.queryProjection=...` overrides the YAML value. When
+neither is supplied, the existing `auto` policy applies. Omitting `ash` does
+not change existing runs. Unsupported explicit selections still fail clearly.
+Use one precision per BenchYAML JVM; start a new run after changing it.
+
+`experiments.csv` adds two columns for ASH cases:
+
+- `ash_query_projection_requested`: the selected setting after JVM/YAML precedence.
+- `ash_query_projection_effective`: the prepared projection's actual precision.
+  `auto` can resolve to `fp16` or `fp32`; `fp16+fp32` means the automatic FP16
+  view has used its FP32 range fallback.
+
+The columns are blank for non-ASH cases. Effective precision is blank if no
+query projection was initialized. Reporting reads the existing view after
+measurement; it does not prepare another view or infer precision from the CPU.
+
 ## Effect on graph construction
 
 BenchYAML defaults to `symmetric-all` construction: insertion and diversity use

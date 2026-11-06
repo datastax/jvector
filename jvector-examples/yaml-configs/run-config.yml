@@ -1,5 +1,8 @@
 yamlSchemaVersion: 1
 onDiskIndexVersion: 7
+# Optional ASH precision; omission preserves JVM settings and the auto default.
+# ash:
+#   queryProjection: int8  # auto, fp16, fp32, int8; explicit -D overrides YAML
 benchmarks:
   throughput: [AVG]
   latency: [AVG, P999]

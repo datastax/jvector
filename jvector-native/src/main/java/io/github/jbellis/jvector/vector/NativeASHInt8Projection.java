@@ -146,6 +146,9 @@ final class NativeASHInt8Projection implements VectorUtilSupport.AshProjection {
     }
 
     @Override
+    public String operandPrecision() { return "int8"; }
+
+    @Override
     public boolean supportsBatchProjection() { return true; }
 
     @Override

@@ -1347,6 +1347,12 @@ public class AsymmetricHashing implements VectorCompressor<AsymmetricHashing.Qua
             return projection == null || queryBatches == null ? null : queryBatches.batchHistogram();
         }
 
+        /** Reports the prepared view without initializing or changing query execution. */
+        public String initializedQueryProjectionPrecision() {
+            var ready = queryProjection;
+            return ready == null ? null : ready.operandPrecision();
+        }
+
         private VectorUtilSupport.AshProjection queryProjection() {
             var ready = queryProjection;
             if (ready == null) {

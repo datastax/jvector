@@ -543,6 +543,9 @@ public interface VectorUtilSupport {
       }
     }
 
+    /** Operand precision of this prepared view; reporting must not initialize another view. */
+    default String operandPrecision() { return "fp32"; }
+
     /** Additional backing storage, excluding the caller-owned matrix. */
     default long ramBytesUsed() { return 0L; }
   }

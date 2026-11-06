@@ -36,6 +36,12 @@ import java.util.stream.Collectors;
 public class BenchYAML {
 
     public static void main(String[] args) throws IOException {
+        try (var projectionSetting = new RunConfig.AshQueryProjectionSetting()) {
+            run(args, projectionSetting);
+        }
+    }
+
+    private static void run(String[] args, RunConfig.AshQueryProjectionSetting projectionSetting) throws IOException {
         // args is one of:
         // - a list of regexes, possibly needing to be split by whitespace.
         // - a list of YAML files
@@ -97,6 +103,7 @@ public class BenchYAML {
         RunArtifacts artifacts;
         try {
             RunConfig runCfg = RunConfig.loadDefault();
+            projectionSetting.apply(runCfg);
             artifacts = RunArtifacts.open(runCfg, allConfigs);
         } catch (java.io.FileNotFoundException e) {
             if (System.getProperty("jvector.bench.runConfig") != null) throw e;
