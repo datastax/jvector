@@ -262,7 +262,7 @@ if get_option('onednn').enabled()
   onednn_dependency = onednn_project.dependency('dnnl').partial_dependency(
     compile_args: true, includes: true, link_args: true)
   ash_fp16_lib = shared_library('jvector_ash_fp16',
-    sources: 'src/jvector_ash_fp16.cpp',
+    sources: ['src/jvector_ash_fp16.cpp', 'src/jvector_ash_int8.cpp'],
     dependencies: onednn_dependency,
     link_with: onednn_objects,
     cpp_args: ['-fvisibility=hidden'],

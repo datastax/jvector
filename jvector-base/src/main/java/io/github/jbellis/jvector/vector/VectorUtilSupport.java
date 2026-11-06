@@ -536,8 +536,10 @@ public interface VectorUtilSupport {
         case "fp32": return this;
         case "fp16": throw new UnsupportedOperationException(
                 "This provider does not support FP16 ASH query projection");
+        case "int8": throw new UnsupportedOperationException(
+                "This provider does not support INT8 ASH query projection");
         default: throw new IllegalArgumentException(
-                "jvector.ash.queryProjection must be auto, fp32 or fp16: " + mode);
+                "jvector.ash.queryProjection must be auto, fp32, fp16 or int8: " + mode);
       }
     }
 

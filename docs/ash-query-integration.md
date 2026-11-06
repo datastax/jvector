@@ -24,7 +24,10 @@ batch. An isolated request starts as soon as its execution capacity is available
 
 The existing synchronous `GraphSearcher` API remains available. The prepared-query
 and bounded-execution APIs are optional and do not change index formats, write
-ordering, FP32 encoding/training, or the default FP16 query precision selection.
+ordering, FP32 encoding/training, or the existing automatic FP16/FP32 precision policy.
+
+See [Choosing ASH query-projection precision](ash-projection-precision.md) for
+processor-family recommendations and projection settings.
 
 ## Recommended asynchronous allocation
 

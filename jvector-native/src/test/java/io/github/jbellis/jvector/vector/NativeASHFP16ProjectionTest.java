@@ -402,6 +402,12 @@ class NativeASHFP16ProjectionTest {
                 view(original, "fp16");
                 throw new AssertionError("Explicit FP16 silently fell back");
             } catch (UnsupportedOperationException expected) { /* expected */ }
+            for (int attempt = 0; attempt < 2; attempt++) {
+                try {
+                    view(original, "int8");
+                    throw new AssertionError("Explicit INT8 silently fell back");
+                } catch (UnsupportedOperationException expected) { /* no initializer poisoning */ }
+            }
             var transform = new AsymmetricHashing.StiefelTransform(new Array2DRowRealMatrix(new double[][]{{1}, {2}}));
             System.setProperty(PROPERTY, "fp16");
             float[] out = new float[1];

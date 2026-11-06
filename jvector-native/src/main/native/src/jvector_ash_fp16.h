@@ -71,6 +71,22 @@ JV_ASH_FP16_EXPORT int jvector_ash_fp16_project_batch(void* context, const float
 JV_ASH_FP16_EXPORT int jvector_ash_fp32_project_batch(const float* matrix,
         const float* input, int rows, int columns, int count, float* output);
 
+/* Explicit query-only INT8 view. Reuses ABI 1 and its status/result structure.
+ * create requires a qualified x86 VNNI/AMX primitive and finite FP32 operands.
+ * columns <= 65535 bounds the full-range integer accumulator. Training and
+ * encoding never use this view. No C++ exception crosses the ABI.
+ * bytes includes retained plain/packed weights, scales and kernel wrappers;
+ * caller scratch and opaque oneDNN/JIT allocations are excluded, as for FP16. */
+JV_ASH_FP16_EXPORT void* jvector_ash_int8_create(const float* matrix, int rows,
+        int columns, jvector_ash_fp16_result* result);
+JV_ASH_FP16_EXPORT void jvector_ash_int8_destroy(void* context);
+JV_ASH_FP16_EXPORT uint64_t jvector_ash_int8_bytes(const void* context);
+/* Contiguous FP32 input [count][columns], output [count][rows]. Positive count
+ * has no tile-size cap. Java validates shapes/nonaliasing and publishes output
+ * only after success. On failure the caller must discard native output. */
+JV_ASH_FP16_EXPORT int jvector_ash_int8_project_batch(void* context,
+        const float* input, int count, float* output, jvector_ash_fp16_result* result);
+
 #ifdef __cplusplus
 }
 #endif
