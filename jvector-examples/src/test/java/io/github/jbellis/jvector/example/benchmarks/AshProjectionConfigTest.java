@@ -17,6 +17,9 @@
 package io.github.jbellis.jvector.example.benchmarks;
 
 import io.github.jbellis.jvector.example.yaml.RunConfig;
+import io.github.jbellis.jvector.example.yaml.SearchParameters;
+import io.github.jbellis.jvector.example.yaml.MultiConfig;
+import java.util.List;
 import org.junit.Before;
 import org.junit.After;
 import org.junit.Rule;
@@ -29,67 +32,92 @@ public class AshProjectionConfigTest {
     @Rule public final TemporaryFolder temporary = new TemporaryFolder();
     private String original;
     @Before public void isolateProperty() {
-        original = System.getProperty(RunConfig.ASH_QUERY_PROJECTION_PROPERTY);
-        System.clearProperty(RunConfig.ASH_QUERY_PROJECTION_PROPERTY);
+        original = System.getProperty(SearchParameters.ASH_QUERY_PROJECTION_PROPERTY);
+        System.clearProperty(SearchParameters.ASH_QUERY_PROJECTION_PROPERTY);
     }
     @After public void restoreProperty() {
-        if (original == null) System.clearProperty(RunConfig.ASH_QUERY_PROJECTION_PROPERTY);
-        else System.setProperty(RunConfig.ASH_QUERY_PROJECTION_PROPERTY, original);
+        if (original == null) System.clearProperty(SearchParameters.ASH_QUERY_PROJECTION_PROPERTY);
+        else System.setProperty(SearchParameters.ASH_QUERY_PROJECTION_PROPERTY, original);
     }
-    private RunConfig yaml(String body) throws Exception {
+    private MultiConfig yaml(String body) throws Exception {
         var file = temporary.newFile().toPath();
-        Files.writeString(file, "yamlSchemaVersion: 1\n" + body);
-        return RunConfig.load(file.toString());
+        Files.writeString(file, "yamlSchemaVersion: 2\nonDiskIndexVersion: 7\ndataset: precision-test\n"
+                + "construction:\n  compression:\n    - type: ASH\n      parameters:\n        encodedBits: 48\n        optimizer: RANDOM\n        bitsPerDimension: 2\n"
+                + (body.isEmpty() ? "search: {}\n" : body));
+        return MultiConfig.getConfig(file.toString());
     }
     @Test public void omissionDoesNotSetAPropertyOrChangeExistingDefaults() throws Exception {
         var config = yaml("");
-        assertNull(config.ash);
-        try (var setting = new RunConfig.AshQueryProjectionSetting()) {
-            setting.apply(config);
-            assertNull(System.getProperty(RunConfig.ASH_QUERY_PROJECTION_PROPERTY));
-            assertEquals("direct", config.queryExecution.mode);
-            assertEquals(8, config.queryExecution.maxBatchSize);
+        assertNull(config.search.queryProjection);
+        try (var setting = new SearchParameters.AshQueryProjectionSetting()) {
+            setting.apply(List.of(config));
+            assertNull(System.getProperty(SearchParameters.ASH_QUERY_PROJECTION_PROPERTY));
+            assertEquals("direct", new RunConfig().queryExecution.mode);
+            assertEquals(8, new RunConfig().queryExecution.maxBatchSize);
         }
-        assertNull(System.getProperty(RunConfig.ASH_QUERY_PROJECTION_PROPERTY));
+        assertNull(System.getProperty(SearchParameters.ASH_QUERY_PROJECTION_PROPERTY));
     }
     @Test public void eachYamlSelectionIsAppliedAndRestored() throws Exception {
         for (String mode : new String[]{"auto", "fp32", "fp16", "int8"}) {
-            var config = yaml("ash:\n  queryProjection: " + mode + "\n");
-            try (var setting = new RunConfig.AshQueryProjectionSetting()) {
-                setting.apply(config);
-                assertEquals(mode, System.getProperty(RunConfig.ASH_QUERY_PROJECTION_PROPERTY));
+            var config = yaml("search:\n  queryProjection: " + mode + "\n");
+            try (var setting = new SearchParameters.AshQueryProjectionSetting()) {
+                setting.apply(List.of(config));
+                assertEquals(mode, System.getProperty(SearchParameters.ASH_QUERY_PROJECTION_PROPERTY));
             }
-            assertNull(System.getProperty(RunConfig.ASH_QUERY_PROJECTION_PROPERTY));
+            assertNull(System.getProperty(SearchParameters.ASH_QUERY_PROJECTION_PROPERTY));
         }
     }
     @Test public void explicitJvmSettingOverridesYamlAndIsPreserved() throws Exception {
-        System.setProperty(RunConfig.ASH_QUERY_PROJECTION_PROPERTY, "fp32");
-        try (var setting = new RunConfig.AshQueryProjectionSetting()) {
-            setting.apply(yaml("ash:\n  queryProjection: int8\n"));
-            assertEquals("fp32", System.getProperty(RunConfig.ASH_QUERY_PROJECTION_PROPERTY));
+        System.setProperty(SearchParameters.ASH_QUERY_PROJECTION_PROPERTY, "fp32");
+        try (var setting = new SearchParameters.AshQueryProjectionSetting()) {
+            setting.apply(List.of(yaml("search:\n  queryProjection: int8\n")));
+            assertEquals("fp32", System.getProperty(SearchParameters.ASH_QUERY_PROJECTION_PROPERTY));
         }
-        assertEquals("fp32", System.getProperty(RunConfig.ASH_QUERY_PROJECTION_PROPERTY));
+        assertEquals("fp32", System.getProperty(SearchParameters.ASH_QUERY_PROJECTION_PROPERTY));
     }
     @Test public void failedRunsRestoreOnlyTheirTemporarySetting() throws Exception {
-        var config = yaml("ash:\n  queryProjection: int8\n");
+        var config = yaml("search:\n  queryProjection: int8\n");
         assertThrows(IllegalStateException.class, () -> {
-            try (var setting = new RunConfig.AshQueryProjectionSetting()) {
-                setting.apply(config);
+            try (var setting = new SearchParameters.AshQueryProjectionSetting()) {
+                setting.apply(List.of(config));
                 throw new IllegalStateException("failed run");
             }
         });
-        assertNull(System.getProperty(RunConfig.ASH_QUERY_PROJECTION_PROPERTY));
+        assertNull(System.getProperty(SearchParameters.ASH_QUERY_PROJECTION_PROPERTY));
     }
     @Test public void invalidNewValuesFailWithoutChangingTheProperty() throws Exception {
-        var bad = yaml("ash:\n  queryProjection: pf32\n");
-        try (var setting = new RunConfig.AshQueryProjectionSetting()) {
-            assertThrows(IllegalArgumentException.class, () -> setting.apply(bad));
+        var bad = yaml("search:\n  queryProjection: pf32\n");
+        try (var setting = new SearchParameters.AshQueryProjectionSetting()) {
+            assertThrows(IllegalArgumentException.class, () -> setting.apply(List.of(bad)));
         }
-        assertNull(System.getProperty(RunConfig.ASH_QUERY_PROJECTION_PROPERTY));
-        System.setProperty(RunConfig.ASH_QUERY_PROJECTION_PROPERTY, "unknown");
-        try (var setting = new RunConfig.AshQueryProjectionSetting()) {
-            assertThrows(IllegalArgumentException.class, () -> setting.apply(new RunConfig()));
+        assertNull(System.getProperty(SearchParameters.ASH_QUERY_PROJECTION_PROPERTY));
+        System.setProperty(SearchParameters.ASH_QUERY_PROJECTION_PROPERTY, "unknown");
+        try (var setting = new SearchParameters.AshQueryProjectionSetting()) {
+            assertThrows(IllegalArgumentException.class, () -> setting.apply(List.of(yaml(""))));
         }
-        assertEquals("unknown", System.getProperty(RunConfig.ASH_QUERY_PROJECTION_PROPERTY));
+        assertEquals("unknown", System.getProperty(SearchParameters.ASH_QUERY_PROJECTION_PROPERTY));
     }
+    @Test public void conflictingAshPrecisionsFailBeforeModelsAreLoaded() throws Exception {
+        var first = yaml("search:\n  queryProjection: int8\n");
+        var second = yaml("search:\n  queryProjection: fp32\n");
+        try (var setting = new SearchParameters.AshQueryProjectionSetting()) {
+            assertThrows(IllegalArgumentException.class, () -> setting.apply(List.of(first,second)));
+        }
+        assertNull(System.getProperty(SearchParameters.ASH_QUERY_PROJECTION_PROPERTY));
+    }
+    @Test public void runConfigRejectsAlgorithmParameters() throws Exception {
+        var file = temporary.newFile().toPath();
+        Files.writeString(file,"yamlSchemaVersion: 1\nash:\n  queryProjection: int8\n");
+        assertThrows(org.yaml.snakeyaml.error.YAMLException.class, () -> RunConfig.load(file.toString()));
+    }
+    @Test public void pqConfigurationDoesNotOverrideAshSelection() throws Exception {
+        var ash = yaml("search:\n  queryProjection: int8\n");
+        var pq = yaml("");
+        pq.construction.compression.get(0).type = "PQ";
+        try (var setting = new SearchParameters.AshQueryProjectionSetting()) {
+            setting.apply(List.of(ash,pq));
+            assertEquals("int8",System.getProperty(SearchParameters.ASH_QUERY_PROJECTION_PROPERTY));
+        }
+    }
+
 }

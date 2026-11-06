@@ -21,6 +21,7 @@ import io.github.jbellis.jvector.example.benchmarks.Metric;
 import io.github.jbellis.jvector.example.yaml.MultiConfig;
 import io.github.jbellis.jvector.example.yaml.MetricSelection;
 import io.github.jbellis.jvector.example.yaml.RunConfig;
+import io.github.jbellis.jvector.example.yaml.SearchParameters;
 import io.github.jbellis.jvector.graph.disk.feature.FeatureId;
 import io.github.jbellis.jvector.quantization.AsymmetricHashing;
 
@@ -44,7 +45,7 @@ import java.util.Set;
 public final class RunArtifacts {
 
     private final String ashQueryProjectionRequested =
-            System.getProperty(RunConfig.ASH_QUERY_PROJECTION_PROPERTY, "auto");
+            System.getProperty(SearchParameters.ASH_QUERY_PROJECTION_PROPERTY, "auto");
     private String queryExecutionMode = "direct";
     private int queryBatchSize = 8;
 

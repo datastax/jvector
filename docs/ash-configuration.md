@@ -92,16 +92,17 @@ asymmetric construction, it can affect insertion too.
 
 ### BenchYAML precision selection
 
-The run YAML can select the same precision without a JVM option:
+The index-parameters YAML can select the same precision under `search`:
 
 ```yaml
-ash:
+search:
   queryProjection: int8  # auto, fp16, fp32, or int8
 ```
 
 An explicit `-Djvector.ash.queryProjection=...` overrides YAML. Omitting the
 setting preserves the existing JVM setting or `auto` default. Use one precision
-per BenchYAML JVM. ASH CSV rows record `ash_query_projection_requested` and
+per BenchYAML JVM; conflicting ASH selections in one invocation are rejected.
+ASH CSV rows record `ash_query_projection_requested` and
 `ash_query_projection_effective`; the latter is read from the prepared view,
 with `fp16+fp32` indicating observed automatic FP32 range fallback. Non-ASH
 rows have blank precision columns; an unused projection has blank effective

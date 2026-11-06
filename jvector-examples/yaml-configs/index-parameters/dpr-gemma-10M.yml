@@ -28,6 +28,7 @@ construction:
   useSavedIndexIfExists: No
 
 search:
+  queryProjection: auto # auto, fp16, fp32, int8; explicit -D overrides YAML
   topKOverquery:
     10: [1.0]
   useSearchPruning: [No]

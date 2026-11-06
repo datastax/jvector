@@ -30,7 +30,7 @@ See [Choosing ASH query-projection precision](ash-projection-precision.md) for
 processor-family recommendations and projection settings.
 The [ASH configuration reference](ash-configuration.md) lists model parameters,
 construction modes, runtime flags and their defaults.
-BenchYAML researchers can select `ash.queryProjection` in the run YAML; the
+BenchYAML researchers can select `search.queryProjection` in the index-parameters YAML; the
 precision guide describes JVM overrides and the requested/effective precision
 columns in `experiments.csv`.
 

@@ -63,18 +63,20 @@ after initialization does not reconfigure an existing view.
 
 ## BenchYAML runs
 
-Select precision in the **run configuration**, independently of the index YAML:
+Select precision under `search` in the **index-parameters YAML**:
 
 ```yaml
-ash:
+search:
   queryProjection: int8  # auto, fp16, fp32, or int8
 ```
 
-Select that run file with `-Djvector.bench.runConfig=/path/to/run.yml`.
+For example, edit `jvector-examples/yaml-configs/index-parameters/mpnet-10M.yml`.
+Run-config continues to select data collection and reporting.
 An explicit `-Djvector.ash.queryProjection=...` overrides the YAML value. When
-neither is supplied, the existing `auto` policy applies. Omitting `ash` does
+neither is supplied, the existing `auto` policy applies. Omitting `search.queryProjection` does
 not change existing runs. Unsupported explicit selections still fail clearly.
 Use one precision per BenchYAML JVM; start a new run after changing it.
+Conflicting ASH precisions across index configurations in one invocation are rejected.
 
 `experiments.csv` adds two columns for ASH cases:
 
