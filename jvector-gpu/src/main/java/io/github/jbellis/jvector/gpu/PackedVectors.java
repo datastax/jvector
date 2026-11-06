@@ -36,6 +36,9 @@ import uk.ac.manchester.tornado.api.types.arrays.IntArray;
  */
 final class PackedVectors {
 
+    /** A row buffer per thread, at least {@code paddedDim} floats. */
+    private static final ThreadLocal<float[]> ROW = ThreadLocal.withInitial(() -> new float[0]);
+
     final IntArray[] shards;
     final int rowsPerShard;
     final int paddedDim;
@@ -86,22 +89,30 @@ final class PackedVectors {
             // unused shards still need a buffer for the kernel signature
             IntArray shard = new IntArray(Math.max(1, count * words));
             MemorySegment out = shard.getSegment();
+            // Each row is first copied to a float[] with a bulk copy, which works the same for every segment class:
+            // the hot loops then never see the segment, so callers passing a mapped file and native memory to the same
+            // JVM do not deoptimise them (a class check in them sent C2 into a recompile loop, 30x slower).
             IntStream.range(0, count).parallel().forEach(r -> {
-                long from = (long) (first + r) * dim * Float.BYTES;
+                float[] row = ROW.get();
+                if (row.length < paddedDim) {
+                    row = new float[paddedDim];
+                    ROW.set(row);
+                }
+                MemorySegment.copy(rows, ValueLayout.JAVA_FLOAT_UNALIGNED, (long) (first + r) * dim * Float.BYTES, row, 0, dim);
+                java.util.Arrays.fill(row, dim, paddedDim, 0.0f);
                 float scale = 1.0f;
                 if (normalise) {
                     double sq = 0;
                     for (int d = 0; d < dim; d++) {
-                        float x = rows.get(ValueLayout.JAVA_FLOAT_UNALIGNED, from + (long) d * Float.BYTES);
-                        sq += x * x;
+                        sq += row[d] * row[d];
                     }
                     scale = (float) (1.0 / Math.sqrt(sq));
                 }
                 float norm = 0;
                 long to = (long) r * words * Integer.BYTES;
                 for (int p = 0; p < words; p++) {
-                    short lo = half(rows, from, 2 * p, dim, scale);
-                    short hi = half(rows, from, 2 * p + 1, dim, scale);
+                    short lo = Float.floatToFloat16(row[2 * p] * scale);
+                    short hi = Float.floatToFloat16(row[2 * p + 1] * scale);
                     if (norms != null) {
                         float a = Float.float16ToFloat(lo);
                         float b = Float.float16ToFloat(hi);
@@ -116,14 +127,6 @@ final class PackedVectors {
             shards[s] = shard;
         }
         return new PackedVectors(shards, rowsPerShard, paddedDim, norms);
-    }
-
-    /** Dimension {@code d} of the row at {@code from} as FP16, zero beyond {@code dim}. */
-    private static short half(MemorySegment rows, long from, int d, int dim, float scale) {
-        if (d >= dim) {
-            return 0;
-        }
-        return Float.floatToFloat16(rows.get(ValueLayout.JAVA_FLOAT_UNALIGNED, from + (long) d * Float.BYTES) * scale);
     }
 
     /** Dimension {@code d} of row {@code row}, as packed. */
