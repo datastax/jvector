@@ -60,8 +60,16 @@ public class IvfConfig {
     public static class Search {
         /** topK to the nprobe values to run with it. */
         public Map<Integer, List<Integer>> topKNprobe;
-        /** Search thread counts; 0 uses all CPUs, as the graph benchmark's QPS does. */
+        /**
+         * Search thread counts; 0 uses all CPUs, as the graph benchmark's QPS does. Sets the batched
+         * searcher's threads and the number of concurrent callers in the per-query modes.
+         */
         public List<Integer> searchThreads;
+        /**
+         * Native thread counts for searchers that take one query per call: the latency benchmark's
+         * and each direct per-query caller's. 0 uses all CPUs. Optional; default 1.
+         */
+        public List<Integer> queryThreads = List.of(1);
     }
 
     /** One index to build. */
@@ -73,7 +81,7 @@ public class IvfConfig {
     }
 
     /** One search configuration to measure. */
-    public record SearchPoint(int topK, int nprobe, int searchThreads) {}
+    public record SearchPoint(int topK, int nprobe, int searchThreads, int queryThreads) {}
 
     /**
      * Loads the config for {@code datasetName}, falling back to {@code default.yml}. With the
@@ -124,11 +132,12 @@ public class IvfConfig {
     static final String SSD_PATHS_PROPERTY = "ivf.ssdPaths";
     static final String BUILD_THREADS_PROPERTY = "ivf.buildThreads";
     static final String SEARCH_THREADS_PROPERTY = "ivf.searchThreads";
+    static final String QUERY_THREADS_PROPERTY = "ivf.queryThreads";
 
     /**
      * Replaces the machine-specific settings with any of these properties that are set:
      * {@code ivf.ssdPaths} (comma-separated), {@code ivf.buildThreads}, {@code ivf.searchThreads}
-     * (comma-separated). Blank values are ignored.
+     * and {@code ivf.queryThreads} (comma-separated). Blank values are ignored.
      */
     void applyOverrides(java.util.Properties props) {
         if (construction == null || search == null) {
@@ -150,6 +159,13 @@ public class IvfConfig {
                     .map(s -> parseInt(SEARCH_THREADS_PROPERTY, s))
                     .toList();
             System.out.println("Override " + SEARCH_THREADS_PROPERTY + ": " + search.searchThreads);
+        }
+        String queryThreads = props.getProperty(QUERY_THREADS_PROPERTY);
+        if (queryThreads != null && !queryThreads.isBlank()) {
+            search.queryThreads = splitList(queryThreads).stream()
+                    .map(s -> parseInt(QUERY_THREADS_PROPERTY, s))
+                    .toList();
+            System.out.println("Override " + QUERY_THREADS_PROPERTY + ": " + search.queryThreads);
         }
     }
 
@@ -204,6 +220,12 @@ public class IvfConfig {
                 fail(source, "search.searchThreads values must be 0 (all CPUs) or positive, got " + t);
             }
         });
+        requireNonEmpty(source, "search.queryThreads", search.queryThreads);
+        search.queryThreads.forEach(t -> {
+            if (t == null || t < 0) {
+                fail(source, "search.queryThreads values must be 0 (all CPUs) or positive, got " + t);
+            }
+        });
     }
 
     /** Every {@code nlist} x {@code storageFactor} combination, in config order. */
@@ -218,19 +240,25 @@ public class IvfConfig {
     }
 
     /**
-     * Every {@code topK} x {@code nprobe} x {@code searchThreads} combination, in config order,
-     * with a {@code searchThreads} of 0 resolved to the number of CPUs.
+     * Every {@code topK} x {@code nprobe} x {@code searchThreads} x {@code queryThreads}
+     * combination, in config order, with thread counts of 0 resolved to the number of CPUs.
      */
     public List<SearchPoint> searchPoints() {
         List<SearchPoint> points = new ArrayList<>();
         search.topKNprobe.forEach((topK, nprobes) -> {
             for (int nprobe : nprobes) {
                 for (int threads : search.searchThreads) {
-                    points.add(new SearchPoint(topK, nprobe, threads == 0 ? Runtime.getRuntime().availableProcessors() : threads));
+                    for (int queryThreads : search.queryThreads) {
+                        points.add(new SearchPoint(topK, nprobe, allCpusIfZero(threads), allCpusIfZero(queryThreads)));
+                    }
                 }
             }
         });
         return points;
+    }
+
+    private static int allCpusIfZero(int threads) {
+        return threads == 0 ? Runtime.getRuntime().availableProcessors() : threads;
     }
 
     public List<Path> ssdPaths() {
@@ -263,7 +291,8 @@ public class IvfConfig {
                   + ", ssdPaths=" + construction.ssdPaths
                   + ", useSavedIndexIfExists=" + construction.useSavedIndexIfExists + "}";
         String s = search == null ? "null"
-                : "{topKNprobe=" + search.topKNprobe + ", searchThreads=" + search.searchThreads + "}";
+                : "{topKNprobe=" + search.topKNprobe + ", searchThreads=" + search.searchThreads
+                  + ", queryThreads=" + search.queryThreads + "}";
         return "IvfConfig{dataset=" + dataset + ", construction=" + c + ", search=" + s + "}";
     }
 }

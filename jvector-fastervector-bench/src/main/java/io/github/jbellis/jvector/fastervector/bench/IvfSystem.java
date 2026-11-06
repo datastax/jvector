@@ -233,7 +233,10 @@ public final class IvfSystem implements AutoCloseable {
         return out;
     }
 
-    /** A new searcher; the caller closes it. {@code pool} null means one thread. */
+    /**
+     * A new searcher; the caller closes it. Only {@code pool}'s thread count is used, so the pool
+     * may be closed once this returns; null means one thread.
+     */
     public IvfAshIndexSearcher searcher(int topK, int nprobe, FvecThreadPool pool) {
         return index.searcherBuilder().topk(topK).nprobe(nprobe).searchThreadPool(pool).build();
     }

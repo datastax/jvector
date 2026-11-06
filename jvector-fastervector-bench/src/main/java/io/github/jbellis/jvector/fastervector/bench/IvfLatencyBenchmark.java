@@ -17,6 +17,7 @@
 package io.github.jbellis.jvector.fastervector.bench;
 
 import io.github.jbellis.jvector.example.benchmarks.Metric;
+import io.github.jbellis.jvector.fastervector.FvecThreadPool;
 import io.github.jbellis.jvector.fastervector.IvfAshIndexSearcher;
 import io.github.jbellis.jvector.fastervector.Vecs;
 import io.github.jbellis.jvector.fastervector.bench.IvfConfig.SearchPoint;
@@ -29,9 +30,9 @@ import java.util.Arrays;
 import java.util.List;
 
 /**
- * Per-query latency: one thread and one single-threaded searcher, one query per call, over the
- * query set {@code queryRuns} times. Mirrors the graph's {@code LatencyBenchmark}, including its
- * metric keys. {@code searchThreads} doesn't apply, since a single query runs on one thread.
+ * Per-query latency: one calling thread and one searcher of {@code queryThreads} native threads,
+ * one query per call, over the query set {@code queryRuns} times. Mirrors the graph's
+ * {@code LatencyBenchmark}, including its metric keys. {@code searchThreads} doesn't apply.
  */
 public class IvfLatencyBenchmark implements IvfQueryBenchmark {
     private static final Logger log = LoggerFactory.getLogger(IvfLatencyBenchmark.class);
@@ -91,7 +92,12 @@ public class IvfLatencyBenchmark implements IvfQueryBenchmark {
         }
 
         long[] latencies = new long[nq * queryRuns];
-        try (IvfAshIndexSearcher searcher = system.searcher(point.topK(), point.nprobe(), null)) {
+        IvfAshIndexSearcher searcher;
+        try (FvecThreadPool pool = FvecThreadPool.create(point.queryThreads())) {
+            // The searcher reads only the pool's thread count
+            searcher = system.searcher(point.topK(), point.nprobe(), pool);
+        }
+        try (searcher) {
             int n = 0;
             for (int run = 0; run < queryRuns; run++) {
                 long passStart = System.nanoTime();

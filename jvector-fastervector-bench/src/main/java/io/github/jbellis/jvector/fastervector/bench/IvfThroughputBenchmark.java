@@ -18,7 +18,9 @@ package io.github.jbellis.jvector.fastervector.bench;
 
 import io.github.jbellis.jvector.example.benchmarks.Metric;
 import io.github.jbellis.jvector.fastervector.FvecThreadPool;
+import io.github.jbellis.jvector.fastervector.IvfAshBatchingSearcher;
 import io.github.jbellis.jvector.fastervector.IvfAshIndexSearcher;
+import io.github.jbellis.jvector.fastervector.NodeScore;
 import io.github.jbellis.jvector.fastervector.SearchResult;
 import io.github.jbellis.jvector.fastervector.Vecs;
 import io.github.jbellis.jvector.fastervector.bench.IvfConfig.SearchPoint;
@@ -38,14 +40,18 @@ import java.util.concurrent.Future;
 import java.util.concurrent.atomic.AtomicInteger;
 
 /**
- * Queries per second, in one of two modes (Part 7, D5.3):
+ * Queries per second, in one of three modes (Part 7, D5.3):
  * <ul>
  *   <li>{@link Mode#BATCHED}: the whole query set as one {@code search(Vecs)} call on one searcher
  *       with a {@code searchThreads} pool. This is how fastervector is meant to be used, so it
  *       reports under the graph benchmark's {@code search.throughput.*} keys.</li>
- *   <li>{@link Mode#PER_QUERY}: one query per call, spread over {@code searchThreads} Java threads,
- *       each with its own single-threaded searcher. This has the shape of the graph benchmark's
- *       QPS and reports under {@code search.throughput.per_query.*}.</li>
+ *   <li>{@link Mode#COALESCED}: one query per call from {@code searchThreads} Java threads, through
+ *       an {@link IvfAshBatchingSearcher} over one searcher with a {@code searchThreads} pool. This
+ *       has the shape of the graph benchmark's QPS, a server answering single requests, and
+ *       reports under {@code search.throughput.coalesced.*}.</li>
+ *   <li>{@link Mode#PER_QUERY}: one query per call from {@code searchThreads} Java threads, each
+ *       with its own searcher of {@code queryThreads} threads, calling fastervector directly.
+ *       Reports under {@code search.throughput.per_query.*}.</li>
  * </ul>
  * Like the graph's {@code ThroughputBenchmark}, warm-up runs use random unit vectors so the measured
  * runs get no help from caches warmed by the real queries, and each measured run follows a GC pause.
@@ -57,6 +63,7 @@ public class IvfThroughputBenchmark implements IvfQueryBenchmark {
 
     public enum Mode {
         BATCHED("search.throughput.", ""),
+        COALESCED("search.throughput.coalesced.", " coalesced"),
         PER_QUERY("search.throughput.per_query.", " per-query");
 
         final String keyPrefix;
@@ -110,7 +117,11 @@ public class IvfThroughputBenchmark implements IvfQueryBenchmark {
 
     @Override
     public String getBenchmarkName() {
-        return mode == Mode.BATCHED ? "IvfThroughputBenchmark" : "IvfPerQueryThroughputBenchmark";
+        return switch (mode) {
+            case BATCHED -> "IvfThroughputBenchmark";
+            case COALESCED -> "IvfCoalescedThroughputBenchmark";
+            case PER_QUERY -> "IvfPerQueryThroughputBenchmark";
+        };
     }
 
     @Override
@@ -123,75 +134,102 @@ public class IvfThroughputBenchmark implements IvfQueryBenchmark {
         float[][] warmup = randomUnitVectors(nq, dim, 42);
 
         double[] qps = new double[numTestRuns];
-        if (mode == Mode.BATCHED) {
-            Vecs warmupVecs = new Array2DVecs(warmup);
-            try (FvecThreadPool pool = FvecThreadPool.create(point.searchThreads());
-                 IvfAshIndexSearcher searcher = system.searcher(point.topK(), point.nprobe(), pool)) {
-                for (int i = 0; i < numWarmupRuns; i++) {
-                    long start = System.nanoTime();
-                    consume(searcher.search(warmupVecs));
-                    logRun("warm-up", i, numWarmupRuns, nq / ((System.nanoTime() - start) / 1e9));
-                }
-                for (int i = 0; i < numTestRuns; i++) {
-                    gcPause();
-                    long start = System.nanoTime();
-                    consume(searcher.search(system.queryVecs()));
-                    qps[i] = nq / ((System.nanoTime() - start) / 1e9);
-                    logRun("run", i, numTestRuns, qps[i]);
+        switch (mode) {
+            case BATCHED -> {
+                Vecs warmupVecs = new Array2DVecs(warmup);
+                try (FvecThreadPool pool = FvecThreadPool.create(point.searchThreads());
+                     IvfAshIndexSearcher searcher = system.searcher(point.topK(), point.nprobe(), pool)) {
+                    measure(nq, () -> consume(searcher.search(warmupVecs)),
+                            () -> consume(searcher.search(system.queryVecs())), qps);
                 }
             }
-        } else {
-            Vecs[] queries = new Vecs[nq];
-            Vecs[] warmupQueries = new Vecs[nq];
-            for (int i = 0; i < nq; i++) {
-                queries[i] = new FlatArrayVecs(system.query(i), dim);
-                warmupQueries[i] = new FlatArrayVecs(warmup[i], dim);
+            case COALESCED -> {
+                float[][] queries = new float[nq][];
+                for (int i = 0; i < nq; i++) {
+                    queries[i] = system.query(i);
+                }
+                int clients = point.searchThreads();
+                ExecutorService executor = Executors.newFixedThreadPool(clients);
+                try (FvecThreadPool pool = FvecThreadPool.create(point.searchThreads());
+                     IvfAshIndexSearcher searcher = system.searcher(point.topK(), point.nprobe(), pool);
+                     IvfAshBatchingSearcher batcher = IvfAshBatchingSearcher.builder(searcher).build()) {
+                    measure(nq, () -> runConcurrent(executor, clients, nq, (w, i) -> consumeRow(batcher.search(warmup[i]))),
+                            () -> runConcurrent(executor, clients, nq, (w, i) -> consumeRow(batcher.search(queries[i]))), qps);
+                    log.info("    {}: {} clients, mean batch {} queries", getBenchmarkName(), clients,
+                             String.format("%.1f", (double) batcher.queryCount() / Math.max(1, batcher.batchCount())));
+                } finally {
+                    executor.shutdownNow();
+                }
             }
-            int threads = point.searchThreads();
-            List<IvfAshIndexSearcher> searchers = new ArrayList<>(threads);
-            ExecutorService executor = Executors.newFixedThreadPool(threads);
-            try {
-                for (int t = 0; t < threads; t++) {
-                    searchers.add(system.searcher(point.topK(), point.nprobe(), null));
+            case PER_QUERY -> {
+                Vecs[] queries = new Vecs[nq];
+                Vecs[] warmupQueries = new Vecs[nq];
+                for (int i = 0; i < nq; i++) {
+                    queries[i] = new FlatArrayVecs(system.query(i), dim);
+                    warmupQueries[i] = new FlatArrayVecs(warmup[i], dim);
                 }
-                for (int i = 0; i < numWarmupRuns; i++) {
-                    long start = System.nanoTime();
-                    runPerQuery(executor, searchers, warmupQueries);
-                    logRun("warm-up", i, numWarmupRuns, nq / ((System.nanoTime() - start) / 1e9));
+                int threads = point.searchThreads();
+                List<IvfAshIndexSearcher> searchers = new ArrayList<>(threads);
+                ExecutorService executor = Executors.newFixedThreadPool(threads);
+                try {
+                    // The searcher reads only the pool's thread count, so one pool serves them all
+                    try (FvecThreadPool pool = FvecThreadPool.create(point.queryThreads())) {
+                        for (int t = 0; t < threads; t++) {
+                            searchers.add(system.searcher(point.topK(), point.nprobe(), pool));
+                        }
+                    }
+                    measure(nq, () -> runConcurrent(executor, threads, nq, (w, i) -> consume(searchers.get(w).search(warmupQueries[i]))),
+                            () -> runConcurrent(executor, threads, nq, (w, i) -> consume(searchers.get(w).search(queries[i]))), qps);
+                } finally {
+                    executor.shutdownNow();
+                    searchers.forEach(IvfAshIndexSearcher::close);
                 }
-                for (int i = 0; i < numTestRuns; i++) {
-                    gcPause();
-                    long start = System.nanoTime();
-                    runPerQuery(executor, searchers, queries);
-                    qps[i] = nq / ((System.nanoTime() - start) / 1e9);
-                    logRun("run", i, numTestRuns, qps[i]);
-                }
-            } finally {
-                executor.shutdownNow();
-                searchers.forEach(IvfAshIndexSearcher::close);
             }
         }
         return metrics(qps);
+    }
+
+    /** Runs the warm-up passes, then the measured passes, each after a GC pause, into {@code qps}. */
+    private void measure(int nq, Runnable warmupPass, Runnable pass, double[] qps) {
+        for (int i = 0; i < numWarmupRuns; i++) {
+            long start = System.nanoTime();
+            warmupPass.run();
+            logRun("warm-up", i, numWarmupRuns, nq / ((System.nanoTime() - start) / 1e9));
+        }
+        for (int i = 0; i < numTestRuns; i++) {
+            gcPause();
+            long start = System.nanoTime();
+            pass.run();
+            qps[i] = nq / ((System.nanoTime() - start) / 1e9);
+            logRun("run", i, numTestRuns, qps[i]);
+        }
     }
 
     private void logRun(String kind, int i, int of, double qps) {
         log.info("    {} {} {}/{}: {} QPS", getBenchmarkName(), kind, i + 1, of, String.format("%.1f", qps));
     }
 
-    /** Each worker owns one searcher and pulls query indexes from a shared counter. */
-    private static void runPerQuery(ExecutorService executor, List<IvfAshIndexSearcher> searchers, Vecs[] queries) {
+    /** One query by one worker. */
+    @FunctionalInterface
+    private interface Query {
+        void run(int worker, int query);
+    }
+
+    /** {@code workers} threads pull query indexes from a shared counter until all {@code nq} are done. */
+    private static void runConcurrent(ExecutorService executor, int workers, int nq, Query query) {
         AtomicInteger next = new AtomicInteger();
-        List<Future<?>> workers = new ArrayList<>(searchers.size());
-        for (IvfAshIndexSearcher searcher : searchers) {
-            workers.add(executor.submit(() -> {
-                for (int i = next.getAndIncrement(); i < queries.length; i = next.getAndIncrement()) {
-                    consume(searcher.search(queries[i]));
+        List<Future<?>> futures = new ArrayList<>(workers);
+        for (int w = 0; w < workers; w++) {
+            int worker = w;
+            futures.add(executor.submit(() -> {
+                for (int i = next.getAndIncrement(); i < nq; i = next.getAndIncrement()) {
+                    query.run(worker, i);
                 }
             }));
         }
-        for (Future<?> worker : workers) {
+        for (Future<?> future : futures) {
             try {
-                worker.get();
+                future.get();
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
                 throw new RuntimeException(e);
@@ -256,5 +294,9 @@ public class IvfThroughputBenchmark implements IvfQueryBenchmark {
     /** Uses the result so the JIT can't drop the search. */
     static void consume(SearchResult result) {
         SINK += result.results().size();
+    }
+
+    static void consumeRow(List<NodeScore> row) {
+        SINK += row.size();
     }
 }

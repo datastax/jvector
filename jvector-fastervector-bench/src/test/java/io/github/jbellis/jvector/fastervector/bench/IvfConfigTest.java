@@ -123,9 +123,9 @@ class IvfConfigTest {
     @Test
     void searchPointsCoverEveryCombinationInConfigOrder() throws IOException {
         IvfConfig config = IvfConfig.getConfig(write(VALID).toString());
-        assertEquals(List.of(new SearchPoint(10, 8, 1), new SearchPoint(10, 8, 4),
-                             new SearchPoint(10, 16, 1), new SearchPoint(10, 16, 4),
-                             new SearchPoint(100, 32, 1), new SearchPoint(100, 32, 4)),
+        assertEquals(List.of(new SearchPoint(10, 8, 1, 1), new SearchPoint(10, 8, 4, 1),
+                             new SearchPoint(10, 16, 1, 1), new SearchPoint(10, 16, 4, 1),
+                             new SearchPoint(100, 32, 1, 1), new SearchPoint(100, 32, 4, 1)),
                      config.searchPoints());
     }
 
@@ -162,6 +162,19 @@ class IvfConfigTest {
         assertInvalid(VALID.replace("10: [8, 16]", "10: [0]"), "nprobe");
         assertInvalid(VALID.replace("10: [8, 16]", "10: []"), "topKNprobe[10]");
         assertInvalid(VALID.replace("searchThreads: [1, 4]", "searchThreads: [-1]"), "searchThreads");
+        assertInvalid(VALID.replace("searchThreads: [1, 4]", "searchThreads: [1, 4]\n  queryThreads: [-1]"), "queryThreads");
+        assertInvalid(VALID.replace("searchThreads: [1, 4]", "searchThreads: [1, 4]\n  queryThreads: []"), "queryThreads");
+    }
+
+    @Test
+    void queryThreadsDefaultToOneAndMultiplyTheSearchPoints() throws IOException {
+        assertEquals(List.of(1), IvfConfig.getConfig(write(VALID).toString()).search.queryThreads);
+        IvfConfig config = IvfConfig.getConfig(
+                write(VALID.replace("searchThreads: [1, 4]", "searchThreads: [4]\n  queryThreads: [2, 0]")).toString());
+        int cpus = Runtime.getRuntime().availableProcessors();
+        assertEquals(List.of(new SearchPoint(10, 8, 4, 2), new SearchPoint(10, 8, 4, cpus)),
+                     config.searchPoints().subList(0, 2));
+        assertEquals(6, config.searchPoints().size());
     }
 
     @Test
@@ -184,10 +197,12 @@ class IvfConfigTest {
         props.setProperty("ivf.ssdPaths", " /nvme/a , /nvme/b ");
         props.setProperty("ivf.buildThreads", "48");
         props.setProperty("ivf.searchThreads", "1,16, 48");
+        props.setProperty("ivf.queryThreads", "1,4");
         config.applyOverrides(props);
         assertEquals(List.of(Path.of("/nvme/a"), Path.of("/nvme/b")), config.ssdPaths());
         assertEquals(48, config.construction.buildThreads);
         assertEquals(List.of(1, 16, 48), config.search.searchThreads);
+        assertEquals(List.of(1, 4), config.search.queryThreads);
         // Dataset settings are untouched
         assertEquals(List.of(256, 1024), config.construction.nlist);
     }

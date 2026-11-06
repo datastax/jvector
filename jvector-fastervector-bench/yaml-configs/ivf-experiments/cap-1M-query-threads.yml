@@ -1,0 +1,28 @@
+yamlSchemaVersion: 1
+
+# How the native thread count of a single-query searcher (queryThreads) affects latency and
+# direct per-query QPS, next to coalesced QPS, which answers the same single queries through
+# IvfAshBatchingSearcher. Each search call starts queryThreads I/O threads and scores on
+# fastervector's shared scan pool of that size, and concurrent calls share both, so this shows
+# the per-call overhead and how much of it a matching thread count removes.
+#
+#   nohup java ... io.github.jbellis.jvector.fastervector.bench.BenchIvfYAML \
+#       jvector-fastervector-bench/yaml-configs/ivf-experiments/cap-1M-query-threads.yml > query-threads.log 2>&1 &
+#
+# Add -Divf.perQuery=false for latency and coalesced QPS only; direct per-query QPS takes most of
+# the run (about 3 minutes per row on the 48-CPU box).
+# 2 nprobe x 5 queryThreads = 10 rows. Reuses the calibration run's nlist 1024 index if present.
+dataset: cap-1M
+
+construction:
+  nlist: [1024]
+  storageFactor: [1.0]        # 32x, the graph's PQ compression
+  buildThreads: 0             # all CPUs; override with -Divf.buildThreads
+  ssdPaths: [ivf_cache]       # override with -Divf.ssdPaths
+  useSavedIndexIfExists: Yes
+
+search:
+  topKNprobe:
+    10: [4, 16]               # the provisional 1M and 6M/10M values
+  searchThreads: [0]          # all CPUs: the batched searcher, and the callers in the per-query modes
+  queryThreads: [1, 2, 4, 8, 0]   # 0 = all CPUs

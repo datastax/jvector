@@ -60,6 +60,11 @@ public final class IvfAshIndexSearcher implements AutoCloseable {
         return topk;
     }
 
+    /** The index dimension this searcher checks queries against, or 0 if it isn't known. */
+    int dim() {
+        return dim;
+    }
+
     /**
      * Search all vectors of {@code queries}.
      * <p>
@@ -150,7 +155,7 @@ public final class IvfAshIndexSearcher implements AutoCloseable {
         private final IvfAshIndex index;
         private Integer topk;
         private Integer nprobe;
-        private FvecThreadPool searchThreadPool; // null = use internal 1-thread pool
+        private FvecThreadPool searchThreadPool; // null = 1 thread
 
         Builder(IvfAshIndex index) {
             this.index = index;
@@ -169,9 +174,10 @@ public final class IvfAshIndexSearcher implements AutoCloseable {
         }
 
         /**
-         * Thread pool for search.  If not supplied, an internal 1-thread pool
-         * is created and released right after searcher creation (matching the
-         * Rust behaviour of {@code unwrap_or(1)}).
+         * Thread pool for search. Only its thread count is used: each search call starts that
+         * many I/O threads and scores on fastervector's shared scan pool of that size. If not
+         * supplied, the searcher uses 1 thread (an internal 1-thread pool is passed, since the C
+         * API's {@code NULL} would mean all CPUs at the pinned fastervector commit).
          */
         public Builder searchThreadPool(FvecThreadPool pool) {
             this.searchThreadPool = pool;

@@ -26,7 +26,7 @@ import java.util.Locale;
 /**
  * Console table for IVF results, laid out like jvector-examples' {@code BenchmarkTablePrinter},
  * whose first column is fixed to the graph's overquery. Here the leading columns are
- * {@code nprobe} and {@code Threads}, then one column per metric. A new header is printed
+ * {@code nprobe}, {@code Threads} (searchThreads) and {@code QThreads} (queryThreads), then one column per metric. A new header is printed
  * after {@link #resetTable()}, for example when topK, and so the metric columns, change.
  */
 final class IvfTablePrinter {
@@ -34,6 +34,7 @@ final class IvfTablePrinter {
     private static final int MIN_HEADER_PADDING = 3;
     private static final int MAX_COLUMN_WIDTH = 15;
     private static final int KEY_COLUMN_WIDTH = 8;
+    private static final int KEYS = 3;
 
     private final PrintStream out;
     private String headerFmt;
@@ -48,15 +49,16 @@ final class IvfTablePrinter {
         rowFmt = null;
     }
 
-    void printRow(int nprobe, int threads, List<Metric> metrics) {
+    void printRow(int nprobe, int threads, int queryThreads, List<Metric> metrics) {
         if (headerFmt == null) {
             printHeader(metrics);
         }
-        Object[] values = new Object[metrics.size() + 2];
+        Object[] values = new Object[metrics.size() + KEYS];
         values[0] = nprobe;
         values[1] = threads;
+        values[2] = queryThreads;
         for (int i = 0; i < metrics.size(); i++) {
-            values[i + 2] = metrics.get(i).getValue();
+            values[i + KEYS] = metrics.get(i).getValue();
         }
         out.printf(Locale.US, rowFmt, values);
     }
@@ -66,14 +68,17 @@ final class IvfTablePrinter {
     }
 
     private void printHeader(List<Metric> metrics) {
-        StringBuilder header = new StringBuilder("%-" + KEY_COLUMN_WIDTH + "s %-" + KEY_COLUMN_WIDTH + "s");
-        StringBuilder row = new StringBuilder("%-" + KEY_COLUMN_WIDTH + "d %-" + KEY_COLUMN_WIDTH + "d");
-        Object[] line1 = new Object[metrics.size() + 2];
-        Object[] line2 = new Object[metrics.size() + 2];
+        String key = "%-" + KEY_COLUMN_WIDTH;
+        StringBuilder header = new StringBuilder(key + "s " + key + "s " + key + "s");
+        StringBuilder row = new StringBuilder(key + "d " + key + "d " + key + "d");
+        Object[] line1 = new Object[metrics.size() + KEYS];
+        Object[] line2 = new Object[metrics.size() + KEYS];
         line1[0] = "nprobe";
         line1[1] = "Threads";
+        line1[2] = "QThreads";
         line2[0] = "";
         line2[1] = "";
+        line2[2] = "";
         boolean secondLine = false;
         for (int i = 0; i < metrics.size(); i++) {
             Metric m = metrics.get(i);
@@ -81,8 +86,8 @@ final class IvfTablePrinter {
             header.append(" %-").append(width).append('s');
             row.append(" %-").append(width).append(m.getFmtSpec());
             String[] parts = splitHeader(m.getHeader(), width);
-            line1[i + 2] = parts[0];
-            line2[i + 2] = parts[1];
+            line1[i + KEYS] = parts[0];
+            line2[i + KEYS] = parts[1];
             secondLine |= !parts[1].isEmpty();
         }
         headerFmt = header.toString();

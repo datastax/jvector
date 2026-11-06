@@ -44,18 +44,19 @@ class IvfReportingTest {
     Path dir;
 
     @Test
-    void defaultBenchmarksMeasureBothThroughputModesAndSkipCount() {
+    void defaultBenchmarksMeasureEveryThroughputModeAndSkipCount() {
         List<IvfQueryBenchmark> benchmarks = IvfBenchmarks.fromSpec(null);
-        assertEquals(List.of("IvfThroughputBenchmark", "IvfPerQueryThroughputBenchmark",
+        assertEquals(List.of("IvfThroughputBenchmark", "IvfCoalescedThroughputBenchmark", "IvfPerQueryThroughputBenchmark",
                              "IvfLatencyBenchmark", "IvfRecallBenchmark"),
                      benchmarks.stream().map(IvfQueryBenchmark::getBenchmarkName).collect(Collectors.toList()));
     }
 
     @Test
     void perQueryThroughputCanBeTurnedOff() {
-        assertEquals(List.of("IvfThroughputBenchmark", "IvfLatencyBenchmark", "IvfRecallBenchmark"),
+        // Coalesced stays: it answers the same single queries without the per-query cost
+        assertEquals(List.of("IvfThroughputBenchmark", "IvfCoalescedThroughputBenchmark", "IvfLatencyBenchmark", "IvfRecallBenchmark"),
                      IvfBenchmarks.fromSpec(null, false).stream().map(IvfQueryBenchmark::getBenchmarkName).toList());
-        assertEquals(List.of("IvfThroughputBenchmark", "IvfLatencyBenchmark", "IvfRecallBenchmark"),
+        assertEquals(List.of("IvfThroughputBenchmark", "IvfCoalescedThroughputBenchmark", "IvfLatencyBenchmark", "IvfRecallBenchmark"),
                      AutoBenchIvfYAML.defaultBenchmarks(false).stream().map(IvfQueryBenchmark::getBenchmarkName).toList());
         System.setProperty(IvfBenchmarks.PER_QUERY_PROPERTY, "nope");
         try {
@@ -72,16 +73,17 @@ class IvfReportingTest {
     }
 
     @Test
-    void perQueryThroughputFollowsItsBatchedCounterpart() {
+    void perQueryAndCoalescedThroughputFollowTheirBatchedCounterpart() {
         var selection = SearchSelection.forConsole(Map.of("throughput", List.of("AVG"), "accuracy", List.of("recall")), null);
         List<Metric> results = Stream.of(
-                        "search.throughput.avg_qps", "search.throughput.per_query.avg_qps",
-                        "search.throughput.median_qps", "search.throughput.per_query.median_qps",
+                        "search.throughput.avg_qps", "search.throughput.coalesced.avg_qps", "search.throughput.per_query.avg_qps",
+                        "search.throughput.median_qps", "search.throughput.coalesced.median_qps",
+                        "search.throughput.per_query.median_qps",
                         "search.latency.mean_ms", "search.accuracy.recall_at_10")
                 .map(k -> Metric.of(k, k, ".1f", 1)).collect(Collectors.toList());
         var shown = IvfReporting.select(results, selection.resolveForTopK(10)).stream().map(Metric::getKey).toList();
-        assertEquals(List.of("search.throughput.avg_qps", "search.throughput.per_query.avg_qps",
-                             "search.accuracy.recall_at_10"), shown);
+        assertEquals(List.of("search.throughput.avg_qps", "search.throughput.coalesced.avg_qps",
+                             "search.throughput.per_query.avg_qps", "search.accuracy.recall_at_10"), shown);
     }
 
     @Test
@@ -96,6 +98,8 @@ class IvfReportingTest {
         var selection = SearchSelection.forLogging(Map.of("throughput", List.of("AVG"), "accuracy", List.of("recall")), null);
         assertEquals(List.of(
                         "search.throughput.avg_qps", "search.throughput.stddev_qps", "search.throughput.cv_pct",
+                        "search.throughput.coalesced.avg_qps", "search.throughput.coalesced.stddev_qps",
+                        "search.throughput.coalesced.cv_pct",
                         "search.throughput.per_query.avg_qps", "search.throughput.per_query.stddev_qps",
                         "search.throughput.per_query.cv_pct",
                         "search.accuracy.recall_at_10", "search.accuracy.recall_at_100",
@@ -124,7 +128,7 @@ class IvfReportingTest {
     @Test
     void openWithoutRunConfigComputesDefaults() throws IOException {
         IvfReporting reporting = IvfReporting.open(null, List.of(IvfConfig.getDefaultConfig("x")));
-        assertEquals(4, reporting.benchmarks().size());
+        assertEquals(5, reporting.benchmarks().size());
         List<Metric> results = List.of(Metric.of("search.latency.mean_ms", "x", ".1f", 1));
         assertEquals(results, reporting.forConsole(results, 10));
     }
@@ -158,8 +162,8 @@ class IvfReportingTest {
         var bytes = new ByteArrayOutputStream();
         var table = new IvfTablePrinter(new PrintStream(bytes, true, StandardCharsets.UTF_8));
         List<Metric> metrics = IvfThroughputBenchmark.createDefault(Mode.PER_QUERY).metrics(new double[]{1234.5});
-        table.printRow(16, 4, metrics);
-        table.printRow(32, 4, metrics);
+        table.printRow(16, 4, 1, metrics);
+        table.printRow(32, 4, 1, metrics);
         String[] lines = bytes.toString(StandardCharsets.UTF_8).strip().split("\n");
         assertTrue(lines[0].startsWith("nprobe") && lines[0].contains("Threads") && lines[0].contains("Avg per-query"),
                    lines[0]);

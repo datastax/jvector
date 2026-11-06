@@ -150,6 +150,7 @@ public class BenchIvfYAML {
             index.put("index", system.reopened() ? "reopened" : "built");
             var query = new LinkedHashMap<String, Object>();
             query.put("searchThreads", config.search.searchThreads);
+            query.put("queryThreads", config.search.queryThreads);
             new BenchmarkTablePrinter().printConfig(index, query);
         }
 
@@ -163,7 +164,7 @@ public class BenchIvfYAML {
                 System.out.println("\ntopK = " + currentTopK);
                 table.resetTable();
             }
-            table.printRow(point.nprobe(), point.searchThreads(), reporting.forConsole(metrics, point.topK()));
+            table.printRow(point.nprobe(), point.searchThreads(), point.queryThreads(), reporting.forConsole(metrics, point.topK()));
             try {
                 reporting.log(system, config, point, metrics);
             } catch (IOException e) {

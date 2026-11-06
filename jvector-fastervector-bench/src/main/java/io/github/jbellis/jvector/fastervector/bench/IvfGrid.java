@@ -93,8 +93,9 @@ public final class IvfGrid {
                     sink.startConstructionPoint(system);
                     List<Metric> constructionMetrics = system.constructionMetrics();
                     for (SearchPoint searchPoint : searchPoints) {
-                        String label = String.format("%s [%d/%d] topK=%d nprobe=%d searchThreads=%d", index, ++n, total,
-                                                     searchPoint.topK(), searchPoint.nprobe(), searchPoint.searchThreads());
+                        String label = String.format("%s [%d/%d] topK=%d nprobe=%d searchThreads=%d queryThreads=%d",
+                                                     index, ++n, total, searchPoint.topK(), searchPoint.nprobe(),
+                                                     searchPoint.searchThreads(), searchPoint.queryThreads());
                         long start = System.nanoTime();
                         log.info("Search point {}", label);
                         List<Metric> metrics = runBenchmarks(system, searchPoint, benchmarks, heartbeat, label);

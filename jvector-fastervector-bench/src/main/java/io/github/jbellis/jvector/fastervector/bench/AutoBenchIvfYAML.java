@@ -65,7 +65,7 @@ public class AutoBenchIvfYAML {
     /** AutoBenchYAML's columns, then the IVF-only ones. */
     static final String CSV_HEADER = "dataset,QPS,QPS StdDev,Mean Latency,Recall@10,Index Construction Time,Avg Nodes Visited,"
             + "Build Heap Used (MB),Build Off-Heap (MB),Search Heap Used (MB),Search Off-Heap (MB),"
-            + "Per-query QPS,Per-query QPS StdDev,Index Size (MB),Index Memory (MB),Search Peak Memory (MB),"
+            + "Coalesced QPS,Coalesced QPS StdDev,Per-query QPS,Per-query QPS StdDev,Index Size (MB),Index Memory (MB),Search Peak Memory (MB),"
             + "Build Peak Memory (MB)";
 
     /** Metric keys to the BenchResult names BenchmarkSummarizer reads; anything else keeps its header. */
@@ -74,6 +74,9 @@ public class AutoBenchIvfYAML {
             Map.entry("search.throughput.avg_qps", "QPS"),
             Map.entry("search.throughput.stddev_qps", "± Std Dev"),
             Map.entry("search.throughput.cv_pct", "QPS CV %"),
+            Map.entry("search.throughput.coalesced.avg_qps", "Coalesced QPS"),
+            Map.entry("search.throughput.coalesced.stddev_qps", "Coalesced QPS StdDev"),
+            Map.entry("search.throughput.coalesced.cv_pct", "Coalesced QPS CV %"),
             Map.entry("search.throughput.per_query.avg_qps", "Per-query QPS"),
             Map.entry("search.throughput.per_query.stddev_qps", "Per-query QPS StdDev"),
             Map.entry("search.throughput.per_query.cv_pct", "Per-query QPS CV %"),
@@ -187,8 +190,8 @@ public class AutoBenchIvfYAML {
     }
 
     /**
-     * Fixed, as AutoBenchYAML's are: average QPS in both modes (per-query unless
-     * {@code -Divf.perQuery=false}), mean latency, recall.
+     * Fixed, as AutoBenchYAML's are: average QPS batched, coalesced and per-query (per-query
+     * unless {@code -Divf.perQuery=false}), mean latency, recall.
      */
     static List<IvfQueryBenchmark> defaultBenchmarks() {
         return defaultBenchmarks(IvfBenchmarks.perQueryEnabled());
@@ -214,6 +217,7 @@ public class AutoBenchIvfYAML {
         params.put("topK", point.topK());
         params.put("nprobe", point.nprobe());
         params.put("searchThreads", point.searchThreads());
+        params.put("queryThreads", point.queryThreads());
         return new BenchResult(system.dataSet().getName(), params, resultMetrics(metrics));
     }
 
@@ -255,6 +259,8 @@ public class AutoBenchIvfYAML {
                         Double.toString(s.getAvgBuildOffHeapMB()),
                         Double.toString(s.getAvgSearchHeapMB()),
                         Double.toString(s.getAvgSearchOffHeapMB()),
+                        average(rows, "Coalesced QPS"),
+                        average(rows, "Coalesced QPS StdDev"),
                         average(rows, "Per-query QPS"),
                         average(rows, "Per-query QPS StdDev"),
                         average(rows, "Disk Usage (MB)"),

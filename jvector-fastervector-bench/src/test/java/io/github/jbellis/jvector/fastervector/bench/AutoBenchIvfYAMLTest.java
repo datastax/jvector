@@ -63,6 +63,7 @@ class AutoBenchIvfYAMLTest {
     void metricsUseTheNamesTheSummarizerReads() {
         List<Metric> metrics = new ArrayList<>();
         metrics.addAll(IvfThroughputBenchmark.createDefault(Mode.BATCHED).metrics(new double[]{100, 100, 100}));
+        metrics.addAll(IvfThroughputBenchmark.createDefault(Mode.COALESCED).metrics(new double[]{700, 700, 700}));
         metrics.addAll(IvfThroughputBenchmark.createDefault(Mode.PER_QUERY).metrics(new double[]{900, 900, 900}));
         metrics.addAll(IvfLatencyBenchmark.createDefault().metrics(new long[]{2_000_000}));
         metrics.add(Metric.of("search.accuracy.recall_at_10", "Recall@10", ".2f", 0.9));
@@ -74,6 +75,7 @@ class AutoBenchIvfYAMLTest {
         Map<String, Object> m = AutoBenchIvfYAML.resultMetrics(metrics);
         assertEquals(100.0, m.get("QPS"));
         assertEquals(0.0, m.get("± Std Dev"));
+        assertEquals(700.0, m.get("Coalesced QPS"));
         assertEquals(900.0, m.get("Per-query QPS"));
         assertEquals(2.0, m.get("Mean Latency (ms)"));
         assertEquals(0.9, m.get("Recall@10"));
@@ -100,12 +102,13 @@ class AutoBenchIvfYAMLTest {
         assertEquals(200.0, Double.parseDouble(cap[1]), 1e-9, "QPS is the batched average, not per-query");
         assertEquals(0.85, Double.parseDouble(cap[4]), 1e-9);
         assertEquals("", cap[6], "Avg Nodes Visited is blank for IVF");
-        assertEquals(1000.0, Double.parseDouble(cap[11]), 1e-9);
-        assertEquals(40.0, Double.parseDouble(cap[13]), 1e-9);
-        assertEquals(10.0, Double.parseDouble(cap[14]), 1e-9, "Index Memory (MB)");
-        assertEquals(20.0, Double.parseDouble(cap[15]), 1e-9, "Search Peak Memory (MB)");
-        assertEquals("", cap[16], "Build Peak Memory (MB) is blank when no row has it");
-        assertEquals(17, cap.length);
+        assertEquals(500.0, Double.parseDouble(cap[11]), 1e-9, "Coalesced QPS");
+        assertEquals(1000.0, Double.parseDouble(cap[13]), 1e-9, "Per-query QPS");
+        assertEquals(40.0, Double.parseDouble(cap[15]), 1e-9);
+        assertEquals(10.0, Double.parseDouble(cap[16]), 1e-9, "Index Memory (MB)");
+        assertEquals(20.0, Double.parseDouble(cap[17]), 1e-9, "Search Peak Memory (MB)");
+        assertEquals("", cap[18], "Build Peak Memory (MB) is blank when no row has it");
+        assertEquals(19, cap.length);
         assertTrue(lines.get(2).startsWith("dpr-gemma-1m,50.0,"), lines.get(2));
     }
 
@@ -114,6 +117,8 @@ class AutoBenchIvfYAMLTest {
         Map<String, Object> metrics = new LinkedHashMap<>();
         metrics.put("QPS", qps);
         metrics.put("± Std Dev", 1.0);
+        metrics.put("Coalesced QPS", perQueryQps / 2);
+        metrics.put("Coalesced QPS StdDev", 3.0);
         metrics.put("Per-query QPS", perQueryQps);
         metrics.put("Per-query QPS StdDev", 2.0);
         metrics.put("Mean Latency (ms)", 1.5);

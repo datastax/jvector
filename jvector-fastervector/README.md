@@ -174,14 +174,43 @@ try (FvecThreadPool pool = FvecThreadPool.create(8);
   ```
 - **Results.** Similarity is inner product. Each query gets up to `topk` results, best
   first; empty slots are dropped, so a row can be shorter than `topk`.
-- **Thread pools.** Without a pool, a build and a searcher both use all CPUs. (`fvec_capi.h`
-  says a searcher without a pool uses 1 thread, but the pinned fastervector code uses
-  `num_procs()`.) Pass a pool to set the thread count.
-- **Concurrency.** Search a batch of queries per call. At the pinned fastervector commit,
-  concurrent single-query calls on separate searchers share the same I/O rings and scan pool,
-  so they barely scale with threads.
+- **Thread pools.** Without a pool, a build uses all CPUs and a searcher uses 1 thread, as
+  `fvec_capi.h` documents. (The pinned C API treats a `NULL` searcher pool as all CPUs, so
+  `IvfAshIndex` passes a 1-thread pool instead.) A searcher reads only the pool's thread count,
+  so one pool can serve many searchers and be closed once they're built.
+- **Concurrency.** Search a batch of queries per call. At the pinned fastervector commit, each
+  search call starts its thread count of new I/O threads on io_uring rings `0..n-1`, which every
+  searcher shares behind a lock, and scores on a process-wide scan pool of that size. Concurrent
+  single-query calls therefore barely scale, whatever their thread counts. To answer single
+  queries from many threads, use `IvfAshBatchingSearcher` (below).
 - **Lifetime.** Close searchers and indexes (both are `AutoCloseable`). Closing an index
   closes its searchers; using either after `close()` throws `IllegalStateException`.
+
+### Single queries from many threads
+
+`IvfAshBatchingSearcher` combines concurrent single queries into batched searches on one
+searcher. Callers submit one query each; a dispatcher thread searches whatever has queued, up to
+`maxBatch` queries, in one call, so queries that arrive during a search form the next batch.
+
+```java
+try (IvfAshIndexSearcher searcher = index.searcherBuilder()
+             .topk(10).nprobe(16).searchThreadPool(pool)   // a pool sized for the machine
+             .build();
+     IvfAshBatchingSearcher batcher = IvfAshBatchingSearcher.builder(searcher)
+             .maxBatch(1024)                               // the default
+             .maxDelay(Duration.ZERO)                      // the default: don't wait for more
+             .build()) {
+    List<NodeScore> top = batcher.search(query);           // from any thread; or searchAsync(query)
+}
+```
+
+- It doesn't own the searcher: close the batcher first, as above. Closing it finishes the batch
+  in progress and fails queued queries with `IllegalStateException`.
+- `maxDelay` makes a batch wait for more queries before it searches, adding up to that much
+  latency per query. Under load, batches fill without waiting.
+- Futures complete on the dispatcher thread, so keep stages chained onto them without an
+  executor short.
+- `batchCount()` and `queryCount()` give the mean batch size.
 
 ## Regenerating the FFI bindings
 
@@ -206,6 +235,7 @@ before JDK 23.
 1. Point `$FASTERVECTOR_PINNED` at the new fastervector commit and run
    `jvector-fastervector/scripts/stage-fastervector-native.sh "$FASTERVECTOR_PINNED"`.
 2. If it warns that the header changed, regenerate the bindings (above).
-3. Copy over any changed Java code from fastervector, keeping this module's package names
-   and its edits to `FastervectorLibrary` and `IvfAshIndex`.
+3. Copy over any changed Java code from fastervector, keeping this module's package names,
+   its edits to `FastervectorLibrary`, `IvfAshIndex` and `IvfAshIndexSearcher`, and
+   `IvfAshBatchingSearcher`, which is only here.
 4. Update `FASTERVECTOR_SOURCE`, then run the build and tests with `requireNative=true`.

@@ -14,6 +14,7 @@ search:
     10: [8, 16, 32, 64]
     100: [16, 64]
   searchThreads: [1, 8]
+  queryThreads: [1]           # threads of a single-query searcher (latency, per-query QPS); 0 = all CPUs
 
 # Run-level controls, such as benchmarks, console, and logging, are in
 # jvector-examples/yaml-configs/run-config.yml.

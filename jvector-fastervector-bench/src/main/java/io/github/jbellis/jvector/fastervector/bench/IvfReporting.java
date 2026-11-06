@@ -40,15 +40,18 @@ import java.util.TreeSet;
  * run-config.yml applied to IVF results: which benchmarks to compute, which metrics the console
  * shows, and, when logging is enabled, an {@code experiments.csv} with IVF columns in the run's own
  * logging directory. Selections resolve through jvector-examples' {@link SearchSelection}, so the
- * graph names apply; a per-query throughput metric is shown wherever its batched counterpart is.
+ * graph names apply; a per-query or coalesced throughput metric is shown wherever its batched
+ * counterpart is.
  */
 final class IvfReporting {
     static final String PER_QUERY_PREFIX = "search.throughput.per_query.";
+    static final String COALESCED_PREFIX = "search.throughput.coalesced.";
     private static final String BATCHED_PREFIX = "search.throughput.";
 
     static final List<String> FIXED_COLUMNS = List.of(
             "schema_version", "run_id", "run_uuid", "system_id", "index_type", "dataset_name",
-            "nlist", "storageFactor", "buildThreads", "reopened", "topK", "nprobe", "searchThreads");
+            "nlist", "storageFactor", "buildThreads", "reopened", "topK", "nprobe", "searchThreads",
+            "queryThreads");
 
     private static final List<String> THROUGHPUT_STATS =
             List.of("avg_qps", "stddev_qps", "cv_pct", "median_qps", "max_qps", "min_qps");
@@ -130,12 +133,13 @@ final class IvfReporting {
         fixed.put("topK", Integer.toString(point.topK()));
         fixed.put("nprobe", Integer.toString(point.nprobe()));
         fixed.put("searchThreads", Integer.toString(point.searchThreads()));
+        fixed.put("queryThreads", Integer.toString(point.queryThreads()));
         experiments.appendRow(fixed, results);
     }
 
     /**
-     * Keeps metrics the selection matches, plus per-query throughput wherever its batched
-     * counterpart matches, and always the resident-memory metrics.
+     * Keeps metrics the selection matches, plus per-query and coalesced throughput wherever their
+     * batched counterpart matches, and always the resident-memory metrics.
      */
     static List<Metric> select(List<Metric> results, ResolvedSelection resolved) {
         if (resolved.keys().isEmpty() && resolved.prefixes().isEmpty()) {
@@ -155,8 +159,10 @@ final class IvfReporting {
                                                     IvfSystem.BUILD_PEAK_RSS_KEY);
 
     private static boolean selected(String key, ResolvedSelection resolved) {
-        if (key.startsWith(PER_QUERY_PREFIX)) {
-            return resolved.matchesKey(BATCHED_PREFIX + key.substring(PER_QUERY_PREFIX.length()));
+        for (String prefix : List.of(PER_QUERY_PREFIX, COALESCED_PREFIX)) {
+            if (key.startsWith(prefix)) {
+                return resolved.matchesKey(BATCHED_PREFIX + key.substring(prefix.length()));
+            }
         }
         return resolved.matchesKey(key);
     }
@@ -186,6 +192,9 @@ final class IvfReporting {
         List<String> keys = new ArrayList<>();
         for (String stat : THROUGHPUT_STATS) {
             keys.add(BATCHED_PREFIX + stat);
+        }
+        for (String stat : THROUGHPUT_STATS) {
+            keys.add(COALESCED_PREFIX + stat);
         }
         for (String stat : THROUGHPUT_STATS) {
             keys.add(PER_QUERY_PREFIX + stat);

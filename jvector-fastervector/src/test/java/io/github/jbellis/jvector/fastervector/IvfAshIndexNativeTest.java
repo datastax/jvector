@@ -36,6 +36,8 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Random;
 import java.util.Set;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.TimeUnit;
 import java.util.stream.IntStream;
 
 import static org.junit.jupiter.api.Assertions.*;
@@ -163,6 +165,33 @@ class IvfAshIndexNativeTest {
             Vecs wrongDim = new FlatArrayVecs(new float[DIM + 1], DIM + 1);
             assertThrows(IllegalArgumentException.class, () -> searcher.search(wrongDim));
         }
+    }
+
+    @Test
+    void batchingSearcherMatchesOneBatchedCall() throws Exception {
+        try (FvecThreadPool pool = FvecThreadPool.create(2);
+             IvfAshIndex index = build(new Array2DVecs(data), pool);
+             IvfAshIndexSearcher searcher = index.searcherBuilder().topk(TOPK).nprobe(NPROBE).searchThreadPool(pool).build()) {
+            SearchResult expected = searcher.search(queryVecs());
+            List<CompletableFuture<List<NodeScore>>> futures = new ArrayList<>();
+            try (IvfAshBatchingSearcher batcher = IvfAshBatchingSearcher.builder(searcher).maxBatch(7).build()) {
+                for (float[] q : queries) {
+                    futures.add(batcher.searchAsync(q));
+                }
+                for (int q = 0; q < NQ; q++) {
+                    // Batches split differently, so compare neighbour sets rather than tie order
+                    assertEquals(labels(expected.results().get(q)), labels(futures.get(q).get(30, TimeUnit.SECONDS)));
+                }
+                assertEquals(NQ, batcher.queryCount());
+                assertThrows(IllegalArgumentException.class, () -> batcher.search(new float[DIM + 1]));
+            }
+        }
+    }
+
+    private static Set<Long> labels(List<NodeScore> row) {
+        Set<Long> out = new HashSet<>();
+        row.forEach(ns -> out.add(ns.label()));
+        return out;
     }
 
     @Test

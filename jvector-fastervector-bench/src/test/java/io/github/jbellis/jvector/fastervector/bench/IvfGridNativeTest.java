@@ -142,17 +142,20 @@ class IvfGridNativeTest {
     void timingBenchmarksReportPositiveValues() throws IOException {
         List<IvfQueryBenchmark> benchmarks = List.of(
                 IvfThroughputBenchmark.createEmpty(IvfThroughputBenchmark.Mode.BATCHED, 1, 2).displayAvgQps(),
+                IvfThroughputBenchmark.createEmpty(IvfThroughputBenchmark.Mode.COALESCED, 1, 2).displayAvgQps(),
                 IvfThroughputBenchmark.createEmpty(IvfThroughputBenchmark.Mode.PER_QUERY, 1, 2).displayAvgQps(),
                 IvfLatencyBenchmark.createEmpty(1).displayAvgLatency().displayP999Latency());
         // Each measured run starts with a 500 ms GC pause, so keep this grid to one point per thread count
         IvfConfig config = config(false);
         config.construction.storageFactor = List.of(1.0f);
         config.search.topKNprobe = Map.of(10, List.of(CLUSTERS));
+        config.search.queryThreads = List.of(2);
         var rows = run(config, benchmarks);
         assertEquals(2, rows.size());
         assertFalse(rows.isEmpty());
         for (Row row : rows) {
-            for (String key : List.of("search.throughput.avg_qps", "search.throughput.per_query.avg_qps",
+            for (String key : List.of("search.throughput.avg_qps", "search.throughput.coalesced.avg_qps",
+                                      "search.throughput.per_query.avg_qps",
                                       "search.latency.mean_ms", "search.latency.p999_ms")) {
                 assertTrue(row.metrics().get(key) > 0, key + " = " + row.metrics().get(key) + " at " + row.point());
             }
@@ -172,6 +175,7 @@ class IvfGridNativeTest {
         assertEquals(1, results.size());
         assertEquals(16, results.get(0).parameters.get("nlist"));
         assertTrue((Double) results.get(0).metrics.get("QPS") > 0);
+        assertTrue((Double) results.get(0).metrics.get("Coalesced QPS") > 0);
         assertTrue((Double) results.get(0).metrics.get("Per-query QPS") > 0);
 
         Path csv = dir.resolve("ivf.csv");

@@ -131,8 +131,8 @@ public final class IvfAshIndex implements AutoCloseable {
      */
     IvfAshIndexSearcher createSearcher(int topk, int nprobe, FvecThreadPool userPool) {
         MemorySegment indexPtr = requireOpen();
-        // Rust unwrap_or(1): if no pool, create 1-thread pool internally.
-        // Passing NULL to C API means "all CPUs", so we must NOT pass null here.
+        // No pool means 1 thread, as fvec_capi.h documents. The pinned C API
+        // treats NULL as all CPUs, so pass a 1-thread pool instead of null.
         boolean ownPool = (userPool == null);
         FvecThreadPool pool = ownPool ? FvecThreadPool.create(1) : userPool;
         try {

@@ -26,7 +26,7 @@ import java.util.Map;
 
 /**
  * Turns run-config.yml's {@code benchmarks} section into IVF benchmarks, the way the graph
- * {@code Grid} turns it into its own. Throughput is measured batched and, unless
+ * {@code Grid} turns it into its own. Throughput is measured batched, coalesced and, unless
  * {@code -Divf.perQuery=false}, per-query. {@code count} has no IVF meaning and is skipped with a
  * warning.
  */
@@ -36,9 +36,11 @@ final class IvfBenchmarks {
     private IvfBenchmarks() {}
 
     /**
-     * Whether to measure per-query throughput: {@code -Divf.perQuery=false} turns it off. At the
-     * pinned fastervector commit, concurrent single-query searchers share one scan pool and one set
-     * of I/O rings, so per-query QPS barely scales with threads and takes most of a run's time.
+     * Whether to measure direct per-query throughput: {@code -Divf.perQuery=false} turns it off. At
+     * the pinned fastervector commit, concurrent single-query searchers share one scan pool and one
+     * set of I/O rings, so per-query QPS barely scales with threads and takes most of a run's time.
+     * Coalesced throughput, which answers the same single queries through
+     * {@code IvfAshBatchingSearcher}, is always measured.
      */
     static boolean perQueryEnabled() {
         String value = System.getProperty(PER_QUERY_PROPERTY, "true").trim().toLowerCase(Locale.ROOT);
@@ -53,7 +55,7 @@ final class IvfBenchmarks {
     static List<Mode> throughputModes(boolean perQuery) {
         if (!perQuery) {
             System.out.println("Per-query throughput off (-D" + PER_QUERY_PROPERTY + "=false)");
-            return List.of(Mode.BATCHED);
+            return List.of(Mode.BATCHED, Mode.COALESCED);
         }
         return List.of(Mode.values());
     }
