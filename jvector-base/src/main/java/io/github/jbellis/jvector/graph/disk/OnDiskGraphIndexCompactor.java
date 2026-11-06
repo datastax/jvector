@@ -109,6 +109,12 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
     private static final long EXACT_JOIN_PAIR_BYTES_MIN = 512L << 20, EXACT_JOIN_PAIR_BYTES_MAX = 32L << 30;
     private static final int MIN_SEARCH_TOP_K = 2;
     private static final int SEARCH_TOP_K_MULTIPLIER = 4;
+    // Fixed cell-walk budgets (bytes); 0 = the heap-derived defaults above (see withCellWalkBudgets).
+    private long walkPairBytes = 0, walkQueryBytes = 0;
+    // Records announced to the page cache this many nodes ahead of their read in the level-0 pass and
+    // the pre-encode (see withRecordAnnounceAhead); 0 = demand faults only.
+    static final int DEFAULT_RECORD_ANNOUNCE_AHEAD = 64;
+    private int recordAnnounceAhead = DEFAULT_RECORD_ANNOUNCE_AHEAD;
 
     private List<OnDiskGraphIndex> sources;
     // Optional non-fused compressed sidecar, parallel to `sources`. Null when sources carry their
@@ -590,7 +596,7 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
     /** Snapshot the compactor's state into a {@link CompactionContext} for strategies to consume. */
     private CompactionContext buildContext() {
         return new CompactionContext(sources, sourceCompressed, liveNodes, remappers,
-                dimension, maxOrdinal, executor, taskWindowSize);
+                dimension, maxOrdinal, executor, taskWindowSize, recordAnnounceAhead);
     }
 
     /**
@@ -833,7 +839,11 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
                         // new ordinals. The cell walk scans for the whole range before its batches run.
                         OrdinalMapper m = remappers.get(s);
                         int range = exactJoinRange(s, 0, 0, 0);
-                        log.info("Cell walk: source {} in ranges of {} nodes", s, range);
+                        log.info("Cell walk: source {} in ranges of {} nodes (pair budget {} MB{}, query budget {} MB{})", s, range,
+                                 (walkPairBytes > 0 ? walkPairBytes : Math.max(EXACT_JOIN_PAIR_BYTES_MIN, Math.min(EXACT_JOIN_PAIR_BYTES_MAX, Runtime.getRuntime().maxMemory() / 8))) >> 20,
+                                 walkPairBytes > 0 ? " fixed" : " from the heap",
+                                 (walkQueryBytes > 0 ? walkQueryBytes : Math.max(EXACT_JOIN_QUERY_BYTES_MIN, Runtime.getRuntime().maxMemory() / 16)) >> 20,
+                                 walkQueryBytes > 0 ? " fixed" : " from the heap");
                         int gStart = 0;
                         while (gStart < batches.size()) {
                             ExactJoin previous = exactJoin;
@@ -980,20 +990,24 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
                                               CompactionParams params) throws IOException {
 
         List<WriteResult> out = new ArrayList<>(bs.end - bs.start);
-        if (bs.end > bs.start) {
-            // Stream this batch's own records into the page cache before processing. Search
-            // reads into other sources are data-dependent and stay demand-faulted, but each
-            // node's own record read (adjacency + vector) is fully predictable. Under
-            // similarity ordering the batch's ordinals are scattered, so only prefetch when
-            // they still form a reasonably dense range.
-            int lo = Integer.MAX_VALUE;
-            int hi = -1;
-            for (int i = bs.start; i < bs.end; i++) {
-                lo = Math.min(lo, bs.nodes[i]);
-                hi = Math.max(hi, bs.nodes[i]);
-            }
-            if ((long) hi - lo <= 8L * (bs.end - bs.start)) {
-                sources.get(bs.sourceIdx).prefetchL0Records(lo, hi);
+        // Each node's own record read (adjacency + vector) is fully predictable, while search reads
+        // into other sources are data-dependent and stay demand-faulted. A batch whose ordinals form
+        // a dense range is streamed into the page cache whole; a region-ordered batch is scattered
+        // over the source, so its records are announced one at a time, a fixed number of nodes ahead
+        // of their read, which keeps the device busy instead of faulting them in one by one.
+        int lo = Integer.MAX_VALUE, hi = -1;
+        for (int i = bs.start; i < bs.end; i++) {
+            lo = Math.min(lo, bs.nodes[i]);
+            hi = Math.max(hi, bs.nodes[i]);
+        }
+        final boolean scattered = bs.end > bs.start && (long) hi - lo > 8L * (bs.end - bs.start);
+        if (bs.end > bs.start && !scattered) {
+            sources.get(bs.sourceIdx).prefetchL0Records(lo, hi);
+        } else if (scattered && recordAnnounceAhead > 0) {
+            OnDiskGraphIndex source = sources.get(bs.sourceIdx);
+            FixedBitSet live = liveNodes.get(bs.sourceIdx);
+            for (int i = bs.start; i < Math.min(bs.end, bs.start + recordAnnounceAhead); i++) {
+                if (live.get(bs.nodes[i])) source.announceL0Record(bs.nodes[i]);
             }
         }
 
@@ -1005,11 +1019,16 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
         for (int i = bs.start; i < bs.end; i++) {
             int node = bs.nodes[i];
             if (!liveNodes.get(bs.sourceIdx).get(node)) continue;
+            if (scattered && recordAnnounceAhead > 0 && i + recordAnnounceAhead < bs.end) {
+                int ahead = bs.nodes[i + recordAnnounceAhead];
+                if (liveNodes.get(bs.sourceIdx).get(ahead)) sources.get(bs.sourceIdx).announceL0Record(ahead);
+            }
             out.add(processBaseNode(node, bs.sourceIdx, scratch, writer, params));
         }
 
         return out;
     }
+
 
 
 
@@ -1621,10 +1640,9 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
             // score the unvisited neighbours in one tight loop first (their cache misses overlap)
             int cnt = 0;
             for (int j = 0; j < stride; j++) {
-                int nb = adj[p * stride + j];
-                if (nb < 0) break;
-                int np = map.position(level, nb);
-                if (np >= 0 && visited.add(np)) nbPos[cnt++] = np;
+                int np = adj[p * stride + j];
+                if (np < 0) break;
+                if (visited.add(np)) nbPos[cnt++] = np;
             }
             for (int j = 0; j < cnt; j++) {
                 scored[scoredCount + j] = packScored(scorer.score(level, nbPos[j]), nbPos[j]);
@@ -2406,9 +2424,9 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
      */
     private int exactJoinRange(int src, long measuredNodes, long measuredPairs, long measuredMaxTarget) {
         long heap = Runtime.getRuntime().maxMemory();
-        long queryBudget = Math.max(EXACT_JOIN_QUERY_BYTES_MIN, heap / 16);
+        long queryBudget = walkQueryBytes > 0 ? walkQueryBytes : Math.max(EXACT_JOIN_QUERY_BYTES_MIN, heap / 16);
         long byQueries = queryBudget / (4L * dimension);
-        long pairBudget = Math.max(EXACT_JOIN_PAIR_BYTES_MIN, Math.min(EXACT_JOIN_PAIR_BYTES_MAX, heap / 8));
+        long pairBudget = walkPairBytes > 0 ? walkPairBytes : Math.max(EXACT_JOIN_PAIR_BYTES_MIN, Math.min(EXACT_JOIN_PAIR_BYTES_MAX, heap / 8));
         long pairsPerNode, maxTargetPerNode;
         if (measuredNodes > 0) {
             pairsPerNode = (measuredPairs + measuredNodes - 1) / measuredNodes;

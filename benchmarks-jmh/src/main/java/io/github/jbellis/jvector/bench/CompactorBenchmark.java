@@ -315,6 +315,17 @@ public class CompactorBenchmark {
     @Param({"1"})
     public int parallelWriteThreads;
 
+    /** Cell-walk budgets in MB (0 = the compactor's heap-derived defaults): pair table, query vectors. */
+    @Param({"0"})
+    public long walkPairMb;
+
+    @Param({"0"})
+    public long walkQueryMb;
+
+    /** Records announced to the page cache this many nodes ahead of their read in the level-0 pass and pre-encode (0 = off). */
+    @Param({"64"})
+    public int recordAnnounceAhead;
+
     @Param({""})
     public String vectorizationProvider;
 
@@ -701,7 +712,9 @@ public class CompactorBenchmark {
         for (int n = 0; n < numPartitions; n++) {
             liveNodes.add(randomLiveNodes(graphs.get(n).size(), liveNodesRate, n));
         }
-        var compactor = new OnDiskGraphIndexCompactor(graphs, liveNodes, similarityFunction, null);
+        var compactor = new OnDiskGraphIndexCompactor(graphs, liveNodes, similarityFunction, null)
+                .withCellWalkBudgets(walkPairMb << 20, walkQueryMb << 20)
+                .withRecordAnnounceAhead(recordAnnounceAhead);
 
         long startNanos = System.nanoTime();
         compactor.compact(compactOutputPath);

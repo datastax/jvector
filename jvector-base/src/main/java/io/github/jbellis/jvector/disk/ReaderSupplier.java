@@ -41,6 +41,17 @@ public interface ReaderSupplier extends AutoCloseable {
     default void prefetch(long offset, long length) {
     }
 
+    /**
+     * Announces that the byte range {@code [offset, offset + length)} is about to be read, so the
+     * implementation can start bringing it into the page cache without blocking the caller
+     * ({@code POSIX_MADV_WILLNEED} on a mapping). Meant for one record at a time, a fixed number of
+     * records ahead of the read loop that will touch it. Best-effort; by default the synchronous
+     * {@link #prefetch(long, long)}.
+     */
+    default void announce(long offset, long length) {
+        prefetch(offset, length);
+    }
+
     default void close() throws IOException {
     }
 }
