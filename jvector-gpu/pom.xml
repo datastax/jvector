@@ -32,8 +32,8 @@
     </description>
 
     <properties>
-        <!-- TornadoVM 8.0.0 (released 2026-10-26): tornado-api and tornado-cuvs from Maven Central, the SDK of the same release at run time -->
-        <tornadovm.version>8.0.0-jdk22plus</tornadovm.version>
+        <!-- TornadoVM 8.1.0 (released 2026-11-06): tornado-api and tornado-cuvs from Maven Central, the SDK of the same release at run time -->
+        <tornadovm.version>8.1.0-jdk22plus</tornadovm.version>
     </properties>
 
     <dependencies>
