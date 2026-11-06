@@ -33,6 +33,7 @@ import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.LongAdder;
 import java.util.stream.IntStream;
 import io.github.jbellis.jvector.annotations.Experimental;
+import io.github.jbellis.jvector.disk.IndexWriter;
 import io.github.jbellis.jvector.graph.*;
 import io.github.jbellis.jvector.graph.disk.feature.FeatureId;
 import io.github.jbellis.jvector.graph.disk.feature.FusedFeature;
@@ -125,9 +126,21 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
      * of every target. Callers read the mapping back via {@link #ordinalMappers()}.
      */
     private List<OrdinalMapper> remappers;
+    /**
+     * The output ordinals the caller chose, per source and indexed by source ordinal ({@link #withOutputOrdinals}), or
+     * null to number the output by {@link #remappers}. The merge still runs on its own ordinals, whose layout the cell
+     * join depends on; only the writer and the sidecar translate, on the way out.
+     */
+    private List<int[]> outputOrdinals;
+    private int[] mergedToOutput;      // merged ordinal -> output ordinal, set by compact() with outputOrdinals
+    private int[] outputToMerged;      // its inverse
+    private List<OrdinalMapper> outputMappers;   // what ordinalMappers() reports with outputOrdinals
     private final List<Integer> maxDegrees;
 
     private final int dimension;
+    // The vector components the sources store, and so the output: the dimension, or 0 when the
+    // sources are topology-only and their vectors come from the caller.
+    private final int storedDimension;
     private int maxOrdinal = -1;
     private int numTotalNodes = 0;
     private final ForkJoinPool executor;
@@ -266,7 +279,48 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
             List<FixedBitSet> liveNodes,
             VectorSimilarityFunction similarityFunction,
             ForkJoinPool executor) {
-        checkBeforeCompact(sources, sourceCompressed, liveNodes);
+        this(sources, null, sourceCompressed, liveNodes, similarityFunction, executor);
+    }
+
+    /**
+     * Constructs a new OnDiskGraphIndexCompactor whose full-precision vectors may come from the
+     * caller instead of from the source graphs.
+     * <p>
+     * With {@code sourceVectors}, every vector the compaction reads (the merge, codebook retraining
+     * and the cross-source searches) comes from the caller, and the graphs supply only topology and
+     * their other features. The sources may then be topology-only (written with
+     * {@code InlineVectors} of dimension 0), which is how a caller that already stores its vectors
+     * avoids storing them twice; the output is written the same way. When the sources do store
+     * vectors, the supplied ones replace them, in the merge and in the output.
+     *
+     * @param sourceVectors    parallel to {@code sources}, or {@code null} to read the vectors stored
+     *                         in the graphs. Entry {@code s} is indexed by source {@code s}'s own
+     *                         ordinals and spans its {@link OnDiskGraphIndex#getIdUpperBound()}, but
+     *                         is only ever asked for the live nodes: the searches that walk through a
+     *                         deleted node score it by a live neighbour, so a store that has let go of
+     *                         its deleted vectors can supply them. All entries share one dimension, which
+     *                         must be the sources' stored dimension when they store one. They are read
+     *                         concurrently from the compaction pool, each thread through its own
+     *                         instance from {@link RandomAccessVectorValues#threadLocalSupplier()}.
+     * @param sourceCompressed see {@link #OnDiskGraphIndexCompactor(List, List, List, VectorSimilarityFunction, ForkJoinPool)}
+     */
+    @Experimental
+    public OnDiskGraphIndexCompactor(
+            List<OnDiskGraphIndex> sources,
+            List<RandomAccessVectorValues> sourceVectors,
+            List<CompressedVectors> sourceCompressed,
+            List<FixedBitSet> liveNodes,
+            VectorSimilarityFunction similarityFunction,
+            ForkJoinPool executor) {
+        checkBeforeCompact(sources, sourceVectors, sourceCompressed, liveNodes);
+        this.storedDimension = sources.get(0).getDimension();
+        if (sourceVectors != null) {
+            List<OnDiskGraphIndex> withVectors = new ArrayList<>(sources.size());
+            for (int s = 0; s < sources.size(); s++) {
+                withVectors.add(new ExternalVectorsGraphIndex(sources.get(s), sourceVectors.get(s), liveNodes.get(s)));
+            }
+            sources = withVectors;
+        }
 
         if (executor != null) {
             this.executor = executor;
@@ -310,13 +364,53 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
      */
     private void checkBeforeCompact(
             List<OnDiskGraphIndex> sources,
+            List<RandomAccessVectorValues> sourceVectors,
             List<CompressedVectors> sourceCompressed,
             List<FixedBitSet> liveNodes) {
         validateInputSizes(sources, liveNodes);
         validateLiveNodesBounds(sources, liveNodes);
         validateGraphConfiguration(sources);
         validateFeatures(sources);
+        validateVectors(sources, sourceVectors);
         validateCompressed(sources, sourceCompressed);
+    }
+
+    /**
+     * Validates where the vectors come from: the sources must store them unless the caller supplies
+     * them, and supplied vectors must cover every source ordinal at one dimension, the stored one
+     * when the sources store any.
+     */
+    private void validateVectors(List<OnDiskGraphIndex> sources, List<RandomAccessVectorValues> sourceVectors) {
+        int storedDimension = sources.get(0).getDimension();
+        if (sourceVectors == null) {
+            if (storedDimension == 0) {
+                throw new IllegalArgumentException(
+                        "The sources store no vectors (inline vectors of dimension 0); supply them through sourceVectors");
+            }
+            return;
+        }
+        if (sourceVectors.size() != sources.size()) {
+            throw new IllegalArgumentException("sourceVectors must have the same size as sources");
+        }
+        int dimension = Objects.requireNonNull(sourceVectors.get(0), "sourceVectors[0] is null").dimension();
+        if (dimension <= 0) {
+            throw new IllegalArgumentException("sourceVectors must have a positive dimension, got " + dimension);
+        }
+        if (storedDimension != 0 && storedDimension != dimension) {
+            throw new IllegalArgumentException("sourceVectors have dimension " + dimension
+                    + " but the sources store vectors of dimension " + storedDimension);
+        }
+        for (int s = 0; s < sources.size(); s++) {
+            RandomAccessVectorValues vectors = Objects.requireNonNull(sourceVectors.get(s), "sourceVectors[" + s + "] is null");
+            if (vectors.dimension() != dimension) {
+                throw new IllegalArgumentException("sourceVectors must have the same dimension; sourceVectors[" + s
+                        + "] has " + vectors.dimension() + ", sourceVectors[0] has " + dimension);
+            }
+            if (vectors.size() < sources.get(s).getIdUpperBound()) {
+                throw new IllegalArgumentException("sourceVectors[" + s + "] has " + vectors.size()
+                        + " vectors but source " + s + " has ordinals up to " + (sources.get(s).getIdUpperBound() - 1));
+            }
+        }
     }
 
     /**
@@ -436,13 +530,103 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
     /**
      * The output ordinal of every source node, one mapper per source: {@code oldToNew} of a live
      * node is its ordinal in the compacted graph, of a deleted node {@link OrdinalMapper#OMITTED}.
-     * Available once {@link #compact} has assigned the ordinals.
+     * Available once {@link #compact} has assigned the ordinals; with {@link #withOutputOrdinals}
+     * they are the caller's.
      */
     public List<OrdinalMapper> ordinalMappers() {
         if (remappers == null) {
             throw new IllegalStateException("ordinals are assigned by compact()");
         }
-        return remappers;
+        return outputMappers != null ? outputMappers : remappers;
+    }
+
+    /**
+     * Numbers the compacted graph with ordinals the caller chooses instead of the compactor's own,
+     * for a caller whose own structures expect an order of their own (the ordinal order of an
+     * external id, say), so that it does not have to rewrite the graph afterwards. The merge is
+     * the one the compactor runs with its own ordinals: only the numbering of what is written
+     * changes, in the records, the neighbour lists, the upper layers, the entry node and the
+     * compressed sidecar, and {@link #ordinalMappers()} reports these ordinals.
+     * <p>
+     * The level-0 records then come out of the merge in an order that is not the output's, so they
+     * are placed through a mapping of the level-0 section: in the output file, or, for an output
+     * {@link #compact(IndexWriter, Path) streamed} to the caller, in the work directory first, which
+     * then needs as much more space as the level-0 records take.
+     *
+     * @param outputOrdinals one array per source, indexed by source ordinal and covering its
+     *                       {@link OnDiskGraphIndex#getIdUpperBound()}: the output ordinal of every
+     *                       live node. The live nodes of all the sources must be given every ordinal
+     *                       from 0 to their count - 1 exactly once. What a deleted node is given is
+     *                       not read.
+     * @return this compactor
+     */
+    @Experimental
+    public OnDiskGraphIndexCompactor withOutputOrdinals(List<int[]> outputOrdinals) {
+        Objects.requireNonNull(outputOrdinals, "outputOrdinals");
+        if (outputOrdinals.size() != sources.size()) {
+            throw new IllegalArgumentException("outputOrdinals must have one array per source: " + outputOrdinals.size()
+                                               + " for " + sources.size() + " sources");
+        }
+        FixedBitSet taken = new FixedBitSet(Math.max(1, numTotalNodes));
+        for (int s = 0; s < sources.size(); s++) {
+            int[] ordinals = Objects.requireNonNull(outputOrdinals.get(s), "outputOrdinals[" + s + "] is null");
+            FixedBitSet alive = liveNodes.get(s);
+            if (ordinals.length < alive.length()) {
+                throw new IllegalArgumentException("outputOrdinals[" + s + "] has " + ordinals.length
+                                                   + " entries but source " + s + " has ordinals up to " + (alive.length() - 1));
+            }
+            for (int node = alive.nextSetBit(0); node != DocIdSetIterator.NO_MORE_DOCS; node = alive.nextSetBit(node + 1)) {
+                int ordinal = ordinals[node];
+                if (ordinal < 0 || ordinal >= numTotalNodes) {
+                    throw new IllegalArgumentException("output ordinal " + ordinal + " of source " + s + " node " + node
+                                                       + " is outside 0.." + (numTotalNodes - 1) + ", the live nodes' range");
+                }
+                if (taken.getAndSet(ordinal)) {
+                    throw new IllegalArgumentException("output ordinal " + ordinal + " is given to more than one live node");
+                }
+            }
+        }
+        this.outputOrdinals = outputOrdinals;
+        return this;
+    }
+
+    /** Translates the caller's output ordinals into the merged ordinals {@link #remappers} just assigned. */
+    private void resolveOutputOrdinals() {
+        mergedToOutput = null;
+        outputToMerged = null;
+        outputMappers = null;
+        if (outputOrdinals == null) {
+            return;
+        }
+        int count = maxOrdinal + 1;
+        mergedToOutput = new int[count];
+        outputToMerged = new int[count];
+        int[] outputToSource = new int[count];
+        int[] outputToOld = new int[count];
+        List<int[]> oldToOutput = new ArrayList<>(sources.size());
+        for (int s = 0; s < sources.size(); s++) {
+            FixedBitSet alive = liveNodes.get(s);
+            int[] ordinals = outputOrdinals.get(s);
+            int[] mapped = new int[alive.length()];
+            OrdinalMapper merged = remappers.get(s);
+            for (int node = 0; node < mapped.length; node++) {
+                if (!alive.get(node)) {
+                    mapped[node] = OrdinalMapper.OMITTED;
+                    continue;
+                }
+                int ordinal = ordinals[node];
+                mapped[node] = ordinal;
+                mergedToOutput[merged.oldToNew(node)] = ordinal;
+                outputToMerged[ordinal] = merged.oldToNew(node);
+                outputToSource[ordinal] = s;
+                outputToOld[ordinal] = node;
+            }
+            oldToOutput.add(mapped);
+        }
+        outputMappers = new ArrayList<>(sources.size());
+        for (int s = 0; s < sources.size(); s++) {
+            outputMappers.add(new ArrayOrdinalMapper(s, oldToOutput.get(s), outputToOld, outputToSource, maxOrdinal));
+        }
     }
 
     /**
@@ -451,25 +635,53 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
      */
     @Experimental
     public void compact(Path outputPath) throws FileNotFoundException {
-        QuantizationCompactionStrategy strategy = detectInlineStrategy();
-        // Whatever the sources carry, the merge itself runs on the vectors: the scratch holds them
-        // in merged-ordinal order and the whole merge is exact. A fused output still gets its codes
-        // from the inline strategy's pre-encode, which is what that output format needs.
-        QuantizationCompactionStrategy scratch = SidecarCompactionStrategy.scratchVectors(buildContext());
-        scratch.retrain(similarityFunction);
+        compactGraph(Target.file(outputPath));
+    }
+
+    /**
+     * Compaction entry point for a caller-provided output. Writes the merged graph to
+     * {@code output}, strictly sequentially and starting at its current position, so it can be any
+     * stream the caller owns (pages of its own storage, a checksummed segment); the graph is the
+     * same, byte for byte, as {@link #compact(Path)} writes to a file. The output is left open.
+     * <p>
+     * The scratch and spill files the merge needs, which {@link #compact(Path)} keeps next to and
+     * past the end of its output file, go to {@code workDirectory} instead and are deleted before
+     * this returns, whether it succeeds or not. They need about as much space as the merged graph.
+     *
+     * @param output        where the graph is written; read back with
+     *                      {@link OnDiskGraphIndex#load(io.github.jbellis.jvector.disk.ReaderSupplier, long)}
+     *                      at the position it had when this was called
+     * @param workDirectory an existing directory for the merge's transient files
+     */
+    @Experimental
+    public void compact(IndexWriter output, Path workDirectory) throws IOException {
+        Objects.requireNonNull(output, "output");
+        compactGraph(Target.stream(output, workDirectory));
+    }
+
+    private void compactGraph(Target target) throws FileNotFoundException {
+        // Set up inside the try, so that a failure there still releases a streamed target's scratch file.
+        QuantizationCompactionStrategy strategy = QuantizationCompactionStrategy.NONE;
+        QuantizationCompactionStrategy scratch = QuantizationCompactionStrategy.NONE;
         try {
+            strategy = detectInlineStrategy();
+            // Whatever the sources carry, the merge itself runs on the vectors: the scratch holds them
+            // in merged-ordinal order and the whole merge is exact. A fused output still gets its codes
+            // from the inline strategy's pre-encode, which is what that output format needs.
+            scratch = SidecarCompactionStrategy.scratchVectors(buildContext());
+            scratch.retrain(similarityFunction);
             activeSidecarStrategy = scratch;
             vectorStore = scratch;
-            compactGraphImpl(outputPath, strategy);
+            compactGraphImpl(target, strategy);
         } finally {
             activeSidecarStrategy = QuantizationCompactionStrategy.NONE;
             vectorStore = QuantizationCompactionStrategy.NONE;
             // Release every mapping before resizing: both strategies can hold mappings on scratch
             // sections of this same file, and a truncate under a live mapping fails on Windows.
-            strategy.onAfterClose(outputPath);
-            scratch.onAfterClose(outputPath);
+            strategy.onAfterClose(target.scratchPath);
+            scratch.onAfterClose(target.scratchPath);
             scratch.releaseTransientState();
-            truncateScratchSections(outputPath, strategy, scratch);
+            releaseScratch(target, strategy, scratch);
         }
     }
 
@@ -484,39 +696,135 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
      */
     @Experimental
     public void compact(Path graphPath, Path compressedPath) throws FileNotFoundException {
+        requireSourceCompressed();
+        Objects.requireNonNull(compressedPath, "compressedPath");
+        compactGraphAndSidecar(Target.file(graphPath), sidecar -> sidecar.writeSidecar(compressedPath));
+    }
+
+    /**
+     * {@link #compact(Path, Path)} for caller-provided outputs: the merged graph goes to
+     * {@code graphOutput} exactly as {@link #compact(IndexWriter, Path)} writes it, and the merged
+     * compressed vectors go to {@code compressedOutput}, sequentially from its current position.
+     * Both outputs are left open, and {@code workDirectory} holds the transient files.
+     */
+    @Experimental
+    public void compact(IndexWriter graphOutput, IndexWriter compressedOutput, Path workDirectory) throws IOException {
+        requireSourceCompressed();
+        Objects.requireNonNull(graphOutput, "graphOutput");
+        Objects.requireNonNull(compressedOutput, "compressedOutput");
+        compactGraphAndSidecar(Target.stream(graphOutput, workDirectory), sidecar -> sidecar.writeSidecar(compressedOutput));
+    }
+
+    private void requireSourceCompressed() {
         if (sourceCompressed == null) {
             throw new IllegalStateException(
-                    "compact(graphPath, compressedPath) requires sourceCompressed to be supplied to the constructor");
+                    "compacting into a graph and a compressed sidecar requires sourceCompressed to be supplied to the constructor");
         }
-        Objects.requireNonNull(compressedPath, "compressedPath");
+    }
 
-        // Graph compaction proceeds without fused-PQ retrain (validateCompressed forbids
-        // FUSED_PQ when sourceCompressed is set), then the sidecar is written below.
-        QuantizationCompactionStrategy inlineStrategy = detectInlineStrategy();
-        QuantizationCompactionStrategy sidecarStrategy = detectSidecarStrategy();
-        QuantizationCompactionStrategy scratch = SidecarCompactionStrategy.scratchVectors(buildContext());
+    /** Writes the merged sidecar once the graph is complete. */
+    private interface SidecarWrite {
+        void writeTo(QuantizationCompactionStrategy sidecarStrategy) throws IOException;
+    }
+
+    private void compactGraphAndSidecar(Target target, SidecarWrite sidecarWrite) {
+        QuantizationCompactionStrategy inlineStrategy = QuantizationCompactionStrategy.NONE;
+        QuantizationCompactionStrategy sidecarStrategy = QuantizationCompactionStrategy.NONE;
+        QuantizationCompactionStrategy scratch = QuantizationCompactionStrategy.NONE;
         try {
+            // Graph compaction proceeds without fused-PQ retrain (validateCompressed forbids
+            // FUSED_PQ when sourceCompressed is set), then the sidecar is written below.
+            inlineStrategy = detectInlineStrategy();
+            sidecarStrategy = detectSidecarStrategy();
+            scratch = SidecarCompactionStrategy.scratchVectors(buildContext());
             sidecarStrategy.retrain(similarityFunction);
             scratch.retrain(similarityFunction);
             activeSidecarStrategy = sidecarStrategy;
             vectorStore = scratch;
-            compactGraphImpl(graphPath, inlineStrategy);
+            compactGraphImpl(target, inlineStrategy);
             // Record the graph path with the sidecar strategy before writeSidecar: the strategy
             // defers its cache-region truncation until the sidecar copy completes.
-            sidecarStrategy.onAfterClose(graphPath);
-            sidecarStrategy.writeSidecar(compressedPath);
+            sidecarStrategy.onAfterClose(target.scratchPath);
+            sidecarWrite.writeTo(sidecarStrategy);
         } catch (IOException e) {
             throw new RuntimeException("Sidecar compaction failed", e);
         } finally {
             activeSidecarStrategy = QuantizationCompactionStrategy.NONE;
             vectorStore = QuantizationCompactionStrategy.NONE;
-            inlineStrategy.onAfterClose(graphPath);
-            scratch.onAfterClose(graphPath);
+            inlineStrategy.onAfterClose(target.scratchPath);
+            scratch.onAfterClose(target.scratchPath);
             scratch.releaseTransientState();
             sidecarStrategy.releaseTransientState();
             // Every mapping on the graph file is released by now, including the sidecar strategy's,
             // which held one until writeSidecar copied out of it. Resize once, here.
-            truncateScratchSections(graphPath, inlineStrategy, scratch, sidecarStrategy);
+            releaseScratch(target, inlineStrategy, scratch, sidecarStrategy);
+        }
+    }
+
+    /**
+     * Where the merged graph goes, and where the merge keeps its transient files meanwhile: an output
+     * file, which also holds the scratch sections past its end and has the spill files next to it, or
+     * a caller's sequential output, with both in a separate work directory.
+     */
+    private static final class Target {
+        final Path file;            // the output file, or null for a caller's output
+        final IndexWriter output;   // the caller's output, or null for a file
+        final Path workDirectory;   // where the spill files go
+        final Path scratchPath;     // the file the scratch sections are mapped from
+
+        private Target(Path file, IndexWriter output, Path workDirectory, Path scratchPath) {
+            this.file = file;
+            this.output = output;
+            this.workDirectory = workDirectory;
+            this.scratchPath = scratchPath;
+        }
+
+        static Target file(Path outputPath) {
+            return new Target(outputPath, null, outputPath.toAbsolutePath().getParent(), outputPath);
+        }
+
+        static Target stream(IndexWriter output, Path workDirectory) throws IOException {
+            Objects.requireNonNull(workDirectory, "workDirectory");
+            if (!Files.isDirectory(workDirectory)) {
+                throw new IllegalArgumentException("workDirectory is not an existing directory: " + workDirectory);
+            }
+            Path scratch = Files.createTempFile(workDirectory, "compaction-scratch-", ".tmp");
+            return new Target(null, output, workDirectory, scratch);
+        }
+
+        CompactWriter openWriter(int maxOrdinal, int numBaseLayerNodes, List<CommonHeader.LayerInfo> layerInfo, int entryNode,
+                                 int storedDimension, List<Integer> layerDegrees, FusedFeature fusedFeature,
+                                 int[] outputOrdinals) throws IOException {
+            return file != null
+                    ? new CompactWriter(file, maxOrdinal, numBaseLayerNodes, 0, layerInfo, entryNode, storedDimension, layerDegrees, fusedFeature,
+                                        outputOrdinals)
+                    : new CompactWriter(output, scratchPath, maxOrdinal, numBaseLayerNodes, layerInfo, entryNode, storedDimension, layerDegrees,
+                                        fusedFeature, outputOrdinals);
+        }
+
+        @Override
+        public String toString() {
+            return file != null ? file.toString() : "the caller's output";
+        }
+    }
+
+    /**
+     * Gives back the scratch space once every strategy has released its mappings: an output file is
+     * cut back to its graph, a separate scratch file is deleted.
+     */
+    private void releaseScratch(Target target, QuantizationCompactionStrategy... strategies) {
+        if (target.file != null) {
+            truncateScratchSections(target.file, strategies);
+            return;
+        }
+        for (QuantizationCompactionStrategy st : strategies) {
+            st.clearPendingTruncate();
+        }
+        try {
+            Files.deleteIfExists(target.scratchPath);
+        } catch (IOException e) {
+            // Most likely cause on Windows: a mapping on this file could not be released.
+            log.warn("Could not delete the compaction scratch file {}", target.scratchPath, e);
         }
     }
 
@@ -590,7 +898,7 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
     /** Snapshot the compactor's state into a {@link CompactionContext} for strategies to consume. */
     private CompactionContext buildContext() {
         return new CompactionContext(sources, sourceCompressed, liveNodes, remappers,
-                dimension, maxOrdinal, executor, taskWindowSize);
+                dimension, maxOrdinal, executor, taskWindowSize, outputToMerged);
     }
 
     /**
@@ -603,8 +911,8 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
      * mmap cleanup) are delegated to {@code strategy}. For sources with no inline quantization,
      * pass {@link QuantizationCompactionStrategy#NONE} for a fully no-op strategy hook set.
      */
-    private void compactGraphImpl(Path outputPath, QuantizationCompactionStrategy strategy) throws FileNotFoundException {
-        this.spillParent = outputPath.toAbsolutePath().getParent();
+    private void compactGraphImpl(Target target, QuantizationCompactionStrategy strategy) throws FileNotFoundException {
+        this.spillParent = target.workDirectory;
         strategy.retrain(similarityFunction);
 
         boolean fusedPQEnabled = strategy.writesCodesInline();
@@ -628,6 +936,7 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
         }
         try {
         remappers = buildRegionOrdinalMappers(pq);
+        resolveOutputOrdinals();
         if (cellMap != null) {
             log.info("Level-0 candidates are scanned and scored on the vectors themselves ({} B per node in scratch)",
                      4 * dimension);
@@ -654,7 +963,8 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
 
         log.info("Writing compacted graph : {} total nodes, maxOrdinal={}, dimension={}, degree={}",
                 numTotalNodes, maxOrdinal, dimension, maxDegrees.get(0));
-        try (CompactWriter writer = new CompactWriter(outputPath, maxOrdinal, numTotalNodes, 0, layerInfo, entryNode, dimension, maxDegrees, outputFusedFeature)) {
+        try (CompactWriter writer = target.openWriter(maxOrdinal, numTotalNodes, layerInfo, entryNode, storedDimension, maxDegrees, outputFusedFeature,
+                                                      mergedToOutput)) {
             // Header has to be written first so the writer's position is past the header
             // before any strategy that mmaps past the projected end of the output runs.
             writer.writeHeader();
@@ -673,11 +983,15 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
             strategy.onAfterLevels(writer, entryNodeSource, maxDegrees);
 
             writer.writeFooter();
-            log.info("Compaction complete: {}", outputPath);
+            log.info("Compaction complete: {}", target);
         } catch (IOException | ExecutionException | InterruptedException e) {
             throw new RuntimeException(e);
         }
         } finally {
+            if (reverseCandidates != null) {
+                reverseCandidates.close();   // only still open when level 0 failed: its spill directory
+                reverseCandidates = null;
+            }
             if (cellMap != null) {
                 cellMap.close();   // the level-1 vector mapping
                 cellMap = null;
@@ -781,37 +1095,10 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
                     });
                 };
 
-                var wropts = EnumSet.of(StandardOpenOption.WRITE, StandardOpenOption.READ);
-                try (FileChannel fc = FileChannel.open(writer.getOutputPath(), wropts)) {
-                    // A batch's records are consecutive ordinals, hence adjacent on disk: gather each
-                    // contiguous run into one positional write instead of one syscall per record.
-                    final ByteBuffer run = ByteBuffer.allocateDirect(4 << 20);
+                try (CompactWriter.RecordSink sink = writer.openRecordSink()) {
                     java.util.function.Consumer<List<WriteResult>> writeResults = (results) -> {
                         try {
-                            long runStart = -1, runEnd = -1;
-                            for (WriteResult r : results) {
-                                int len = r.data.remaining();
-                                if (runStart >= 0 && (r.fileOffset != runEnd || run.remaining() < len)) {
-                                    run.flip();
-                                    writeFully(fc, run, runStart);
-                                    run.clear();
-                                    runStart = -1;
-                                }
-                                if (len > run.capacity()) {
-                                    writeFully(fc, r.data, r.fileOffset);
-                                    continue;
-                                }
-                                if (runStart < 0) {
-                                    runStart = runEnd = r.fileOffset;
-                                }
-                                run.put(r.data);
-                                runEnd += len;
-                            }
-                            if (runStart >= 0) {
-                                run.flip();
-                                writeFully(fc, run, runStart);
-                                run.clear();
-                            }
+                            sink.write(results);
                         } catch (IOException e) {
                             throw new RuntimeException(e);
                         }
@@ -852,6 +1139,7 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
                             gStart = gEnd;
                         }
                     }
+                    sink.finish();
                 }
 
                 log.info("Cross-link: {} of {} nodes took the retained-only fast path", retainedOnlyNodes.get(), maxOrdinal + 1);
@@ -1307,7 +1595,10 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
     private WriteResult writeRetainedOnlyRecord(int node, int sourceIdx, int newOrdinal,
                                                 Scratch scratch, CompactWriter writer) throws IOException {
         var view = (OnDiskGraphIndex.View) scratch.gs[sourceIdx].getView();
-        view.getVectorInto(node, scratch.baseVec, 0);
+        // A topology-only output stores no vector, so the node's own is not needed here.
+        if (storedDimension > 0) {
+            view.getVectorInto(node, scratch.baseVec, 0);
+        }
         FixedBitSet alive = liveNodes.get(sourceIdx);
         OrdinalMapper mapper = remappers.get(sourceIdx);
         var selected = scratch.selectedCache;
@@ -1661,12 +1952,6 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
                          VectorFloat<?> tmp) {
         view.getVectorInto(node, tmp, 0);
         return similarityFunction.compare(base, tmp);
-    }
-
-    private static void writeFully(FileChannel fc, ByteBuffer b, long pos) throws IOException {
-        while (b.hasRemaining()) {
-            pos += fc.write(b, pos);
-        }
     }
 
     /// Executes batches with controlled concurrency using a sliding window approach. Prevents

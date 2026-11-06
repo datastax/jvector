@@ -17,6 +17,7 @@
 package io.github.jbellis.jvector.graph.disk;
 
 import io.github.jbellis.jvector.disk.BufferedRandomAccessWriter;
+import io.github.jbellis.jvector.disk.IndexWriter;
 import io.github.jbellis.jvector.quantization.CompressedVectors;
 import io.github.jbellis.jvector.quantization.VectorCompressor;
 import io.github.jbellis.jvector.vector.VectorSimilarityFunction;
@@ -145,6 +146,16 @@ public final class SidecarCompactionStrategy extends QuantizationCompactionStrat
 
     @Override
     public void writeSidecar(Path compressedPath) throws IOException {
+        try (var out = new BufferedRandomAccessWriter(compressedPath)) {
+            writeSidecar(out);
+        } catch (IOException e) {
+            throw new IOException("Failed to write compressed sidecar to " + compressedPath, e);
+        }
+        log.info("Wrote compacted compressed sidecar to {}", compressedPath);
+    }
+
+    @Override
+    public void writeSidecar(IndexWriter out) throws IOException {
         if (retrainedCompressor == null || formatHandle == null) {
             throw new IllegalStateException("writeSidecar() needs a retrained sidecar compressor");
         }
@@ -153,11 +164,11 @@ public final class SidecarCompactionStrategy extends QuantizationCompactionStrat
         final int count = ctx.maxOrdinal + 1;
         final int chunkCount = (count + vectorsPerChunk - 1) / vectorsPerChunk;
 
-        log.info("Streaming {} merged ordinals to {} ({} chunks of up to {} entries each{})",
-                count, compressedPath, chunkCount, vectorsPerChunk,
+        log.info("Streaming {} merged ordinals ({} chunks of up to {} entries each{})",
+                count, chunkCount, vectorsPerChunk,
                 codeCache != null ? ", from pre-encode cache" : "");
 
-        try (var out = new BufferedRandomAccessWriter(compressedPath)) {
+        try {
             formatHandle.writeSidecarHeader(out, retrainedCompressor, count);
 
             int parallelism = Math.max(ctx.taskWindowSize, 1);
@@ -176,13 +187,12 @@ public final class SidecarCompactionStrategy extends QuantizationCompactionStrat
                 }
             }
         } catch (InterruptedException | ExecutionException e) {
-            throw new IOException("Failed to write compressed sidecar to " + compressedPath, e);
+            throw new IOException("Failed to write compressed sidecar", e);
         } finally {
             // The copy is done with the mapping; the compactor truncates the file once every
             // strategy has released its mappings.
             releaseMappings();
         }
-        log.info("Wrote compacted compressed sidecar to {}", compressedPath);
     }
 
     private ByteSequence<?> copyChunkFromCache(int chunkStart, int chunkEnd, int codeSize) {
@@ -190,10 +200,11 @@ public final class SidecarCompactionStrategy extends QuantizationCompactionStrat
         ByteSequence<?> chunk = vectorTypeSupport.createByteSequence(chunkBytes);
         chunk.zero();
         byte[] code = new byte[codeSize];
-        for (int newOrd = chunkStart; newOrd < chunkEnd; newOrd++) {
+        for (int slot = chunkStart; slot < chunkEnd; slot++) {
+            int newOrd = ctx.mergedOrdinalAt(slot);
             if (resolveSourceForNewOrd(newOrd) == null) continue;  // hole; slot stays zero
             codeCache.get(newOrd, code);
-            int slotOffset = (newOrd - chunkStart) * codeSize;
+            int slotOffset = (slot - chunkStart) * codeSize;
             for (int b = 0; b < codeSize; b++) {
                 chunk.set(slotOffset + b, code[b]);
             }
@@ -245,8 +256,8 @@ public final class SidecarCompactionStrategy extends QuantizationCompactionStrat
         try {
             VectorFloat<?> vec = vectorTypeSupport.createFloatVector(ctx.dimension);
             ByteSequence<?> code = vectorTypeSupport.createByteSequence(codeSize);
-            for (int newOrd = chunkStart; newOrd < chunkEnd; newOrd++) {
-                int[] resolved = resolveSourceForNewOrd(newOrd);
+            for (int slot = chunkStart; slot < chunkEnd; slot++) {
+                int[] resolved = resolveSourceForNewOrd(ctx.mergedOrdinalAt(slot));
                 if (resolved == null) continue;  // hole; slot stays zero
                 int srcIdx = resolved[0];
                 int oldOrd = resolved[1];
@@ -256,7 +267,7 @@ public final class SidecarCompactionStrategy extends QuantizationCompactionStrat
                 views[srcIdx].getVectorInto(oldOrd, vec, 0);
                 code.zero();
                 byteCompressor.encodeTo(vec, code);
-                int slotOffset = (newOrd - chunkStart) * codeSize;
+                int slotOffset = (slot - chunkStart) * codeSize;
                 for (int b = 0; b < codeSize; b++) {
                     chunk.set(slotOffset + b, code.get(b));
                 }

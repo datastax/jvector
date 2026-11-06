@@ -16,6 +16,7 @@
 
 package io.github.jbellis.jvector.graph.disk;
 
+import io.github.jbellis.jvector.disk.IndexWriter;
 import io.github.jbellis.jvector.graph.disk.feature.FusedFeature;
 import io.github.jbellis.jvector.quantization.ProductQuantization;
 import io.github.jbellis.jvector.vector.VectorizationProvider;
@@ -221,6 +222,17 @@ public abstract class QuantizationCompactionStrategy {
     }
 
     /**
+     * Writes the merged compressed-vectors sidecar to a caller's output, sequentially from its
+     * current position, and leaves it open. Called by the compactor's
+     * {@code compact(graphOutput, compressedOutput, workDirectory)} entry point after the graph is
+     * fully written. Throws {@link UnsupportedOperationException} by default; sidecar strategies
+     * override.
+     */
+    public void writeSidecar(IndexWriter out) throws IOException {
+        throw new UnsupportedOperationException(this + " does not write a sidecar");
+    }
+
+    /**
      * Returns the {@link FusedFeature} the compactor should put in the merged output graph for
      * an inline strategy. {@code null} for non-inline strategies (NONE and any sidecar strategy).
      * Called after {@link #retrain} so the strategy can build the output feature from the
@@ -274,7 +286,7 @@ public abstract class QuantizationCompactionStrategy {
         long tempOffset = writer.reserveScratch(tempSize + secondaryBytes);
         final long secondaryOffset = tempOffset + tempSize;
         final PreEncodedCodeCache cache;
-        try (FileChannel fc = FileChannel.open(writer.getOutputPath(), StandardOpenOption.READ, StandardOpenOption.WRITE)) {
+        try (FileChannel fc = FileChannel.open(writer.scratchPath(), StandardOpenOption.READ, StandardOpenOption.WRITE)) {
             fc.write(ByteBuffer.wrap(new byte[]{0}), secondaryOffset + secondaryBytes - 1);
             cache = PreEncodedCodeCache.map(fc, tempOffset, codeCount, codeSize);
             if (secondarySize > 0) {
