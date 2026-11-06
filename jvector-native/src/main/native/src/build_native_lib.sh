@@ -123,10 +123,10 @@ build_native() {
 
   rm -rf "${OUT_SO}"
 
-  # Older Meson versions only accept --wipe for an already configured build.
+  # Reuse configured builds so repeated Maven phases keep incremental native outputs.
   local setup_options=()
   if [[ -f "${BUILD_DIR}/meson-private/coredata.dat" ]]; then
-    setup_options+=(--wipe)
+    setup_options+=(--reconfigure)
   fi
 
   if [ "${ARCH}" == "${HOST_ARCH}" ]; then
