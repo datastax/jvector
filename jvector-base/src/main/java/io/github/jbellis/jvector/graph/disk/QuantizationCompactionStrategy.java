@@ -276,7 +276,7 @@ public abstract class QuantizationCompactionStrategy {
         final PreEncodedCodeCache cache;
         try (FileChannel fc = FileChannel.open(writer.getOutputPath(), StandardOpenOption.READ, StandardOpenOption.WRITE)) {
             fc.write(ByteBuffer.wrap(new byte[]{0}), secondaryOffset + secondaryBytes - 1);
-            cache = PreEncodedCodeCache.map(fc, tempOffset, codeCount, codeSize);
+            cache = PreEncodedCodeCache.map(fc, writer.getOutputPath(), tempOffset, codeCount, codeSize);
             if (secondarySize > 0) {
                 secondaryCache = PreEncodedCodeCache.map(fc, secondaryOffset, codeCount, secondarySize);
             }
