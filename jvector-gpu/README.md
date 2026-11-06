@@ -17,38 +17,34 @@ limitations under the License.
 # jvector-gpu: graph construction on NVIDIA GPUs
 
 `jvector-gpu` builds JVector graph indexes on an NVIDIA GPU, using [TornadoVM](https://github.com/beehive-lab/TornadoVM)
-and NVIDIA [cuVS](https://github.com/rapidsai/cuvs). The result is an ordinary JVector graph, with hierarchy, and
+and NVIDIA [cuVS](https://github.com/NVIDIA/cuvs). The result is an ordinary JVector graph, with hierarchy, and
 search, writers and on-disk formats are unchanged.
 
-Graph build time on an RTX 4090 against JVector on a 13th-gen i9 (i9-13900K, 32 threads), at the same settings
-(M=32, efConstruction=100, overflow 1.2, alpha 1.2, hierarchy). Recall@10 for both is from the same search (topK 10,
-rerankK 50). Measured in October 2026 on JVector 4.0.1 with TornadoVM 7.x; the re-measurement on JVector 4.1.0 with
-TornadoVM 8.0.0 follows the table.
+Graph build time on an RTX 4090 against JVector on a 13th-gen i9 (i9-13900K, 32 threads), at JVector's defaults
+(M=32, efConstruction 100, overflow 1.2, alpha 1.2, hierarchy). Each build runs cold in a fresh JVM, so the GPU times
+include TornadoVM's compilation of the kernels and cuVS's start-up. Medians of 5 GPU and 3 CPU builds (10M: 3 and 2),
+measured on this branch with TornadoVM 8.1.0. Recall@10 is from JVector's `GraphSearcher` on each graph, exact scores,
+at search beams 40 / 160 (median over the builds).
 
-| dataset | similarity | vectors | JVector (CPU) | jvector-gpu | speed-up | recall@10 CPU / GPU |
-|---|---|---|---|---|---|---|
-| Cohere Wikipedia v3, 10M\* | COSINE | 10,000,000 x 1024 | 2270.7 s | 207.1 s | 11x | 0.8752 / 0.8970 |
-| ada002-1M | COSINE | 982,790 x 1536 | 268.4 s | 14.1 s | 19x | 0.9692 / 0.9727 |
-| glove-100-angular | COSINE | 1,183,514 x 100 | 52.5 s | 8.0 s | 6.5x | 0.7430 / 0.7755 |
-| sift-128-euclidean | EUCLIDEAN | 985,462 x 128 | 36.3 s | 7.9 s | 4.6x | 0.9564 / 0.9645 |
-| lastfm-64-dot | DOT_PRODUCT | 292,385 x 65 | 4.3 s | 2.6 s | 1.6x | 0.9575 / 0.9597 |
+| dataset | similarity | vectors | JVector (CPU) | jvector-gpu | speed-up | recall@10, beam 40 / 160: CPU | GPU |
+|---|---|---|---|---|---|---|---|
+| Cohere Wikipedia v3, 10M\* | COSINE | 10,000,000 x 1024 | 2320 s | **186 s** | 12.5x | 0.854 / 0.954 | 0.868 / 0.964 |
+| Cohere Wikipedia v3, 1M\* | COSINE | 1,000,000 x 1024 | 179.5 s | **7.5 s** | 23.8x | 0.893 / 0.976 | 0.898 / 0.979 |
+| ada002-1M | COSINE | 982,790 x 1536 | 272.6 s | **9.2 s** | 29.7x | 0.961 / 0.992 | 0.964 / 0.994 |
+| glove-100-angular | COSINE | 1,183,514 x 100 | 70.5 s | **6.4 s** | 11.0x | 0.714 / 0.853 | 0.738 / 0.869 |
+| sift-128-euclidean | EUCLIDEAN | 985,462 x 128 | 48.0 s | **5.5 s** | 8.7x | 0.943 / 0.994 | 0.954 / 0.997 |
+| ada002-100k | COSINE | 99,287 x 1536 | 16.3 s | **1.9 s** | 8.5x | 0.985 / 0.998 | 0.985 / 0.998 |
+| lastfm-64-dot | DOT_PRODUCT | 292,385 x 65 | 5.6 s | **2.5 s** | 2.3x | 0.938 / 0.988 | 0.933 / 0.987 |
 
-\* The first 10M English rows of `CohereLabs/wikipedia-2023-11-embed-multilingual-v3`, with 10k held-out queries
-and exact ground truth. The GPU build reads the vectors in place with `MappedVectors`. cuVS builds the candidates
-in 9 overlapping batches (143 s), and the FP16 vectors take 20.5 GB on the device. At every search beam the GPU
-graph has the higher recall@100 (e.g. 0.926 vs 0.912 at beam 200).
+\* The first 1M or 10M English rows of `CohereLabs/wikipedia-2023-11-embed-multilingual-v3`
+(`datasets/wikipedia.sh`), with 10k held-out queries and exact ground truth. The 10M build reads the vectors in place
+with `MappedVectors`; cuVS builds its candidates in 9 overlapping batches (143 s of the 186 s), and the build peaks at
+19.7 GB of device memory.
 
-Re-measured on JVector 4.1.0 and TornadoVM 8.0.0 (`run.sh wikipedia <dir> gpu|cpu`): Cohere Wikipedia v3,
-1,000,000 x 1024, COSINE. The GPU build takes **17.4 s** (median of 4 cold runs, 16.0-19.0 s) against **181.7 s** for
-JVector on the CPU, about 10x. Recall@10 by search beam:
-
-| beam | 20 | 40 | 80 | 160 |
-|---|---|---|---|---|
-| JVector (CPU) | 0.8117 | 0.8934 | 0.9459 | 0.9741 |
-| jvector-gpu (3 runs) | 0.8060-0.8073 | 0.8943-0.8960 | 0.9476-0.9485 | 0.9761-0.9766 |
-
-GPU times are for a single cold build in a fresh JVM, JIT compilation of the kernels included (a warm 1M x 1536
-build takes about 10-12 s). The speed-up grows with the dimension and the dataset size.
+The speed-up grows with the dimension: the work moved to the GPU grows with it, the fixed costs (kernel compilation,
+cuVS start-up, installing the lists into the builder) do not. The GPU graphs are also slightly better:
+to reach the same recall@10, JVector's searcher visits 4-16% fewer nodes on them than on JVector's own graphs, on every
+dataset above. (On LastFM a search of the same beam visits fewer nodes and reaches half a point less recall.)
 
 ## How it works
 
