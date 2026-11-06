@@ -103,9 +103,19 @@ public class HelloASHWorldFp16 {
                 // One searcher/prepared state per in-flight query; reuse after completion.
                 var result = searcher.search(view.scoreProviderFor(prepared, true),
                         10, 20, 0.0f, 0.0f, Bits.ALL);
-                System.out.println("Top 10 for query 0 (vector ordinal, similarity score):");
+                System.out.println("Synchronous top 10 for query 0 (vector ordinal, similarity score):");
                 for (var hit : result.getNodes()) System.out.printf("  %d  %.6f%n", hit.node, hit.score);
                 System.out.println("Visited nodes: " + result.getVisitedCount());
+
+                // 6. The same search through the queued API. The application assigns
+                // two search workers; the queue uses admission=8C and maximum batch=8.
+                // Submit eight independent queries without waiting between submissions.
+                var queued = HelloASHQueuedSearch.search(graph, similarity,
+                        dataset.getQueryVectors().subList(0, 8), 2);
+                System.out.println("Queued searches completed: " + queued.size());
+                System.out.println("Queued top 10 for query 0 (vector ordinal, similarity score):");
+                for (var hit : queued.get(0).getNodes()) System.out.printf("  %d  %.6f%n", hit.node, hit.score);
+                System.out.println("Visited nodes: " + queued.get(0).getVisitedCount());
             }
         }
     }
