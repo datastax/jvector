@@ -72,6 +72,8 @@ public class GraphIndexBuilder implements Closeable, Accountable {
     private final float alpha;
     private final boolean addHierarchy;
     private final boolean refineFinalGraph;
+    // set by addGraphNodeWithNeighbors: the graph was built outside addGraphNode
+    private volatile boolean externalBuild;
 
     @VisibleForTesting
     final MutableGraphIndex graph;
@@ -747,7 +749,7 @@ public class GraphIndexBuilder implements Closeable, Accountable {
             return;
         }
 
-        if (refineFinalGraph && graph.getMaxLevel() > 0) {
+        if (refineFinalGraph && !externalBuild && graph.getMaxLevel() > 0) {
             // improve connections on everything in L1 & L0.
             // It may be helpful for 2D use cases, but empirically it seems unnecessary for high-dimensional vectors.
             // It may bring a slight improvement in recall for small maximum degrees,
@@ -801,6 +803,83 @@ public class GraphIndexBuilder implements Closeable, Accountable {
 
     public ImmutableGraphIndex getGraph() {
         return graph;
+    }
+
+    /** @return the maximum degree of the base layer */
+    public int getMaxDegree() {
+        return graph.getDegree(0);
+    }
+
+    /** @return the diversity-pruning alpha */
+    public float getAlpha() {
+        return alpha;
+    }
+
+    /**
+     * Adds a node to the base layer with a neighbor list computed outside this builder, e.g. by a
+     * {@link GraphBuildAccelerator}. The list is used as given: it must contain at most {@link #getMaxDegree()}
+     * distinct neighbors other than {@code node}, sorted by decreasing score, already diversity-pruned.
+     * <p>
+     * Safe to call concurrently for distinct nodes. Do not mix with {@link #addGraphNode}; after the last node,
+     * call {@link #completeExternalBuild(int)} and then {@link #cleanup()}.
+     *
+     * @param node      the node id
+     * @param neighbors its neighbors and their scores
+     */
+    @Experimental
+    public void addGraphNodeWithNeighbors(int node, NodeArray neighbors) {
+        addGraphNodeWithNeighbors(0, node, neighbors);
+    }
+
+    /**
+     * Installs the neighbors of a node in one layer of an externally built graph. Every node must be added to the
+     * base layer; a node in layer {@code level > 0} must also be added to layers 1 through {@code level - 1}.
+     * Levels should follow {@link #sampleGraphLevels(int)}, the distribution {@link #addGraphNode} uses.
+     * <p>
+     * Safe to call concurrently for distinct (node, level) pairs.
+     *
+     * @param level     the layer
+     * @param node      the node id
+     * @param neighbors its neighbors in that layer and their scores
+     */
+    @Experimental
+    public void addGraphNodeWithNeighbors(int level, int node, NodeArray neighbors) {
+        externalBuild = true;
+        graph.connectNode(level, node, neighbors);
+        // promotes the entry point when this is the highest layer so far
+        graph.markComplete(new NodeAtLevel(level, node));
+    }
+
+    /**
+     * Random levels for nodes {@code 0..n-1}, drawn as {@link #addGraphNode} draws them: all zero without a
+     * hierarchy, otherwise geometric with ratio {@code 1 / maxDegree}.
+     *
+     * @param n the number of nodes
+     * @return the level of every node
+     */
+    @Experimental
+    public int[] sampleGraphLevels(int n) {
+        int[] levels = new int[n];
+        for (int node = 0; node < n; node++) {
+            levels[node] = getRandomGraphLevel();
+        }
+        return levels;
+    }
+
+
+    /**
+     * Completes a build made of {@link #addGraphNodeWithNeighbors} calls. For a single-layer graph this sets the
+     * entry node; when upper layers were installed, the entry point is already the node on the top layer. Call
+     * {@link #cleanup()} afterwards. {@code cleanup()} does not refine externally built graphs
+     * ({@code refineFinalGraph}): their quality is up to the code that built them.
+     *
+     * @param entryNode the entry point of a single-layer graph, typically the node closest to the centroid
+     */
+    @Experimental
+    public void completeExternalBuild(int entryNode) {
+        if (graph.getMaxLevel() == 0) {
+            graph.updateEntryNode(new NodeAtLevel(0, entryNode));
+        }
     }
 
     /**
