@@ -241,6 +241,9 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
                 Arrays.toString(l0ProcessOrder), REVERSE_CANDIDATE_SLOTS, OFFER_BAND_WIDTH);
     }
 
+    // The busiest target's (cell, node) pairs per node measured by the previous range of the current source (0 before
+    // the first): sizes the next range's per-task pair tables exactly instead of growing them by doubling.
+    private long walkMaxTargetPairsPerNode = 0;
     // Whether the cell walk reads the store with direct I/O: null = decided by size (see walkReadsDirect).
     private Boolean walkDirectSetting;
     private Boolean walkDirect;               // the decision, made once per compaction
@@ -923,6 +926,7 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
                         // nodes are one contiguous range, so a group of consecutive batches is a range of
                         // new ordinals. The cell walk scans for the whole range before its batches run.
                         OrdinalMapper m = remappers.get(s);
+                        walkMaxTargetPairsPerNode = 0;
                         int range = exactJoinRange(s, 0, 0, 0);
                         log.info("Cell walk: source {} in ranges of {} nodes (pair budget {} MB{}, query budget {} MB{})", s, range,
                                  (walkPairBytes > 0 ? walkPairBytes : Math.max(EXACT_JOIN_PAIR_BYTES_MIN, Math.min(EXACT_JOIN_PAIR_BYTES_MAX, Runtime.getRuntime().maxMemory() / 8))) >> 20,
@@ -935,6 +939,7 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
                             exactJoin = null;                       // released before the next walk allocates
                             if (previous != null) {
                                 // size the next range from the pairs the previous one measured
+                                walkMaxTargetPairsPerNode = (previous.maxTargetPairs + previous.n - 1) / Math.max(1, previous.n);
                                 int next = exactJoinRange(s, previous.n, previous.pairsWalked, previous.maxTargetPairs);
                                 if (next != range) {
                                     log.info("Cell walk: source {} ranges of {} nodes ({} pairs per node measured)",
@@ -2543,11 +2548,11 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
 
     /**
      * Node range size of the cell walk for source {@code src}: at most {@link #EXACT_JOIN_MAX_RANGE}
-     * nodes, query vectors within a sixteenth of the heap (at least {@link #EXACT_JOIN_QUERY_BYTES_MIN}),
-     * and (cell, node) pairs within an eighth of the heap, so pairs with their growth slack, the
-     * per-target sort copy and the queries stay around a third. Every range streams the targets'
-     * store once, so the range is as large as the heap allows: a store larger than RAM is read
-     * from the device once per range.
+     * nodes, query vectors within a sixteenth of the heap (at least {@link #EXACT_JOIN_QUERY_BYTES_MIN}), and the
+     * (cell, node) pair table within an eighth of the heap counted twice, since the tasks' sorted runs and the merged
+     * table coexist at the table's peak; fixed budgets ({@link #withCellWalkBudgets}) replace the heap shares. Every
+     * range streams the targets' store once, so the range is as large as the budgets allow: a store larger than RAM
+     * is read from the device once per range.
      *
      * <p>Before the first range of a source the pairs per node are bounded from the cell sizes: a
      * node records one pair per cell it probes, and it probes cells until {@link #CELL_BUDGET}
@@ -2577,7 +2582,8 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
                 maxTargetPerNode = Math.max(maxTargetPerNode, perTarget);
             }
         }
-        long byPairs = pairsPerNode == 0 ? Long.MAX_VALUE : pairBudget / (Long.BYTES * pairsPerNode);
+        // a pair is 8 bytes and the table exists twice at its peak: the tasks' sorted runs and the merged table
+        long byPairs = pairsPerNode == 0 ? Long.MAX_VALUE : pairBudget / (2L * Long.BYTES * pairsPerNode);
         long byTarget = maxTargetPerNode == 0 ? Long.MAX_VALUE : (Integer.MAX_VALUE / 2L) / maxTargetPerNode;
         long range = Math.min(Math.min(EXACT_JOIN_MAX_RANGE, byQueries), Math.min(byPairs, byTarget));
         return (int) Math.max(1 << 16, range);
@@ -2621,7 +2627,9 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
                 if (sc.wide == null) sc.wide = new WideDecoder(candidateStore, exactMode, pqWide, dimension);
                 long[][] pairs = pairsByTask[task];
                 int[] count = countByTask[task];
-                for (int t = 0; t < j.targets; t++) pairs[t] = new long[Math.max(64, (to - from) * 6)];
+                // sized from the previous range's busiest target (plus a tenth), so the tables are not grown by doubling
+                final long perNode = walkMaxTargetPairsPerNode > 0 ? walkMaxTargetPairsPerNode + walkMaxTargetPairsPerNode / 10 + 1 : 6;
+                for (int t = 0; t < j.targets; t++) pairs[t] = new long[(int) Math.min(Integer.MAX_VALUE - 8, Math.max(64, (to - from) * perNode))];
                 final ByteBuffer buf = direct ? sc.directBuffer(readBufBytes) : null;
                 int bufLo = 0, bufHi = 0, bufBase = 0;   // rows [bufLo, bufHi) are in buf, row bufLo at bufBase
                 for (int i = from; i < to; i++) {
@@ -2677,16 +2685,21 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
             if (ti < 0) continue;
             int total = 0;
             for (int c = 0; c < tasks1; c++) total += countByTask[c][ti];
-            final long[] pairs = new long[total];
-            int at = 0;
+            if (total == 0) { for (int c = 0; c < tasks1; c++) pairsByTask[c][ti] = null; continue; }
+            // Each task's pairs are sorted in place, in parallel, and the sorted runs merged by cell partition into the
+            // target's table: the table exists at most twice (runs + merged), never with a concatenation copy or a
+            // parallel sort's scratch on top, which is what the walk's pair budget accounts for.
+            final long[][] runs = new long[tasks1][]; final int[] runCounts = new int[tasks1];
+            List<Callable<Void>> sorts = new ArrayList<>();
             for (int c = 0; c < tasks1; c++) {
-                int cnt = countByTask[c][ti];
-                if (cnt > 0) System.arraycopy(pairsByTask[c][ti], 0, pairs, at, cnt);
-                at += cnt;
-                pairsByTask[c][ti] = null;
+                runs[c] = pairsByTask[c][ti]; runCounts[c] = countByTask[c][ti];
+                final int rc = c;
+                if (runCounts[c] > 0) sorts.add(() -> { Arrays.sort(runs[rc], 0, runCounts[rc]); return null; });
             }
-            if (total == 0) continue;
-            Arrays.parallelSort(pairs);
+            joinAll(sorts);
+            final long[] pairs = new long[total];
+            mergeSortedRuns(runs, runCounts, pairs, Math.max(1, Math.min(taskWindowSize * 4, total / 65536)));
+            for (int c = 0; c < tasks1; c++) pairsByTask[c][ti] = null;
             pairTotal += total;
             maxTargetPairs = Math.max(maxTargetPairs, total);
             final int[] starts = cellStart[target];
@@ -2793,6 +2806,66 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
     private static final int EXACT_QUERY_CHUNK = 32;   // queries scored together against each vector; 32 x 1.5 KB stays in L1
     private static final int EXACT_JOIN_READ_BYTES = 2 << 20;              // store bytes per direct read (direct walk)
     private static final int EXACT_JOIN_READ_GAP_BYTES = 64 << 10;         // unwanted bytes a direct read may span
+
+    /**
+     * Merges sorted runs of (cell << 32 | node) keys into {@code out}, in parallel: the key space is cut into
+     * {@code parts} ranges at equal cell boundaries, each range's slice of every run is found by binary search, and
+     * each range is merged with a small heap over the runs into its own stretch of {@code out}.
+     */
+    private void mergeSortedRuns(long[][] runs, int[] counts, long[] out, int parts) {
+        final int r = runs.length;
+        final long[] splitKey = new long[parts + 1];
+        for (int p = 0; p < parts; p++) splitKey[p] = ((long) cellCount * p / parts) << 32;
+        splitKey[parts] = Long.MAX_VALUE;
+        final int[][] lb = new int[parts + 1][r];           // first index of each run at or above each split key
+        for (int c = 0; c < r; c++) {
+            for (int p = 1; p < parts; p++) lb[p][c] = lowerBound(runs[c], counts[c], splitKey[p]);
+            lb[parts][c] = counts[c];
+        }
+        final long[] offset = new long[parts + 1];
+        for (int p = 0; p <= parts; p++) { long o = 0; for (int c = 0; c < r; c++) o += lb[p][c]; offset[p] = o; }
+        List<Callable<Void>> tasks = new ArrayList<>();
+        for (int p = 0; p < parts; p++) {
+            final int part = p;
+            if (offset[p + 1] == offset[p]) continue;
+            tasks.add(() -> {
+                final int[] pos = new int[r], end = new int[r], heap = new int[r];
+                int size = 0;
+                for (int c = 0; c < r; c++) {
+                    pos[c] = lb[part][c]; end[c] = lb[part + 1][c];
+                    if (pos[c] < end[c]) heap[size++] = c;
+                }
+                // binary heap of runs keyed by their head element
+                for (int i = size / 2 - 1; i >= 0; i--) siftDown(heap, size, i, runs, pos);
+                int at = (int) offset[part];
+                while (size > 0) {
+                    int c = heap[0];
+                    out[at++] = runs[c][pos[c]++];
+                    if (pos[c] == end[c]) heap[0] = heap[--size];
+                    siftDown(heap, size, 0, runs, pos);
+                }
+                return null;
+            });
+        }
+        joinAll(tasks);
+    }
+
+    private static void siftDown(int[] heap, int size, int i, long[][] runs, int[] pos) {
+        while (true) {
+            int l = 2 * i + 1, m = i;
+            if (l < size && runs[heap[l]][pos[heap[l]]] < runs[heap[m]][pos[heap[m]]]) m = l;
+            if (l + 1 < size && runs[heap[l + 1]][pos[heap[l + 1]]] < runs[heap[m]][pos[heap[m]]]) m = l + 1;
+            if (m == i) return;
+            int t = heap[i]; heap[i] = heap[m]; heap[m] = t; i = m;
+        }
+    }
+
+    /** First index in {@code a[0, n)} (sorted ascending) whose value is at least {@code key}. */
+    private static int lowerBound(long[] a, int n, long key) {
+        int lo = 0, hi = n;
+        while (lo < hi) { int mid = (lo + hi) >>> 1; if (a[mid] < key) lo = mid + 1; else hi = mid; }
+        return lo;
+    }
 
     private static int readRowsDirect(PreEncodedCodeCache store, int first, int rows, ByteBuffer buf) {
         try {
