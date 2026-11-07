@@ -149,18 +149,7 @@ public class AutoBenchYAML {
                     ).getDataSet()) {
                         logger.info("Dataset loaded: {} with {} vectors", datasetName, ds.getBaseVectors().size());
 
-                        List<BenchResult> datasetResults = Grid.runAllAndCollectResults(ds,
-                                config.construction.useSavedIndexIfExists,
-                                config.construction.outDegree,
-                                config.construction.efConstruction,
-                                config.construction.neighborOverflow,
-                                config.construction.addHierarchy,
-                                config.construction.refineFinalGraph,
-                                config.construction.getFeatureSets(),
-                                config.construction.getCompressorParameters(),
-                                config.search.getCompressorParameters(),
-                                config.search.topKOverquery,
-                                config.search.useSearchPruning);
+                        List<BenchResult> datasetResults = Grid.runAndCollectResults(ds, GridSpec.fromConfig(config));
                         results.addAll(datasetResults);
 
                         logger.info("Benchmark completed for dataset: {}", datasetName);
