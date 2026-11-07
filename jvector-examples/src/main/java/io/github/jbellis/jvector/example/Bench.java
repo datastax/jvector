@@ -21,6 +21,7 @@ import io.github.jbellis.jvector.example.util.CompressorParameters.PQParameters;
 import io.github.jbellis.jvector.example.benchmarks.datasets.DataSet;
 import io.github.jbellis.jvector.example.benchmarks.datasets.DataSets;
 import io.github.jbellis.jvector.example.yaml.DatasetCollection;
+import io.github.jbellis.jvector.example.reporting.RunArtifacts;
 import io.github.jbellis.jvector.graph.disk.feature.FeatureId;
 import io.github.jbellis.jvector.vector.VectorSimilarityFunction;
 
@@ -94,7 +95,15 @@ public class Bench {
             DataSet ds = DataSets.loadDataSet(datasetName).orElseThrow(
                     () -> new RuntimeException("Dataset " + datasetName + " not found")
             ).getDataSet();
-            Grid.runAll(ds, enableIndexCache, mGrid, efConstructionGrid, neighborOverflowGrid, addHierarchyGrid, refineFinalGraphGrid, featureSets, buildCompression, compressionGrid, topKGrid, usePruningGrid);
+            var spec = GridSpec.fromGrids(addHierarchyGrid, refineFinalGraphGrid, mGrid, neighborOverflowGrid,
+                    efConstructionGrid, buildCompression, featureSets,
+                    SearchConfig.builder()
+                            .searchCompressors(compressionGrid)
+                            .topKGrid(topKGrid)
+                            .usePruningGrid(usePruningGrid)
+                            .build(),
+                    enableIndexCache);
+            Grid.run(ds, spec, RunArtifacts.disabled());
         }
     }
 }
