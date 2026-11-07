@@ -18,8 +18,8 @@ limitations under the License.
 
 ASH has independent settings for stored codes, construction, query projection,
 and query execution. This reference covers library parameters and BenchYAML
-controls. A recipe supplies its own graph/compression parameters; its chosen
-numbers are not universal library defaults.
+controls. The [BenchYAML Guide](benchyaml-guide.md) defines the index YAML
+fields. Recipes specify their own graph and compression values.
 
 Set JVM properties before the affected model, provider or executor is initialized.
 Query views and pools are cached; changing a property later does not reconfigure
@@ -28,8 +28,8 @@ existing objects. CPU-count properties do not pin threads.
 ## Stored codes and training
 
 BenchYAML puts these under `compression[].parameters` with `type: ASH`.
-Construction and search compression occupy separate YAML sections. A fused ASH
-graph reuses its stored codes for search, without a second search encoding.
+Construction compression controls graph scoring. Search compression selects
+the codes stored with a fused ASH graph.
 
 | Parameter | Default / requirement | Optional values and definition |
 | --- | --- | --- |
@@ -50,7 +50,9 @@ change the trained model, base encoding, stored-code layout or index format.
 
 ## Graph construction
 
-BenchYAML defaults to **`symmetric-all`**. To restore the earlier mixed policy:
+BenchYAML selects construction scoring through `compression[].scoring` on
+an ASH construction entry. Omission uses the JVM policy, which defaults to
+`symmetric-all`. For example, this JVM property selects mixed scoring:
 
 ```text
 -Djvector.bench.ashConstruction=symmetric
@@ -92,16 +94,9 @@ asymmetric construction, it can affect insertion too.
 
 ### BenchYAML precision selection
 
-The index-parameters YAML can select the same precision under `search`:
-
-```yaml
-search:
-  queryProjection: int8  # auto, fp16, fp32, or int8
-```
-
-An explicit `-Djvector.ash.queryProjection=...` overrides YAML. Omitting the
-setting preserves the existing JVM setting or `auto` default. Use one precision
-per BenchYAML JVM; conflicting ASH selections in one invocation are rejected.
+Set `queryProjection` in the `parameters` map of an ASH compression entry.
+See [ASH query parameters](benchyaml-guide.md#ash-query-parameters) for values
+and JVM precedence.
 ASH CSV rows record `ash_query_projection_requested` and
 `ash_query_projection_effective`; the latter is read from the prepared view,
 with `fp16+fp32` indicating observed automatic FP32 range fallback. Non-ASH
@@ -116,7 +111,6 @@ precision. See the [precision guide](ash-projection-precision.md#benchyaml-runs)
 | `jvector.enable_native_vectorization` | `true` | `true` / `false`; automatic native selection. Explicit provider selection overrides it. Deprecated `jvector.experimental.enable_native_vectorization` is a lower-precedence alias. |
 | `jvector.physical_core_count` | OS topology detection bounded by available processors; fallback heuristic | Positive physical-core budget for JVector's bounded pool and queued workers. Construction and queries can use separate budgets/processes. |
 | `-XX:ActiveProcessorCount` | JVM/container detection | Positive processor count exposed to the JVM; coordinate with allocated physical cores. Does not set affinity. |
-| `jvector.parallel_writer` | `true` in BenchYAML | `true` / `false`; parallel graph serialization, with deferred feature production. Separate from an application's `GraphIndexBuilderConfig` selection. |
 | `--add-modules=jdk.incubator.vector` | Not added by the application | Enables the Vector API module needed by SIMD providers on supported runtimes. |
 | `--enable-native-access=ALL-UNNAMED` | JVM native-access policy | Native access for classpath deployments. Named-module deployments should enable the relevant module. |
 | `-Xms`, `-Xmx` | JVM ergonomics | Initial / maximum heap; account for resident input, model and construction memory. |
@@ -132,38 +126,22 @@ are deployment choices.
 
 ## Graph and search parameters in BenchYAML
 
-Index YAML supplies these grids explicitly. Recipe values are choices, not
-omitted-field library defaults.
-
-| YAML field | Values / definition |
-| --- | --- |
-| `construction.outDegree` | Positive graph degree grid (`M`); adjacency capacity and graph size. |
-| `construction.efConstruction` | Positive construction search-width grid; work spent finding neighbors. |
-| `construction.neighborOverflow` | Neighbor-list overflow factor before pruning. |
-| `construction.addHierarchy` | `Yes` / `No`; upper graph layers. |
-| `construction.refineFinalGraph` | `Yes` / `No`; final graph refinement. |
-| `construction.fusedGraph` | `Yes` / `No`; store search codes with graph neighborhoods. |
-| `construction.compression` | Build quantizer definitions, including ASH parameters above. |
-| `construction.reranking` | `NVQ` or `FP`; accurate reranking / inline vector representation. |
-| `construction.useSavedIndexIfExists` | `Yes` / `No`; reuse matching cached graph. Change cache directories when changing construction policy. |
-| `search.topKOverquery` | Final `topK` mapped to rerank multipliers; `10: [1.0, 2.0]` requests 10 or 20 candidates before returning 10 results. |
-| `search.useSearchPruning` | `Yes` / `No`; traversal pruning. |
-| `search.compression` | Search quantizer definitions for non-fused indexes. Fused ASH reuses graph codes. |
-| `yamlSchemaVersion`, `onDiskIndexVersion` | Explicit configuration schema and index format; match the supported loader/writer. |
+Use the [BenchYAML Guide](benchyaml-guide.md) for index type, graph parameters,
+writer selection, compression, and reranking.
 
 ## Query delivery and measurement controls
 
-These controls belong to BenchYAML. A database integration owns its admission
-policy and executors; see [ASH query callers and CPU budgeting](ash-query-integration.md).
+Set BenchYAML query delivery and batch limits in the
+[ASH search parameters](benchyaml-guide.md#ash-query-parameters). Database
+integrations select their own admission policy and executors. See
+[ASH query callers and CPU budgeting](ash-query-integration.md).
 
 | Setting | Default | Optional values / definition |
 | --- | --- | --- |
-| Run YAML `queryExecution.mode` | `direct` | `direct`: synchronous callers. `queued`: bounded, opportunistically batched preparation and independent graph searches. |
-| Run YAML `queryExecution.maxBatchSize` | `8` | Positive queued batch limit. With `C` workers, admission is `max(8, maxBatchSize) * C`. Eight gives admission `8C`, without a batching timer. |
 | `jvector.bench.queryThreads` | `0` | Direct caller count: `0` uses common pool, `1` is serial, larger positive values use a dedicated caller pool. Does not set queued worker count. |
 | `jvector.bench.verifyConcurrentResults` | `false` | `true` / `false`; validate concurrent results against reference results. |
 | `jvector.bench.throughputMinSeconds` | `1.0` | Minimum throughput sample duration in seconds. |
-| `jvector.bench.runConfig` | `jvector-examples/yaml-configs/run-config.yml` | Run YAML path: execution, measured benchmarks, console and CSV fields. |
+| `jvector.bench.runConfig` | `jvector-examples/yaml-configs/run-config.yml` | Run YAML path for measured benchmarks, console and CSV fields. |
 | `jvector.bench.sourceRef` | Unset | Source identity for provenance; no numerical effect. |
 
 Run YAML `benchmarks`, `console` and `logging` select computed/reported throughput,

@@ -16,11 +16,11 @@ limitations under the License.
 
 # Reproducing fused PQ versus fused ASH with BenchYAML
 
-BenchYAML's default ASH construction mode is `symmetric-all`. The JVM property
-`-Djvector.bench.ashConstruction=symmetric` restores the earlier mixed policy.
-Use fresh graph caches when changing construction mode. See the general
-[ASH configuration and defaults guide](ash-configuration.md) for parameters,
-supported values, scope and defaults.
+This comparison uses symmetric ASH construction. Use fresh graph caches
+when comparing construction modes. The [BenchYAML Guide](benchyaml-guide.md)
+describes the index configuration. See
+[ASH configuration and defaults](ash-configuration.md) for model and runtime
+settings.
 
 This comparison uses the branch's ordinary packaged JVector code and
 `io.github.jbellis.jvector.example.BenchYAML`. The fixed index configurations,
@@ -33,10 +33,10 @@ Projection settings and processor recommendations are documented in
 [Choosing ASH query-projection precision](ash-projection-precision.md).
 An explicitly requested INT8/FP32 comparison is a precision override to the
 FP16 benchmark configuration below; record it with the command and CSV evidence.
-BenchYAML also accepts `search.queryProjection` (`auto`, `fp16`, `fp32`, `int8`) in
-the index-parameters YAML. An explicit JVM precision property overrides YAML; omission keeps
-the existing defaults. ASH CSV rows record `ash_query_projection_requested` and
-`ash_query_projection_effective`; see the precision guide for fallback labels.
+Set `queryProjection` in the ASH compression parameters. The
+[BenchYAML Guide](benchyaml-guide.md#ash-query-parameters) lists the values and
+JVM precedence. ASH CSV rows record `ash_query_projection_requested` and
+`ash_query_projection_effective`. The precision guide explains fallback labels.
 
 ## Build the checkout
 

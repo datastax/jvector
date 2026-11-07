@@ -63,20 +63,10 @@ after initialization does not reconfigure an existing view.
 
 ## BenchYAML runs
 
-Select precision under `search` in the **index-parameters YAML**:
-
-```yaml
-search:
-  queryProjection: int8  # auto, fp16, fp32, or int8
-```
-
-For example, edit `jvector-examples/yaml-configs/index-parameters/mpnet-10M.yml`.
-Run-config continues to select data collection and reporting.
-An explicit `-Djvector.ash.queryProjection=...` overrides the YAML value. When
-neither is supplied, the existing `auto` policy applies. Omitting `search.queryProjection` does
-not change existing runs. Unsupported explicit selections still fail clearly.
-Use one precision per BenchYAML JVM; start a new run after changing it.
-Conflicting ASH precisions across index configurations in one invocation are rejected.
+Set `queryProjection` in the `parameters` map of an ASH compression entry.
+The [BenchYAML Guide](benchyaml-guide.md#ash-query-parameters) defines the
+accepted values. An explicit `-Djvector.ash.queryProjection=...` overrides YAML.
+The default is `auto`. Use one projection mode per JVM.
 
 `experiments.csv` adds two columns for ASH cases:
 
@@ -95,12 +85,11 @@ BenchYAML defaults to `symmetric-all` construction: insertion and diversity use
 encoded symmetric scoring, without dense query projection for insertion. Query
 precision therefore affects application queries, not insertion under this default.
 
-Use `-Djvector.bench.ashConstruction=symmetric` to restore mixed construction:
-insertion projects the original vector as an asymmetric query, while diversity
-uses symmetric scoring. Query precision can then affect construction too.
+Select `scoring: mixed` on the ASH construction entry to use asymmetric
+insertion and symmetric diversity scoring. Query projection then applies
+during insertion.
 Library callers explicitly choose an encoded node score provider or an
-original-vector insertion overload; the BenchYAML flag does not globally
-reconfigure library builders. See [ASH configuration and defaults](ash-configuration.md#graph-construction).
+original-vector insertion overload for their graph builders. See [ASH configuration and defaults](ash-configuration.md#graph-construction).
 
 Neither construction mode changes training or base-encoding precision. To
 measure query-projection effects independently, query the same saved graph

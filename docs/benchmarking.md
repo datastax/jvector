@@ -1,6 +1,7 @@
 # How to run benchmarks
 
-JVector comes with a built-in benchmarking system in `jvector-examples/.../BenchYAML.java`.
+JVector runs dataset benchmarks with BenchYAML. See the
+[BenchYAML Guide](benchyaml-guide.md) for the construction and search fields.
 
 To run a benchmark
 - Decide which dataset(s) you want to benchmark. A dataset consists of
@@ -52,13 +53,14 @@ some-other-category:
 
 You can specify a custom set of a parameters for any given dataset by creating a file called `<dataset-name>.yml`, with `<dataset-name>` replaced by the actual name of the dataset. This is the same as the identifier used in `datasets.yml`. The format of this file is exactly the same as `default.yml`.
 
-Refer to `default.yml` for a list of all options.
+See the [BenchYAML Guide](benchyaml-guide.md) for the field reference and an
+example index configuration.
 
 Most parameters can be specified as an array. For these parameters, a separate benchmark is run for each value of the parameter. If multiple parameters are specified as arrays, a benchmark is run for each combination (i.e. taking the Cartesian product). For example:
 ```yaml
 construction:
-  M: [32, 64]
-  ef: [100, 200]
+  outDegree: [32, 64]
+  efConstruction: [100, 200]
 ```
 will build and benchmark four graphs, one for each combination of M and ef in {(32, 100), (64, 100), (32, 200), (64, 200)}. This is particularly useful when running a Grid search to identify the best performing parameters.
 
@@ -118,11 +120,11 @@ For remote datasets, use `base_url` to specify where files should be downloaded 
 
 ## Final index serialization
 
-BenchYAML and AutoBenchYAML default to parallel complete-record serialization
-(default batch size 64) after graph cleanup. `-Djvector.parallel_writer=false`
-selects the sequential path, which encodes FP/NVQ features during insertion.
-Dataset prefetching is a separate option and is not required. See
-[Deferred batch serialization](deferred-batch-writer.md) for activation and caller examples.
+For an on-disk index, set `construction.writerMode` to `sequential` or
+`parallel` in the index parameters. Both writers serialize the completed graph
+after cleanup. The parallel writer defaults to 64 records per batch. See the
+[BenchYAML Guide](benchyaml-guide.md#construction) for configuration and
+[Deferred batch serialization](deferred-batch-writer.md) for writer details.
 
 
 ## Fused PQ and ASH comparison

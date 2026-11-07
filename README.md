@@ -217,7 +217,8 @@ To run Sift/Bench without the JVM vector module available, you can use the follo
 
 The `... -Pjdk11` invocations will also work with `JAVA_HOME` pointing at a Java 11 installation.
 
-For more information on running benchmarks, go through [docs/benchmarking.md](./docs/benchmarking.md).
+See [How to run benchmarks](./docs/benchmarking.md) for dataset setup and commands, and the
+[BenchYAML Guide](./docs/benchyaml-guide.md) for construction and search configuration.
 
 To release, configure `~/.m2/settings.xml` to point to OSSRH and run `mvn -Prelease clean deploy`.
 
