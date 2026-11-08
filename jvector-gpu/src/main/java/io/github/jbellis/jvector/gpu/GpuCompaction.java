@@ -18,14 +18,16 @@ package io.github.jbellis.jvector.gpu;
 
 import java.io.IOException;
 import java.io.UncheckedIOException;
+import java.nio.ByteBuffer;
+import java.nio.ByteOrder;
+import java.nio.channels.FileChannel;
+import java.nio.file.Files;
 import java.nio.file.Path;
-import java.util.Arrays;
+import java.nio.file.StandardOpenOption;
 import java.util.List;
 import java.util.stream.IntStream;
 
 import io.github.jbellis.jvector.graph.GraphIndexBuilder;
-import io.github.jbellis.jvector.graph.ListRandomAccessVectorValues;
-import io.github.jbellis.jvector.graph.RandomAccessVectorValues;
 import io.github.jbellis.jvector.graph.disk.OnDiskGraphIndex;
 import io.github.jbellis.jvector.graph.disk.OnDiskGraphIndexCompactor;
 import io.github.jbellis.jvector.graph.disk.OrdinalMapper;
@@ -43,10 +45,16 @@ import io.github.jbellis.jvector.vector.types.VectorFloat;
  * <p>
  * The merged graph gets the sources' max degrees (a hierarchy when they have more than one layer, otherwise as
  * {@code GraphIndexBuilderConfig} says); {@code beamWidth}, {@code neighborOverflow} and
- * {@code alpha} are the builder's settings (by default efConstruction 100, overflow 1.2, alpha 1.2). When the GPU
- * build is not available for the merged set, {@link #compact} falls back to {@link OnDiskGraphIndexCompactor}.
+ * {@code alpha} are the builder's settings (by default efConstruction 100, overflow 1.2, alpha 1.2).
+ * <p>
+ * The rebuild is in-core: the merged set must fit in device memory (its vectors in FP16) and its build structures in
+ * host memory. {@link #compact} decides from the sizes alone, before it reads any vector, and otherwise runs
+ * {@link OnDiskGraphIndexCompactor}, which merges out of core. The live vectors are streamed to a temporary raw
+ * float32 file next to the output and read through a memory mapping, so they are never held on the Java heap.
  */
 public final class GpuCompaction {
+
+    private static final java.util.logging.Logger LOG = java.util.logging.Logger.getLogger(GpuCompaction.class.getName());
 
     private final List<OnDiskGraphIndex> sources;
     private final List<FixedBitSet> liveNodes;
@@ -98,28 +106,59 @@ public final class GpuCompaction {
     }
 
     /**
-     * Writes the merged index to {@code outputPath}: rebuilt on the GPU if possible, else by the CPU
-     * compactor. On the GPU the live nodes are numbered in source order, then node order; the CPU
-     * compactor numbers them by region. Either way {@link #ordinalMappers()} gives the mapping.
+     * Writes the merged index to {@code outputPath}: rebuilt on the GPU if the merged set fits (see the class
+     * documentation), else by the CPU compactor. On the GPU the live nodes are numbered in source order, then node
+     * order; the CPU compactor numbers them by region. Either way {@link #ordinalMappers()} gives the mapping.
      */
     public void compact(Path outputPath) throws IOException {
-        remappers = sequentialMappers();
-        RandomAccessVectorValues vectors = liveVectors();
-        var builder = GraphIndexBuilder.builder(vectors, similarity, maxDegrees())
-                .withBeamWidth(beamWidth)
-                .withNeighborOverflow(neighborOverflow)
-                .withAlpha(alpha)
-                .build();
-        var accelerator = new TornadoGraphBuildAccelerator();
-        if (!accelerator.supports(builder, vectors, similarity)) {
+        int n = liveNodes.stream().mapToInt(FixedBitSet::cardinality).sum();
+        int dim = sources.get(0).getDimension();
+        int maxDegree = maxDegrees().get(0);
+        String declined = declineReason(n, dim, maxDegree);
+        if (declined != null) {
+            LOG.info(() -> "GPU compaction declined, merging with OnDiskGraphIndexCompactor: " + declined);
             var compactor = new OnDiskGraphIndexCompactor(sources, liveNodes, similarity, null);
             compactor.compact(outputPath);
             remappers = compactor.ordinalMappers();
             return;
         }
-        accelerator.build(builder, vectors, similarity);
-        builder.cleanup();
-        OnDiskGraphIndex.write(builder.getGraph(), vectors, outputPath);
+        remappers = sequentialMappers();
+        Path vectorsFile = outputPath.resolveSibling(outputPath.getFileName() + ".live-vectors.tmp");
+        try {
+            writeLiveVectors(vectorsFile);
+            try (var vectors = new MappedVectors(vectorsFile, dim, n)) {
+                var builder = GraphIndexBuilder.builder(vectors, similarity, maxDegrees())
+                        .withBeamWidth(beamWidth)
+                        .withNeighborOverflow(neighborOverflow)
+                        .withAlpha(alpha)
+                        .build();
+                new TornadoGraphBuildAccelerator().build(builder, vectors, similarity);
+                builder.cleanup();
+                OnDiskGraphIndex.write(builder.getGraph(), vectors, outputPath);
+            }
+        } finally {
+            Files.deleteIfExists(vectorsFile);
+        }
+    }
+
+    /**
+     * Why the GPU rebuild cannot take this merge, or null if it can, decided from the sizes alone: the build's host
+     * memory (see {@link HostMemory}; the live vectors are memory-mapped, so they are not counted), then the device.
+     */
+    static String declineReason(int n, int dim, int maxDegree) {
+        return declineReason(n, dim, maxDegree, HostMemory.shortfall(n, dim, maxDegree, true));
+    }
+
+    /** As {@link #declineReason(int, int, int)}, with the host-memory check's result given. */
+    static String declineReason(int n, int dim, int maxDegree, String hostShortfall) {
+        if (hostShortfall != null) {
+            return n + " live nodes: the build " + hostShortfall;
+        }
+        if (!TornadoGraphBuildAccelerator.supports(n, dim, maxDegree, true)) {
+            return String.format(java.util.Locale.ROOT, "the GPU build does not take %d x %d (no device, too little device memory, or degree %d)",
+                    n, dim, maxDegree);
+        }
+        return null;
     }
 
     /** Per source, old to new ordinals of the merged index; available once {@link #compact} has run. */
@@ -144,30 +183,51 @@ public final class GpuCompaction {
         return mappers;
     }
 
-    /** The live vectors of all sources, at the ordinals the GPU rebuild gives them (source order, then node order). */
-    RandomAccessVectorValues liveVectors() {
-        var sequential = sequentialMappers();
-        int total = liveNodes.stream().mapToInt(FixedBitSet::cardinality).sum();
-        VectorFloat<?>[] vectors = new VectorFloat<?>[total];
-        IntStream.range(0, sources.size()).parallel().forEach(s -> {
-            var live = liveNodes.get(s);
-            var mapper = sequential.get(s);
-            try (var view = sources.get(s).getView()) {
-                for (int node = live.nextSetBit(0); node != DocIdSetIterator.NO_MORE_DOCS; node = live.nextSetBit(node + 1)) {
-                    int ordinal = mapper.oldToNew(node);
-                    if (ordinal < 0 || ordinal >= total) {
-                        throw new IllegalArgumentException("new ordinals of the live nodes must be in 0.." + (total - 1) + ", got " + ordinal);
-                    }
-                    vectors[ordinal] = view.getVector(node);
-                }
-            } catch (IOException e) {
-                throw new UncheckedIOException(e);
-            }
-        });
-        if (Arrays.stream(vectors).anyMatch(v -> v == null)) {
-            throw new IllegalArgumentException("new ordinals of the live nodes must be distinct");
+    /**
+     * Writes the live vectors of all sources to {@code file} as raw float32 rows, at the ordinals the GPU rebuild
+     * gives them (source order, then node order). Sources are written in parallel, each to its own range of the file.
+     */
+    void writeLiveVectors(Path file) throws IOException {
+        int dim = sources.get(0).getDimension();
+        long rowBytes = (long) dim * Float.BYTES;
+        long[] firstRow = new long[sources.size() + 1];
+        for (int s = 0; s < sources.size(); s++) {
+            firstRow[s + 1] = firstRow[s] + liveNodes.get(s).cardinality();
         }
-        return new ListRandomAccessVectorValues(Arrays.asList(vectors), sources.get(0).getDimension());
+        try (FileChannel channel = FileChannel.open(file, StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING,
+                StandardOpenOption.READ, StandardOpenOption.WRITE)) {
+            IntStream.range(0, sources.size()).parallel().forEach(s -> {
+                var live = liveNodes.get(s);
+                int rowsPerBuffer = (int) Math.max(1, (4L << 20) / rowBytes);
+                ByteBuffer buffer = ByteBuffer.allocate((int) (rowsPerBuffer * rowBytes)).order(ByteOrder.LITTLE_ENDIAN);
+                long position = firstRow[s] * rowBytes;
+                try (var view = sources.get(s).getView()) {
+                    for (int node = live.nextSetBit(0); node != DocIdSetIterator.NO_MORE_DOCS; node = live.nextSetBit(node + 1)) {
+                        VectorFloat<?> v = view.getVector(node);
+                        for (int d = 0; d < dim; d++) {
+                            buffer.putFloat(v.get(d));
+                        }
+                        if (!buffer.hasRemaining()) {
+                            position += flush(channel, buffer, position);
+                        }
+                    }
+                    flush(channel, buffer, position);
+                } catch (IOException e) {
+                    throw new UncheckedIOException(e);
+                }
+            });
+        }
+    }
+
+    /** Writes the buffer's contents at {@code position}, clears it, and returns the bytes written. */
+    private static long flush(FileChannel channel, ByteBuffer buffer, long position) throws IOException {
+        buffer.flip();
+        long written = 0;
+        while (buffer.hasRemaining()) {
+            written += channel.write(buffer, position + written);
+        }
+        buffer.clear();
+        return written;
     }
 
     /** The max degrees of the source with the most layers, as {@link OnDiskGraphIndexCompactor} uses. */

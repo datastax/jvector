@@ -80,11 +80,19 @@ Not supported: incremental insertion and deletes, which stay on the CPU path, an
 
 ## Also on the GPU: compaction and product quantization
 
-**Compaction by rebuilding.** `GpuCompaction` takes the same inputs as `OnDiskGraphIndexCompactor`: on-disk sources
-with inline vectors and their live nodes. It reads the live vectors back and builds the merged graph from scratch on the
-GPU. As with `OnDiskGraphIndexCompactor`, the compaction assigns the new ordinals and `ordinalMappers()` returns them
-afterwards (on the GPU the live nodes are numbered in source order). When the GPU build isn't available, it falls back
-to `OnDiskGraphIndexCompactor`.
+**Compaction by rebuilding (in-core).** `GpuCompaction` takes the same inputs as `OnDiskGraphIndexCompactor`:
+on-disk sources with inline vectors and their live nodes. It streams the live vectors to a temporary raw float32 file
+next to the output, reads it through a memory mapping (never through the Java heap), and builds the merged graph from
+scratch on the GPU. As with `OnDiskGraphIndexCompactor`, the compaction assigns the new ordinals and `ordinalMappers()`
+returns them afterwards (on the GPU the live nodes are numbered in source order).
+
+It is meant for merges that fit: the merged vectors in FP16 on the device (`n x dim x 2` bytes, e.g. 10M x 1024 on a
+24 GB card), and the build's host memory, as the GPU build estimates it (about 1.9 KB of heap per live node at M=32,
+plus native memory for the FP16 rows and cuVS's output; the live vectors are memory-mapped). `compact()` decides from
+these sizes before it reads any vector, and merges anything larger with `OnDiskGraphIndexCompactor`, which merges out of
+core on any machine; the same happens without a GPU or TornadoVM. `-Djvector.gpu.hostMemory` (e.g. `48GB`) sets a fixed
+host budget. The rebuild does not replace the out-of-core compactor: it is a
+faster path for the merges a GPU can hold.
 
 ```java
 var compaction = new GpuCompaction(sources, liveNodes, VectorSimilarityFunction.COSINE);
@@ -182,8 +190,6 @@ Measured on an RTX 4090 against an i9-13900K (32 threads).
   (3.0×)**, with identical recall@10 of an NVQ-scored scan (0.9974). 99.995% of the code bytes and 96.9% of the
   growth rates are identical; the rest are near-ties, because the GPU sums each loss in a different order.
   `run.sh nvq <dataset>`.
-- **Exact ground truth** (`run.sh groundtruth`): cuVS brute force over base chunks. Wikipedia 10M × 1024 takes
-  **24.5 s against numpy's 681 s**, with 99.997% top-10 agreement with the CPU (ties among duplicate passages).
 - **Where an on-disk build's time goes** (`run.sh phases <dataset>`, ada002-1M): GPU build 11.2 s, NVQ encode
   4.3 s a pass (JVector's `Bench` encodes twice), inline writes 2.8–7.0 s a format (`writeInline` is
   synchronized), fused-PQ final write 5.6 s.

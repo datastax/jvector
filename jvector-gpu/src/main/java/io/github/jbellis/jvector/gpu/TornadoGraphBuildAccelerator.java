@@ -74,10 +74,17 @@ public final class TornadoGraphBuildAccelerator implements GraphBuildAccelerator
 
     @Override
     public boolean supports(GraphIndexBuilder builder, RandomAccessVectorValues vectors, VectorSimilarityFunction similarity) {
-        int n = vectors.size();
-        int dim = vectors.dimension();
-        if (builder.getMaxDegree() > MAX_DEGREE) {
-            LOG.info(() -> "GPU build supports max degree up to " + MAX_DEGREE + ", not " + builder.getMaxDegree());
+        return supports(vectors.size(), vectors.dimension(), builder.getMaxDegree(), vectors instanceof MappedVectors);
+    }
+
+    /**
+     * As {@link #supports(GraphIndexBuilder, RandomAccessVectorValues, VectorSimilarityFunction)}, from the shape of
+     * the build alone, so a caller can decide before it loads any vector. {@code mapped}: the vectors will be a
+     * {@link MappedVectors} file, so the build does not copy them.
+     */
+    static boolean supports(int n, int dim, int maxDegree, boolean mapped) {
+        if (maxDegree > MAX_DEGREE) {
+            LOG.info(() -> "GPU build supports max degree up to " + MAX_DEGREE + ", not " + maxDegree);
             return false;
         }
         if (n < 2 || !PackedVectors.fits(n, dim)) {
@@ -90,7 +97,7 @@ public final class TornadoGraphBuildAccelerator implements GraphBuildAccelerator
                     n, dim, needed / 1e9, (needed >> 30) + 1));
             return false;
         }
-        String host = HostMemory.shortfall(n, dim, builder.getMaxDegree(), vectors instanceof MappedVectors);
+        String host = HostMemory.shortfall(n, dim, maxDegree, mapped);
         if (host != null) {
             LOG.info(() -> String.format(Locale.ROOT, "GPU build of %d x %d vectors declined, building on the CPU: %s", n, dim, host));
             return false;

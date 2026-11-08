@@ -101,10 +101,14 @@ class TestGpuCompactionAndPqHost {
                 live.add(bits);
             }
             var compaction = new GpuCompaction(sources, live, SIMILARITY);
-            var vectors = compaction.liveVectors();
-            assertEquals(expected.size(), vectors.size());
-            for (int ordinal = 0; ordinal < vectors.size(); ordinal++) {
-                assertTrue(all.get(expected.get(ordinal)).equals(vectors.getVector(ordinal)), "vector at new ordinal " + ordinal);
+            Path file = dir.resolve("live.f32");
+            compaction.writeLiveVectors(file);
+            assertEquals((long) expected.size() * 16 * Float.BYTES, java.nio.file.Files.size(file));
+            try (var vectors = new MappedVectors(file, 16, -1)) {
+                assertEquals(expected.size(), vectors.size());
+                for (int ordinal = 0; ordinal < vectors.size(); ordinal++) {
+                    assertTrue(all.get(expected.get(ordinal)).equals(vectors.getVector(ordinal)), "vector at new ordinal " + ordinal);
+                }
             }
 
             assertThrows(IllegalStateException.class, compaction::ordinalMappers, "no mapping before compact()");
@@ -166,5 +170,20 @@ class TestGpuCompactionAndPqHost {
                 assertTrue(original.get(i).equals(roundTripped.get(i)), "codes of " + i + ", centered " + center);
             }
         }
+    }
+
+    @Test
+    void declinesFromTheSizesAloneWhenTheHostCannotHoldTheBuild() {
+        // a host that cannot hold the build declines before the device is even asked
+        var need = HostMemory.need(1_000_000, 1024, 32, true);
+        String host = HostMemory.shortfall(need, need.heap() - 1, Long.MAX_VALUE, Long.MAX_VALUE, null);
+        String reason = GpuCompaction.declineReason(1_000_000, 1024, 32, host);
+        assertTrue(reason != null && reason.contains("heap"), reason);
+        // enough host memory: without TornadoVM in the tests, the device check declines instead
+        reason = GpuCompaction.declineReason(1000, 16, 32, null);
+        assertTrue(reason != null && reason.contains("GPU build does not take"), reason);
+        // degrees beyond the GPU build's limit decline too
+        reason = GpuCompaction.declineReason(1000, 16, 128, null);
+        assertTrue(reason != null && reason.contains("degree 128"), reason);
     }
 }
