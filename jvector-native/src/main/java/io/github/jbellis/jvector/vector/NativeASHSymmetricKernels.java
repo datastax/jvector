@@ -34,102 +34,180 @@ import static java.lang.foreign.ValueLayout.JAVA_INT;
  * ranges use one LUT call; larger legal inputs use ordinary FFM with temporary
  * native buffers. Neither kernel allocates, retains pointers, blocks or calls Java.
  * Missing symbols preserve the provider's existing Java implementations.
+ * <p>
+ * JIT notes. The pair kernel runs billions of times per graph build, so:
+ * <ul>
+ * <li>Downcall handles are {@code static final} fields. HotSpot trusts only static
+ * finals (not instance finals) as constants, so {@code invokeExact} links straight to
+ * the downcall stub and inlines it. A non-constant handle goes through the generic
+ * invoker ({@code Invokers.checkCustomized}) and the heap segments escape into it.</li>
+ * <li>Each heap {@link MemorySegment} is created in the same small method that passes
+ * it to {@code invokeExact}, so once the stub inlines, escape analysis can
+ * scalar-replace the segment and its session instead of allocating them per call.</li>
+ * <li>Tracing, exception construction and the large-input {@link Arena} path live in
+ * separate cold methods, keeping hot-method bytecode small enough to inline.</li>
+ * </ul>
  */
 final class NativeASHSymmetricKernels {
     private static final int MAX_CRITICAL_WORK = 1 << 16;
     private static final boolean TRACE = Boolean.getBoolean("jextract.trace.downcalls");
-    private static final Binding PAIR = new Binding("ash_symmetric_dot",
-            FunctionDescriptor.of(JAVA_FLOAT, ADDRESS, ADDRESS, JAVA_INT, JAVA_INT));
-    private static final Binding LUT = new Binding("ash_symmetric_lut_i16",
-            FunctionDescriptor.ofVoid(ADDRESS, ADDRESS, JAVA_INT, JAVA_INT, JAVA_INT, JAVA_INT, ADDRESS));
+    private static final String PAIR_SYMBOL = "ash_symmetric_dot";
+    private static final String LUT_SYMBOL = "ash_symmetric_lut_i16";
+    private static final FunctionDescriptor PAIR_DESCRIPTOR =
+            FunctionDescriptor.of(JAVA_FLOAT, ADDRESS, ADDRESS, JAVA_INT, JAVA_INT);
+    private static final FunctionDescriptor LUT_DESCRIPTOR =
+            FunctionDescriptor.ofVoid(ADDRESS, ADDRESS, JAVA_INT, JAVA_INT, JAVA_INT, JAVA_INT, ADDRESS);
+    private static final MemorySegment PAIR_ADDRESS = find(PAIR_SYMBOL);
+    private static final MemorySegment LUT_ADDRESS = find(LUT_SYMBOL);
+    // Must stay static final: see the class comment.
+    private static final MethodHandle PAIR_CRITICAL = downcall(PAIR_ADDRESS, PAIR_DESCRIPTOR, true);
+    private static final MethodHandle PAIR_ORDINARY = downcall(PAIR_ADDRESS, PAIR_DESCRIPTOR, false);
+    private static final MethodHandle LUT_CRITICAL = downcall(LUT_ADDRESS, LUT_DESCRIPTOR, true);
+    private static final MethodHandle LUT_ORDINARY = downcall(LUT_ADDRESS, LUT_DESCRIPTOR, false);
 
     private NativeASHSymmetricKernels() {}
 
-    static boolean hasPairKernel() { return PAIR.available(); }
-    static boolean hasLutKernel() { return LUT.available(); }
+    static boolean hasPairKernel() { return PAIR_CRITICAL != null; }
+    static boolean hasLutKernel() { return LUT_CRITICAL != null; }
 
     static float dot(long[] aBits, byte[] aCodes, long[] bBits, byte[] bCodes, int dimensions, int bits) {
-        if (dimensions < 0 || (bits != 1 && bits != 2 && bits != 4))
-            throw new IllegalArgumentException("Symmetric ASH requires nonnegative dimensions and bits in {1,2,4}");
-        if (!PAIR.available()) throw new UnsupportedOperationException("Native symmetric pair kernel unavailable");
-        MemorySegment a, b;
-        long bytes;
+        if (dimensions < 0 || (bits != 1 && bits != 2 && bits != 4)) throw badPairShape();
+        if (PAIR_CRITICAL == null) throw pairUnavailable();
         if (bits == 1) {
             long words = (dimensions + 63L) / 64;
-            if (words > aBits.length || words > bBits.length) throw new IndexOutOfBoundsException("ASH bit arrays");
-            a = MemorySegment.ofArray(aBits); b = MemorySegment.ofArray(bBits); bytes = words * Long.BYTES;
-        } else {
-            bytes = ((long) dimensions * bits + 7) / 8;
-            if (bytes > aCodes.length || bytes > bCodes.length) throw new IndexOutOfBoundsException("ASH code arrays");
-            a = MemorySegment.ofArray(aCodes); b = MemorySegment.ofArray(bCodes);
+            if (words > aBits.length || words > bBits.length) throw outOfBounds("ASH bit arrays");
+            if (TRACE) trace(PAIR_SYMBOL, dimensions, bits);
+            return dimensions <= MAX_CRITICAL_WORK
+                    ? pairCritical(aBits, bBits, dimensions, bits)
+                    : pairOrdinary(MemorySegment.ofArray(aBits), MemorySegment.ofArray(bBits),
+                                   words * Long.BYTES, dimensions, bits);
         }
-        if (dimensions <= MAX_CRITICAL_WORK) return invokePair(PAIR.critical, a, b, dimensions, bits);
+        long bytes = ((long) dimensions * bits + 7) / 8;
+        if (bytes > aCodes.length || bytes > bCodes.length) throw outOfBounds("ASH code arrays");
+        if (TRACE) trace(PAIR_SYMBOL, dimensions, bits);
+        return dimensions <= MAX_CRITICAL_WORK
+                ? pairCritical(aCodes, bCodes, dimensions, bits)
+                : pairOrdinary(MemorySegment.ofArray(aCodes), MemorySegment.ofArray(bCodes), bytes, dimensions, bits);
+    }
+
+    // Hot path: segments are created and consumed here so they don't escape after inlining.
+    private static float pairCritical(byte[] a, byte[] b, int dimensions, int bits) {
+        try {
+            return (float) PAIR_CRITICAL.invokeExact(MemorySegment.ofArray(a), MemorySegment.ofArray(b), dimensions, bits);
+        } catch (RuntimeException | Error e) {
+            throw e;
+        } catch (Throwable t) {
+            throw unexpected(PAIR_SYMBOL, t);
+        }
+    }
+
+    private static float pairCritical(long[] a, long[] b, int dimensions, int bits) {
+        try {
+            return (float) PAIR_CRITICAL.invokeExact(MemorySegment.ofArray(a), MemorySegment.ofArray(b), dimensions, bits);
+        } catch (RuntimeException | Error e) {
+            throw e;
+        } catch (Throwable t) {
+            throw unexpected(PAIR_SYMBOL, t);
+        }
+    }
+
+    // Cold path: inputs too large for a bounded critical call are copied to native memory.
+    private static float pairOrdinary(MemorySegment a, MemorySegment b, long bytes, int dimensions, int bits) {
         try (Arena arena = Arena.ofConfined()) {
             MemorySegment na = arena.allocate(bytes, Long.BYTES), nb = arena.allocate(bytes, Long.BYTES);
             MemorySegment.copy(a, 0, na, 0, bytes); MemorySegment.copy(b, 0, nb, 0, bytes);
-            return invokePair(PAIR.ordinary, na, nb, dimensions, bits);
+            return (float) PAIR_ORDINARY.invokeExact(na, nb, dimensions, bits);
+        } catch (RuntimeException | Error e) {
+            throw e;
+        } catch (Throwable t) {
+            throw unexpected(PAIR_SYMBOL, t);
         }
     }
 
     static void scoreLut(byte[] codes, int groups, int stride, int lane, int count,
                          short[] lut, float[] out, int outOffset) {
         Objects.requireNonNull(codes, "codes"); Objects.requireNonNull(lut, "lut"); Objects.requireNonNull(out, "out");
-        if (!LUT.available()) throw new UnsupportedOperationException("Native symmetric LUT kernel unavailable");
+        if (LUT_CRITICAL == null) throw lutUnavailable();
         if (groups < 0 || stride <= 0) throw new IllegalArgumentException("ASH groups/stride");
         Objects.checkFromIndexSize(lane, count, stride);
         Objects.checkFromIndexSize(outOffset, count, out.length);
         long codeBytes = ((groups + 1L) / 2) * stride, lutBytes = (long) groups * 32 * Short.BYTES;
-        if (codeBytes > codes.length || lutBytes / Short.BYTES > lut.length)
-            throw new IndexOutOfBoundsException("ASH LUT/code arrays");
+        if (codeBytes > codes.length || lutBytes / Short.BYTES > lut.length) throw outOfBounds("ASH LUT/code arrays");
         if (count == 0) return;
-        MemorySegment source = MemorySegment.ofArray(codes), table = MemorySegment.ofArray(lut);
-        MemorySegment result = MemorySegment.ofArray(out).asSlice((long) outOffset * Float.BYTES);
+        if (TRACE) trace(LUT_SYMBOL, groups, count);
         // Charge padded SIMD lanes as well as active lanes (native width is capped at 16).
         long vectorSlots = ((count + 15L) / 16) * 16;
         if ((long) groups * vectorSlots <= MAX_CRITICAL_WORK) {
-            invokeLut(LUT.critical, source, table, groups, stride, lane, count, result);
+            lutCritical(codes, lut, out, outOffset, groups, stride, lane, count);
         } else {
-            try (Arena arena = Arena.ofConfined()) {
-                MemorySegment nc = arena.allocate(Math.max(1, codeBytes));
-                MemorySegment nl = arena.allocate(Math.max(Short.BYTES, lutBytes), Short.BYTES);
-                MemorySegment no = arena.allocate((long) count * Float.BYTES, Float.BYTES);
-                MemorySegment.copy(source, 0, nc, 0, codeBytes); MemorySegment.copy(table, 0, nl, 0, lutBytes);
-                invokeLut(LUT.ordinary, nc, nl, groups, stride, lane, count, no);
-                MemorySegment.copy(no, 0, result, 0, (long) count * Float.BYTES);
-            }
+            lutOrdinary(codes, lut, out, outOffset, groups, stride, lane, count, codeBytes, lutBytes);
         }
     }
 
-    private static float invokePair(MethodHandle handle, MemorySegment a, MemorySegment b, int dimensions, int bits) {
-        if (TRACE) System.out.printf("%s(%d, %d)%n", PAIR.symbol, dimensions, bits);
+    // Hot path: as with pairCritical, segments stay local to the invokeExact call.
+    private static void lutCritical(byte[] codes, short[] lut, float[] out, int outOffset,
+                                    int groups, int stride, int lane, int count) {
         try {
-            return (float) handle.invokeExact(a, b, dimensions, bits);
-        } catch (RuntimeException | Error error) { throw error;
-        } catch (Throwable error) { throw new AssertionError("Unexpected exception from " + PAIR.symbol, error); }
-    }
-
-    private static void invokeLut(MethodHandle handle, MemorySegment codes, MemorySegment lut,
-                                   int groups, int stride, int lane, int count, MemorySegment out) {
-        if (TRACE) System.out.printf("%s(%d, %d)%n", LUT.symbol, groups, count);
-        try {
-            handle.invokeExact(codes, lut, groups, stride, lane, count, out);
-        } catch (RuntimeException | Error error) { throw error;
-        } catch (Throwable error) { throw new AssertionError("Unexpected exception from " + LUT.symbol, error); }
-    }
-
-    private static final class Binding {
-        final String symbol;
-        final MethodHandle critical;
-        final MethodHandle ordinary;
-
-        Binding(String symbol, FunctionDescriptor descriptor) {
-            this.symbol = symbol;
-            MemorySegment address = SymbolLookup.loaderLookup().find(symbol).orElse(null);
-            critical = address == null ? null : Linker.nativeLinker().downcallHandle(
-                    address, descriptor, Linker.Option.critical(true));
-            ordinary = address == null ? null : Linker.nativeLinker().downcallHandle(address, descriptor);
+            LUT_CRITICAL.invokeExact(MemorySegment.ofArray(codes), MemorySegment.ofArray(lut), groups, stride, lane, count,
+                                     MemorySegment.ofArray(out).asSlice((long) outOffset * Float.BYTES));
+        } catch (RuntimeException | Error e) {
+            throw e;
+        } catch (Throwable t) {
+            throw unexpected(LUT_SYMBOL, t);
         }
+    }
 
-        boolean available() { return critical != null; }
+    private static void lutOrdinary(byte[] codes, short[] lut, float[] out, int outOffset,
+                                    int groups, int stride, int lane, int count, long codeBytes, long lutBytes) {
+        try (Arena arena = Arena.ofConfined()) {
+            MemorySegment nc = arena.allocate(Math.max(1, codeBytes));
+            MemorySegment nl = arena.allocate(Math.max(Short.BYTES, lutBytes), Short.BYTES);
+            MemorySegment no = arena.allocate((long) count * Float.BYTES, Float.BYTES);
+            MemorySegment.copy(MemorySegment.ofArray(codes), 0, nc, 0, codeBytes);
+            MemorySegment.copy(MemorySegment.ofArray(lut), 0, nl, 0, lutBytes);
+            LUT_ORDINARY.invokeExact(nc, nl, groups, stride, lane, count, no);
+            MemorySegment.copy(no, 0, MemorySegment.ofArray(out), (long) outOffset * Float.BYTES, (long) count * Float.BYTES);
+        } catch (RuntimeException | Error e) {
+            throw e;
+        } catch (Throwable t) {
+            throw unexpected(LUT_SYMBOL, t);
+        }
+    }
+
+    // ---- cold helpers (kept out of line so hot methods stay small) ----
+
+    private static MemorySegment find(String symbol) {
+        return SymbolLookup.loaderLookup().find(symbol).orElse(null);
+    }
+
+    private static MethodHandle downcall(MemorySegment address, FunctionDescriptor descriptor, boolean critical) {
+        if (address == null) return null;
+        return critical
+                ? Linker.nativeLinker().downcallHandle(address, descriptor, Linker.Option.critical(true))
+                : Linker.nativeLinker().downcallHandle(address, descriptor);
+    }
+
+    private static void trace(String symbol, int x, int y) {
+        System.out.printf("%s(%d, %d)%n", symbol, x, y);
+    }
+
+    private static IllegalArgumentException badPairShape() {
+        return new IllegalArgumentException("Symmetric ASH requires nonnegative dimensions and bits in {1,2,4}");
+    }
+
+    private static UnsupportedOperationException pairUnavailable() {
+        return new UnsupportedOperationException("Native symmetric pair kernel unavailable");
+    }
+
+    private static UnsupportedOperationException lutUnavailable() {
+        return new UnsupportedOperationException("Native symmetric LUT kernel unavailable");
+    }
+
+    private static IndexOutOfBoundsException outOfBounds(String what) {
+        return new IndexOutOfBoundsException(what);
+    }
+
+    private static AssertionError unexpected(String symbol, Throwable t) {
+        return new AssertionError("Unexpected exception from " + symbol, t);
     }
 }
