@@ -100,14 +100,16 @@ compaction.compact(outputPath);
 List<OrdinalMapper> newOrdinals = compaction.ordinalMappers();   // as OnDiskGraphIndexCompactor.ordinalMappers()
 ```
 
-ada002-1M, 4 segments built by JVector on the CPU (M=32, hierarchy):
+ada002-1M, 4 segments of ~246k vectors built by JVector on the CPU (M=32, hierarchy), on an RTX 4090 against an
+i9-13900K (32 threads), TornadoVM 8.1.0 (`run.sh compact ada002-1M`):
 
-| | time | p50 search latency at equal recall@10 |
+| | time | recall@10 of the merged index, beam 20 / 40 / 80 / 160 |
 |---|---|---|
-| `OnDiskGraphIndexCompactor` | 291.6 s | baseline |
-| `GpuCompaction` (read 0.4 s, build 14.4 s, write 4.4 s) | **19.2 s (15.2x)** | 5-17% lower (0.86-0.99 recall) |
+| `OnDiskGraphIndexCompactor` | 226.4 s | 0.915 / 0.958 / 0.982 / 0.993 |
+| `GpuCompaction` | **16.0 s (14.2x)** | 0.925 / 0.964 / 0.985 / 0.994 |
 
-The rebuilt graph is a fresh build rather than a stitched one, so at the same beam it has slightly higher recall.
+The rebuilt graph is a fresh build rather than a stitched one, so at the same beam it has slightly higher recall,
+at the same search latency.
 
 **Product quantization.** `GpuProductQuantization.compute` trains PQ codebooks the way `ProductQuantization.compute`
 does (unweighted): the same subspaces, training sample, k-means++ seeding and Lloyd iterations. `encodeAll`
@@ -115,14 +117,15 @@ encodes with any unweighted `ProductQuantization`, including one trained on the 
 `ProductQuantization` and `PQVectors`. Both use JVector's CPU code when TornadoVM isn't present, or when a subspace
 is wider than 32 dimensions.
 
-ada002-1M, M=192, K=256:
+ada002-1M, M=192, K=256, same machine (`run.sh pq ada002-1M`):
 
 | | train | encode | total | recall@10 of a PQ scan |
 |---|---|---|---|---|
-| JVector (CPU) | 10.01 s | 3.55 s | 13.56 s | 0.8037 |
-| GPU | 2.85 s | 0.95 s | **3.80 s (3.6x)** | 0.8071 |
+| JVector (CPU) | 10.47 s | 5.32 s | 15.79 s | 0.7999 |
+| GPU | 1.60 s | 0.99 s | **2.59 s (6.1x)** | 0.8023 |
 
-Encoding with JVector's own codebooks on the GPU gives JVector's codes except exact ties: 23 of 188,695,680 codes, where two centroids are equally close up to float rounding (relative difference ≤ 1.5e-7) and the GPU picks the other one.
+Encoding with JVector's own codebooks on the GPU (1.01 s) gives JVector's codes: all 188,695,680 identical in this
+run. Where two centroids are equally close up to float rounding, the GPU may pick the other one.
 
 `jvector-gpu/run.sh check` covers both:
 * compaction: 4 segments with 10% of the nodes deleted;
@@ -181,16 +184,15 @@ Options (system properties):
 force over chunks of the base file. Wikipedia 10M × 1024 takes **24.5 s against numpy's 681 s**, with 99.997%
 top-10 agreement with the CPU (ties among duplicate passages).
 
-## More on the GPU (2026-10-09)
-
-Measured on an RTX 4090 against an i9-13900K (32 threads).
+## More on the GPU
 
 - **NVQ encoding** (`GpuNvq.encodeAll`): JVector's 8-bit NVQ with the same growth-rate search, one work-group
-  per (vector, sub-vector). It returns JVector's own `NVQVectors`. On ada002-1M it takes **1.34 s against 4.06 s
-  (3.0×)**, with identical recall@10 of an NVQ-scored scan (0.9974). 99.995% of the code bytes and 96.9% of the
-  growth rates are identical; the rest are near-ties, because the GPU sums each loss in a different order.
-  `run.sh nvq <dataset>`.
-- **Where an on-disk build's time goes** (`run.sh phases <dataset>`, ada002-1M): GPU build 11.2 s, NVQ encode
+  per (vector, sub-vector). It returns JVector's own `NVQVectors`. On ada002-1M (same machine, TornadoVM 8.1.0) it
+  takes **1.29 s against 4.02 s (3.1x)**, with identical recall@10 of an NVQ-scored scan (0.9974). 99.994% of the
+  code bytes and 96.6% of the growth rates are identical; the rest are near-ties, because the GPU sums each loss in
+  a different order. `run.sh nvq <dataset>`.
+- **Where an on-disk build's time goes** (`run.sh phases <dataset>`, ada002-1M, measured in October on TornadoVM
+  7.x and an earlier version of the GPU build): GPU build 11.2 s, NVQ encode
   4.3 s a pass (JVector's `Bench` encodes twice), inline writes 2.8–7.0 s a format (`writeInline` is
   synchronized), fused-PQ final write 5.6 s.
 - **Fused PQ is not a GPU job.** Its write copies each neighbour's PQ code into a new array (`compressed.copy()`)
