@@ -135,11 +135,7 @@ JVECTOR_BENCH_NUMA_POLICY=interleave:0,1 \
 
 # Reuse that model and graph. Each invocation is a fresh JVM.
 bash jvector-examples/run-ash-pq-benchmark.sh \
-  mpnet-2bit-ash.yml direct 1 0 "$BENCH_CASE"
-bash jvector-examples/run-ash-pq-benchmark.sh \
   mpnet-2bit-ash.yml queued 1 0 "$BENCH_CASE"
-bash jvector-examples/run-ash-pq-benchmark.sh \
-  mpnet-2bit-ash.yml direct 8 0-7 "$BENCH_CASE"
 bash jvector-examples/run-ash-pq-benchmark.sh \
   mpnet-2bit-ash.yml queued 8 0-7 "$BENCH_CASE"
 ```
@@ -149,16 +145,17 @@ memory-node lists together on other hosts. Do not run cases concurrently or
 share their CPU allocation with another experiment. The heap must fit the
 machine; report any heap, CPU, NUMA or library differences from the reference.
 
-Replace `ash` with `pq` and use a separate case directory for its matching PQ
-case. Repeat with each prefix and bit count in the table. Construction refuses
+For the matching PQ case, replace `ash` with `pq`, use `direct` for the query
+report selection, and use a separate case directory. Each index YAML selects
+its delivery policy. The run YAML selects the metrics and reporting. Repeat with each prefix and bit count in the table. Construction refuses
 nonempty model/index caches; query invocations require caches and reject a run
 that rebuilt an index. No existing indexes are automatically deleted.
 
 For the full report, collect five fresh construction JVMs per case in separate
 directories. Retain the first graph for queries, without choosing the best build.
-Run three fresh query JVMs per algorithm, core budget and execution mode against
-that first graph. Alternate PQ/ASH and direct/queued order across repetitions.
-That is 80 builds and 192 query JVMs; each query JVM reports both overquery levels.
+Run three fresh query JVMs per algorithm and core budget against that first
+graph. Alternate PQ and ASH order across repetitions. That is 80 builds and 96
+query JVMs for the four 1M datasets, with both overquery levels per query JVM.
 
 The optional checked-in study driver launches exactly these standalone invocations
 sequentially and aggregates their CSV files. It has no query loop or performance
@@ -234,7 +231,7 @@ kernel switches or prototype classpaths are used.
   including preparation, traversal and reranking. Each QPS sample lasts at least
   three seconds and completes the final pass. Direct mode has 4C synchronous
   callers; queued mode has at most C execution workers and admission 8C, with
-  default maximum batch 8. PQ uses the same queued policy without ASH preparation.
+  default maximum batch 8 for ASH. PQ uses direct execution.
 * **Unloaded latency:** BenchYAML submits and completes one query at a time,
   with the same configured worker capacity. The timer ends when the call returns,
   including preparation, execution and dispatch. This is not sustained latency

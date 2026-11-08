@@ -1,10 +1,11 @@
-yamlSchemaVersion: 2
+yamlSchemaVersion: 3
 onDiskIndexVersion: 7
 
 dataset: colbert-1M
 useDatasetPrefetching: false
 
 construction:
+  type: onDisk
   outDegree: [32]
   efConstruction: [100]
   neighborOverflow: [1.2f]
@@ -27,7 +28,7 @@ construction:
 #        k: 256
 #        anisotropicThreshold: -1.0
   reranking:
-    - NVQ
+    type: None
   useSavedIndexIfExists: No
 
 search:

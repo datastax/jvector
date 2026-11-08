@@ -168,7 +168,15 @@ public final class OnDiskGraphIndexCache {
         Objects.requireNonNull(featureSet, "featureSet");
         Objects.requireNonNull(buildCompressor, "buildCompressor");
         String compressorId = buildCompressor.toString().replaceAll("\\s+", "");
-        return new CacheKey(datasetName, featureSet, M, efConstruction, neighborOverflow, alpha, addHierarchy, refineFinalGraph, compressorId);
+        return keyWithCompressorId(datasetName, featureSet, M, efConstruction, neighborOverflow, alpha,
+                addHierarchy, refineFinalGraph, compressorId);
+    }
+
+    public CacheKey keyWithCompressorId(String datasetName, Set<FeatureId> featureSet, int M,
+                                         int efConstruction, float neighborOverflow, float alpha,
+                                         boolean addHierarchy, boolean refineFinalGraph, String compressorId) {
+        return new CacheKey(datasetName, featureSet, M, efConstruction, neighborOverflow, alpha,
+                addHierarchy, refineFinalGraph, compressorId);
     }
 
     /**

@@ -18,6 +18,8 @@ package io.github.jbellis.jvector.example.yaml;
 
 import java.util.List;
 import java.util.Map;
+import java.util.ArrayList;
+import java.util.Objects;
 
 public class SearchParameters extends CommonParameters {
     /** ASH query arithmetic; omitted settings preserve JVM properties and auto. */
@@ -33,10 +35,23 @@ public class SearchParameters extends CommonParameters {
         public void apply(List<MultiConfig> configs) {
             String selected = null;
             boolean explicitYaml = false;
+            List<String> settings = new ArrayList<>();
+            boolean usesAsh = false;
             for (MultiConfig config : configs) {
-                String yaml = config.search == null ? null : config.search.queryProjection;
+                boolean configUsesAsh = hasAsh(config.construction) || hasAsh(config.search);
+                usesAsh |= configUsesAsh;
+                if (config.usesSchema3()) {
+                    collectProjectionSettings(config.construction, settings);
+                    collectProjectionSettings(config.search, settings);
+                } else {
+                    String legacy = config.search == null ? null : config.search.queryProjection;
+                    if (legacy != null) validatePrecision(legacy);
+                    if (configUsesAsh) settings.add(legacy);
+                }
+            }
+            if (usesAsh && original != null) validatePrecision(original);
+            for (var yaml : settings) {
                 if (yaml != null) validatePrecision(yaml);
-                if (!hasAsh(config.construction) && !hasAsh(config.search)) continue;
                 String mode = original != null ? original : yaml == null ? "auto" : yaml;
                 validatePrecision(mode);
                 if (selected != null && !selected.equals(mode))
@@ -50,14 +65,24 @@ public class SearchParameters extends CommonParameters {
             }
         }
 
+        private static void collectProjectionSettings(CommonParameters section, List<String> settings) {
+            if (section == null || section.compression == null) return;
+            for (var entry : section.compression) {
+                if (entry != null && "ASH".equals(entry.type) && entry.parameters != null) {
+                    String value = entry.parameters.get("queryProjection");
+                    if (value != null) settings.add(value);
+                }
+            }
+        }
+
         private static boolean hasAsh(CommonParameters parameters) {
             return parameters != null && parameters.compression != null
                     && parameters.compression.stream().anyMatch(c -> c != null && "ASH".equals(c.type));
         }
 
-        private static void validatePrecision(String value) {
+        static void validatePrecision(String value) {
             if (!List.of("auto", "fp32", "fp16", "int8").contains(value))
-                throw new IllegalArgumentException("search.queryProjection must be auto, fp32, fp16 or int8: " + value);
+                throw new IllegalArgumentException("queryProjection must be auto, fp32, fp16 or int8: " + value);
         }
 
         @Override public void close() {
@@ -70,6 +95,28 @@ public class SearchParameters extends CommonParameters {
 
     public Map<Integer, List<Double>> topKOverquery;
     public List<Boolean> useSearchPruning;
+
+    void validateSchema3() {
+        if (queryProjection != null) {
+            throw new IllegalArgumentException("place queryProjection in the ASH compression parameters in schema 3");
+        }
+        validateCompression("search", true);
+        if (topKOverquery == null || topKOverquery.isEmpty() || useSearchPruning == null || useSearchPruning.isEmpty()
+                || useSearchPruning.stream().anyMatch(Objects::isNull)) {
+            throw new IllegalArgumentException("search.topKOverquery and search.useSearchPruning must be set");
+        }
+        for (var entry : topKOverquery.entrySet()) {
+            var k = entry.getKey();
+            if (k == null || k <= 0 || entry.getValue() == null || entry.getValue().isEmpty()) {
+                throw new IllegalArgumentException("search.topKOverquery requires positive K and a list of multipliers");
+            }
+            for (var multiplier : entry.getValue()) {
+                if (multiplier == null || !Double.isFinite(multiplier) || multiplier < 1 || multiplier * k > Integer.MAX_VALUE) {
+                    throw new IllegalArgumentException("search.topKOverquery multipliers must be finite, at least 1, and fit an integer candidate budget");
+                }
+            }
+        }
+    }
 
     // NOTE: benchmark compute + console/logging selection are now run-level (run-config.yml)
     // and are no longer recognized in dataset configs.

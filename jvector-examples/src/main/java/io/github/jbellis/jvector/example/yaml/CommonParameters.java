@@ -29,4 +29,14 @@ public class CommonParameters {
     public List<Function<DataSet, CompressorParameters>> getCompressorParameters() {
         return compression.stream().map(Compression::getCompressorParameters).collect(Collectors.toList());
     }
+
+    void validateCompression(String section, boolean search) {
+        if (compression == null || compression.isEmpty()) {
+            throw new IllegalArgumentException(section + ".compression must contain at least one entry");
+        }
+        for (var entry : compression) {
+            if (entry == null) throw new IllegalArgumentException(section + ".compression contains an empty entry");
+            entry.validateSchema3(section, search);
+        }
+    }
 }

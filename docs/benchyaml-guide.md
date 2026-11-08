@@ -33,6 +33,9 @@ reranking optionally rescores the candidates.
 - [Run configuration](../jvector-examples/yaml-configs/run-config.yml) selects
   which measurements to compute and which to display or log.
 
+Each index-parameter file sets `yamlSchemaVersion: 3`, the current
+`onDiskIndexVersion`, and its `dataset` name.
+
 See [How to run benchmarks](benchmarking.md) for dataset setup and commands.
 
 ## Construction
@@ -49,7 +52,7 @@ Each `compression` list entry has a `type` and its own settings.
 | `useSavedIndexIfExists` | `Yes`, `No` | Controls reuse of a compatible `onDisk` index. A cache hit skips fresh construction and serialization measurements. |
 | `outDegree` | Positive integers | Maximum final neighborhood degree, also called M. |
 | `efConstruction` | Positive integers | Search width used to find candidates during insertion. |
-| `neighborOverflow` | Finite numbers ≥ 1.0 | Temporary neighborhood capacity relative to final degree. |
+| `neighborOverflow` | Finite numbers ≥ 1.0 | Temporary neighborhood capacity relative to final degree. Java float suffixes such as `1.2f` are accepted. |
 | `addHierarchy` | `Yes`, `No` | Builds upper graph layers. |
 | `refineFinalGraph` | `Yes`, `No` | Refines the graph during final cleanup. |
 | `fusedGraph` | `Yes`, `No` | Applies to `onDisk`. `Yes` stores ASH or PQ neighbor codes alongside the graph records. `search.compression` selects the codec. |
@@ -67,7 +70,10 @@ for the JVM setting.
 
 Search uses the index selected by `construction.type`. Changes to stored features
 define separate index cases. Search sweeps such as `topKOverquery` use the index
-for their case.
+for their case. When CSV logging is enabled, the row also records the index
+type, writer mode, reranker, ASH construction mode, and query delivery settings
+including the number of callers or workers. A run with mixed delivery policies
+reports thread counts per case in the CSV.
 
 | Field | Values | Description |
 | --- | --- | --- |
@@ -77,8 +83,10 @@ for their case.
 | `compression[].parameters` | [Quantizer parameters](#quantizer-parameters) | Supplies encoding settings for traversal. Reuse matching construction models and codes where possible. |
 
 For a fused disk case, Grid writes the selected search codes over the completed
-topology. The same ASH model can serve construction and search when their
-quantizer settings match.
+topology. Matching ASH or PQ settings reuse the construction model and codes.
+With a non-fused layout, compressed traversal uses a separate in-memory code
+store. With source-vector disk search and no reranker, the inline source
+vectors are the sole vector feature.
 
 ### ASH query parameters
 
@@ -87,7 +95,7 @@ Place `queryExecution` and `maxBatchSize` in that map on an ASH **search** entry
 
 | Field | Values | Description |
 | --- | --- | --- |
-| `queryProjection` | `auto`, `fp32`, `fp16`, `int8` | Optional. `auto` is the default and selects FP16 where supported, with FP32 fallback. `fp32` selects FP32 projection. `fp16` and `int8` require their selected paths. The mode applies to ASH search and asymmetric construction scoring. All ASH entries in one JVM must resolve to one mode. The `jvector.ash.queryProjection` JVM property overrides YAML. |
+| `queryProjection` | `auto`, `fp32`, `fp16`, `int8` | Optional. `auto` is the default and selects FP16 where supported, with FP32 fallback. `fp32` selects FP32 projection. `fp16` and `int8` require their selected paths. The mode applies to ASH search and asymmetric construction scoring. Explicit ASH settings in one JVM must agree. Entries that omit it inherit the JVM mode, which defaults to `auto`. The `jvector.ash.queryProjection` JVM property overrides YAML. |
 | `queryExecution` | `direct`, `queued` | `direct` runs searches on the calling threads. `queued` sends searches to workers and batches query preparation when supported. Defaults to `direct`. |
 | `maxBatchSize` | Positive integer | Caps the number of queries prepared together in queued mode. Defaults to 8. The value must fit the executor limits at the selected worker count. |
 

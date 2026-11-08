@@ -37,11 +37,11 @@ public class StandaloneASHBenchmarkConfigTest {
     @Test
     public void explicitRunFileDoesNotRequireEditingTheDefaultYaml() throws Exception {
         var path = directory.newFile("run.yml").toPath().toAbsolutePath();
-        Files.writeString(path, "yamlSchemaVersion: 1\nqueryExecution:\n  mode: queued\n");
+        Files.writeString(path, "yamlSchemaVersion: 1\nbenchmarks:\n  accuracy: [recall]\n");
         String previous = System.getProperty("jvector.bench.runConfig");
         try {
             System.setProperty("jvector.bench.runConfig", path.toString());
-            assertEquals("queued", RunConfig.loadDefault().queryExecution.mode);
+            assertEquals(List.of("recall"), RunConfig.loadDefault().benchmarks.get("accuracy"));
             Files.writeString(path, "");
             assertThrows(IllegalArgumentException.class, RunConfig::loadDefault);
         } finally {
@@ -94,10 +94,19 @@ public class StandaloneASHBenchmarkConfigTest {
                     var construction = (Map<String, Object>) root.get("construction");
                     var search = (Map<String, Object>) root.get("search");
                     assertEquals(List.of(true), construction.get("fusedGraph"));
-                    assertEquals(List.of("NVQ"), construction.get("reranking"));
+                    assertEquals(Map.of("type", "NVQ"), construction.get("reranking"));
+                    assertEquals("onDisk", construction.get("type"));
+                    assertEquals("parallel", construction.get("writerMode"));
                     assertEquals(List.of(32), construction.get("outDegree"));
                     assertEquals(List.of(100), construction.get("efConstruction"));
-                    assertEquals(compression(construction), compression(search));
+                    var searchSettings = new java.util.LinkedHashMap<>(
+                            (Map<String, Object>) compression(search).get("parameters"));
+                    if (algorithm.equals("ash")) {
+                        assertEquals("queued", searchSettings.remove("queryExecution"));
+                        assertEquals(8, searchSettings.remove("maxBatchSize"));
+                        assertEquals("auto", searchSettings.remove("queryProjection"));
+                    }
+                    assertEquals(compression(construction).get("parameters"), searchSettings);
                     assertEquals(Map.of(10, List.of(1.0, 2.0)), search.get("topKOverquery"));
                     var parameters = (Map<String, Object>) compression(construction).get("parameters");
                     int expectedBits = 40 + entry.getValue() / 2 * bits;
@@ -122,11 +131,9 @@ public class StandaloneASHBenchmarkConfigTest {
     }
 
     @Test
-    public void runModesKeepStandardBenchmarkSelectionsAndQueuedBatchDefaults() throws Exception {
+    public void runRecipesKeepStandardBenchmarkSelections() throws Exception {
         for (String mode : List.of("construction", "direct", "queued")) {
             var config = RunConfig.load(CONFIGS.resolve("run-" + mode + ".yml").toString());
-            assertEquals(mode.equals("queued") ? "queued" : "direct", config.queryExecution.mode);
-            assertEquals(8, config.queryExecution.maxBatchSize);
             assertEquals(List.of("recall"), config.benchmarks.get("accuracy"));
             if (!mode.equals("construction")) {
                 assertEquals(List.of("AVG"), config.benchmarks.get("throughput"));
@@ -148,10 +155,15 @@ public class StandaloneASHBenchmarkConfigTest {
             config.logging.dir = directory.getRoot().getAbsolutePath();
             config.logging.jvectorRef = "old-label";
             for (String mode : List.of("direct", "queued")) {
-                config.queryExecution.mode = mode;
+                config.benchmarks = Map.of("accuracy", List.of("recall"));
+                config.logging.type = "csv";
+                config.logging.benchmarks = config.benchmarks;
                 config.logging.runId = mode;
-                var reporting = io.github.jbellis.jvector.example.reporting.RunReporting.open(config);
-                var info = yaml(reporting.run().runDir().resolve("sys_info.json"));
+                String codec = mode.equals("queued") ? "ash" : "pq";
+                var index = MultiConfig.getConfig(CONFIGS.resolve("mpnet-2bit-" + codec + ".yml")
+                        .toAbsolutePath().toString());
+                var artifacts = io.github.jbellis.jvector.example.reporting.RunArtifacts.open(config, List.of(index));
+                var info = yaml(artifacts.experimentsWriter().path().resolveSibling("sys_info.json"));
                 assertEquals("test-source-reference", info.get("jvector_ref"));
                 var threads = (Map<String, Object>) info.get("threads");
                 int expected = mode.equals("direct") ? 7 : Math.max(1,

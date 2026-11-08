@@ -43,14 +43,6 @@ public class RunConfig {
     public int yamlSchemaVersion;
     public int onDiskIndexVersion;
 
-    /** Query delivery policy; omitted settings preserve the synchronous benchmark. */
-    public QueryExecution queryExecution = new QueryExecution();
-
-    public static class QueryExecution {
-        public String mode = "direct";
-        public int maxBatchSize = 8;
-    }
-
     /** Benchmark computation policy (what is computed). */
     public Map<String, List<String>> benchmarks;
 

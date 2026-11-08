@@ -47,23 +47,6 @@ public final class RunArtifacts {
 
     private final String ashQueryProjectionRequested =
             System.getProperty(SearchParameters.ASH_QUERY_PROJECTION_PROPERTY, "auto");
-    private String queryExecutionMode = "direct";
-    private int queryBatchSize = 8;
-
-    public String queryExecutionMode() { return queryExecutionMode; }
-    public int queryBatchSize() { return queryBatchSize; }
-
-    private RunArtifacts withQueryExecution(RunConfig.QueryExecution settings) {
-        if (settings == null) return this;
-        if (!"direct".equals(settings.mode) && !"queued".equals(settings.mode))
-            throw new IllegalArgumentException("queryExecution.mode must be direct or queued");
-        if (settings.maxBatchSize <= 0 || settings.maxBatchSize == Integer.MAX_VALUE)
-            throw new IllegalArgumentException("queryExecution.maxBatchSize must be positive and fit its histogram");
-        queryExecutionMode = settings.mode;
-        queryBatchSize = settings.maxBatchSize;
-        return this;
-    }
-
     private final RunContext run;
     private final DatasetInfoWriter datasetInfoWriter;
     private final ExperimentsCsvWriter experimentsWriter;
@@ -146,11 +129,11 @@ public final class RunArtifacts {
                     metricsToDisplay,
                     benchmarksToLog,
                     metricsToLog
-            ).withQueryExecution(runCfg.queryExecution);
+            );
         }
 
         // Logging enabled => create run artifacts
-        var reporting = RunReporting.open(runCfg);
+        var reporting = RunReporting.open(runCfg, datasetConfigs);
         var run = reporting.run();
 
         System.out.println("Logging enabled: " + run.runDir().toAbsolutePath() + ".\n" +
@@ -159,7 +142,10 @@ public final class RunArtifacts {
         var datasetInfoWriter = DatasetInfoWriter.open(run);
 
         var outputKeyColumns = LoggingSchemaPlanner.unionLoggingMetricKeys(runCfg, datasetConfigs);
-        var experimentsWriter = new ExperimentsCsvWriter(run, ExperimentsSchemaV1.fixedColumns(), outputKeyColumns);
+        boolean includeIndexOptions = datasetConfigs != null
+                && datasetConfigs.stream().anyMatch(cfg -> cfg != null && cfg.usesSchema3());
+        var experimentsWriter = new ExperimentsCsvWriter(run, ExperimentsSchemaV1.fixedColumns(includeIndexOptions),
+                outputKeyColumns);
 
         return new RunArtifacts(
                 run,
@@ -170,7 +156,7 @@ public final class RunArtifacts {
                 metricsToDisplay,
                 benchmarksToLog,
                 metricsToLog
-        ).withQueryExecution(runCfg.queryExecution);
+        );
     }
 
     /** No-op artifacts instance for legacy callers (no sys_info/dataset_info/experiments output). */
@@ -242,6 +228,14 @@ public final class RunArtifacts {
                        int rerankK,
                        AsymmetricHashing ashQueryModel,
                        List<Metric> logOutputs) {
+        logRow(datasetName, buildParameters, featureSetForIndex, buildCompressorString, searchCompressorString,
+                usePruning, topK, overquery, rerankK, ashQueryModel, Map.of(), logOutputs);
+    }
+
+    public void logRow(String datasetName, Map<String, ?> buildParameters, Set<FeatureId> featureSetForIndex,
+                       String buildCompressorString, String searchCompressorString, boolean usePruning,
+                       int topK, double overquery, int rerankK, AsymmetricHashing ashQueryModel,
+                       Map<String, ?> queryParameters, List<Metric> logOutputs) {
         if (experimentsWriter == null || run == null) {
             return;
         }
@@ -263,6 +257,9 @@ public final class RunArtifacts {
         String effective = ashQueryModel == null ? null
                 : ashQueryModel.stiefelTransform.initializedQueryProjectionPrecision();
         fixed.put("ash_query_projection_effective", effective == null ? "" : effective);
+        if (buildParameters.containsKey("type")) {
+            ExperimentsSchemaV1.addIndexOptions(fixed, buildParameters, queryParameters);
+        }
 
         try {
             experimentsWriter.appendRow(fixed, logOutputs);

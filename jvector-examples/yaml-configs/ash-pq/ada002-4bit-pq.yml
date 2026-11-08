@@ -2,11 +2,13 @@
 # The 4-bit label describes the ASH budget; PQ uses 389 8-bit subspaces.
 # ASH uses C=1 and D/2 projected dimensions, including its five-byte header.
 # See docs/ash-pq-benchmark.md for construction, direct and queued run commands.
-yamlSchemaVersion: 2
+yamlSchemaVersion: 3
 onDiskIndexVersion: 7
 dataset: ada002-1M
 
 construction:
+  type: onDisk
+  writerMode: parallel
   outDegree: [32]
   efConstruction: [100]
   neighborOverflow: [1.2f]
@@ -20,7 +22,8 @@ construction:
         k: 256
         centerData: "No"
         anisotropicThreshold: -1.0
-  reranking: [NVQ]
+  reranking:
+    type: NVQ
   # A fresh case directory measures training/encoding/construction. Later JVMs
   # in that directory reuse exactly the same model and index for querying.
   useSavedIndexIfExists: Yes

@@ -116,9 +116,15 @@ public class MultiConfig {
                 }
 
                 // Validate supported versions
-                if (cfg.getYamlSchemaVersion() != 2) {
+                if (cfg.getYamlSchemaVersion() != 2 && cfg.getYamlSchemaVersion() != 3) {
                     throw new IllegalArgumentException("Unsupported yamlSchemaVersion="
                             + cfg.getYamlSchemaVersion() + " in " + configFile.getAbsolutePath());
+                }
+                try {
+                    if (cfg.usesSchema3()) cfg.validateSchema3();
+                    else cfg.validateSchema2();
+                } catch (IllegalArgumentException e) {
+                    throw new IllegalArgumentException(configFile.getAbsolutePath() + ": " + e.getMessage(), e);
                 }
 
                 return cfg;
@@ -187,6 +193,54 @@ public class MultiConfig {
 
     public int getYamlSchemaVersion() {
         return yamlSchemaVersion;
+    }
+
+    public boolean usesSchema3() {
+        return yamlSchemaVersion == 3;
+    }
+
+    private void validateSchema2() {
+        if (construction != null && (construction.type != null || construction.writerMode != null
+                || (construction.reranking != null && !(construction.reranking instanceof List<?>)))) {
+            throw new IllegalArgumentException("construction.type, writerMode, and reranking.type require schema 3");
+        }
+        if (hasSchema3CompressionFields(construction) || hasSchema3CompressionFields(search)) {
+            throw new IllegalArgumentException("compression scoring and ASH query settings require schema 3");
+        }
+    }
+
+    private static boolean hasSchema3CompressionFields(CommonParameters section) {
+        if (section == null || section.compression == null) return false;
+        for (var entry : section.compression) {
+            if (entry == null) continue;
+            if (entry.scoring != null) return true;
+            if ("ASH".equals(entry.type) && entry.parameters != null
+                    && (entry.parameters.containsKey("queryExecution")
+                    || entry.parameters.containsKey("maxBatchSize")
+                    || entry.parameters.containsKey("queryProjection"))) return true;
+        }
+        return false;
+    }
+
+    private void validateSchema3() {
+        if (dataset == null || dataset.isBlank() || construction == null || search == null) {
+            throw new IllegalArgumentException("schema 3 requires dataset, construction, and search");
+        }
+        construction.validateSchema3();
+        search.validateSchema3();
+        var reranking = construction.rerankingType();
+        boolean fused = construction.fusedGraph != null && construction.fusedGraph.contains(Boolean.TRUE);
+        if (fused && "None".equals(reranking)) {
+            throw new IllegalArgumentException("fusedGraph requires construction.reranking.type FP32 or NVQ");
+        }
+        for (var entry : search.compression) {
+            if (fused && !List.of("ASH", "PQ").contains(entry.type)) {
+                throw new IllegalArgumentException("fusedGraph requires ASH or PQ search compression");
+            }
+            if ("None".equals(entry.type) && "FP32".equals(reranking)) {
+                throw new IllegalArgumentException("FP32 reranking repeats source-vector traversal scores. Use reranking.type None");
+            }
+        }
     }
 
     public void setYamlSchemaVersion(int yamlSchemaVersion) {

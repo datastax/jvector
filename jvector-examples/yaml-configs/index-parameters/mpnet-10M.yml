@@ -1,10 +1,11 @@
 # MPNet-10M: ASH(b=2,d=384), nominal 32x compression.
 # Fused graph scoring, NVQ reranking, and saved model/index reuse.
-yamlSchemaVersion: 2
+yamlSchemaVersion: 3
 onDiskIndexVersion: 7
 dataset: mpnet-10m
 
 construction:
+  type: onDisk
   outDegree: [32]
   efConstruction: [100]
   neighborOverflow: [1.2f]
@@ -18,13 +19,13 @@ construction:
         optimizer: ITQ
         landmarkCount: 1
         bitsPerDimension: 2
-  reranking: [NVQ]
+  reranking:
+    type: NVQ
   # A fresh case directory measures training/encoding/construction. Later JVMs
   # in that directory reuse exactly the same model and index for querying.
   useSavedIndexIfExists: Yes
 
 search:
-  queryProjection: auto # auto, fp16, fp32, int8; explicit -D overrides YAML
   topKOverquery:
     10: [1.0, 2.0]
   useSearchPruning: [No]

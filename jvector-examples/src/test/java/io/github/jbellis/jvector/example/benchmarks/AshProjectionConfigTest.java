@@ -52,8 +52,6 @@ public class AshProjectionConfigTest {
         try (var setting = new SearchParameters.AshQueryProjectionSetting()) {
             setting.apply(List.of(config));
             assertNull(System.getProperty(SearchParameters.ASH_QUERY_PROJECTION_PROPERTY));
-            assertEquals("direct", new RunConfig().queryExecution.mode);
-            assertEquals(8, new RunConfig().queryExecution.maxBatchSize);
         }
         assertNull(System.getProperty(SearchParameters.ASH_QUERY_PROJECTION_PROPERTY));
     }

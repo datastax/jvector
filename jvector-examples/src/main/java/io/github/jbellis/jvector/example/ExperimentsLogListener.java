@@ -60,6 +60,7 @@ final class ExperimentsLogListener implements GridListener {
                 row.overquery,
                 row.rerankK,
                 ctx.ashQueryProjectionModel,
+                ctx.queryParameters,
                 selection.apply(row.metrics, resolved)
         );
     }

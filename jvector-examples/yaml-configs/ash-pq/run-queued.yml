@@ -1,8 +1,6 @@
 # Used by standalone BenchYAML via -Djvector.bench.runConfig=<this file>.
 yamlSchemaVersion: 1
 onDiskIndexVersion: 7
-queryExecution:
-  mode: queued
 benchmarks:
   throughput: [AVG]
   latency: [AVG, STD, P999]

@@ -1,5 +1,5 @@
 # ASH configuration for DOT_PRODUCT datasets only.
-yamlSchemaVersion: 2
+yamlSchemaVersion: 3
 onDiskIndexVersion: 7
 
 dataset: default
@@ -7,31 +7,47 @@ dataset: default
 useDatasetPrefetching: false
 
 construction:
+  type: onDisk
+  # type: inMemory     # Omit writerMode, fusedGraph, and useSavedIndexIfExists.
+  # writerMode: parallel  # Default for onDisk.
+  # writerMode: sequential
   outDegree: [64]
   efConstruction: [200]
   neighborOverflow: [1.2f]
   addHierarchy: [Yes]
   refineFinalGraph: [Yes]
   fusedGraph: [Yes]
+  # fusedGraph: [No]  # Use separate search codes, or source vectors with search type None.
   compression:
     - type: ASH
+      # scoring: symmetric  # Also accepts asymmetric or mixed.
       parameters:
-        compressionRatio: 32
-        optimizer: ITQ
-        landmarkCount: 1
-        bitsPerDimension: 2
-# To use PQ, comment out ASH and uncomment PQ in both sections.
+        compressionRatio: 32  # Other ratios: 8, 16, 64, 128, 256.
+        # encodedBits: 808     # Alternative to compressionRatio, includes the 40-bit header.
+        optimizer: ITQ  # Or RANDOM.
+        landmarkCount: 1  # Symmetric and mixed construction require 1.
+        bitsPerDimension: 2  # Fused ASH supports 1, 2, and 4.
+        # queryProjection: auto  # Used for asymmetric scoring. See ASH search below.
+# Select the compression entries for this case.
+# For source scoring, use None in both sections, fusedGraph: [No], and reranking.type: None.
+# BQ traversal requires fusedGraph: [No].
+#    - type: None
+#    - type: BQ
+# For fused PQ search, select PQ for search and use 256 centroids.
 #    - type: PQ
 #      parameters:
 #        mFactor: 8
+#        # m: 96          # Alternative to mFactor.
 #        k: 256
+#        # centerData: "No"  # Defaults to centering for Euclidean similarity.
 #        anisotropicThreshold: -1.0
   reranking:
-    - NVQ
-  useSavedIndexIfExists: No # If yes, the system will attempt to locate a cached copy of the index instead of constructing
+    type: NVQ
+    # type: FP32   # Rescore with source vectors.
+    # type: None   # Skip rescoring where supported. Set fusedGraph: [No].
+  useSavedIndexIfExists: No  # Set Yes to reuse a compatible disk index.
 
 search:
-  queryProjection: auto # auto, fp16, fp32, int8; explicit -D overrides YAML
   topKOverquery:
     10: [1.0, 2.0, 5.0, 10.0]
 #    100: [1.0, 2.0]
@@ -39,13 +55,25 @@ search:
   compression:
     - type: ASH
       parameters:
-        compressionRatio: 32
-        optimizer: ITQ
-        landmarkCount: 1
-        bitsPerDimension: 2
-# To use PQ, comment out ASH and uncomment PQ in both sections.
+        compressionRatio: 32  # Other ratios: 8, 16, 64, 128, 256.
+        # encodedBits: 808     # Alternative to compressionRatio, includes the 40-bit header.
+        optimizer: ITQ  # Or RANDOM.
+        landmarkCount: 1  # Symmetric and mixed construction require 1.
+        bitsPerDimension: 2  # Fused ASH supports 1, 2, and 4.
+        # queryProjection: auto  # fp32, fp16, and int8 are also available.
+        # queryExecution: direct
+        # queryExecution: queued
+        # maxBatchSize: 8         # For queued execution.
+# Select the compression entries for this case.
+# For source scoring, use None in both sections, fusedGraph: [No], and reranking.type: None.
+# BQ traversal requires fusedGraph: [No].
+#    - type: None
+#    - type: BQ
+# For fused PQ search, select PQ for search and use 256 centroids.
 #    - type: PQ
 #      parameters:
 #        mFactor: 8
+#        # m: 96          # Alternative to mFactor.
 #        k: 256
+#        # centerData: "No"  # Defaults to centering for Euclidean similarity.
 #        anisotropicThreshold: -1.0

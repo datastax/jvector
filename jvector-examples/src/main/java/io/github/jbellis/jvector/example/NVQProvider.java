@@ -16,6 +16,8 @@
 
 package io.github.jbellis.jvector.example;
 
+import io.github.jbellis.jvector.graph.RandomAccessVectorValues;
+import io.github.jbellis.jvector.vector.types.VectorFloat;
 import io.github.jbellis.jvector.graph.disk.feature.FeatureId;
 import io.github.jbellis.jvector.graph.disk.feature.NVQ;
 import io.github.jbellis.jvector.quantization.NVQuantization;
@@ -30,12 +32,14 @@ final class NVQProvider implements FeatureProvider {
     @Override
     public void configure(FeatureWriteContext ctx) {
         var vectors = ctx.vectors();
-        int nSubVectors = vectors.dimension() == 2 ? 1 : 2;
-        var nvq = ctx.timeIndexCompute("NVQ", () -> ctx.inputMean() == null
-                ? NVQuantization.compute(vectors, nSubVectors)
-                : NVQuantization.create(ctx.inputMean(), nSubVectors));
+        var nvq = ctx.timeIndexCompute("NVQ", () -> train(vectors, ctx.inputMean()));
         ctx.add(new NVQ(nvq));
         ctx.supplyFromVector(FeatureId.NVQ_VECTORS, vector -> new NVQ.State(nvq.encode(vector)));
+    }
+
+    static NVQuantization train(RandomAccessVectorValues vectors, VectorFloat<?> mean) {
+        int nSubVectors = vectors.dimension() <= 2 ? 1 : 2;
+        return mean == null ? NVQuantization.compute(vectors, nSubVectors) : NVQuantization.create(mean, nSubVectors);
     }
 
     @Override

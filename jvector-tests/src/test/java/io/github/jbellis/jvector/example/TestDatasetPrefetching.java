@@ -136,7 +136,7 @@ public class TestDatasetPrefetching {
             public List<VectorFloat<?>> getQueryVectors(){return List.of(vectors.get(0));}
             public List<List<Integer>> getGroundTruth(){return List.of(List.of(0));}
         };
-        var cacheFile = Path.of("pq_cache").resolve(new CompressorParameters.PQParameters(4,16,false,-1f).idStringFor(ds));
+        var cacheFile = Path.of("compressor_cache").resolve(new CompressorParameters.PQParameters(4,16,false,-1f).idStringFor(ds));
         var work = Files.createTempDirectory("bulk-grid-wiring");
         try {
             Grid.runOneGraph(OnDiskGraphIndexCache.initialize(work.resolve("saved")), List.of(EnumSet.of(FeatureId.INLINE_VECTORS),EnumSet.of(FeatureId.NVQ_VECTORS)),

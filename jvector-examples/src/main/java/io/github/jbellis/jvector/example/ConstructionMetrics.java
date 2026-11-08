@@ -43,7 +43,13 @@ final class ConstructionMetrics {
     // Search phase (reset per evaluated config)
     private final Map<String, QuantStats> searchByType = new HashMap<>();
 
-    ConstructionMetrics() {}
+    private final boolean sumIndexQuantTimes;
+
+    ConstructionMetrics() { this(false); }
+
+    ConstructionMetrics(boolean sumIndexQuantTimes) {
+        this.sumIndexQuantTimes = sumIndexQuantTimes;
+    }
 
     /** Clear search-phase quant timings for the next evaluated (index, compression) configuration. */
     void resetSearch() {
@@ -71,16 +77,16 @@ final class ConstructionMetrics {
         }
 
         // Index-construction quant timings
-        appendQuant(out, "construction.index_quant_time_s", "Idx", indexByType);
+        appendQuant(out, "construction.index_quant_time_s", "Idx", indexByType, sumIndexQuantTimes);
 
         // Search-phase quant timings (note: search.* namespace matches other query-time metrics)
-        appendQuant(out, "search.search_quant_time_s", "Search", searchByType);
+        appendQuant(out, "search.search_quant_time_s", "Search", searchByType, false);
     }
 
     private static void appendQuant(List<Metric> out,
                                     String prefix,
                                     String phaseLabel,
-                                    Map<String, QuantStats> byType) {
+                                    Map<String, QuantStats> byType, boolean sumTimes) {
         final String hPrefix = (phaseLabel == null || phaseLabel.isBlank()) ? "" : (phaseLabel + " ");
 
         for (var e : byType.entrySet()) {
@@ -88,16 +94,19 @@ final class ConstructionMetrics {
             QuantStats qs = e.getValue();
 
             // Compute
-            if (qs.computeTimeS != null) {
+            if (!qs.computeTimesS.isEmpty()) {
+                double computeTime = sumTimes ? qs.computeTimesS.stream().mapToDouble(Double::doubleValue).sum()
+                        : qs.computeTimesS.get(qs.computeTimesS.size() - 1);
                 out.add(Metric.of(prefix + "." + qt + ".compute_time_s",
-                        hPrefix + qt + " compute (s)", ".2f", qs.computeTimeS));
+                        hPrefix + qt + " compute (s)", ".2f", computeTime));
             }
 
             // Encoding (usually single; suffix only if multiple)
             int n = qs.encodeTimesS.size();
-            if (n == 1) {
+            if (n > 0 && (n == 1 || sumTimes)) {
+                double encodeTime = qs.encodeTimesS.stream().mapToDouble(Double::doubleValue).sum();
                 out.add(Metric.of(prefix + "." + qt + ".encoding_time_s",
-                        hPrefix + qt + " encoding (s)", ".2f", qs.encodeTimesS.get(0)));
+                        hPrefix + qt + " encoding (s)", ".2f", encodeTime));
             } else if (n > 1) {
                 for (int i = 0; i < n; i++) {
                     out.add(Metric.of(prefix + "." + qt + ".encoding_time_s." + i,
@@ -108,7 +117,7 @@ final class ConstructionMetrics {
     }
 
     private static final class QuantStats {
-        Double computeTimeS;
+        final List<Double> computeTimesS = new ArrayList<>();
         final List<Double> encodeTimesS = new ArrayList<>();
     }
 
@@ -125,7 +134,7 @@ final class ConstructionMetrics {
             if (qs == null) return f.get();
             long t0 = System.nanoTime();
             try { return f.get(); }
-            finally { qs.computeTimeS = (System.nanoTime() - t0) / 1_000_000_000.0; }
+            finally { qs.computeTimesS.add((System.nanoTime() - t0) / 1_000_000_000.0); }
         }
 
         <T> T timeEncode(java.util.function.Supplier<T> f) {

@@ -28,6 +28,7 @@ import io.github.jbellis.jvector.graph.disk.RandomAccessOnDiskGraphIndexWriter;
 import io.github.jbellis.jvector.graph.disk.feature.Feature;
 import io.github.jbellis.jvector.graph.disk.feature.FeatureId;
 import io.github.jbellis.jvector.quantization.BQVectors;
+import io.github.jbellis.jvector.quantization.CompressedVectors;
 import io.github.jbellis.jvector.quantization.ASHVectors;
 import io.github.jbellis.jvector.quantization.AsymmetricHashing;
 import io.github.jbellis.jvector.quantization.PQVectors;
@@ -46,7 +47,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
-import java.util.function.IntFunction;
+import java.util.function.Supplier;
 import java.util.stream.IntStream;
 
 /**
@@ -56,18 +57,40 @@ import java.util.stream.IntStream;
 final class CompressedOnDiskBuild implements IndexBuildStrategy {
     private final OnDiskGraphIndexCache cache;
     private final Path workDirectory;
-    private final VectorCompressor<?> buildCompressor;
+    private VectorCompressor<?> buildCompressor;
+    private final Supplier<VectorCompressor<?>> buildCodec;
     private final ConstructionMetrics constructionMetrics;
+    private final Supplier<VectorCompressor<?>> fusedCompressor;
+    private final String cacheIdentity;
 
     /** @param constructionMetrics construction metrics sink, or null when not reporting */
     CompressedOnDiskBuild(OnDiskGraphIndexCache cache,
                           Path workDirectory,
                           VectorCompressor<?> buildCompressor,
                           ConstructionMetrics constructionMetrics) {
+        this(cache, workDirectory, buildCompressor, constructionMetrics, null, null, null);
+    }
+
+    CompressedOnDiskBuild(OnDiskGraphIndexCache cache, Path workDirectory, Supplier<VectorCompressor<?>> buildCodec,
+                          ConstructionMetrics constructionMetrics, Supplier<VectorCompressor<?>> fusedCompressor,
+                          String cacheIdentity) {
+        this(cache, workDirectory, null, constructionMetrics, buildCodec, fusedCompressor, cacheIdentity);
+    }
+
+    private CompressedOnDiskBuild(OnDiskGraphIndexCache cache, Path workDirectory, VectorCompressor<?> buildCompressor,
+                                  ConstructionMetrics constructionMetrics, Supplier<VectorCompressor<?>> buildCodec,
+                                  Supplier<VectorCompressor<?>> fusedCompressor, String cacheIdentity) {
+        this.buildCodec = buildCodec;
+        this.fusedCompressor = fusedCompressor;
+        this.cacheIdentity = cacheIdentity;
         this.cache = cache;
         this.workDirectory = workDirectory;
         this.buildCompressor = buildCompressor;
         this.constructionMetrics = constructionMetrics;
+    }
+
+    VectorCompressor<?> buildCompressor() {
+        return buildCompressor;
     }
 
     @Override
@@ -82,45 +105,48 @@ final class CompressedOnDiskBuild implements IndexBuildStrategy {
         // Map feature sets to their cache handles for the build phase
         Map<Set<FeatureId>, OnDiskGraphIndexCache.WriteHandle> handles = new LinkedHashMap<>();
 
-        for (Set<FeatureId> fs : featureSets) {
-            var key = cache.key(ds.getName(), fs, build.M, build.efConstruction, build.neighborOverflow, build.alpha,
-                    build.addHierarchy, build.refineFinalGraph, buildCompressor);
-            var cached = cache.tryLoad(key);
+        try {
+            for (Set<FeatureId> fs : featureSets) {
+                var key = cacheIdentity == null
+                        ? cache.key(ds.getName(), fs, build.M, build.efConstruction, build.neighborOverflow, build.alpha,
+                                build.addHierarchy, build.refineFinalGraph, buildCompressor)
+                        : cache.keyWithCompressorId(ds.getName(), fs, build.M, build.efConstruction, build.neighborOverflow,
+                                build.alpha, build.addHierarchy, build.refineFinalGraph, cacheIdentity);
+                var cached = cache.tryLoad(key);
 
-            if (cached.isPresent()) {
-                System.out.printf("%s: Using cached graph index for %s%n", key.datasetName, fs);
-                indexes.put(fs, cached.get());
-                try { fileSizes.put(fs, Files.size(cache.resolve(key).finalPath)); } catch (IOException ignored) {}
-            } else {
-                missing.add(fs);
-                if (cache.isEnabled()) {
-                    var handle = cache.beginWrite(key, OnDiskGraphIndexCache.Overwrite.ALLOW);
-                    // Log cache miss / build start
-                    System.out.printf("%s: Building graph index (cached enabled) for %s%n", key.datasetName, fs);
-                    // Prepare the atomic write handle immediately
-                    handles.put(fs, handle);
+                if (cached.isPresent()) {
+                    System.out.printf("%s: Using cached graph index for %s%n", key.datasetName, fs);
+                    indexes.put(fs, cached.get());
+                    try { fileSizes.put(fs, Files.size(cache.resolve(key).finalPath)); } catch (IOException ignored) {}
                 } else {
-                    System.out.printf("%s: Building graph index (cache disabled) for %s%n", key.datasetName, fs);
+                    missing.add(fs);
+                    if (cache.isEnabled()) {
+                        var handle = cache.beginWrite(key, OnDiskGraphIndexCache.Overwrite.ALLOW);
+                        // Log cache miss / build start
+                        System.out.printf("%s: Building graph index (cached enabled) for %s%n", key.datasetName, fs);
+                        // Prepare the atomic write handle immediately
+                        handles.put(fs, handle);
+                    } else {
+                        System.out.printf("%s: Building graph index (cache disabled) for %s%n", key.datasetName, fs);
+                    }
                 }
             }
-        }
 
-        Double buildTimeS = null;
-        if (!missing.isEmpty()) {
-            // At least one index needs to be built (b/c not in cache or cache is disabled)
-            // We pass the handles map so buildMissing knows exactly where to write
-            try {
-                buildTimeS = buildMissing(missing, build, ds, outputDir, handles, indexes, fileSizes);
-            } catch (IOException | RuntimeException e) {
-                // A rejected or failed build must not leave the cache's temp files behind.
-                for (var handle : handles.values()) {
-                    try { handle.close(); }
-                    catch (IOException suppressed) { e.addSuppressed(suppressed); }
-                }
-                throw e;
+            Double buildTimeS = missing.isEmpty() ? null
+                    : buildMissing(missing, build, ds, outputDir, handles, indexes, fileSizes);
+            return new BuiltIndexes(indexes, fileSizes, buildTimeS);
+        } catch (IOException | RuntimeException e) {
+            // A failed build must release cached readers and discard uncommitted writes.
+            for (var handle : handles.values()) {
+                try { handle.close(); }
+                catch (IOException suppressed) { e.addSuppressed(suppressed); }
             }
+            for (var index : indexes.values()) {
+                try { index.close(); }
+                catch (IOException suppressed) { e.addSuppressed(suppressed); }
+            }
+            throw e;
         }
-        return new BuiltIndexes(indexes, fileSizes, buildTimeS);
     }
 
     /** Builds one graph for {@code featureSets}, loads each written index into {@code indexes}, and returns the build time. */
@@ -133,6 +159,13 @@ final class CompressedOnDiskBuild implements IndexBuildStrategy {
                                 Map<Set<FeatureId>, Long> fileSizes) throws IOException
     {
         Files.createDirectories(outputDir);
+
+        if (build.indexType != null) {
+            buildCompressor = buildCodec == null ? null : buildCodec.get();
+            double seconds = buildAndFlush(featureSets, build, ds, outputDir, handles);
+            reopen(featureSets, outputDir, handles, indexes, fileSizes);
+            return seconds;
+        }
 
         var floatVectors = ds.getBaseRavv();
 
@@ -225,13 +258,7 @@ final class CompressedOnDiskBuild implements IndexBuildStrategy {
             try (var vectors = new FinalWriteVectors(floatVectors);
                  var view = builder.getGraph().getView();
                  var closeWriter = writer) {
-                Map<FeatureId, IntFunction<Feature.State>> writeSuppliers = new EnumMap<>(FeatureId.class);
-                if (deferFeatures) {
-                    ctx.vectorSuppliers().forEach((id, supplier) ->
-                            writeSuppliers.put(id, ordinal -> supplier.apply(vectors.get(ordinal))));
-                }
-                ctx.afterBuildSuppliers().forEach((id, supplier) -> writeSuppliers.put(id, supplier.apply(view)));
-                writer.write(writeSuppliers);
+                writer.write(ctx.completedSuppliers(view, deferFeatures ? vectors::get : null));
             } catch (IOException e) {
                 throw new UncheckedIOException(e);
             }
@@ -243,6 +270,55 @@ final class CompressedOnDiskBuild implements IndexBuildStrategy {
                 (System.nanoTime()-cleanupEnd)/1e9);
         System.out.format("Build and write %s in %ss%n", featureSets, totalTime);
 
+        reopen(featureSets, outputDir, handles, indexes, fileSizes);
+        return totalTime;
+    }
+
+    /** Builds the topology before preparing search features and writing the disk index. */
+    private double buildAndFlush(List<Set<FeatureId>> featureSets, BuildConfig build, DataSet ds, Path outputDir,
+                                 Map<Set<FeatureId>, OnDiskGraphIndexCache.WriteHandle> handles) throws IOException {
+        var vectors = ds.getBaseRavv();
+        var mean = featureSets.stream().anyMatch(features -> features.contains(FeatureId.NVQ_VECTORS))
+                ? new VectorMean(vectors.size(), vectors.dimension()) : null;
+        var buildVectors = mean == null ? vectors : mean.duringScan(vectors);
+        var encoded = Grid.encodeForConstruction(buildCompressor, buildVectors, constructionMetrics);
+
+        long start = System.nanoTime();
+        try (var graph = GraphBuilderFactory.buildGraph(ds, build, encoded)) {
+            double buildSeconds = (System.nanoTime() - start) / 1e9;
+            var codec = fusedCompressor == null ? null : fusedCompressor.get();
+            CompressedVectors searchCodes = codec == null ? null : codec == buildCompressor
+                    ? encoded
+                    : Grid.encodeForConstruction(codec, mean != null && !mean.isComplete() ? buildVectors : vectors,
+                            constructionMetrics);
+            var inputMean = mean != null && mean.isComplete() ? mean.mean() : null;
+            double flushSeconds = 0;
+            int n = 0;
+            for (var features : featureSets) {
+                Path path = handles.containsKey(features) ? handles.get(features).writePath() : outputDir.resolve("graph" + n++);
+                var ctx = FeatureProviders.configureWriter(features, graph, path, vectors,
+                        searchCodes instanceof PQVectors ? (PQVectors) searchCodes : null,
+                        searchCodes instanceof ASHVectors ? (ASHVectors) searchCodes : null,
+                        inputMean, constructionMetrics, build.writerMode);
+                start = System.nanoTime();
+                try (var input = new FinalWriteVectors(vectors);
+                     var view = graph.getView();
+                     var writer = ctx.buildWriter()) {
+                    writer.write(ctx.completedSuppliers(view, input::get));
+                }
+                flushSeconds += (System.nanoTime() - start) / 1e9;
+            }
+            double totalTime = buildSeconds + flushSeconds;
+            System.out.printf("Graph phases: buildAndCleanup=%.6f flush=%.6f seconds%n", buildSeconds, flushSeconds);
+            System.out.format("Build and write %s in %ss%n", featureSets, totalTime);
+            return totalTime;
+        }
+    }
+
+    private static void reopen(List<Set<FeatureId>> featureSets, Path outputDir,
+                               Map<Set<FeatureId>, OnDiskGraphIndexCache.WriteHandle> handles,
+                               Map<Set<FeatureId>, ImmutableGraphIndex> indexes,
+                               Map<Set<FeatureId>, Long> fileSizes) throws IOException {
         // Commit the index to cache atomically
         for (var entry : handles.entrySet()) {
             System.out.printf("Committing %s build to graph index cache...%n", entry.getKey());
@@ -250,7 +326,7 @@ final class CompressedOnDiskBuild implements IndexBuildStrategy {
         }
 
         // open indexes and capture per-feature-set file sizes
-        n = 0;
+        int n = 0;
         for (var features : featureSets) {
             Path loadPath = handles.containsKey(features)
                     ? handles.get(features).finalPath()
@@ -259,7 +335,6 @@ final class CompressedOnDiskBuild implements IndexBuildStrategy {
             indexes.put(features, OnDiskGraphIndex.load(ReaderSupplierFactory.open(loadPath)));
             fileSizes.put(features, Files.size(loadPath));
         }
-        return totalTime;
     }
 
     /// Write one node's original-vector features to every writer during insertion. The borrowed

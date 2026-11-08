@@ -43,6 +43,11 @@ public final class BuildConfig {
     public final boolean refineFinalGraph;
     /** Compression used for graph construction, or null to build from full-precision vectors. */
     public final Function<DataSet, CompressorParameters> buildCompressor;
+    /** Explicit index settings for schema 3. Legacy callers leave indexType unset. */
+    public final String indexType;
+    public final String writerMode;
+    public final String rerankingType;
+    public final String ashConstructionMode;
 
     private BuildConfig(Builder b) {
         this.M = b.M;
@@ -52,6 +57,10 @@ public final class BuildConfig {
         this.addHierarchy = b.addHierarchy;
         this.refineFinalGraph = b.refineFinalGraph;
         this.buildCompressor = b.buildCompressor;
+        this.indexType = b.indexType;
+        this.writerMode = b.writerMode;
+        this.rerankingType = b.rerankingType;
+        this.ashConstructionMode = b.ashConstructionMode;
     }
 
     /**
@@ -69,6 +78,10 @@ public final class BuildConfig {
         params.put("neighborOverflow", neighborOverflow);
         params.put("addHierarchy", addHierarchy);
         params.put("refineFinalGraph", refineFinalGraph);
+        if (indexType != null) params.put("type", indexType);
+        if (writerMode != null) params.put("writerMode", writerMode);
+        if (rerankingType != null) params.put("reranking", rerankingType);
+        if (ashConstructionMode != null) params.put("ashConstruction", ashConstructionMode);
         return Collections.unmodifiableMap(params);
     }
 
@@ -84,6 +97,10 @@ public final class BuildConfig {
         private Boolean addHierarchy;
         private Boolean refineFinalGraph;
         private Function<DataSet, CompressorParameters> buildCompressor;
+        private String indexType;
+        private String writerMode;
+        private String rerankingType;
+        private String ashConstructionMode;
 
         private Builder() {}
 
@@ -94,6 +111,10 @@ public final class BuildConfig {
         public Builder addHierarchy(boolean addHierarchy) { this.addHierarchy = addHierarchy; return this; }
         public Builder refineFinalGraph(boolean refineFinalGraph) { this.refineFinalGraph = refineFinalGraph; return this; }
         public Builder buildCompressor(Function<DataSet, CompressorParameters> buildCompressor) { this.buildCompressor = buildCompressor; return this; }
+        public Builder indexType(String indexType) { this.indexType = indexType; return this; }
+        public Builder writerMode(String writerMode) { this.writerMode = writerMode; return this; }
+        public Builder rerankingType(String rerankingType) { this.rerankingType = rerankingType; return this; }
+        public Builder ashConstructionMode(String mode) { this.ashConstructionMode = mode; return this; }
 
         /** @throws IllegalStateException if a parameter without a default was not set */
         public BuildConfig build() {

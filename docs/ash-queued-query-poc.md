@@ -66,13 +66,9 @@ Close/drain the batching executor before shutting down its supplied workers.
 
 ## BenchYAML configuration
 
-Select the mode in the existing run YAML; use the usual dataset/index YAMLs:
-
-```yaml
-queryExecution:
-  mode: queued
-  maxBatchSize: 8
-```
+Set `queryExecution: queued` and `maxBatchSize: 8` in the parameters of
+the ASH search compression entry. See the
+[BenchYAML guide](benchyaml-guide.md#ash-query-parameters) for placement.
 
 The default mode is `direct`. Setting `maxBatchSize: 1` is a no-batching control
 with the same admission budget; it is not how isolated production traffic is

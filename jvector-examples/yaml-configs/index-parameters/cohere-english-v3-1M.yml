@@ -1,11 +1,12 @@
 # ASH configuration for DOT_PRODUCT datasets only.
-yamlSchemaVersion: 2
+yamlSchemaVersion: 3
 onDiskIndexVersion: 7
 
 dataset: cohere-english-v3-1M
 useDatasetPrefetching: false
 
 construction:
+  type: onDisk
   outDegree: [64]
   efConstruction: [200]
   neighborOverflow: [1.2f]
@@ -26,11 +27,10 @@ construction:
 #        k: 256
 #        anisotropicThreshold: -1.0
   reranking:
-    - NVQ
+    type: NVQ
   useSavedIndexIfExists: No # If yes, the system will attempt to locate a cached copy of the index instead of constructing
 
 search:
-  queryProjection: auto # auto, fp16, fp32, int8; explicit -D overrides YAML
   topKOverquery:
     10: [1.0, 2.0, 5.0, 10.0]
 #    100: [1.0, 2.0]

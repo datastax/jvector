@@ -1,10 +1,11 @@
-yamlSchemaVersion: 2
+yamlSchemaVersion: 3
 onDiskIndexVersion: 7
 
 dataset: cohere-english-v3-10M
 useDatasetPrefetching: false
 
 construction:
+  type: onDisk
   outDegree: [32]
   efConstruction: [100]
   neighborOverflow: [1.2f]
@@ -25,11 +26,10 @@ construction:
 #        k: 256
 #        anisotropicThreshold: -1.0
   reranking:
-    - NVQ
+    type: NVQ
   useSavedIndexIfExists: No
 
 search:
-  queryProjection: auto # auto, fp16, fp32, int8; explicit -D overrides YAML
   topKOverquery:
     10: [1.0]
   useSearchPruning: [No]

@@ -2,11 +2,13 @@
 # The 2-bit label describes the ASH budget; PQ uses 389 8-bit subspaces.
 # ASH uses C=1 and D/2 projected dimensions, including its five-byte header.
 # See docs/ash-pq-benchmark.md for construction, direct and queued run commands.
-yamlSchemaVersion: 2
+yamlSchemaVersion: 3
 onDiskIndexVersion: 7
 dataset: openai-3072-1m
 
 construction:
+  type: onDisk
+  writerMode: parallel
   outDegree: [32]
   efConstruction: [100]
   neighborOverflow: [1.2f]
@@ -20,19 +22,22 @@ construction:
         optimizer: ITQ
         landmarkCount: 1
         bitsPerDimension: 2
-  reranking: [NVQ]
+  reranking:
+    type: NVQ
   # A fresh case directory measures training/encoding/construction. Later JVMs
   # in that directory reuse exactly the same model and index for querying.
   useSavedIndexIfExists: Yes
 
 search:
-  queryProjection: auto # auto, fp16, fp32, int8; explicit -D overrides YAML
   topKOverquery:
     10: [1.0, 2.0]
   useSearchPruning: [No]
   compression:
     - type: ASH
       parameters:
+        queryProjection: auto
+        queryExecution: queued
+        maxBatchSize: 8
         encodedBits: 3112
         optimizer: ITQ
         landmarkCount: 1

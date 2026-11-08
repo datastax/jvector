@@ -68,13 +68,12 @@ for group, (prefix, bits) in enumerate((p, b) for p in prefixes for b in (2, 4))
                              numa="interleave:" + args.build_nodes))
     for repetition in range(1, args.query_repetitions + 1):
         algorithms = ("pq", "ash") if (group + repetition) % 2 else ("ash", "pq")
-        modes = ("direct", "queued") if repetition % 2 else ("queued", "direct")
         for cores, cpus in ((1, args.one_core_cpu), (8, args.eight_core_cpus)):
-            for mode in modes:
-                for algorithm in algorithms:
-                    jobs.append(dict(prefix=prefix, bits=bits, algorithm=algorithm, mode=mode,
-                                     cores=cores, cpus=cpus, repetition=repetition,
-                                     numa="bind:" + args.query_node))
+            for algorithm in algorithms:
+                mode = "queued" if algorithm == "ash" else "direct"
+                jobs.append(dict(prefix=prefix, bits=bits, algorithm=algorithm, mode=mode,
+                                 cores=cores, cpus=cpus, repetition=repetition,
+                                 numa="bind:" + args.query_node))
 jobs = [job for job in jobs if job["algorithm"] in args.algorithms
         and (job["mode"] == "construction" or job["mode"] in args.query_modes)]
 for job in jobs:
@@ -266,6 +265,7 @@ for job in jobs:
     if job["mode"] == "construction":
         assert all(row.get("construction.index_build_time_s") for row in rows)
     else:
+        assert all(row["query_execution"] == job["mode"] for row in rows)
         assert all(row.get("search.throughput.avg_qps") and row.get("search.latency.mean_ms") for row in rows)
         reference = next(result for result in results if result["job"]["prefix"] == job["prefix"]
                          and result["job"]["bits"] == job["bits"] and result["job"]["algorithm"] == job["algorithm"]

@@ -80,6 +80,15 @@ CATALOG="$REPO_ROOT/jvector-examples/yaml-configs/ash-pq/$CATALOG_NAME"
   echo "Unknown index config: $CONFIG_NAME" >&2; exit 2;
 }
 
+if [[ "$MODE" != construction ]]; then
+  # The checked-in recipes put delivery under the ASH search parameters.
+  EXECUTION="$(sed -nE 's/^[[:space:]]+queryExecution:[[:space:]]*(direct|queued)[[:space:]]*(#.*)?$/\1/p' "$CONFIG")"
+  if [[ "${EXECUTION:-direct}" != "$MODE" ]]; then
+    echo "The index YAML selects ${EXECUTION:-direct}. Use its matching query report selection." >&2
+    exit 2
+  fi
+fi
+
 shopt -s nullglob
 JARS=("$REPO_ROOT"/jvector-examples/target/jvector-examples-*-jar-with-dependencies.jar)
 if [[ ${#JARS[@]} != 1 ]]; then

@@ -18,10 +18,12 @@ package io.github.jbellis.jvector.example;
 
 import io.github.jbellis.jvector.example.benchmarks.datasets.DataSet;
 import io.github.jbellis.jvector.example.util.CompressorParameters;
+import io.github.jbellis.jvector.example.yaml.Compression;
 
 import java.util.List;
 import java.util.Map;
 import java.util.function.Function;
+import java.util.stream.Collectors;
 
 /**
  * The search-side sweep {@link Grid} runs against every index it builds: each search compressor,
@@ -35,11 +37,26 @@ public final class SearchConfig {
     /** topK mapped to the overquery factors to try; each factor gives rerankK = topK * factor. */
     public final Map<Integer, List<Double>> topKGrid;
     public final List<Boolean> usePruningGrid;
+    private final List<Compression> entries;
+    /** Search compression and delivery settings for a single schema 3 index case. */
+    final Compression compression;
 
     private SearchConfig(Builder b) {
         this.searchCompressors = b.searchCompressors;
         this.topKGrid = b.topKGrid;
         this.usePruningGrid = b.usePruningGrid;
+        this.entries = b.entries;
+        this.compression = b.compression;
+    }
+
+    List<SearchConfig> cases() {
+        if (entries == null) return List.of(this);
+        return entries.stream().map(entry -> {
+            var builder = builder().topKGrid(topKGrid).usePruningGrid(usePruningGrid)
+                    .searchCompressors(List.of(entry.getCompressorParameters()));
+            builder.compression = entry;
+            return builder.build();
+        }).collect(Collectors.toList());
     }
 
     public static Builder builder() {
@@ -50,12 +67,20 @@ public final class SearchConfig {
         private List<Function<DataSet, CompressorParameters>> searchCompressors;
         private Map<Integer, List<Double>> topKGrid;
         private List<Boolean> usePruningGrid;
+        private List<Compression> entries;
+        private Compression compression;
 
         private Builder() {}
 
         public Builder searchCompressors(List<Function<DataSet, CompressorParameters>> searchCompressors) { this.searchCompressors = searchCompressors; return this; }
         public Builder topKGrid(Map<Integer, List<Double>> topKGrid) { this.topKGrid = topKGrid; return this; }
         public Builder usePruningGrid(List<Boolean> usePruningGrid) { this.usePruningGrid = usePruningGrid; return this; }
+
+        Builder compressionEntries(List<Compression> entries) {
+            this.entries = List.copyOf(entries);
+            this.searchCompressors = entries.stream().map(Compression::getCompressorParameters).collect(Collectors.toList());
+            return this;
+        }
 
         /** @throws IllegalStateException if a parameter was not set */
         public SearchConfig build() {

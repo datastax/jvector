@@ -22,11 +22,97 @@ import io.github.jbellis.jvector.quantization.AsymmetricHashing;
 import io.github.jbellis.jvector.vector.VectorSimilarityFunction;
 
 import java.util.Map;
+import java.util.List;
+import java.util.Set;
 import java.util.function.Function;
 
 public class Compression {
     public String type;
+    public String scoring;
     public Map<String, String> parameters;
+
+    void validateSchema3(String section, boolean search) {
+        String path = section + ".compression";
+        if (type == null || !List.of("None", "ASH", "PQ", "BQ").contains(type)) {
+            throw new IllegalArgumentException(path + ".type must be None, ASH, PQ, or BQ");
+        }
+        if (scoring != null && (search || !"ASH".equals(type)
+                || !List.of("symmetric", "asymmetric", "mixed").contains(scoring))) {
+            throw new IllegalArgumentException(path + ".scoring requires ASH construction and must be symmetric, asymmetric, or mixed");
+        }
+
+        Set<String> allowed;
+        switch (type) {
+            case "ASH":
+                allowed = search
+                        ? Set.of("optimizer", "encodedBits", "compressionRatio", "landmarkCount", "bitsPerDimension",
+                                 "queryProjection", "queryExecution", "maxBatchSize")
+                        : Set.of("optimizer", "encodedBits", "compressionRatio", "landmarkCount", "bitsPerDimension",
+                                 "queryProjection");
+                break;
+            case "PQ":
+                allowed = Set.of("m", "mFactor", "k", "centerData", "anisotropicThreshold");
+                break;
+            default:
+                allowed = Set.of();
+        }
+        var settings = parameters == null ? Map.<String, String>of() : parameters;
+        for (var setting : settings.entrySet()) {
+            var key = setting.getKey();
+            if (key == null || !allowed.contains(key) || setting.getValue() == null) {
+                throw new IllegalArgumentException(path + ".parameters." + key + " is invalid for " + type);
+            }
+        }
+        if ("PQ".equals(type) && settings.containsKey("m") == settings.containsKey("mFactor")) {
+            throw new IllegalArgumentException(path + " requires exactly one of m or mFactor for PQ");
+        }
+        if ("PQ".equals(type) && settings.containsKey("mFactor") && Integer.parseInt(settings.get("mFactor")) < 1) {
+            throw new IllegalArgumentException(path + ".parameters.mFactor must be positive");
+        }
+        if ("ASH".equals(type)) {
+            if (!settings.containsKey("optimizer")
+                    || settings.containsKey("encodedBits") == settings.containsKey("compressionRatio")) {
+                throw new IllegalArgumentException(path + " requires optimizer and exactly one of encodedBits or compressionRatio for ASH");
+            }
+            if (!List.of("ITQ", "RANDOM").contains(settings.get("optimizer"))) {
+                throw new IllegalArgumentException(path + ".parameters.optimizer must be ITQ or RANDOM");
+            }
+            var projection = settings.get("queryProjection");
+            if (projection != null) SearchParameters.AshQueryProjectionSetting.validatePrecision(projection);
+            var execution = queryExecution();
+            if (!List.of("direct", "queued").contains(execution)) {
+                throw new IllegalArgumentException(path + ".parameters.queryExecution must be direct or queued");
+            }
+            if (settings.containsKey("maxBatchSize") && !"queued".equals(execution)) {
+                throw new IllegalArgumentException(path + ".parameters.maxBatchSize requires queued queryExecution");
+            }
+            maxBatchSize();
+        }
+    }
+
+    public String queryExecution() {
+        return parameters == null ? "direct" : parameters.getOrDefault("queryExecution", "direct");
+    }
+
+    public int maxBatchSize() {
+        String configured = parameters == null ? null : parameters.get("maxBatchSize");
+        if (configured == null) return 8;
+        int size = Integer.parseInt(configured);
+        if (size <= 0 || size == Integer.MAX_VALUE) {
+            throw new IllegalArgumentException("maxBatchSize must be positive and fit its histogram");
+        }
+        return size;
+    }
+
+    public String ashConstructionMode() {
+        if (scoring == null) return null;
+        switch (scoring) {
+            case "symmetric": return "symmetric-all";
+            case "mixed": return "symmetric";
+            case "asymmetric": return "asymmetric";
+            default: throw new IllegalArgumentException("Unknown ASH construction scoring: " + scoring);
+        }
+    }
 
     public Function<DataSet, CompressorParameters> getCompressorParameters() {
         switch (type) {
@@ -45,7 +131,7 @@ public class Compression {
                     if (strCenterData == null) {
                         centerData = ds.getSimilarityFunction() == VectorSimilarityFunction.EUCLIDEAN;
                     } else {
-                        centerData = strCenterData.equals("Yes");;
+                        centerData = strCenterData.equals("Yes");
                     }
 
                     if (parameters.containsKey("m")) {
