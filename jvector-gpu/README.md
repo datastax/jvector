@@ -71,7 +71,10 @@ dataset above. (On LastFM a search of the same beam visits fewer nodes and reach
 
 Supported: COSINE, DOT_PRODUCT and EUCLIDEAN; any dimension (rows are padded to a multiple of 16); max degree up
 to 64; up to `4 x 2^31` FP16 values (e.g. 10M x 1024). Datasets in a raw float32 file can be read in place with
-`MappedVectors`. In every other case `supports()` returns false and JVector builds on the CPU as usual.
+`MappedVectors`. `supports()` also estimates the host memory the build needs from the shape alone (about 1.9 KB of heap per
+node at M=32, plus native memory for the FP16 rows, cuVS's output and, unless the vectors are memory-mapped, a
+float32 copy of them) and declines when it does not fit the free heap and the host's available memory. In every
+other case `supports()` returns false and JVector builds on the CPU as usual.
 
 Not supported: incremental insertion and deletes, which stay on the CPU path, and non-NVIDIA GPUs.
 
@@ -120,6 +123,7 @@ Options (system properties):
 | `jvector.gpu.clusters` | auto | cuVS batches for the candidate graph (more than 1 when the dataset exceeds device memory) |
 | `jvector.gpu.overlap` | 2 | batches each vector joins when the candidate graph is built in batches |
 | `jvector.gpu.trace` | false | print the time of each phase |
+| `jvector.gpu.hostMemory` | auto | host memory (heap and native together) the build may use, e.g. `48GB`; by default the free heap and the host's available memory |
 
 ## Ground truth on the GPU
 

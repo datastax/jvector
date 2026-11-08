@@ -90,6 +90,11 @@ public final class TornadoGraphBuildAccelerator implements GraphBuildAccelerator
                     n, dim, needed / 1e9, (needed >> 30) + 1));
             return false;
         }
+        String host = HostMemory.shortfall(n, dim, builder.getMaxDegree(), vectors instanceof MappedVectors);
+        if (host != null) {
+            LOG.info(() -> String.format(Locale.ROOT, "GPU build of %d x %d vectors declined, building on the CPU: %s", n, dim, host));
+            return false;
+        }
         return runtimeAvailable();
     }
 

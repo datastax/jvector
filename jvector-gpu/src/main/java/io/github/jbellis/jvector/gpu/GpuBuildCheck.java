@@ -87,7 +87,7 @@ public final class GpuBuildCheck {
         RandomAccessVectorValues vectors = new ListRandomAccessVectorValues(base, dim);
         var gpuBuilder = new GraphIndexBuilder(vectors, similarity, 32, 100, 1.2f, 1.2f, true);
         if (!accelerator.supports(gpuBuilder, vectors, similarity)) {
-            throw new IllegalStateException("the GPU build is not available: run under the TornadoVM launcher with cuVS on the library path");
+            throw new IllegalStateException("the GPU build declined (the log says why): run under the TornadoVM launcher with cuVS on the library path, with enough device and host memory");
         }
         long t0 = System.nanoTime();
         accelerator.build(gpuBuilder, vectors, similarity);

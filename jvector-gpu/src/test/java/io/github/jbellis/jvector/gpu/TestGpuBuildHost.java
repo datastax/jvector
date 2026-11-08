@@ -171,4 +171,40 @@ class TestGpuBuildHost {
             }
         }
     }
+
+    @Test
+    void estimatesTheHostMemoryOfABuild() {
+        var copied = HostMemory.need(10_000_000, 1024, 32, false);
+        var mapped = HostMemory.need(10_000_000, 1024, 32, true);
+        // the same heap; a mapped dataset saves the float32 copy of its rows
+        assertEquals(copied.heap(), mapped.heap());
+        assertEquals(10_000_000L * 1024 * Float.BYTES, copied.nativeMemory() - mapped.nativeMemory());
+        // 10M x 1024, which builds on a 62 GB host with a 56 GB heap: about 19 GB of heap and 33 GB of native memory
+        assertTrue(mapped.heap() > 15e9 && mapped.heap() < 25e9, "heap " + mapped.heap());
+        assertTrue(mapped.nativeMemory() > 25e9 && mapped.nativeMemory() < 40e9, "native " + mapped.nativeMemory());
+    }
+
+    @Test
+    void declinesABuildTheHostCannotHold() {
+        var need = new HostMemory.Need(20L << 30, 30L << 30);
+        assertEquals(null, HostMemory.shortfall(need, 50L << 30, 1L << 30, 59L << 30, null));
+        String heap = HostMemory.shortfall(need, 10L << 30, 1L << 30, 59L << 30, null);
+        assertTrue(heap != null && heap.contains("heap"), heap);
+        // enough heap, but growing into it and the native allocations together exceed the memory available
+        String memory = HostMemory.shortfall(need, 50L << 30, 1L << 30, 40L << 30, null);
+        assertTrue(memory != null && memory.contains("memory available"), memory);
+        // a fixed budget replaces both checks
+        assertEquals(null, HostMemory.shortfall(need, 0, 0, 0, "64GB"));
+        String fixed = HostMemory.shortfall(need, Long.MAX_VALUE, Long.MAX_VALUE, Long.MAX_VALUE, "32GB");
+        assertTrue(fixed != null && fixed.contains("jvector.gpu.hostMemory=32GB"), fixed);
+    }
+
+    @Test
+    void parsesHostMemorySizes() {
+        assertEquals(48L << 30, HostMemory.parseBytes("48GB"));
+        assertEquals(512L << 20, HostMemory.parseBytes(" 512mb "));
+        assertEquals(12_345_678L * 1024, HostMemory.parseMemInfoLine("MemAvailable:   12345678 kB"));
+        assertTrue(HostMemory.availableNative() > 0);
+        assertTrue(HostMemory.freeHeap() > 0);
+    }
 }
