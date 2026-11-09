@@ -126,11 +126,11 @@ cohere-10M:
   similarity_function: DOT_PRODUCT
   load_behavior: NO_SCRUB
 
-esmc-600-1M:
+esmc-600-1m:
   similarity_function: DOT_PRODUCT
   load_behavior: NO_SCRUB
 
-esmc-600-6M:
+esmc-600-6m:
   similarity_function: DOT_PRODUCT
   load_behavior: NO_SCRUB
 

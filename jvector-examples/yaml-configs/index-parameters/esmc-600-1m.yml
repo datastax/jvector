@@ -1,7 +1,7 @@
 yamlSchemaVersion: 3
 onDiskIndexVersion: 7
 
-dataset: esmc-600-6M
+dataset: esmc-600-1m
 
 construction:
   type: onDisk

@@ -1,9 +1,9 @@
-# esmc-600-1M (1152 dimensions): build with 2-bit ASH scoring and write the graph with full-precision
+# esmc-600-1m (1152 dimensions): build with 2-bit ASH scoring and write the graph with full-precision
 # vectors. Searches traverse with ASH codes held in memory and rescore from disk.
 yamlSchemaVersion: 3
 onDiskIndexVersion: 7
 
-dataset: esmc-600-1M
+dataset: esmc-600-1m
 
 construction:
   type: onDisk
