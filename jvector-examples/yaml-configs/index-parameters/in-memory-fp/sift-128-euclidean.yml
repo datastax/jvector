@@ -1,0 +1,26 @@
+# sift-128-euclidean (128 dimensions, Euclidean similarity): in-memory graph built and searched with full-precision vectors.
+# Nothing is written to disk.
+yamlSchemaVersion: 3
+onDiskIndexVersion: 7
+
+dataset: sift-128-euclidean
+
+construction:
+  type: inMemory
+  outDegree: [32]
+  efConstruction: [100]
+  neighborOverflow: [1.2f]
+  addHierarchy: [Yes]
+  refineFinalGraph: [Yes]
+  compression:
+    - type: None
+  reranking:
+    type: None
+
+search:
+  topKOverquery:
+    10: [1.0, 2.0]
+    100: [1.0, 2.0]
+  useSearchPruning: [No]
+  compression:
+    - type: None

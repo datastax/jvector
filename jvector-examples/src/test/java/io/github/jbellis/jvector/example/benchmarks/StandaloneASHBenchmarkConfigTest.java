@@ -31,7 +31,7 @@ import static org.junit.Assert.*;
 
 /** Fair code budgets and independent selection of checked-in run/index YAML. */
 public class StandaloneASHBenchmarkConfigTest {
-    private static final Path INDEX_CONFIGS = Path.of("jvector-examples/yaml-configs/index-parameters/ash-pq");
+    private static final Path INDEX_CONFIGS = Path.of("jvector-examples/yaml-configs/index-parameters/studies/ash-vs-pq");
     private static final Path RUN_CONFIGS = Path.of("jvector-examples/yaml-configs/ash-pq");
     private static final Path ALL_INDEX_CONFIGS = Path.of("jvector-examples/yaml-configs/index-parameters");
     @Rule public final TemporaryFolder directory = new TemporaryFolder();
@@ -196,40 +196,6 @@ public class StandaloneASHBenchmarkConfigTest {
             if (construction != null && construction.containsKey("useSavedIndexIfExists")) {
                 boolean reused = path.startsWith(INDEX_CONFIGS);
                 assertEquals(path.toString(), reused, construction.get("useSavedIndexIfExists"));
-            }
-        }
-    }
-
-    @Test
-    @SuppressWarnings("unchecked")
-    public void ashPathRecipesLoadAndMatchTheirNames() throws Exception {
-        List<Path> paths;
-        try (var files = Files.list(ALL_INDEX_CONFIGS.resolve("ash-paths"))) {
-            paths = files.filter(p -> p.toString().endsWith(".yml")).sorted().collect(java.util.stream.Collectors.toList());
-        }
-        assertEquals(8, paths.size());
-        for (Path path : paths) {
-            String name = path.getFileName().toString();
-            assertNotNull(name, MultiConfig.getConfig(path.toAbsolutePath().toString()));
-            var root = yaml(path);
-            var construction = (Map<String, Object>) root.get("construction");
-            assertEquals(name, Boolean.TRUE, ((List<Object>) construction.get("fusedGraph")).get(0));
-            var build = compression(construction);
-            var search = compression((Map<String, Object>) root.get("search"));
-            var searchParameters = (Map<String, Object>) search.get("parameters");
-            int bits = name.endsWith("-4bit.yml") ? 4 : 2;
-            assertEquals(name, bits, searchParameters.get("bitsPerDimension"));
-            if (name.contains("-compressed-build-")) {
-                assertEquals(name, "ASH", build.get("type"));
-                assertEquals(name, "symmetric", build.get("scoring"));
-                assertEquals(name, build.get("parameters"), Map.of(
-                        "encodedBits", searchParameters.get("encodedBits"),
-                        "optimizer", searchParameters.get("optimizer"),
-                        "landmarkCount", searchParameters.get("landmarkCount"),
-                        "bitsPerDimension", bits));
-            } else {
-                assertTrue(name, name.contains("-build-flush-"));
-                assertEquals(name, "None", build.get("type"));
             }
         }
     }

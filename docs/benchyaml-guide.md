@@ -24,11 +24,12 @@ reranking optionally rescores the candidates.
 ## Configuration files
 
 - [Index parameters](../jvector-examples/yaml-configs/index-parameters) describe
-  construction and search for a dataset. A dataset-specific file takes
-  precedence over `default.yml`. To run an explicit recipe, pass its path to
-  BenchYAML. The [ASH/PQ comparison recipes](../jvector-examples/yaml-configs/index-parameters/ash-pq)
-  and [ASH build and flush examples](../jvector-examples/yaml-configs/index-parameters/ash-paths)
-  are grouped in subdirectories.
+  construction and search for a dataset. Running BenchYAML with a dataset name
+  loads `index-parameters/<dataset>.yml`, named exactly like the dataset and
+  declaring it, or `default.yml` when the dataset has no file. Subdirectories
+  hold [example pipelines](../jvector-examples/yaml-configs/index-parameters/README.md),
+  such as in-memory graphs and in-memory builds flushed to fused on-disk graphs,
+  and published studies. Run them by passing their paths to BenchYAML.
 - [Dataset catalogs](../jvector-examples/yaml-configs/dataset-catalogs) locate
   the base vectors, query vectors, and ground truth.
   [Dataset metadata](../jvector-examples/yaml-configs/dataset-metadata.yml)

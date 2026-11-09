@@ -1,0 +1,39 @@
+# mpnet-1m: fused 2-bit ASH graph with NVQ reranking. This example shows how to
+# project queries with INT8 arithmetic. Requires a
+# provider and CPU that support it; the run fails validation otherwise.
+yamlSchemaVersion: 3
+onDiskIndexVersion: 7
+
+dataset: mpnet-1m
+
+construction:
+  type: onDisk
+  outDegree: [32]
+  efConstruction: [100]
+  neighborOverflow: [1.2f]
+  addHierarchy: [Yes]
+  refineFinalGraph: [Yes]
+  fusedGraph: [Yes]
+  compression:
+    - type: ASH
+      parameters:
+        compressionRatio: 32
+        optimizer: ITQ
+        landmarkCount: 1
+        bitsPerDimension: 2
+  reranking:
+    type: NVQ
+  useSavedIndexIfExists: No
+
+search:
+  topKOverquery:
+    10: [1.0, 2.0]
+  useSearchPruning: [No]
+  compression:
+    - type: ASH
+      parameters:
+        compressionRatio: 32
+        optimizer: ITQ
+        landmarkCount: 1
+        bitsPerDimension: 2
+        queryProjection: int8

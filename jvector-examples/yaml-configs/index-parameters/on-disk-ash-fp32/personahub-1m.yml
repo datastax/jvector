@@ -1,0 +1,37 @@
+# personahub-1m (1024 dimensions): build with 2-bit ASH scoring and write the graph with full-precision
+# vectors. Searches traverse with ASH codes held in memory and rescore from disk.
+yamlSchemaVersion: 3
+onDiskIndexVersion: 7
+
+dataset: personahub-1m
+
+construction:
+  type: onDisk
+  outDegree: [32]
+  efConstruction: [100]
+  neighborOverflow: [1.2f]
+  addHierarchy: [Yes]
+  refineFinalGraph: [Yes]
+  fusedGraph: [No]
+  compression:
+    - type: ASH
+      parameters:
+        compressionRatio: 32
+        optimizer: ITQ
+        landmarkCount: 1
+        bitsPerDimension: 2
+  reranking:
+    type: FP32
+  useSavedIndexIfExists: No
+
+search:
+  topKOverquery:
+    10: [1.0, 2.0, 4.0]
+  useSearchPruning: [No]
+  compression:
+    - type: ASH
+      parameters:
+        compressionRatio: 32
+        optimizer: ITQ
+        landmarkCount: 1
+        bitsPerDimension: 2

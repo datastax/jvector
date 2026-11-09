@@ -110,6 +110,8 @@ tahoe-x1-1m:
   similarity_function: DOT_PRODUCT
   load_behavior: NO_SCRUB
 personahub-1m:
+  similarity_function: DOT_PRODUCT
+  load_behavior: NO_SCRUB
 openai-3072-1m:
   similarity_function: DOT_PRODUCT
   load_behavior: NO_SCRUB

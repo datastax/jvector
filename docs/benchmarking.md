@@ -51,7 +51,7 @@ some-other-category:
 
 `jvector-examples/yaml-configs/index-parameters/default.yml` specifies the default index construction and search parameters to be used by `bench` for all datasets.
 
-You can specify a custom set of a parameters for any given dataset by creating a file called `<dataset-name>.yml`, with `<dataset-name>` replaced by the actual name of the dataset. This is the same as the identifier used in `datasets.yml`. The format of this file is exactly the same as `default.yml`.
+You can specify a custom set of a parameters for any given dataset by creating a file called `<dataset-name>.yml`, with `<dataset-name>` replaced by the actual name of the dataset. This is the same as the identifier used in `datasets.yml`. The format of this file is exactly the same as `default.yml`. The name must match exactly, including case, and the file's `dataset:` field must name the same dataset; BenchYAML stops with an error otherwise. Place the file directly in `index-parameters`, not a subfolder. Subfolders hold [example pipelines](../jvector-examples/yaml-configs/index-parameters/README.md) that you run by path.
 
 See the [BenchYAML Guide](benchyaml-guide.md) for the field reference and an
 example index configuration.

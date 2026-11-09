@@ -48,33 +48,45 @@ public class MultiConfig {
     private int yamlSchemaVersion;
     private int onDiskIndexVersion;
 
-    private static final java.util.concurrent.ConcurrentSkipListSet<String> DEFAULT_USED_FOR_DATASETS =
-            new java.util.concurrent.ConcurrentSkipListSet<>();
-
-    private static final java.util.concurrent.atomic.AtomicReference<File> DEFAULT_FILE_USED =
-            new java.util.concurrent.atomic.AtomicReference<>();
-
+    /**
+     * Returns the default index config for a dataset: {@code index-parameters/<dataset>.yml}, named exactly
+     * like the dataset and declaring that dataset. Subdirectories hold examples and are never searched.
+     * A dataset without its own file uses {@code default.yml}.
+     */
     public static MultiConfig getDefaultConfig(String datasetName) throws FileNotFoundException {
-        var name = defaultDirectory + datasetName;
-        if (!name.endsWith(".yml")) {
-            name += ".yml";
+        return getDefaultConfig(new File(defaultDirectory), datasetName);
+    }
+
+    static MultiConfig getDefaultConfig(File directory, String datasetName) throws FileNotFoundException {
+        String fileName = datasetName.endsWith(".yml") ? datasetName : datasetName + ".yml";
+        String[] names = directory.list();
+        if (names == null) throw new FileNotFoundException("Index config directory not found: " + directory.getPath());
+        // Compare names exactly. File.exists ignores case on some file systems, so lookups would
+        // otherwise find different files on macOS and Linux.
+        String caseOnly = null;
+        for (String name : names) {
+            if (name.equals(fileName)) {
+                File file = new File(directory, name);
+                MultiConfig config = getConfig(file);
+                if (config.dataset != null && !config.dataset.equals(datasetName)) {
+                    throw new IllegalArgumentException("Index config " + file.getPath() + " declares dataset: "
+                            + config.dataset + "." + System.lineSeparator()
+                            + "A default config's file name must match its dataset field exactly.");
+                }
+                return config;
+            }
+            if (name.equalsIgnoreCase(fileName) && new File(directory, name).isFile()) caseOnly = name;
         }
-        File configFile = new File(name);
-        boolean useDefault = !configFile.exists();
-        if (useDefault) {
-            configFile = new File(defaultDirectory + "default.yml");
-
-            // Record fallback usage for a compact summary print later
-            DEFAULT_FILE_USED.compareAndSet(null, configFile);
-            DEFAULT_USED_FOR_DATASETS.add(datasetName);
+        if (caseOnly != null) {
+            throw new IllegalArgumentException("No index config is named exactly " + fileName + "; found"
+                    + System.lineSeparator() + "  " + new File(directory, caseOnly).getPath()
+                    + System.lineSeparator() + "File names must match the dataset name exactly, including case.");
         }
-
-        var config = getConfig(configFile);
-
-        if (useDefault) {
-            config.dataset = datasetName;
-        }
-
+        File fallback = new File(directory, "default.yml");
+        System.err.println("WARNING: No index config named " + fileName + "; using " + fallback.getPath() + "."
+                + System.lineSeparator() + "Dataset defaults are named <dataset>.yml in " + directory.getPath() + ".");
+        MultiConfig config = getConfig(fallback);
+        config.dataset = datasetName;
         return config;
     }
 
@@ -82,14 +94,16 @@ public class MultiConfig {
         File configFile = new File(configName);
         // If the file doesn't exist as an absolute path, try relative to the default directory
         if (!configFile.exists() && !configName.startsWith("/") && !configName.contains(":")) {
-            configFile = new File(defaultDirectory + configName);
+            File relative = new File(defaultDirectory + configName);
+            if (!relative.exists()) throw new FileNotFoundException("Index config not found: " + configName);
+            configFile = relative;
         }
         return getConfig(configFile);
     }
 
     static MultiConfig getConfig(File configFile) throws FileNotFoundException {
         if (!configFile.exists()) {
-            throw new FileNotFoundException(configFile.getAbsolutePath());
+            throw new FileNotFoundException("Index config not found: " + configFile.getPath());
         }
 
         final String text;
@@ -243,6 +257,51 @@ public class MultiConfig {
         }
     }
 
+    /**
+     * The pipeline this schema 3 config selects, inferred from its fields, for example
+     * {@code onDisk · build ASH-2b symmetric · search fused ASH-2b · rerank NVQ}.
+     * Sweeps list each value. Returns null for older schemas.
+     */
+    public String describePipeline() {
+        return pipeline(true);
+    }
+
+    /** As {@link #describePipeline()} without quantizer settings, so configs with one pipeline compare equal. */
+    public String pipelineSignature() {
+        return pipeline(false);
+    }
+
+    private String pipeline(boolean detailed) {
+        if (!usesSchema3()) return null;
+        String fused = "";
+        if (construction.fusedGraph != null) {
+            boolean yes = construction.fusedGraph.contains(Boolean.TRUE);
+            boolean no = construction.fusedGraph.contains(Boolean.FALSE);
+            fused = yes && no ? "fused or separate " : yes ? "fused " : "";
+        }
+        return construction.type
+                + " · build " + describe(construction.compression, detailed)
+                + " · search " + fused + describe(search.compression, detailed)
+                + " · rerank " + construction.rerankingType();
+    }
+
+    private static String describe(List<Compression> entries, boolean detailed) {
+        var parts = new ArrayList<String>();
+        for (var entry : entries) {
+            String part = entry.type;
+            if (detailed && "ASH".equals(entry.type)) {
+                Map<String, ?> parameters = entry.parameters == null ? Map.of() : entry.parameters;
+                Object bits = parameters.get("bitsPerDimension");
+                part += "-" + (bits == null ? "1" : bits) + "b";
+                Object landmarks = parameters.get("landmarkCount");
+                if (landmarks != null && !"1".equals(String.valueOf(landmarks))) part += " " + landmarks + " landmarks";
+            }
+            if (detailed && entry.scoring != null) part += " " + entry.scoring;
+            parts.add(part);
+        }
+        return String.join(" | ", parts);
+    }
+
     public void setYamlSchemaVersion(int yamlSchemaVersion) {
         this.yamlSchemaVersion = yamlSchemaVersion;
     }
@@ -257,29 +316,6 @@ public class MultiConfig {
             + " (version " + OnDiskGraphIndex.CURRENT_VERSION + " expected)");
         }
         this.onDiskIndexVersion = onDiskIndexVersion;
-    }
-
-    public static void printDefaultConfigUsageSummary() {
-        File f = DEFAULT_FILE_USED.get();
-        if (f == null) return;
-
-        var datasets = new java.util.ArrayList<>(DEFAULT_USED_FOR_DATASETS);
-        if (datasets.isEmpty()) return;
-
-        // Print a wrapped bracket-list similar to "Executing the following datasets"
-        System.out.println("Default YAML used for datasets: " + wrapList(datasets, 6, "  "));
-    }
-
-    private static String wrapList(java.util.List<String> items, int perLine, String indent) {
-        StringBuilder sb = new StringBuilder();
-        sb.append("[");
-        for (int i = 0; i < items.size(); i++) {
-            if (i > 0) sb.append(", ");
-            if (i > 0 && (i % perLine) == 0) sb.append(System.lineSeparator()).append(indent);
-            sb.append(items.get(i));
-        }
-        sb.append("]");
-        return sb.toString();
     }
 
     @SuppressWarnings("unchecked")

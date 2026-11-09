@@ -23,7 +23,7 @@ describes the index configuration. See
 settings.
 
 This comparison uses the branch's ordinary packaged JVector code and
-`io.github.jbellis.jvector.example.BenchYAML`. The fixed [index configurations](../jvector-examples/yaml-configs/index-parameters/ash-pq)
+`io.github.jbellis.jvector.example.BenchYAML`. The fixed [index configurations](../jvector-examples/yaml-configs/index-parameters/studies/ash-vs-pq)
 have their own directory. The [run configurations and local dataset catalogs](../jvector-examples/yaml-configs/ash-pq)
 are grouped separately.
 No separate query harness, source overlay, profiling agent, manually linked
@@ -215,7 +215,7 @@ numactl --physcpubind=0 --membind=0 "$JAVA_HOME/bin/java" \
   "-Djvector.bench.sourceRef=$(git -C "$REPO_ROOT" rev-parse HEAD)" \
   "-Djvector.bench.runConfig=$REPO_ROOT/jvector-examples/yaml-configs/ash-pq/run-queued.yml" \
   -cp "$BENCH_JAR" io.github.jbellis.jvector.example.BenchYAML \
-  "$REPO_ROOT/jvector-examples/yaml-configs/index-parameters/ash-pq/mpnet-2bit-ash.yml"
+  "$REPO_ROOT/jvector-examples/yaml-configs/index-parameters/studies/ash-vs-pq/mpnet-2bit-ash.yml"
 ```
 
 The case directory contains copies of the checked-in dataset catalog, dataset

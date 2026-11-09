@@ -82,8 +82,6 @@ public class BenchYAML {
                 String name = raw.endsWith(HDF5) ? raw.substring(0, raw.length() - HDF5.length()) : raw;
                 allConfigs.add(MultiConfig.getDefaultConfig(name));
             }
-
-            MultiConfig.printDefaultConfigUsageSummary();
         }
 
         // get the list of YAML files from args
@@ -134,6 +132,8 @@ public class BenchYAML {
             var loading = BaseVectorLoading.forBenchmark(config);
 
             String datasetName = config.dataset;
+            String pipeline = config.describePipeline();
+            if (pipeline != null) System.out.println("Pipeline for " + datasetName + ": " + pipeline);
             try (var ds = DataSets.loadDataSet(datasetName, loading).orElseThrow(
                     () -> new RuntimeException("Could not load dataset:" + datasetName)
             ).getDataSet()) {

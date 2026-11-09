@@ -70,7 +70,7 @@ git -C "$REPO_ROOT" diff --quiet
 git -C "$REPO_ROOT" diff --cached --quiet
 SOURCE_REF="$(git -C "$REPO_ROOT" rev-parse HEAD)"
 JAVA_BIN="$(command -v java)"
-CONFIG="$REPO_ROOT/jvector-examples/yaml-configs/index-parameters/ash-pq/$CONFIG_NAME"
+CONFIG="$REPO_ROOT/jvector-examples/yaml-configs/index-parameters/studies/ash-vs-pq/$CONFIG_NAME"
 RUN_CONFIG="$REPO_ROOT/jvector-examples/yaml-configs/ash-pq/run-$MODE.yml"
 CATALOG_NAME="${JVECTOR_BENCH_CATALOG:-catalog-1m.yml}"
 case "$CATALOG_NAME" in catalog-1m.yml|catalog-large.yml) ;; *) echo "Unknown dataset catalog: $CATALOG_NAME" >&2; exit 2;; esac
