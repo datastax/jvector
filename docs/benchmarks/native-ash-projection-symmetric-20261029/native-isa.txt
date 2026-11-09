@@ -1,1 +1,0 @@
-ACTIVE_HIGHWAY_ISA=avx3_spr

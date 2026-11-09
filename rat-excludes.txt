@@ -40,10 +40,5 @@ jvector-native/src/main/native/third_party/**
 src/main/native/third_party/**
 jvector-native/src/target/meson-build/**
 jvector-native/target/meson-build/**
-docs/figure9-graph-study/*.csv
-docs/figure9-graph-study/jars.sha256
-docs/benchmarks/**/*.csv
-docs/benchmarks/native-ash-projection-symmetric-20261029/native-isa.txt
-docs/ash-symmetric-study/*.csv
 .run/*.run.xml
 bench-profiles/**

@@ -205,7 +205,7 @@ BenchYAML preflights confirm actual native calls; tracing is disabled for all
 performance measurements. Separate fresh full-data builds verify construction.
 The focused cases are MPNet at the 2-bit ASH budget and OpenAI3072 at the 4-bit
 ASH budget on both JDKs. They are not a replacement for the earlier full PQ/ASH
-matrix. Full results and measurement scope accompany the saved report.
+matrix.
 
 ## FP32 encodeAll measurements (JDK 22, October 31, 2026)
 
@@ -216,8 +216,8 @@ result packing. They are not timings of individual `encode()` calls. Training
 and graph/write are separate metrics. The first native packing cost is included.
 
 Both runs use physical CPUs 0–47 with memory interleaved across NUMA nodes 0 and
-1. The before version is `16273e24` (per-vector Panama FP32 encoding); the after
-code is `83e49aac` (Highway FP32 worker-local batches). Both use fresh model and
+1. The before version encodes each vector with Panama FP32; the after version
+encodes worker-local batches with Highway FP32. Both use fresh model and
 index caches, the native scoring provider, deferred parallel writes, NVQ
 reranking, and FP16 query projection. All eight serialized trained models are
 byte-identical between the two runs. Each cell is one full construction run;
@@ -304,10 +304,6 @@ OpenAI3072 gain is modest; these measurements do not establish improvements for
 all other datasets, code widths or hardware. Median graph recall@10 was 81.901%
 versus 81.844% for MPNet and 79.280% versus 79.310% for OpenAI3072. Independent
 parallel graph rebuilds vary and do not isolate an encoding-only recall effect.
-Training and graph-write timers/recall for every run are retained in the raw
-CSVs; they are not manually added to inclusive harness timers. Original CSVs,
-commands, class/source snapshots and live placement observations are preserved
-under `benchmark-runs/ash-quantization-20261101` on the development server.
 
 ## ITQ training workspaces
 

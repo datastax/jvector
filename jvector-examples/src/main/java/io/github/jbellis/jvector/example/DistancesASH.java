@@ -1193,9 +1193,9 @@ public class DistancesASH {
     public static void runCohere100k() throws IOException {
         System.out.println("Running Cohere-100k");
 
-        var baseVectors = "/home/ted_willke/datasets-clean/cohere_english_v3_100k_base_99685.fvecs";
-        var queryVectors = "/home/ted_willke/datasets-clean/cohere_english_v3_100k_query_10000.fvecs";
-        var gtVectors = "/home/ted_willke/datasets-clean/cohere_english_v3_100k_gt_ip_100.ivecs";
+        var baseVectors = "dataset_cache/public/cohere_english_v3_100k_base_99685.fvecs";
+        var queryVectors = "dataset_cache/public/cohere_english_v3_100k_query_10000.fvecs";
+        var gtVectors = "dataset_cache/public/cohere_english_v3_100k_gt_ip_100.ivecs";
         testASHEncodings(baseVectors, queryVectors, gtVectors);
     }
 
