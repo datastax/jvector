@@ -123,8 +123,6 @@ CASE_CONFIG="$CASE_DIRECTORY/jvector-examples/yaml-configs"
 mkdir -p "$CASE_CONFIG/dataset-catalogs"
 cp "$REPO_ROOT/jvector-examples/yaml-configs/dataset-metadata.yml" "$CASE_CONFIG/"
 cp "$REPO_ROOT/jvector-examples/yaml-configs/datasets.yml" "$CASE_CONFIG/"
-# Remove only the catalog name created by the original version of this recipe.
-rm -f "$CASE_CONFIG/dataset-catalogs/ash-pq-1m.yml"
 cp "$CATALOG" "$CASE_CONFIG/dataset-catalogs/ash-pq-local.yml"
 printf '%s\n' "$CASE_ID" > "$CASE_DIRECTORY/case-id.txt"
 mkdir -p "$CASE_DIRECTORY/runs"

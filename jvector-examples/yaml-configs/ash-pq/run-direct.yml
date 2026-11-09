@@ -14,7 +14,6 @@ console:
     count: [visited]
 logging:
   dir: logging
-  jvectorRef: ash-dev
   runId: ash-pq-direct-{ts}
   type: csv
   benchmarks:

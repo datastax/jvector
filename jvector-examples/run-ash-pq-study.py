@@ -28,17 +28,52 @@ import sys
 import subprocess
 import time
 
+
+
+def physical_cores():
+    """One online hardware thread per physical core, in CPU order, as (cpu, node) pairs."""
+    seen, cores = set(), []
+    for line in subprocess.check_output(["lscpu", "-p=CPU,CORE,SOCKET,NODE"], text=True).splitlines():
+        if line.startswith("#"):
+            continue
+        cpu, core, socket, node = (field or "0" for field in line.split(","))
+        if (socket, core) not in seen:
+            seen.add((socket, core))
+            cores.append((int(cpu), int(node)))
+    return cores
+
+
+def cpu_ranges(cpus):
+    """Format CPU numbers as a numactl list, for example 0-7,48."""
+    ranges, cpus = [], sorted(cpus)
+    start = end = cpus[0]
+    for cpu in cpus[1:] + [None]:
+        if cpu is not None and cpu == end + 1:
+            end = cpu
+            continue
+        ranges.append(str(start) if start == end else f"{start}-{end}")
+        if cpu is not None:
+            start = end = cpu
+    return ",".join(ranges)
+
+
+# Defaults follow the published protocol on whatever machine runs it: construction on
+# one thread of every physical core with memory interleaved across all NUMA nodes, and
+# 1- and 8-core queries on the first physical cores of one node, with memory on that node.
+cores = physical_cores()
+query_node = cores[0][1]
+query_cpus = [cpu for cpu, node in cores if node == query_node]
 parser = argparse.ArgumentParser(description=__doc__)
 parser.add_argument("--output", type=Path, required=True)
 parser.add_argument("--data", type=Path, required=True)
-parser.add_argument("--build-cores", type=int, default=48)
-parser.add_argument("--build-cpus", default="0-47")
-parser.add_argument("--build-nodes", default="0,1")
-parser.add_argument("--one-core-cpu", default="0")
-parser.add_argument("--eight-core-cpus", default="0-7")
-parser.add_argument("--query-node", default="0")
-parser.add_argument("--build-repetitions", type=int, default=5)
-parser.add_argument("--query-repetitions", type=int, default=3)
+parser.add_argument("--build-cores", type=int, default=len(cores))
+parser.add_argument("--build-cpus", default=cpu_ranges([cpu for cpu, _ in cores]))
+parser.add_argument("--build-nodes", default=",".join(str(n) for n in sorted({node for _, node in cores})))
+parser.add_argument("--one-core-cpu", default=str(query_cpus[0]))
+parser.add_argument("--eight-core-cpus", default=cpu_ranges(query_cpus[:8]) if len(query_cpus) >= 8 else None)
+parser.add_argument("--query-node", default=str(query_node))
+parser.add_argument("--build-repetitions", type=int, default=2)
+parser.add_argument("--query-repetitions", type=int, default=1)
 parser.add_argument("--dataset-set", choices=("1m", "large"), default="1m")
 parser.add_argument("--algorithms", nargs="+", choices=("pq", "ash"), default=["pq", "ash"])
 parser.add_argument("--query-modes", nargs="+", choices=("direct", "queued"), default=["direct", "queued"])
@@ -46,6 +81,8 @@ parser.add_argument("--plan-only", action="store_true")
 args = parser.parse_args()
 if min(args.build_cores, args.build_repetitions, args.query_repetitions) <= 0:
     parser.error("Core and repetition counts must be positive")
+if args.eight_core_cpus is None:
+    parser.error("NUMA node %s has fewer than 8 physical cores; pass --eight-core-cpus and --query-node" % args.query_node)
 repo = Path(__file__).resolve().parent.parent
 helper = repo / "jvector-examples/run-ash-pq-benchmark.sh"
 source_ref = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=repo, text=True).strip()

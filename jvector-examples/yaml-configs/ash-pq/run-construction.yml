@@ -10,7 +10,6 @@ console:
     construction: [index_build_time_s, index_quant_time_s, search_quant_time_s]
 logging:
   dir: logging
-  jvectorRef: ash-dev
   runId: ash-pq-construction-{ts}
   type: csv
   benchmarks:
