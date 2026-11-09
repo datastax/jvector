@@ -26,7 +26,7 @@ construction:
 #        anisotropicThreshold: -1.0
   reranking:
     type: FP32
-  useSavedIndexIfExists: Yes # If yes, the system will attempt to locate a cached copy of the index instead of constructing
+  useSavedIndexIfExists: No # If yes, the system will attempt to locate a cached copy of the index instead of constructing
 
 search:
   topKOverquery:

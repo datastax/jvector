@@ -1,5 +1,5 @@
 # MPNet-10M: ASH(b=2,d=384), nominal 32x compression.
-# Fused graph scoring, NVQ reranking, and saved model/index reuse.
+# Fused graph scoring and NVQ reranking.
 yamlSchemaVersion: 3
 onDiskIndexVersion: 7
 dataset: mpnet-10m
@@ -21,9 +21,9 @@ construction:
         bitsPerDimension: 2
   reranking:
     type: NVQ
-  # A fresh case directory measures training/encoding/construction. Later JVMs
-  # in that directory reuse exactly the same model and index for querying.
-  useSavedIndexIfExists: Yes
+  # Saved indexes consume disk space, so reuse is opt-in. Set Yes to query a
+  # compatible index saved by an earlier run in the same working directory.
+  useSavedIndexIfExists: No
 
 search:
   topKOverquery:

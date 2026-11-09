@@ -25,7 +25,10 @@ reranking optionally rescores the candidates.
 
 - [Index parameters](../jvector-examples/yaml-configs/index-parameters) describe
   construction and search for a dataset. A dataset-specific file takes
-  precedence over `default.yml`.
+  precedence over `default.yml`. To run an explicit recipe, pass its path to
+  BenchYAML. The [ASH/PQ comparison recipes](../jvector-examples/yaml-configs/index-parameters/ash-pq)
+  and [ASH build and flush examples](../jvector-examples/yaml-configs/index-parameters/ash-paths)
+  are grouped in subdirectories.
 - [Dataset catalogs](../jvector-examples/yaml-configs/dataset-catalogs) locate
   the base vectors, query vectors, and ground truth.
   [Dataset metadata](../jvector-examples/yaml-configs/dataset-metadata.yml)
@@ -49,7 +52,7 @@ Each `compression` list entry has a `type` and its own settings.
 | --- | --- | --- |
 | `type` | `inMemory`, `onDisk` | `inMemory` keeps the graph in memory for search. `onDisk` serializes the completed graph and reopens it for search. |
 | `writerMode` | `sequential`, `parallel` | Selects the writer after graph cleanup for `onDisk`. Defaults to `parallel`. |
-| `useSavedIndexIfExists` | `Yes`, `No` | Controls reuse of a compatible `onDisk` index. A cache hit skips fresh construction and serialization measurements. |
+| `useSavedIndexIfExists` | `Yes`, `No` | Controls reuse of a compatible `onDisk` index. `Yes` saves each built index in the working directory's `index_cache` and reuses it on later runs; a cache hit skips fresh construction and serialization measurements. Saved indexes are never deleted automatically, so starting-point configurations use `No`; recipes that query an index from a later JVM, such as the ASH/PQ comparison, use `Yes`. |
 | `outDegree` | Positive integers | Maximum final neighborhood degree, also called M. |
 | `efConstruction` | Positive integers | Search width used to find candidates during insertion. |
 | `neighborOverflow` | Finite numbers ≥ 1.0 | Temporary neighborhood capacity relative to final degree. Java float suffixes such as `1.2f` are accepted. |

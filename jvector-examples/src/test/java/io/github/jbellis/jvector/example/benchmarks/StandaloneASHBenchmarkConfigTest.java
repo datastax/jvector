@@ -31,7 +31,9 @@ import static org.junit.Assert.*;
 
 /** Fair code budgets and independent selection of checked-in run/index YAML. */
 public class StandaloneASHBenchmarkConfigTest {
-    private static final Path CONFIGS = Path.of("jvector-examples/yaml-configs/ash-pq");
+    private static final Path INDEX_CONFIGS = Path.of("jvector-examples/yaml-configs/index-parameters/ash-pq");
+    private static final Path RUN_CONFIGS = Path.of("jvector-examples/yaml-configs/ash-pq");
+    private static final Path ALL_INDEX_CONFIGS = Path.of("jvector-examples/yaml-configs/index-parameters");
     @Rule public final TemporaryFolder directory = new TemporaryFolder();
 
     @Test
@@ -53,7 +55,7 @@ public class StandaloneASHBenchmarkConfigTest {
     @Test
     public void yamlPathsAreNotRegexesAndMissingExplicitRunFileFailsBeforeDataLoading() throws Exception {
         var index = directory.newFile("index with [literal.yml").toPath();
-        Files.copy(CONFIGS.resolve("mpnet-2bit-ash.yml"), index,
+        Files.copy(INDEX_CONFIGS.resolve("mpnet-2bit-ash.yml"), index,
                 java.nio.file.StandardCopyOption.REPLACE_EXISTING);
         var missing = directory.getRoot().toPath().resolve("missing-run.yml");
         String previous = System.getProperty("jvector.bench.runConfig");
@@ -88,7 +90,7 @@ public class StandaloneASHBenchmarkConfigTest {
                 Map<String, Object> previousConstruction = null;
                 String previousDataset = null;
                 for (String algorithm : List.of("ash", "pq")) {
-                    Path path = CONFIGS.resolve(entry.getKey() + "-" + bits + "bit-" + algorithm + ".yml");
+                    Path path = INDEX_CONFIGS.resolve(entry.getKey() + "-" + bits + "bit-" + algorithm + ".yml");
                     assertNotNull(MultiConfig.getConfig(path.toAbsolutePath().toString()));
                     var root = yaml(path);
                     var construction = (Map<String, Object>) root.get("construction");
@@ -133,7 +135,7 @@ public class StandaloneASHBenchmarkConfigTest {
     @Test
     public void runRecipesKeepStandardBenchmarkSelections() throws Exception {
         for (String mode : List.of("construction", "direct", "queued")) {
-            var config = RunConfig.load(CONFIGS.resolve("run-" + mode + ".yml").toString());
+            var config = RunConfig.load(RUN_CONFIGS.resolve("run-" + mode + ".yml").toString());
             assertEquals(List.of("recall"), config.benchmarks.get("accuracy"));
             if (!mode.equals("construction")) {
                 assertEquals(List.of("AVG"), config.benchmarks.get("throughput"));
@@ -160,7 +162,7 @@ public class StandaloneASHBenchmarkConfigTest {
                 config.logging.benchmarks = config.benchmarks;
                 config.logging.runId = mode;
                 String codec = mode.equals("queued") ? "ash" : "pq";
-                var index = MultiConfig.getConfig(CONFIGS.resolve("mpnet-2bit-" + codec + ".yml")
+                var index = MultiConfig.getConfig(INDEX_CONFIGS.resolve("mpnet-2bit-" + codec + ".yml")
                         .toAbsolutePath().toString());
                 var artifacts = io.github.jbellis.jvector.example.reporting.RunArtifacts.open(config, List.of(index));
                 var info = yaml(artifacts.experimentsWriter().path().resolveSibling("sys_info.json"));
@@ -176,6 +178,59 @@ public class StandaloneASHBenchmarkConfigTest {
             else System.setProperty("jvector.bench.queryThreads", oldThreads);
             if (oldRef == null) System.clearProperty("jvector.bench.sourceRef");
             else System.setProperty("jvector.bench.sourceRef", oldRef);
+        }
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    public void onlyMultiJvmRecipesKeepSavedIndexes() throws Exception {
+        // Saved indexes consume disk space without notice, so starting points leave reuse off.
+        // The ASH/PQ protocol queries each graph from JVMs after the one that built it.
+        List<Path> paths;
+        try (var files = Files.walk(ALL_INDEX_CONFIGS)) {
+            paths = files.filter(p -> p.toString().endsWith(".yml")).sorted().collect(java.util.stream.Collectors.toList());
+        }
+        assertTrue(paths.size() > 36);
+        for (Path path : paths) {
+            var construction = (Map<String, Object>) yaml(path).get("construction");
+            if (construction != null && construction.containsKey("useSavedIndexIfExists")) {
+                boolean reused = path.startsWith(INDEX_CONFIGS);
+                assertEquals(path.toString(), reused, construction.get("useSavedIndexIfExists"));
+            }
+        }
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    public void ashPathRecipesLoadAndMatchTheirNames() throws Exception {
+        List<Path> paths;
+        try (var files = Files.list(ALL_INDEX_CONFIGS.resolve("ash-paths"))) {
+            paths = files.filter(p -> p.toString().endsWith(".yml")).sorted().collect(java.util.stream.Collectors.toList());
+        }
+        assertEquals(8, paths.size());
+        for (Path path : paths) {
+            String name = path.getFileName().toString();
+            assertNotNull(name, MultiConfig.getConfig(path.toAbsolutePath().toString()));
+            var root = yaml(path);
+            var construction = (Map<String, Object>) root.get("construction");
+            assertEquals(name, Boolean.TRUE, ((List<Object>) construction.get("fusedGraph")).get(0));
+            var build = compression(construction);
+            var search = compression((Map<String, Object>) root.get("search"));
+            var searchParameters = (Map<String, Object>) search.get("parameters");
+            int bits = name.endsWith("-4bit.yml") ? 4 : 2;
+            assertEquals(name, bits, searchParameters.get("bitsPerDimension"));
+            if (name.contains("-compressed-build-")) {
+                assertEquals(name, "ASH", build.get("type"));
+                assertEquals(name, "symmetric", build.get("scoring"));
+                assertEquals(name, build.get("parameters"), Map.of(
+                        "encodedBits", searchParameters.get("encodedBits"),
+                        "optimizer", searchParameters.get("optimizer"),
+                        "landmarkCount", searchParameters.get("landmarkCount"),
+                        "bitsPerDimension", bits));
+            } else {
+                assertTrue(name, name.contains("-build-flush-"));
+                assertEquals(name, "None", build.get("type"));
+            }
         }
     }
 }

@@ -23,9 +23,9 @@ describes the index configuration. See
 settings.
 
 This comparison uses the branch's ordinary packaged JVector code and
-`io.github.jbellis.jvector.example.BenchYAML`. The fixed index configurations,
-run configurations and local dataset catalog are in
-[`jvector-examples/yaml-configs/ash-pq`](../jvector-examples/yaml-configs/ash-pq).
+`io.github.jbellis.jvector.example.BenchYAML`. The fixed [index configurations](../jvector-examples/yaml-configs/index-parameters/ash-pq)
+have their own directory. The [run configurations and local dataset catalogs](../jvector-examples/yaml-configs/ash-pq)
+are grouped separately.
 No separate query harness, source overlay, profiling agent, manually linked
 library, or dataset-specific projection setting is required.
 
@@ -149,7 +149,10 @@ For the matching PQ case, replace `ash` with `pq`, use `direct` for the query
 report selection, and use a separate case directory. Each index YAML selects
 its delivery policy. The run YAML selects the metrics and reporting. Repeat with each prefix and bit count in the table. Construction refuses
 nonempty model/index caches; query invocations require caches and reject a run
-that rebuilt an index. No existing indexes are automatically deleted.
+that rebuilt an index. These recipes set `useSavedIndexIfExists: Yes` so the
+graph survives its construction JVM; most index parameter files leave it off
+because saved indexes consume disk space. No existing indexes are automatically
+deleted.
 
 For the full report, collect five fresh construction JVMs per case in separate
 directories. Retain the first graph for queries, without choosing the best build.
@@ -212,7 +215,7 @@ numactl --physcpubind=0 --membind=0 "$JAVA_HOME/bin/java" \
   "-Djvector.bench.sourceRef=$(git -C "$REPO_ROOT" rev-parse HEAD)" \
   "-Djvector.bench.runConfig=$REPO_ROOT/jvector-examples/yaml-configs/ash-pq/run-queued.yml" \
   -cp "$BENCH_JAR" io.github.jbellis.jvector.example.BenchYAML \
-  "$REPO_ROOT/jvector-examples/yaml-configs/ash-pq/mpnet-2bit-ash.yml"
+  "$REPO_ROOT/jvector-examples/yaml-configs/index-parameters/ash-pq/mpnet-2bit-ash.yml"
 ```
 
 The case directory contains copies of the checked-in dataset catalog, dataset
