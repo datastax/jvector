@@ -72,6 +72,9 @@ public final class TornadoCompactionAccelerator implements CompactionAccelerator
     /** Candidate scores per launch. */
     static final int MAX_CANDIDATES = 1 << 27;
 
+    /** Most centers the GPU ranks exhaustively ({@code -Djvector.gpu.probe.maxCenters}, default 100,000). */
+    static final int MAX_PROBE_CENTERS = Integer.getInteger("jvector.gpu.probe.maxCenters", 100_000);
+
     /** Whether the probe step runs on the GPU too ({@code -Djvector.gpu.probe}, default true). */
     static final boolean PROBE = Boolean.parseBoolean(System.getProperty("jvector.gpu.probe", "true"));
 
@@ -138,6 +141,11 @@ public final class TornadoCompactionAccelerator implements CompactionAccelerator
     @Override
     public boolean probe(CellProbe probe) {
         if (!PROBE) {
+            return false;
+        }
+        // exact ranking costs queries x centers x dim, and the centers grow with the merge: past MAX_PROBE_CENTERS the
+        // compactor's beam is cheaper (at 10M x 1024, 313k centers made the GPU probes 1.7x slower than the CPU's)
+        if (probe.centerCount() > MAX_PROBE_CENTERS) {
             return false;
         }
         if (probe.maxProbes() > ProbeKernels.MAX_PROBES || probe.dimension() > CellWalkKernels.MAX_DIM) {
@@ -290,6 +298,7 @@ public final class TornadoCompactionAccelerator implements CompactionAccelerator
         final FloatArray rows;
         final IntArray pairFirst;
         final IntArray pairEnd;
+        final IntArray pairOrdinal;
         final IntArray pairQuery;
         final IntArray pairOffset;
         final IntArray params;
@@ -328,6 +337,7 @@ public final class TornadoCompactionAccelerator implements CompactionAccelerator
             rows = new FloatArray(chunkRows * dim);
             pairFirst = new IntArray(maxPairs);
             pairEnd = new IntArray(maxPairs);
+            pairOrdinal = new IntArray(maxPairs);
             pairQuery = new IntArray(maxPairs);
             pairOffset = new IntArray(maxPairs);
             params = new IntArray(4);
@@ -348,9 +358,9 @@ public final class TornadoCompactionAccelerator implements CompactionAccelerator
             // graph 1, once per launch: a chunk of rows and the pairs that hit it
             TaskGraph tg = new TaskGraph("walk")
                     .consumeFromDevice("block", queries, queryNorms)
-                    .transferToDevice(DataTransferMode.EVERY_EXECUTION, rows, pairFirst, pairEnd, pairQuery,
+                    .transferToDevice(DataTransferMode.EVERY_EXECUTION, rows, pairFirst, pairEnd, pairQuery, pairOrdinal,
                             pairOffset, params, queryOffset, queryCount, topScore, topOrdinal, topCount)
-                    .task("score", CellWalkKernels::score, ctx, queries, queryNorms, rows, pairFirst, pairEnd, pairQuery, pairOffset,
+                    .task("score", CellWalkKernels::score, ctx, queries, queryNorms, rows, pairFirst, pairEnd, pairQuery, pairOffset, pairOrdinal,
                             params, candScore, candOrdinal)
                     .task("topk", CellWalkKernels::topk, ctx, candScore, candOrdinal, queryOffset, queryCount, params, topScore,
                             topOrdinal, topCount)
@@ -379,6 +389,9 @@ public final class TornadoCompactionAccelerator implements CompactionAccelerator
             params.set(CellWalkKernels.P_K, k);
             ByteBuffer rowBuffer = rows.getSegment().asByteBuffer().order(ByteOrder.LITTLE_ENDIAN);
             int[] launchPairs = new int[maxPairs];
+            int[] launchPairRows = new int[maxPairs];
+            int[] launchCells = new int[maxPairs];
+            int[] launchCellRows = new int[maxPairs];
             int[] perQuery = new int[blockQueries];
             int launches = 0;
             long candidates = 0;
@@ -410,13 +423,12 @@ public final class TornadoCompactionAccelerator implements CompactionAccelerator
                     if (at >= pairCount) {
                         break;
                     }
-                    int firstCell = cellOf(pairs[at]);
-                    int row0 = walk.cellStart(firstCell);
-                    if (walk.cellEnd(firstCell) - row0 > chunkRows) {
-                        LOG.info(() -> "cell larger than the GPU walk's row chunk; walking this target on the CPU");
-                        return false;
-                    }
-                    int rowEnd = row0;
+                    // the chunk holds only the launch's distinct cells, packed: a sparse set of probed cells reads
+                    // only those rows, as the CPU walk does, not every row between the first and the last
+                    int rowsUsed = 0;
+                    int lastCell = -1;
+                    int lastRow = 0;
+                    int distinct = 0;
                     int size = 0;
                     long cands = 0;
                     java.util.Arrays.fill(perQuery, 0, bn, 0);
@@ -427,15 +439,26 @@ public final class TornadoCompactionAccelerator implements CompactionAccelerator
                             continue;
                         }
                         int cell = cellOf(pair);
-                        int end = walk.cellEnd(cell);
-                        int members = end - walk.cellStart(cell);
-                        if (end - row0 > chunkRows || cands + members > maxCandidates) {
+                        int members = walk.cellEnd(cell) - walk.cellStart(cell);
+                        if (members > chunkRows) {
+                            LOG.info(() -> "cell larger than the GPU walk's row chunk; walking this target on the CPU");
+                            return false;
+                        }
+                        boolean newCell = cell != lastCell;
+                        if ((newCell && rowsUsed + members > chunkRows) || cands + members > maxCandidates) {
                             break;
                         }
+                        if (newCell) {
+                            lastCell = cell;
+                            lastRow = rowsUsed;
+                            launchCells[distinct] = cell;
+                            launchCellRows[distinct++] = rowsUsed;
+                            rowsUsed += members;
+                        }
+                        launchPairRows[size] = lastRow;
                         launchPairs[size++] = at;
                         perQuery[(int) pair - b0] += members;
                         cands += members;
-                        rowEnd = Math.max(rowEnd, end);
                         at++;
                     }
                     // candidate offsets: each query's candidates contiguous, in cell order
@@ -452,19 +475,24 @@ public final class TornadoCompactionAccelerator implements CompactionAccelerator
                         int qi = (int) pair - b0;
                         int first = walk.cellStart(cell);
                         int end = walk.cellEnd(cell);
-                        pairFirst.set(p, first);
-                        pairEnd.set(p, end);
+                        pairFirst.set(p, launchPairRows[p]);
+                        pairEnd.set(p, launchPairRows[p] + end - first);
+                        pairOrdinal.set(p, first);
                         pairQuery.set(p, qi);
                         pairOffset.set(p, perQuery[qi]);
                         perQuery[qi] += end - first;
                     }
                     long tr = System.nanoTime();
                     tPrep += tr - tl;
-                    rowBuffer.clear();
-                    walk.copyRows(row0, rowEnd - row0, rowBuffer);
+                    final int cells = distinct;
+                    IntStream.range(0, cells).parallel().forEach(c -> {
+                        int cell = launchCells[c];
+                        ByteBuffer dst = rowBuffer.duplicate().order(ByteOrder.LITTLE_ENDIAN);
+                        dst.position(launchCellRows[c] * dim * Float.BYTES);
+                        walk.copyRows(walk.cellStart(cell), walk.cellEnd(cell) - walk.cellStart(cell), dst);
+                    });
                     long te = System.nanoTime();
                     tRows += te - tr;
-                    params.set(CellWalkKernels.P_ROW0, row0);
                     scoreGrid.setGlobalWork((long) size * CellWalkKernels.GROUP, 1, 1);
                     topkGrid.setGlobalWork((long) bn * CellWalkKernels.GROUP, 1, 1);
                     var result = TRACE ? plan.withGraph(1).withGridScheduler(scheduler).withProfiler(uk.ac.manchester.tornado.api.enums.ProfilerMode.SILENT).execute()

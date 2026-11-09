@@ -39,7 +39,6 @@ final class CellWalkKernels {
 
     // params
     static final int P_DIM = 0;
-    static final int P_ROW0 = 1;
     static final int P_SIMILARITY = 2;
     static final int P_K = 3;
     static final int SIM_DOT = 0;
@@ -75,15 +74,15 @@ final class CellWalkKernels {
 
     /**
      * One work-group per pair: the query in local memory, one warp per member row (lanes stride the dimensions, so
-     * reads are coalesced), JVector's score written at {@code offsets[pair] + member - first}.
+     * reads are coalesced), JVector's score written at {@code offsets[pair] + member - first}. A pair's cell occupies
+     * the chunk's rows {@code [pairFirst, pairEnd)}; its first member is new ordinal {@code pairOrdinal}.
      */
     public static void score(KernelContext ctx, FloatArray queries, FloatArray queryNorms, FloatArray rows,
-                             IntArray pairFirst, IntArray pairEnd, IntArray pairQuery, IntArray pairOffset, IntArray params,
-                             FloatArray candScore, IntArray candOrdinal) {
+                             IntArray pairFirst, IntArray pairEnd, IntArray pairQuery, IntArray pairOffset, IntArray pairOrdinal,
+                             IntArray params, FloatArray candScore, IntArray candOrdinal) {
         int p = ctx.groupIdx;
         int lid = ctx.localIdx;
         int dim = params.get(P_DIM);
-        int row0 = params.get(P_ROW0);
         int similarity = params.get(P_SIMILARITY);
         float[] q = ctx.allocateFloatLocalArray(MAX_DIM);
         float[] dots = ctx.allocateFloatLocalArray(GROUP);
@@ -96,6 +95,7 @@ final class CellWalkKernels {
         int first = pairFirst.get(p);
         int end = pairEnd.get(p);
         int offset = pairOffset.get(p);
+        int ordinal0 = pairOrdinal.get(p);
         float queryNorm = queryNorms.get(query);
         int warp = lid / 32;
         int lane = lid - warp * 32;
@@ -104,7 +104,7 @@ final class CellWalkKernels {
             float dot = 0.0f;
             float norm = 0.0f;
             if (member < end) {
-                int row = (member - row0) * dim;
+                int row = member * dim;
                 for (int d = lane; d < dim; d += 32) {
                     float v = rows.get(row + d);
                     dot += v * q[d];
@@ -130,7 +130,7 @@ final class CellWalkKernels {
                     s = (1.0f + sumDot / TornadoMath.sqrt(TornadoMath.max(1e-12f, queryNorm * sumNorm))) / 2.0f;
                 }
                 candScore.set(offset + member - first, s);
-                candOrdinal.set(offset + member - first, member);
+                candOrdinal.set(offset + member - first, ordinal0 + member - first);
             }
             ctx.localBarrier();
         }
