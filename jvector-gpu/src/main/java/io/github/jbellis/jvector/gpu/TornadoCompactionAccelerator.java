@@ -24,9 +24,11 @@ import java.util.Locale;
 import java.util.logging.Logger;
 import java.util.stream.IntStream;
 
+import io.github.jbellis.jvector.graph.RandomAccessVectorValues;
 import io.github.jbellis.jvector.graph.disk.CellProbe;
 import io.github.jbellis.jvector.graph.disk.CellWalk;
 import io.github.jbellis.jvector.graph.disk.CompactionAccelerator;
+import io.github.jbellis.jvector.quantization.ProductQuantization;
 import io.github.jbellis.jvector.vector.VectorSimilarityFunction;
 import uk.ac.manchester.tornado.api.GridScheduler;
 import uk.ac.manchester.tornado.api.KernelContext;
@@ -108,6 +110,24 @@ public final class TornadoCompactionAccelerator implements CompactionAccelerator
             walker = new Walker(dim);
         }
         return walker.walk(walk);
+    }
+
+    /** Whether the wide code is trained on the GPU too ({@code -Djvector.gpu.wideCode}, default true). */
+    static final boolean WIDE_CODE = Boolean.parseBoolean(System.getProperty("jvector.gpu.wideCode", "true"));
+
+    /** The wide code with {@link GpuProductQuantization#compute}, which trains like {@code ProductQuantization.compute}. */
+    @Override
+    public ProductQuantization trainWideCode(RandomAccessVectorValues sample, int subspaces, int clusters, boolean globallyCenter) {
+        if (!WIDE_CODE) {
+            return null;
+        }
+        long t0 = System.nanoTime();
+        ProductQuantization pq = GpuProductQuantization.compute(sample, subspaces, clusters, globallyCenter);
+        if (TRACE) {
+            long ms = (System.nanoTime() - t0) / 1_000_000;
+            LOG.info(() -> String.format(Locale.ROOT, "GPU wide code: %d x %d, %d subspaces, %d ms", sample.size(), sample.dimension(), subspaces, ms));
+        }
+        return pq;
     }
 
     @Override
