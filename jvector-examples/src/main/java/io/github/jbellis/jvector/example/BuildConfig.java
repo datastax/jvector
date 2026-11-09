@@ -48,6 +48,8 @@ public final class BuildConfig {
     public final String writerMode;
     public final String rerankingType;
     public final String ashConstructionMode;
+    /** Construction threads for training, encoding, insertion and writing; null for the platform default. */
+    public final Integer workers;
 
     private BuildConfig(Builder b) {
         this.M = b.M;
@@ -61,6 +63,7 @@ public final class BuildConfig {
         this.writerMode = b.writerMode;
         this.rerankingType = b.rerankingType;
         this.ashConstructionMode = b.ashConstructionMode;
+        this.workers = b.workers;
     }
 
     /**
@@ -82,6 +85,7 @@ public final class BuildConfig {
         if (writerMode != null) params.put("writerMode", writerMode);
         if (rerankingType != null) params.put("reranking", rerankingType);
         if (ashConstructionMode != null) params.put("ashConstruction", ashConstructionMode);
+        if (workers != null) params.put("constructionWorkers", workers);
         return Collections.unmodifiableMap(params);
     }
 
@@ -101,6 +105,7 @@ public final class BuildConfig {
         private String writerMode;
         private String rerankingType;
         private String ashConstructionMode;
+        private Integer workers;
 
         private Builder() {}
 
@@ -115,6 +120,7 @@ public final class BuildConfig {
         public Builder writerMode(String writerMode) { this.writerMode = writerMode; return this; }
         public Builder rerankingType(String rerankingType) { this.rerankingType = rerankingType; return this; }
         public Builder ashConstructionMode(String mode) { this.ashConstructionMode = mode; return this; }
+        public Builder workers(Integer workers) { this.workers = workers; return this; }
 
         /** @throws IllegalStateException if a parameter without a default was not set */
         public BuildConfig build() {

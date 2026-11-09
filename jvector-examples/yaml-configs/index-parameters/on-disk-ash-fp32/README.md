@@ -4,7 +4,7 @@ Builds with ASH scoring and writes the graph with the source vectors. Searches t
 
 **Use case:** Indexes too large for memory, where compact codes stay resident and full vectors are read only for rescoring.
 
-**Pipeline:** onDisk · build ASH · search ASH · rerank FP32
+**Pipeline:** onDisk: build ASH -> search ASH -> rerank FP32
 
 Files are named for their dataset. Each sets `dataset:`; change it to run the same pipeline on another compatible dataset. ASH requires dot-product datasets.
 

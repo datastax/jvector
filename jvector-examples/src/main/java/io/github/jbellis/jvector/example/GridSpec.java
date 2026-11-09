@@ -68,11 +68,13 @@ public final class GridSpec {
                                     ? Objects.requireNonNullElseGet(compressor.ashConstructionMode(),
                                             ASHBuildScoreExperiment::defaultMode)
                                     : null)
-                            .indexType(construction.type).writerMode(writerMode).rerankingType(construction.rerankingType()))
+                            .indexType(construction.type).writerMode(writerMode).rerankingType(construction.rerankingType())
+                            .workers(construction.resolvedWorkers()))
                     .featureSets(List.of())
                     .fusedGraph(construction.fusedGraph == null ? List.of(false) : construction.fusedGraph)
                     .search(SearchConfig.builder().compressionEntries(search.compression)
-                            .topKGrid(search.topKOverquery).usePruningGrid(search.useSearchPruning).build())
+                            .topKGrid(search.topKOverquery).usePruningGrid(search.useSearchPruning)
+                            .workerGrid(search.resolvedWorkers()).build())
                     .enableIndexCache(onDisk && Boolean.TRUE.equals(construction.useSavedIndexIfExists))
                     .build();
         }

@@ -218,6 +218,9 @@ public class MultiConfig {
                 || (construction.reranking != null && !(construction.reranking instanceof List<?>)))) {
             throw new IllegalArgumentException("construction.type, writerMode, and reranking.type require schema 3");
         }
+        if ((construction != null && construction.workers != null) || (search != null && search.workers != null)) {
+            throw new IllegalArgumentException("construction.workers and search.workers require schema 3");
+        }
         if (hasSchema3CompressionFields(construction) || hasSchema3CompressionFields(search)) {
             throw new IllegalArgumentException("compression scoring and ASH query settings require schema 3");
         }
@@ -259,7 +262,7 @@ public class MultiConfig {
 
     /**
      * The pipeline this schema 3 config selects, inferred from its fields, for example
-     * {@code onDisk · build ASH-2b symmetric · search fused ASH-2b · rerank NVQ}.
+     * {@code onDisk: build ASH-2b symmetric -> search fused ASH-2b -> rerank NVQ}.
      * Sweeps list each value. Returns null for older schemas.
      */
     public String describePipeline() {
@@ -280,9 +283,9 @@ public class MultiConfig {
             fused = yes && no ? "fused or separate " : yes ? "fused " : "";
         }
         return construction.type
-                + " · build " + describe(construction.compression, detailed)
-                + " · search " + fused + describe(search.compression, detailed)
-                + " · rerank " + construction.rerankingType();
+                + ": build " + describe(construction.compression, detailed)
+                + " -> search " + fused + describe(search.compression, detailed)
+                + " -> rerank " + construction.rerankingType();
     }
 
     private static String describe(List<Compression> entries, boolean detailed) {

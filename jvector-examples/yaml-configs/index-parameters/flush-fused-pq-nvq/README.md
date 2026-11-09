@@ -4,7 +4,7 @@ Builds the graph with the source vectors, then writes fused PQ traversal codes a
 
 **Use case:** The same write path as flush-fused-ash-nvq with PQ codes, for comparison and compatibility.
 
-**Pipeline:** onDisk · build None · search fused PQ · rerank NVQ
+**Pipeline:** onDisk: build None -> search fused PQ -> rerank NVQ
 
 Files are named for their dataset. Each sets `dataset:`; change it to run the same pipeline on another compatible dataset.
 

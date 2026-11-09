@@ -54,6 +54,7 @@ Each `compression` list entry has a `type` and its own settings.
 | `type` | `inMemory`, `onDisk` | `inMemory` keeps the graph in memory for search. `onDisk` serializes the completed graph and reopens it for search. |
 | `writerMode` | `sequential`, `parallel` | Selects the writer after graph cleanup for `onDisk`. Defaults to `parallel`. |
 | `useSavedIndexIfExists` | `Yes`, `No` | Controls reuse of a compatible `onDisk` index. `Yes` saves each built index in the working directory's `index_cache` and reuses it on later runs; a cache hit skips fresh construction and serialization measurements. Saved indexes are never deleted automatically, so starting-point configurations use `No`; recipes that query an index from a later JVM, such as the ASH/PQ comparison, use `Yes`. |
+| `workers` | Positive integer or `max` | Optional. Threads for quantizer training, encoding, graph insertion and the parallel writer. `max` is the platform's physical core count, which is also the default. |
 | `outDegree` | Positive integers | Maximum final neighborhood degree, also called M. |
 | `efConstruction` | Positive integers | Search width used to find candidates during insertion. |
 | `neighborOverflow` | Finite numbers ≥ 1.0 | Temporary neighborhood capacity relative to final degree. Java float suffixes such as `1.2f` are accepted. |
@@ -90,6 +91,7 @@ reports thread counts per case in the CSV.
 | --- | --- | --- |
 | `topKOverquery` | Map of positive integer K to lists of finite multipliers ≥ 1 | Required for search. The integer part of K × multiplier is the candidate budget. Return up to K results, with a second scoring pass when configured. |
 | `useSearchPruning` | List of `Yes` and `No` values | Enables traversal pruning for supported scorers and similarity functions. |
+| `workers` | List of positive integers or `max` | Optional sweep. Direct search uses this many calling threads; queued ASH search uses this many workers to prepare and execute queries. Each value queries the same index, so `[1, 8]` reports 1 and 8 workers from one build. Omitted, the JVM-wide settings apply. |
 | `compression[].type` | `None`, `ASH`, `PQ`, `BQ` | Selects the traversal representation. `None` scores source vectors. |
 | `compression[].parameters` | [Quantizer parameters](#quantizer-parameters) | Supplies encoding settings for traversal. Reuse matching construction models and codes where possible. |
 

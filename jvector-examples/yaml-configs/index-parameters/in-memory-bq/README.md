@@ -4,7 +4,7 @@ Builds and searches an in-memory graph with 1-bit BQ codes, then rescores with t
 
 **Use case:** Very high-dimensional embeddings, where sign codes keep construction and traversal cheap.
 
-**Pipeline:** inMemory · build BQ · search BQ · rerank FP32
+**Pipeline:** inMemory: build BQ -> search BQ -> rerank FP32
 
 Files are named for their dataset. Each sets `dataset:`; change it to run the same pipeline on another compatible dataset.
 

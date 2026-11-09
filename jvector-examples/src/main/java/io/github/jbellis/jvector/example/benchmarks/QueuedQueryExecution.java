@@ -296,8 +296,10 @@ public final class QueuedQueryExecution implements AutoCloseable {
                 queries += i * histogram[i];
             }
             double meanBatch = groups == 0 ? 0 : (double) queries / groups;
-            System.out.printf("QUERY_BATCHES queries=%d groups=%d mean=%.4f histogram=%s%n",
-                    queries, groups, meanBatch, Arrays.toString(histogram));
+            if (Boolean.getBoolean("jvector.bench.printQueryBatches")) {
+                System.out.printf("QUERY_BATCHES queries=%d groups=%d mean=%.4f histogram=%s%n",
+                        queries, groups, meanBatch, Arrays.toString(histogram));
+            }
             return List.of(
                     Metric.of("search.execution.response_mean_ms", "Loaded mean (ms)", ".3f", times.length == 0 ? 0 : sum / times.length / 1e6),
                     Metric.of("search.execution.response_p95_ms", "Loaded p95 (ms)", ".3f", percentile(times, .95)),

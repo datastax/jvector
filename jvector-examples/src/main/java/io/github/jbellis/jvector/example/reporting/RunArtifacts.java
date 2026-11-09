@@ -136,8 +136,7 @@ public final class RunArtifacts {
         var reporting = RunReporting.open(runCfg, datasetConfigs);
         var run = reporting.run();
 
-        System.out.println("Logging enabled: " + run.runDir().toAbsolutePath() + ".\n" +
-                "Delete this directory to remove run artifacts and free up disk space.");
+        System.out.println("Results: " + run.runDir().toAbsolutePath());
 
         var datasetInfoWriter = DatasetInfoWriter.open(run);
 

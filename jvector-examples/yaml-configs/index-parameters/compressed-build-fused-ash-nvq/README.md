@@ -4,7 +4,7 @@ Builds the graph with symmetric ASH scoring, then writes fused ASH traversal cod
 
 **Use case:** Ingest under a memory limit: construction scores compact codes instead of source vectors.
 
-**Pipeline:** onDisk · build ASH symmetric · search fused ASH · rerank NVQ
+**Pipeline:** onDisk: build ASH symmetric -> search fused ASH -> rerank NVQ
 
 Files are named for their dataset. Each sets `dataset:`; change it to run the same pipeline on another compatible dataset. ASH requires dot-product datasets.
 

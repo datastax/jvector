@@ -244,6 +244,39 @@ public class TestGridASHIntegration {
         }
     }
 
+    @Test(timeout = 120_000)
+    public void searchWorkersSweepQueriesOneIndexWithEachWorkerCount() throws Exception {
+        var data = schema3Data();
+        var search = String.join("\n", "- type: ASH", "  parameters:", "    optimizer: RANDOM",
+                "    encodedBits: 72", "    bitsPerDimension: 2", "    queryProjection: fp32",
+                "    queryExecution: queued", "    maxBatchSize: 4");
+        var config = schema3Config("onDisk", "parallel", true, "NVQ", search);
+        config.construction.workers = 2;
+        config.search.workers = List.of(1, 2);
+        var params = config.search.getCompressorParameters().get(0).apply(data);
+        try (var projection = new SearchParameters.AshQueryProjectionSetting()) {
+            projection.apply(List.of(config));
+            var artifacts = RunArtifacts.open(csvRunConfig(), List.of(config));
+            var console = new java.io.ByteArrayOutputStream();
+            var stdout = System.out;
+            try {
+                System.setOut(new java.io.PrintStream(console, true, java.nio.charset.StandardCharsets.UTF_8));
+                Grid.run(data, GridSpec.fromConfig(config), artifacts);
+            } finally {
+                System.setOut(stdout);
+            }
+            var output = console.toString(java.nio.charset.StandardCharsets.UTF_8);
+            assertEquals(output, 1, output.split("Building graph index", -1).length - 1);
+            var lines = Files.readAllLines(artifacts.experimentsWriter().path());
+            // One build, then one row per search worker count, each recording its own workers.
+            assertEquals(3, lines.size());
+            assertTrue(lines.get(1), lines.get(1).matches(".*,onDisk,parallel,NVQ,,queued,1,4,.*"));
+            assertTrue(lines.get(2), lines.get(2).matches(".*,onDisk,parallel,NVQ,,queued,2,4,.*"));
+        } finally {
+            Files.deleteIfExists(Path.of("compressor_cache").resolve(params.idStringFor(data)));
+        }
+    }
+
     @Test
     public void schema3RecordsGraphBuildFlushAndReopenTimes() throws Exception {
         var data = schema3Data();

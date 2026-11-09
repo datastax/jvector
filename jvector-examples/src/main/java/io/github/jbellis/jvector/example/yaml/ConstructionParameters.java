@@ -38,6 +38,13 @@ public class ConstructionParameters extends CommonParameters {
     public Object reranking;
     public List<Boolean> fusedGraph;
     public Boolean useSavedIndexIfExists;
+    /** Schema 3: threads for training, encoding, graph insertion and writing; an integer or max. */
+    public Object workers;
+
+    /** The construction worker count, or null when the YAML leaves it to the platform default. */
+    public Integer resolvedWorkers() {
+        return workers == null ? null : Workers.resolve(workers, "construction.workers");
+    }
 
     void validateSchema3() {
         if (type == null || !List.of("inMemory", "onDisk").contains(type)) {
@@ -56,6 +63,7 @@ public class ConstructionParameters extends CommonParameters {
         validateSweep("refineFinalGraph", refineFinalGraph, value -> true);
         if (fusedGraph != null) validateSweep("fusedGraph", fusedGraph, value -> true);
         rerankingType();
+        resolvedWorkers();
         validateCompression("construction", false);
     }
 

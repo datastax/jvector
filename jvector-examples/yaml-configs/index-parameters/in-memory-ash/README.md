@@ -4,7 +4,7 @@ Builds an in-memory graph with the source vectors. Searches traverse with ASH co
 
 **Use case:** Larger in-memory collections that need faster traversal while keeping exact final scores.
 
-**Pipeline:** inMemory · build None · search ASH · rerank FP32
+**Pipeline:** inMemory: build None -> search ASH -> rerank FP32
 
 Files are named for their dataset. Each sets `dataset:`; change it to run the same pipeline on another compatible dataset. ASH requires dot-product datasets.
 

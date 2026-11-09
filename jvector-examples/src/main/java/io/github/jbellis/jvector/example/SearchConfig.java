@@ -40,6 +40,8 @@ public final class SearchConfig {
     private final List<Compression> entries;
     /** Search compression and delivery settings for a single schema 3 index case. */
     final Compression compression;
+    /** Search worker counts to sweep over one index; null leaves query concurrency to JVM-wide settings. */
+    public final List<Integer> workerGrid;
 
     private SearchConfig(Builder b) {
         this.searchCompressors = b.searchCompressors;
@@ -47,14 +49,22 @@ public final class SearchConfig {
         this.usePruningGrid = b.usePruningGrid;
         this.entries = b.entries;
         this.compression = b.compression;
+        this.workerGrid = b.workerGrid;
     }
 
+    /** The worker counts to query each index with; a single null means the JVM-wide setting. */
+    List<Integer> workerCounts() {
+        return workerGrid == null ? java.util.Collections.singletonList(null) : workerGrid;
+    }
+
+    /** One case per compression entry. Each case queries its index once per search worker count. */
     List<SearchConfig> cases() {
         if (entries == null) return List.of(this);
         return entries.stream().map(entry -> {
             var builder = builder().topKGrid(topKGrid).usePruningGrid(usePruningGrid)
                     .searchCompressors(List.of(entry.getCompressorParameters()));
             builder.compression = entry;
+            builder.workerGrid = workerGrid;
             return builder.build();
         }).collect(Collectors.toList());
     }
@@ -69,8 +79,14 @@ public final class SearchConfig {
         private List<Boolean> usePruningGrid;
         private List<Compression> entries;
         private Compression compression;
+        private List<Integer> workerGrid;
 
         private Builder() {}
+
+        Builder workerGrid(List<Integer> workerGrid) {
+            this.workerGrid = workerGrid == null ? null : List.copyOf(workerGrid);
+            return this;
+        }
 
         public Builder searchCompressors(List<Function<DataSet, CompressorParameters>> searchCompressors) { this.searchCompressors = searchCompressors; return this; }
         public Builder topKGrid(Map<Integer, List<Double>> topKGrid) { this.topKGrid = topKGrid; return this; }

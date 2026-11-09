@@ -4,7 +4,7 @@ Builds and searches a graph held entirely in memory with the source vectors. Not
 
 **Use case:** Small or frequently queried collections that fit in memory, and lower-dimensional data where quantization saves little.
 
-**Pipeline:** inMemory · build None · search None · rerank None
+**Pipeline:** inMemory: build None -> search None -> rerank None
 
 Files are named for their dataset. Each sets `dataset:`; change it to run the same pipeline on another compatible dataset.
 

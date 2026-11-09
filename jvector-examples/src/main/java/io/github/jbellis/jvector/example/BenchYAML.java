@@ -65,7 +65,7 @@ public class BenchYAML {
                 .collect(Collectors.joining("|"));
         var pattern = Pattern.compile(regex.isEmpty() ? ".*" : regex);
 
-        System.out.println("Heap space available is " + Runtime.getRuntime().maxMemory());
+        System.out.printf(java.util.Locale.ROOT, "Maximum heap: %.1f GiB%n", Runtime.getRuntime().maxMemory() / 1073741824.0);
 
         var datasetCollection = DatasetCollection.load();
         var datasetNames = regex.isEmpty() && !configNames.isEmpty() ? List.<String>of()
@@ -133,7 +133,8 @@ public class BenchYAML {
 
             String datasetName = config.dataset;
             String pipeline = config.describePipeline();
-            if (pipeline != null) System.out.println("Pipeline for " + datasetName + ": " + pipeline);
+            if (pipeline != null) ConsoleSections.pipeline(datasetName, pipeline);
+            ConsoleSections.stage("Dataset");
             try (var ds = DataSets.loadDataSet(datasetName, loading).orElseThrow(
                     () -> new RuntimeException("Could not load dataset:" + datasetName)
             ).getDataSet()) {

@@ -4,7 +4,7 @@ Builds and searches an on-disk graph with the source vectors, without quantizati
 
 **Use case:** Lower-dimensional data stored on disk, and tuning graph degree, build width, hierarchy and pruning.
 
-**Pipeline:** onDisk · build None · search None · rerank None
+**Pipeline:** onDisk: build None -> search None -> rerank None
 
 Files are named for their dataset. Each sets `dataset:`; change it to run the same pipeline on another compatible dataset.
 

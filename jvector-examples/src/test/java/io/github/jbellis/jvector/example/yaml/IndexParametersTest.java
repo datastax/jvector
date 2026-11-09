@@ -202,12 +202,12 @@ public class IndexParametersTest {
     @Test
     public void pipelineIsInferredFromTheFields() throws Exception {
         var compressed = MultiConfig.getConfig(INDEX_PARAMETERS.resolve("compressed-build-fused-ash-nvq/cap-1M-2bit.yml").toString());
-        assertEquals("onDisk · build ASH-2b symmetric · search fused ASH-2b · rerank NVQ", compressed.describePipeline());
-        assertEquals("onDisk · build ASH · search fused ASH · rerank NVQ", compressed.pipelineSignature());
+        assertEquals("onDisk: build ASH-2b symmetric -> search fused ASH-2b -> rerank NVQ", compressed.describePipeline());
+        assertEquals("onDisk: build ASH -> search fused ASH -> rerank NVQ", compressed.pipelineSignature());
         var memory = MultiConfig.getConfig(INDEX_PARAMETERS.resolve("in-memory-ash/mpnet-1m.yml").toString());
-        assertEquals("inMemory · build None · search ASH-2b · rerank FP32", memory.describePipeline());
+        assertEquals("inMemory: build None -> search ASH-2b -> rerank FP32", memory.describePipeline());
         var landmarks = MultiConfig.getConfig(INDEX_PARAMETERS.resolve("ash-options/ada002-1M-4-landmarks.yml").toString());
-        assertEquals("onDisk · build ASH-2b 4 landmarks asymmetric · search fused ASH-2b 4 landmarks · rerank NVQ",
+        assertEquals("onDisk: build ASH-2b 4 landmarks asymmetric -> search fused ASH-2b 4 landmarks -> rerank NVQ",
                 landmarks.describePipeline());
     }
 }

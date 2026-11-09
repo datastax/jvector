@@ -284,6 +284,9 @@ public class Grid {
             diagnostics.startMonitoring("testDirectory", workDirectory);
             diagnostics.startMonitoring("indexCache", Paths.get(indexCacheDir));
             diagnostics.capturePrePhaseSnapshot("Graph Build");
+            ConsoleSections.stage("Construction");
+            System.out.println("Index files: " + workDirectory.toAbsolutePath()
+                    + (cache.isEnabled() ? " (saved indexes: " + cache.cacheDir().toAbsolutePath() + ")" : ""));
             System.out.printf("%s: Dataset similarity function is %s%n", ds.getName(), ds.getSimilarityFunction());
 
             // Resolve build compressor (and label quant type) so we can record compute time
@@ -308,10 +311,11 @@ public class Grid {
                 strategy = new CompressedOnDiskBuild(cache, workDirectory, buildCodec, constructionMetrics,
                         fusedCodec, cacheIdentity);
             } else {
-                buildCompressorObj = buildCodec.get();
+                buildCompressorObj = GraphBuilderFactory.inConstructionPool(build, buildCodec::get);
                 if ("inMemory".equals(build.indexType)) {
                     strategy = new InMemoryBuild(workDirectory,
-                            encodeForConstruction(buildCompressorObj, ds.getBaseRavv(), constructionMetrics));
+                            encodeForConstruction(buildCompressorObj, ds.getBaseRavv(), constructionMetrics,
+                                    GraphBuilderFactory.constructionPool(build)));
                 } else {
                     strategy = buildCompressorObj == null ? new InMemoryBuild(workDirectory)
                             : new CompressedOnDiskBuild(cache, workDirectory, buildCompressorObj, constructionMetrics);
@@ -337,8 +341,11 @@ public class Grid {
             var buildSnapshot = diagnostics.getLatestSystemSnapshot();
 
             diagnostics.printDiskStatistics("Graph Index Build");
-            if (indexBuildTimeS != null) {
-                System.out.printf("Index build time: %f seconds%n%n", indexBuildTimeS);
+            if (indexBuildTimeS != null && constructionMetrics.graphBuildTimeS != null) {
+                System.out.printf(java.util.Locale.ROOT, "Index build time: %.1f s (graph %.1f s, flush %.1f s)%n%n",
+                        indexBuildTimeS, constructionMetrics.graphBuildTimeS, constructionMetrics.flushTimeS);
+            } else if (indexBuildTimeS != null) {
+                System.out.printf(java.util.Locale.ROOT, "Index build time: %.1f s%n%n", indexBuildTimeS);
             } else {
                 System.out.printf("Index build time: not measured, all indexes loaded from the index cache%n%n");
             }
@@ -388,21 +395,27 @@ public class Grid {
                             var nvq = constructionMetrics.index("NVQ").timeCompute(() -> NVQProvider.train(base, null));
                             memoryReranker = (NVQVectors) constructionMetrics.index("NVQ").timeEncode(() -> nvq.encodeAll(base));
                         }
-                        try (var cs = new ConfiguredSystem(ds, index, cv, featureSetForIndex, build.rerankingType,
-                                memoryReranker)) {
-                            if (search.compression != null) {
-                                cs.configureQueryExecution(search.compression.queryExecution(), search.compression.maxBatchSize());
+                        // Each search worker count queries this same index with its own query workers.
+                        for (Integer workers : search.workerCounts()) {
+                            ConsoleSections.stage(workers == null ? "Search"
+                                    : "Search: " + workers + (workers == 1 ? " worker" : " workers"));
+                            try (var cs = new ConfiguredSystem(ds, index, cv, featureSetForIndex, build.rerankingType,
+                                    memoryReranker)) {
+                                if (search.compression != null) {
+                                    cs.configureQueryExecution(search.compression.queryExecution(),
+                                            search.compression.maxBatchSize(), workers);
+                                }
+                                var traversal = cv == null ? null : cv.getCompressor();
+                                if (traversal == null && build.indexType != null) traversal = cs.fusedCompressor();
+                                var ctx = new SearchContext(ds, build, search, features, featureSetForIndex,
+                                        buildCompressorString, cpSupplier,
+                                        traversal == null ? "None" : traversal.toString(),
+                                        indexBuildTimeS, indexFileSizes.get(features), buildSnapshot,
+                                        queryParameters(cs), cs.ashQueryProjectionModel());
+                                testConfiguration(cs, ctx, constructionMetrics, workDirectory, benchmarks, listeners);
+                            } catch (Exception e) {
+                                throw new RuntimeException(e);
                             }
-                            var traversal = cv == null ? null : cv.getCompressor();
-                            if (traversal == null && build.indexType != null) traversal = cs.fusedCompressor();
-                            var ctx = new SearchContext(ds, build, search, features, featureSetForIndex,
-                                    buildCompressorString, cpSupplier,
-                                    traversal == null ? "None" : traversal.toString(),
-                                    indexBuildTimeS, indexFileSizes.get(features), buildSnapshot,
-                                    queryParameters(cs), cs.ashQueryProjectionModel());
-                            testConfiguration(cs, ctx, constructionMetrics, workDirectory, benchmarks, listeners);
-                        } catch (Exception e) {
-                            throw new RuntimeException(e);
                         }
                     });
                 }
@@ -445,7 +458,7 @@ public class Grid {
             var preparer = cs.queryPreparer();
             queryParams.put("batchPreparation", preparer != null && preparer.supportsBatchPreparation());
         } else {
-            int threads = Integer.getInteger("jvector.bench.queryThreads", 0);
+            int threads = cs.directCallerThreads();
             queryParams.put("callerThreads", threads == 0 ? "common pool" : threads);
         }
 
@@ -684,7 +697,7 @@ public class Grid {
         Supplier<VectorCompressor<?>> computeAndSaveAction = () -> {
             var start = System.nanoTime();
             var compressor = cp.computeCompressor(ds);
-            System.out.format("%s: %s codebooks computed in %.2fs,%n",
+            System.out.format(java.util.Locale.ROOT, "%s: trained %s in %.2f s%n",
                     ds.getName(), compressor, (System.nanoTime() - start) / 1_000_000_000.0);
 
             if (cp.supportsCaching()) {
@@ -725,10 +738,16 @@ public class Grid {
 
     static CompressedVectors encodeForConstruction(VectorCompressor<?> compressor, RandomAccessVectorValues vectors,
                                                     ConstructionMetrics metrics) {
+        return encodeForConstruction(compressor, vectors, metrics, PhysicalCoreExecutor.pool());
+    }
+
+    /** Encodes with {@code pool}, which sets how many threads the encoding uses. */
+    static CompressedVectors encodeForConstruction(VectorCompressor<?> compressor, RandomAccessVectorValues vectors,
+                                                    ConstructionMetrics metrics, java.util.concurrent.ForkJoinPool pool) {
         if (compressor == null) return null;
         String quantType = compressor instanceof AsymmetricHashing ? "ASH"
                 : compressor instanceof ProductQuantization ? "PQ" : "BQ";
-        return metrics.index(quantType).timeEncode(() -> compressor.encodeAll(vectors));
+        return metrics.index(quantType).timeEncode(() -> compressor.encodeAll(vectors, pool));
     }
 
     // Load/save helpers for getCompressor
@@ -771,8 +790,19 @@ public class Grid {
         private java.util.concurrent.ExecutorService queuedQueryWorkers;
         private boolean closed;
 
+        private Integer searchWorkers;
+
+        /** Queued workers: the case's search.workers, else one per physical core the JVM can use. */
         public int queryWorkerCount() {
-            return queryWorkerCountForMachine();
+            return searchWorkers != null ? searchWorkers : queryWorkerCountForMachine();
+        }
+
+        /** Direct caller threads: the case's search.workers, else jvector.bench.queryThreads (0 = common pool). */
+        public int directCallerThreads() {
+            if (searchWorkers != null) return searchWorkers;
+            int threads = Integer.getInteger("jvector.bench.queryThreads", 0);
+            if (threads < 0) throw new IllegalArgumentException("queryThreads must be nonnegative");
+            return threads;
         }
 
         /** Shared across this configured index's warmups and all query measurements. */
@@ -792,6 +822,14 @@ public class Grid {
 
         /** Select before launching queries; workers and search-owned state are reused. */
         public synchronized void configureQueryExecution(String mode, int batchSize) {
+            configureQueryExecution(mode, batchSize, null);
+        }
+
+        /** As above, with this case's search worker count, or null for the JVM-wide setting. */
+        public synchronized void configureQueryExecution(String mode, int batchSize, Integer workers) {
+            if (queuedQueryWorkers != null && !java.util.Objects.equals(workers, searchWorkers))
+                throw new IllegalStateException("Query workers are already running; configure workers before searching");
+            searchWorkers = workers;
             if (closed) throw new IllegalStateException("Configured system is closed");
             if (!"direct".equals(mode) && !"queued".equals(mode))
                 throw new IllegalArgumentException("Query execution must be direct or queued");

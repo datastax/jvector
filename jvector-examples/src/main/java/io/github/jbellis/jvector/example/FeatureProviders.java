@@ -106,7 +106,17 @@ final class FeatureProviders {
                                                Path outPath, RandomAccessVectorValues vectors,
                                                PQVectors buildPQ, ASHVectors buildASH, VectorFloat<?> inputMean,
                                                ConstructionMetrics metrics, String writerMode) throws FileNotFoundException {
-        var writer = GraphBuilderFactory.writerBuilder(graph, outPath, vectors.size(), writerMode);
+        return configureWriter(features, graph, outPath, vectors, buildPQ, buildASH, inputMean, metrics, writerMode,
+                io.github.jbellis.jvector.util.PhysicalCoreExecutor.getPhysicalCoreCount());
+    }
+
+    /** As above, with {@code writerThreads} parallel writer workers. */
+    static FeatureWriteContext configureWriter(Set<FeatureId> features, ImmutableGraphIndex graph,
+                                               Path outPath, RandomAccessVectorValues vectors,
+                                               PQVectors buildPQ, ASHVectors buildASH, VectorFloat<?> inputMean,
+                                               ConstructionMetrics metrics, String writerMode, int writerThreads)
+            throws FileNotFoundException {
+        var writer = GraphBuilderFactory.writerBuilder(graph, outPath, vectors.size(), writerMode, writerThreads);
         var ctx = new FeatureWriteContext(writer, graph, vectors, buildPQ, buildASH, inputMean, metrics);
         for (var id : features) {
             require(id).configure(ctx);

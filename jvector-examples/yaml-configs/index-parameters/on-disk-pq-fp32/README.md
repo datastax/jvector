@@ -4,7 +4,7 @@ Builds with PQ scoring and writes the graph with the source vectors. Searches tr
 
 **Use case:** The same layout as on-disk-ash-fp32 with PQ codes.
 
-**Pipeline:** onDisk · build PQ · search PQ · rerank FP32
+**Pipeline:** onDisk: build PQ -> search PQ -> rerank FP32
 
 Files are named for their dataset. Each sets `dataset:`; change it to run the same pipeline on another compatible dataset.
 

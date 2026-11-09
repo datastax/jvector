@@ -161,7 +161,7 @@ final class CompressedOnDiskBuild implements IndexBuildStrategy {
         Files.createDirectories(outputDir);
 
         if (build.indexType != null) {
-            buildCompressor = buildCodec == null ? null : buildCodec.get();
+            buildCompressor = buildCodec == null ? null : GraphBuilderFactory.inConstructionPool(build, buildCodec::get);
             double seconds = buildAndFlush(featureSets, build, ds, outputDir, handles);
             long reopenStart = System.nanoTime();
             reopen(featureSets, outputDir, handles, indexes, fileSizes);
@@ -283,16 +283,18 @@ final class CompressedOnDiskBuild implements IndexBuildStrategy {
         var mean = featureSets.stream().anyMatch(features -> features.contains(FeatureId.NVQ_VECTORS))
                 ? new VectorMean(vectors.size(), vectors.dimension()) : null;
         var buildVectors = mean == null ? vectors : mean.duringScan(vectors);
-        var encoded = Grid.encodeForConstruction(buildCompressor, buildVectors, constructionMetrics);
+        var encoded = Grid.encodeForConstruction(buildCompressor, buildVectors, constructionMetrics,
+                GraphBuilderFactory.constructionPool(build));
 
         long start = System.nanoTime();
         try (var graph = GraphBuilderFactory.buildGraph(ds, build, encoded)) {
             double buildSeconds = (System.nanoTime() - start) / 1e9;
-            var codec = fusedCompressor == null ? null : fusedCompressor.get();
+            var codec = fusedCompressor == null ? null
+                    : GraphBuilderFactory.inConstructionPool(build, fusedCompressor::get);
             CompressedVectors searchCodes = codec == null ? null : codec == buildCompressor
                     ? encoded
                     : Grid.encodeForConstruction(codec, mean != null && !mean.isComplete() ? buildVectors : vectors,
-                            constructionMetrics);
+                            constructionMetrics, GraphBuilderFactory.constructionPool(build));
             var inputMean = mean != null && mean.isComplete() ? mean.mean() : null;
             double flushSeconds = 0;
             int n = 0;
@@ -301,9 +303,10 @@ final class CompressedOnDiskBuild implements IndexBuildStrategy {
                 var ctx = FeatureProviders.configureWriter(features, graph, path, vectors,
                         searchCodes instanceof PQVectors ? (PQVectors) searchCodes : null,
                         searchCodes instanceof ASHVectors ? (ASHVectors) searchCodes : null,
-                        inputMean, constructionMetrics, build.writerMode);
+                        inputMean, constructionMetrics, build.writerMode, GraphBuilderFactory.constructionThreads(build));
                 start = System.nanoTime();
-                try (var input = new FinalWriteVectors(vectors);
+                try (var progress = PhaseProgress.timed("Index write " + features);
+                     var input = new FinalWriteVectors(vectors);
                      var view = graph.getView();
                      var writer = ctx.buildWriter()) {
                     writer.write(ctx.completedSuppliers(view, input::get));
@@ -315,8 +318,6 @@ final class CompressedOnDiskBuild implements IndexBuildStrategy {
                 constructionMetrics.graphBuildTimeS = buildSeconds;
                 constructionMetrics.flushTimeS = flushSeconds;
             }
-            System.out.printf("Graph phases: buildAndCleanup=%.6f flush=%.6f seconds%n", buildSeconds, flushSeconds);
-            System.out.format("Build and write %s in %ss%n", featureSets, totalTime);
             return totalTime;
         }
     }

@@ -4,7 +4,7 @@ Builds the graph with the source vectors, then writes fused ASH traversal codes 
 
 **Use case:** The database write path: an in-memory index (for example a memtable) is flushed to an on-disk index.
 
-**Pipeline:** onDisk · build None · search fused ASH · rerank NVQ
+**Pipeline:** onDisk: build None -> search fused ASH -> rerank NVQ
 
 Files are named for their dataset. Each sets `dataset:`; change it to run the same pipeline on another compatible dataset. ASH requires dot-product datasets.
 

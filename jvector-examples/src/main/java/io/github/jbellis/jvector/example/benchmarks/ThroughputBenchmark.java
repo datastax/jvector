@@ -153,8 +153,7 @@ public class ThroughputBenchmark extends AbstractQueryBenchmark {
             ConfiguredSystem cs, int topK, int rerankK, boolean usePruning,
             int queryRuns, Consumer<Supplier<List<Metric>>> deferredReports) {
         if (cs.usesQueuedExecution()) return runConfiguredBenchmark(cs, topK, rerankK, usePruning, queryRuns, deferredReports);
-        int threads = Integer.getInteger("jvector.bench.queryThreads", 0);
-        if (threads < 0) throw new IllegalArgumentException("queryThreads must be nonnegative");
+        int threads = cs.directCallerThreads();
         if (threads > 1) {
             var pool = new java.util.concurrent.ForkJoinPool(threads);
             try {
@@ -173,9 +172,9 @@ public class ThroughputBenchmark extends AbstractQueryBenchmark {
         return query;
     }
 
-    private static IntStream queryStream(int count) {
+    private static IntStream queryStream(ConfiguredSystem cs, int count) {
         IntStream stream = IntStream.range(0, count);
-        return Integer.getInteger("jvector.bench.queryThreads", 0) == 1 ? stream : stream.parallel();
+        return cs.directCallerThreads() == 1 ? stream : stream.parallel();
     }
 
     private List<Metric> runConfiguredBenchmark(ConfiguredSystem cs, int topK, int rerankK,
@@ -196,7 +195,7 @@ public class ThroughputBenchmark extends AbstractQueryBenchmark {
                 // Direct callers may naturally combine projections too. Keep
                 // the prepared provider fixed while checking per-thread search
                 // reuse; comparing GEMV with GEMM would test rounding instead.
-                queryStream(count).forEach(i ->
+                queryStream(cs, count).forEach(i ->
                         QueryExecutor.verifyConcurrentQuery(cs, topK, rerankK, usePruning, i));
             }
             if (diagnosticLevel != DiagnosticLevel.NONE) {
@@ -218,7 +217,7 @@ public class ThroughputBenchmark extends AbstractQueryBenchmark {
                 warmupQps[warmupRun] = diagnostics.monitorPhaseWithQueryTiming(warmupPhase, (recorder) -> {
                     if (queued != null) {
                         SINK += queued.runPass(totalQueries, k -> randomQuery(dim), recorder, false).visited();
-                    } else queryStream(totalQueries)
+                    } else queryStream(cs, totalQueries)
                             .forEach(k -> {
                                 long queryStart = System.nanoTime();
 
@@ -283,7 +282,7 @@ public class ThroughputBenchmark extends AbstractQueryBenchmark {
                         if (queued != null) {
                             visitedAdder.add(queued.runPass(totalQueries,
                                     cs.getDataSet().getQueryVectors()::get, recorder, false).visited());
-                        } else queryStream(totalQueries)
+                        } else queryStream(cs, totalQueries)
                                 .forEach(i -> {
                                     long queryStart = System.nanoTime();
 

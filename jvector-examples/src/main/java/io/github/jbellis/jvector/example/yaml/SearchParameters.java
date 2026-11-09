@@ -95,12 +95,27 @@ public class SearchParameters extends CommonParameters {
 
     public Map<Integer, List<Double>> topKOverquery;
     public List<Boolean> useSearchPruning;
+    /**
+     * Schema 3: a sweep of search worker counts, each an integer or max. Direct search uses this many
+     * calling threads; queued ASH search uses this many workers to prepare and execute queries.
+     */
+    public List<Object> workers;
+
+    /** One resolved count per sweep value, or null when the YAML leaves it to the platform default. */
+    public List<Integer> resolvedWorkers() {
+        if (workers == null) return null;
+        if (workers.isEmpty()) throw new IllegalArgumentException("search.workers must list at least one worker count");
+        var counts = new ArrayList<Integer>();
+        for (var value : workers) counts.add(Workers.resolve(value, "search.workers"));
+        return counts;
+    }
 
     void validateSchema3() {
         if (queryProjection != null) {
             throw new IllegalArgumentException("place queryProjection in the ASH compression parameters in schema 3");
         }
         validateCompression("search", true);
+        resolvedWorkers();
         if (topKOverquery == null || topKOverquery.isEmpty() || useSearchPruning == null || useSearchPruning.isEmpty()
                 || useSearchPruning.stream().anyMatch(Objects::isNull)) {
             throw new IllegalArgumentException("search.topKOverquery and search.useSearchPruning must be set");
