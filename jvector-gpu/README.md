@@ -111,6 +111,25 @@ i9-13900K (32 threads), TornadoVM 8.1.0 (`run.sh compact ada002-1M`):
 The rebuilt graph is a fresh build rather than a stitched one, so at the same beam it has slightly higher recall,
 at the same search latency.
 
+**The out-of-core compactor's cell walk on the GPU.** For merges that do not fit in memory, `OnDiskGraphIndexCompactor`
+stays the compactor and `TornadoCompactionAccelerator` runs its cell walk on the GPU (select it with
+`-Djvector.compaction.accelerator=tornadovm`). The walk scores each cell's vectors against the nodes that probe it and
+keeps each node's top 32; on the GPU, the queries of a range are uploaded once, the target's vectors stream from the
+merge's scratch region in fixed-size chunks of whole cells, and each launch scores its pairs and merges the results
+into every node's running top 32. Every buffer has a fixed size, so a larger merge runs as more launches. Scores are
+FP32 in JVector's units.
+
+ada002-1M, the same 4 segments, same machine (`run.sh walk ada002-1M 4 <workDir> both`):
+
+| | cell walk | compaction | recall@10, beam 20 / 40 / 80 / 160 |
+|---|---|---|---|
+| CPU walk | 70.7 s | 230.0 s | 0.914 / 0.958 / 0.982 / 0.993 |
+| GPU walk | **23.9 s (3.0x)** | 181.0 s | 0.915 / 0.958 / 0.981 / 0.992 |
+
+Two CPU merges of the same segments agree on 0.94% of base-layer neighbour lists (mean overlap 0.865): the merge is
+parallel and not deterministic. A CPU and a GPU merge agree on 0.92% (mean overlap 0.865), so the GPU walk adds no
+difference of its own.
+
 **Product quantization.** `GpuProductQuantization.compute` trains PQ codebooks the way `ProductQuantization.compute`
 does (unweighted): the same subspaces, training sample, k-means++ seeding and Lloyd iterations. `encodeAll`
 encodes with any unweighted `ProductQuantization`, including one trained on the CPU. Both return JVector's own

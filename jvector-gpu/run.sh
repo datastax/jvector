@@ -50,6 +50,7 @@ case "$MODE" in
     wikipedia) MAIN=io.github.jbellis.jvector.gpu.bench.WikipediaBench ;;
     groundtruth) MAIN=io.github.jbellis.jvector.gpu.bench.GroundTruth ;;
     nvq) MAIN=io.github.jbellis.jvector.gpu.bench.NvqBench ;;
+    walk) MAIN=io.github.jbellis.jvector.gpu.bench.WalkBench ;;
     phases) MAIN=io.github.jbellis.jvector.gpu.bench.WritePhases ;;
     *) sed -n '19,32p' "$0"; exit 1 ;;
 esac

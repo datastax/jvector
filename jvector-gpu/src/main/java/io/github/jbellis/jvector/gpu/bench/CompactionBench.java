@@ -133,7 +133,7 @@ public final class CompactionBench {
     }
 
     /** {recall@10, mean microseconds a query} of a pass over the queries. */
-    private static double[] search(GraphSearcher searcher, RandomAccessVectorValues vectors, int[] toDataset, List<VectorFloat<?>> queries,
+    static double[] search(GraphSearcher searcher, RandomAccessVectorValues vectors, int[] toDataset, List<VectorFloat<?>> queries,
                                    List<? extends List<Integer>> gt, VectorSimilarityFunction sim, int beam) {
         long hits = 0;
         long nanos = 0;
@@ -152,7 +152,7 @@ public final class CompactionBench {
     }
 
     /** Opened segments with the compactors' inputs: every node live; dataset ordinals offset by the segments before. */
-    private static final class Segments implements AutoCloseable {
+    static final class Segments implements AutoCloseable {
         final List<ReaderSupplier> suppliers = new ArrayList<>();
         final List<OnDiskGraphIndex> graphs = new ArrayList<>();
         final List<FixedBitSet> live = new ArrayList<>();
