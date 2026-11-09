@@ -17,6 +17,8 @@
 package io.github.jbellis.jvector.graph.disk;
 
 import io.github.jbellis.jvector.annotations.Experimental;
+import io.github.jbellis.jvector.graph.RandomAccessVectorValues;
+import io.github.jbellis.jvector.quantization.ProductQuantization;
 import io.github.jbellis.jvector.vector.VectorSimilarityFunction;
 
 /**
@@ -49,5 +51,15 @@ public interface CompactionAccelerator {
      */
     default boolean probe(CellProbe probe) {
         return false;
+    }
+
+    /**
+     * Trains the merge's wide code, as {@code ProductQuantization.compute(sample, subspaces, clusters, globallyCenter)}
+     * would, in place of the compactor's own training. The code is used only for the finalize's diversity comparisons.
+     *
+     * @return the trained quantization, or null (the default) to leave it to the compactor
+     */
+    default ProductQuantization trainWideCode(RandomAccessVectorValues sample, int subspaces, int clusters, boolean globallyCenter) {
+        return null;
     }
 }

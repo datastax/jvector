@@ -20,11 +20,13 @@ import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 import java.util.concurrent.atomic.AtomicInteger;
 
+import io.github.jbellis.jvector.graph.RandomAccessVectorValues;
+import io.github.jbellis.jvector.quantization.ProductQuantization;
 import io.github.jbellis.jvector.vector.VectorSimilarityFunction;
 
 /**
  * A {@link CompactionAccelerator} in plain Java, through the public contracts of {@link CellProbe} and {@link CellWalk}
- * only: every query ranks every center exactly, and every (cell, query) pair's members are scored with
+ * only: the wide code trained by {@code ProductQuantization.compute}, every query ranks every center exactly, and every (cell, query) pair's members are scored with
  * {@link CellWalk#score}, the top k kept per query. Tests select it as {@value #NAME}.
  */
 public final class ReferenceCompactionAccelerator implements CompactionAccelerator {
@@ -32,6 +34,7 @@ public final class ReferenceCompactionAccelerator implements CompactionAccelerat
     public static final String NAME = "reference";
     static final AtomicInteger WALKS = new AtomicInteger();
     static final AtomicInteger PROBES = new AtomicInteger();
+    static final AtomicInteger WIDE_CODES = new AtomicInteger();
 
     @Override
     public String name() {
@@ -80,6 +83,12 @@ public final class ReferenceCompactionAccelerator implements CompactionAccelerat
         }
         WALKS.incrementAndGet();
         return true;
+    }
+
+    @Override
+    public ProductQuantization trainWideCode(RandomAccessVectorValues sample, int subspaces, int clusters, boolean globallyCenter) {
+        WIDE_CODES.incrementAndGet();
+        return ProductQuantization.compute(sample, subspaces, clusters, globallyCenter);
     }
 
     @Override

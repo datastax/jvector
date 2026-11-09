@@ -636,7 +636,8 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
         if (cellMap != null) {
             log.info("Level-0 candidates are scanned and scored on the vectors themselves ({} B per node in scratch)",
                      4 * dimension);
-            pqWide = new PQRetrainer(sources, liveNodes, dimension).train(wideSubspaces());
+            pqWide = new PQRetrainer(sources, liveNodes, dimension).train(wideSubspaces(),
+                    accelerator != null && accelerator.supports(similarityFunction, dimension) ? accelerator : null);
             if (pqWide != null) {
                 vectorStore.setSecondaryCompressor(pqWide);
                 log.info("Diversity comparisons use a {}-subspace wide code ({} B per node); every candidate score stays exact",
