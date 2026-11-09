@@ -207,4 +207,29 @@ class TestGpuBuildHost {
         assertTrue(HostMemory.availableNative() > 0);
         assertTrue(HostMemory.freeHeap() > 0);
     }
+
+    @Test
+    void readsCgroupLimits(@org.junit.jupiter.api.io.TempDir java.nio.file.Path root) throws Exception {
+        // v2: /sys/fs/cgroup/a/b, a limit of 8 GB on b (4 GB used, 3 GB of it page cache) and 6 GB on a (5 GB used, none cached)
+        var b = root.resolve("a/b");
+        java.nio.file.Files.createDirectories(b);
+        var a = root.resolve("a");
+        java.nio.file.Files.writeString(b.resolve("memory.max"), (8L << 30) + "\n");
+        java.nio.file.Files.writeString(b.resolve("memory.current"), (4L << 30) + "\n");
+        java.nio.file.Files.writeString(b.resolve("memory.stat"), "anon 1073741824\nfile " + (3L << 30) + "\n");
+        java.nio.file.Files.writeString(a.resolve("memory.max"), (6L << 30) + "\n");
+        java.nio.file.Files.writeString(a.resolve("memory.current"), (5L << 30) + "\n");
+        java.nio.file.Files.writeString(a.resolve("memory.stat"), "anon " + (5L << 30) + "\nfile 0\n");
+        java.nio.file.Files.writeString(root.resolve("memory.max"), "max\n");
+        // b leaves 8 - (4 - 3) = 7 GB, a leaves 6 - 5 = 1 GB: the least wins
+        assertEquals(1L << 30, HostMemory.cgroupAvailable(root, "/a/b", "memory.max", "memory.current", "file "));
+        java.nio.file.Files.writeString(a.resolve("memory.max"), "max\n");
+        assertEquals(7L << 30, HostMemory.cgroupAvailable(root, "/a/b", "memory.max", "memory.current", "file "));
+        // no limits anywhere
+        java.nio.file.Files.writeString(b.resolve("memory.max"), "max\n");
+        assertEquals(Long.MAX_VALUE, HostMemory.cgroupAvailable(root, "/a/b", "memory.max", "memory.current", "file "));
+        // v1 reports "no limit" as a huge number
+        assertEquals(Long.MAX_VALUE, HostMemory.parseLimit("9223372036854771712"));
+        assertTrue(HostMemory.availableNative() > 0);
+    }
 }

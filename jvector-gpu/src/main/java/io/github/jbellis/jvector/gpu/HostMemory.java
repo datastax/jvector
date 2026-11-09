@@ -19,11 +19,14 @@ package io.github.jbellis.jvector.gpu;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.List;
 import java.util.Locale;
 
 /**
  * The host memory a GPU build needs, estimated from its shape alone, and the host memory available, so that
  * {@link TornadoGraphBuildAccelerator#supports} can decline a build that would not fit before anything is allocated.
+ * The host's available memory is cgroup-aware, so a build in a container or a memory-limited service is judged by its
+ * limit, not by the machine's free memory.
  * A declined build runs on the CPU as usual.
  */
 final class HostMemory {
@@ -93,18 +96,97 @@ final class HostMemory {
         return runtime.maxMemory() - (runtime.totalMemory() - runtime.freeMemory());
     }
 
-    /** {@code MemAvailable} from {@code /proc/meminfo}; unlimited where it cannot be read. */
+    /**
+     * The memory available to this process: {@code MemAvailable} from {@code /proc/meminfo}, or less when a cgroup
+     * limit leaves less (a container, a systemd scope); unlimited where neither can be read.
+     */
     static long availableNative() {
+        long available = Long.MAX_VALUE;
         try {
             for (String line : Files.readAllLines(Path.of("/proc/meminfo"))) {
                 if (line.startsWith("MemAvailable:")) {
-                    return parseMemInfoLine(line);
+                    available = parseMemInfoLine(line);
+                    break;
                 }
             }
         } catch (IOException | RuntimeException e) {
             // not Linux, or not readable: leave it to the allocation
         }
+        return Math.min(available, cgroupAvailable());
+    }
+
+    /**
+     * The least headroom of this process's cgroup and its ancestors: each limit less what the group uses, not counting
+     * its page cache, which the kernel reclaims under the limit as {@code MemAvailable} counts it reclaimable.
+     * cgroup v2 ({@code memory.max}, {@code memory.current}, {@code memory.stat}) or v1 ({@code memory.limit_in_bytes},
+     * {@code memory.usage_in_bytes}, {@code memory.stat}); unlimited when there is no limit or nothing to read.
+     */
+    static long cgroupAvailable() {
+        try {
+            List<String> lines = Files.readAllLines(Path.of("/proc/self/cgroup"));
+            for (String line : lines) {
+                if (line.startsWith("0::")) {
+                    return cgroupAvailable(Path.of("/sys/fs/cgroup"), line.substring(3), "memory.max", "memory.current", "file ");
+                }
+            }
+            for (String line : lines) {
+                String[] parts = line.split(":", 3);
+                if (parts.length == 3 && java.util.Arrays.asList(parts[1].split(",")).contains("memory")) {
+                    return cgroupAvailable(Path.of("/sys/fs/cgroup/memory"), parts[2], "memory.limit_in_bytes", "memory.usage_in_bytes", "cache ");
+                }
+            }
+        } catch (IOException | RuntimeException e) {
+            // no cgroup information: no limit known
+        }
         return Long.MAX_VALUE;
+    }
+
+    /** The least headroom from {@code group} (under {@code root}) up to the root. */
+    static long cgroupAvailable(Path root, String group, String limitFile, String usageFile, String cacheKey) {
+        long least = Long.MAX_VALUE;
+        Path dir = root.resolve(group.startsWith("/") ? group.substring(1) : group).normalize();
+        while (dir.startsWith(root)) {
+            try {
+                long limit = parseLimit(Files.readString(dir.resolve(limitFile)));
+                if (limit != Long.MAX_VALUE) {
+                    long usage = Long.parseLong(Files.readString(dir.resolve(usageFile)).trim());
+                    long cache = statValue(Files.readAllLines(dir.resolve("memory.stat")), cacheKey);
+                    least = Math.min(least, headroom(limit, usage, cache));
+                }
+            } catch (IOException | RuntimeException e) {
+                // this level has no readable limit
+            }
+            if (dir.equals(root)) {
+                break;
+            }
+            dir = dir.getParent();
+        }
+        return least;
+    }
+
+    /** A limit file's value: {@code max} (v2) or a v1 value near {@code Long.MAX_VALUE} means no limit. */
+    static long parseLimit(String text) {
+        String t = text.trim();
+        if (t.equals("max")) {
+            return Long.MAX_VALUE;
+        }
+        long v = Long.parseLong(t);
+        return v >= (Long.MAX_VALUE >> 1) ? Long.MAX_VALUE : v;
+    }
+
+    /** The value of {@code key} (with its trailing space) in a {@code memory.stat}, or 0. */
+    static long statValue(List<String> stat, String key) {
+        for (String line : stat) {
+            if (line.startsWith(key)) {
+                return Long.parseLong(line.substring(key.length()).trim());
+            }
+        }
+        return 0;
+    }
+
+    /** What a limit leaves: the limit less the usage that is not reclaimable page cache. */
+    static long headroom(long limit, long usage, long cache) {
+        return Math.max(0, limit - Math.max(0, usage - cache));
     }
 
     /** A {@code /proc/meminfo} line such as {@code MemAvailable:   12345678 kB}, in bytes. */
