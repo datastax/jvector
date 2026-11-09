@@ -43,6 +43,8 @@ final class PanamaASHKernels {
     private static final VectorSpecies<Byte> B = F.length() <= 8 ? ByteVector.SPECIES_64 : ByteVector.SPECIES_128;
     private static final int[] TWO_BIT_INDICES = queryIndices(4);
     private static final int[] FOUR_BIT_INDICES = queryIndices(2);
+    private static final int[][] TWO_BIT_TAIL_INDICES = tailQueryIndices(4);
+    private static final int[][] FOUR_BIT_TAIL_INDICES = tailQueryIndices(2);
 
     // Conservative defaults from JDK 23/AVX-512 sweeps and end-to-end validation.
     // The original compact projection loop is retained for the default 1/1 setting.
@@ -78,6 +80,21 @@ final class PanamaASHKernels {
         int[] indices = new int[F.length()];
         for (int i = 0; i < indices.length; i++) indices[i] = i * stride;
         return indices;
+    }
+
+    /**
+     * Gather indices for a partial final block of {@code active} lanes. Inactive lanes point at
+     * index 0: a masked gather may still bounds-check them, and a short query has no element
+     * at their full-block positions.
+     */
+    private static int[][] tailQueryIndices(int stride) {
+        int[][] tails = new int[F.length()][];
+        for (int active = 1; active < tails.length; active++) {
+            int[] indices = new int[F.length()];
+            for (int lane = 0; lane < active; lane++) indices[lane] = lane * stride;
+            tails[active] = indices;
+        }
+        return tails;
     }
 
     static void lutScore(byte[] codes, int offset, int groups, int stride,
@@ -200,7 +217,9 @@ final class PanamaASHKernels {
                     var fields = packed.lanewise(VectorOperators.LSHR, slot * bits);
                     var magnitude = ((FloatVector) fields.and(sign - 1).convertShape(VectorOperators.I2F, F, 0)).add(0.5f);
                     var values = magnitude.blend(magnitude.neg(), fields.and(sign).compare(VectorOperators.EQ, 0).cast(F));
-                    var q = FloatVector.fromArray(F, query, base * perByte + slot, indices, 0, F.indexInRange(0, active));
+                    int[] gather = active == F.length() ? indices
+                            : (bits == 2 ? TWO_BIT_TAIL_INDICES : FOUR_BIT_TAIL_INDICES)[active];
+                    var q = FloatVector.fromArray(F, query, base * perByte + slot, gather, 0, F.indexInRange(0, active));
                     FloatVector next = a0.add(q.mul(values));
                     if (PROJECTION_ACC == 1) {
                         a0 = next;

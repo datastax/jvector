@@ -224,8 +224,8 @@ public class TestASHCodes {
                     byte[] aPage = embed(a, aOff, random);
                     byte[] bPage = embed(b, bOff, random);
                     String where = "bits=" + bits + " dims=" + dims;
-                    // Padded: the opt-in tuned kernel gathers whole vectors of query lanes.
-                    float[] query = new float[dims + 64];
+                    // Exact length: no kernel may read query elements past the dimension count.
+                    float[] query = new float[dims];
                     for (int k = 0; k < dims; k++) query[k] = (float) random.nextGaussian();
                     assertEquals(where, Float.floatToIntBits(vu.ashProjectionDot(query, a, dims, bits)),
                             Float.floatToIntBits(vu.ashProjectionDot(query, aPage, aOff, dims, bits)));
