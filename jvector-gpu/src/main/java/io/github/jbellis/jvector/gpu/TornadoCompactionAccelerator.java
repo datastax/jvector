@@ -293,6 +293,7 @@ public final class TornadoCompactionAccelerator implements CompactionAccelerator
         final int chunkRows;
         final int maxPairs;
         final int maxCandidates;
+        Staging staging;
         final FloatArray queries;
         final FloatArray queryNorms;
         final FloatArray rows;
@@ -387,15 +388,13 @@ public final class TornadoCompactionAccelerator implements CompactionAccelerator
             params.set(CellWalkKernels.P_DIM, dim);
             params.set(CellWalkKernels.P_SIMILARITY, similarityCode(walk.similarity()));
             params.set(CellWalkKernels.P_K, k);
-            ByteBuffer rowBuffer = rows.getSegment().asByteBuffer().order(ByteOrder.LITTLE_ENDIAN);
-            int[] launchPairs = new int[maxPairs];
-            int[] launchPairRows = new int[maxPairs];
-            int[] launchCells = new int[maxPairs];
-            int[] launchCellRows = new int[maxPairs];
-            int[] perQuery = new int[blockQueries];
+            if (staging == null) {
+                staging = new Staging(maxPairs, maxCandidates, chunkRows, blockQueries, dim);
+            }
+            final Staging st = staging;
             int launches = 0;
             long candidates = 0;
-            long tPrep = 0, tRows = 0, tExec = 0, tOut = 0, tQ = 0, kernelNs = 0, writeNs = 0;
+            long tPrep = 0, tRows = 0, tExec = 0, tOut = 0, tQ = 0, tWait = 0, kernelNs = 0, writeNs = 0;
             for (int blockStart = 0; blockStart < n; blockStart += blockQueries) {
                 final int b0 = blockStart;
                 final int bn = Math.min(blockQueries, n - blockStart);
@@ -413,86 +412,37 @@ public final class TornadoCompactionAccelerator implements CompactionAccelerator
                     topCount.set(i, 0);
                 }
                 tQ += System.nanoTime() - tb;
-                // launches: consecutive pairs of this block (in cell order) whose cells fit one chunk of rows
-                int at = 0;
+                // launches, pipelined: while the GPU runs one, a background thread plans the next and reads its rows
+                // (from disk, when the scratch region is not cached) into the staging buffers
+                final int[] cursor = { 0 };
+                java.util.function.Supplier<Staging> prepare = () -> st.prepare(walk, pairs, pairCount, cursor, b0, bn);
+                java.util.concurrent.CompletableFuture<Staging> next = java.util.concurrent.CompletableFuture.supplyAsync(prepare);
                 while (true) {
-                    long tl = System.nanoTime();
-                    while (at < pairCount && !inBlock(pairs[at], b0, bn)) {
-                        at++;
+                    long tw = System.nanoTime();
+                    Staging ready = next.join();
+                    tWait += System.nanoTime() - tw;
+                    if (ready.tooLarge) {
+                        LOG.info(() -> "cell larger than the GPU walk's row chunk; walking this target on the CPU");
+                        return false;
                     }
-                    if (at >= pairCount) {
+                    if (ready.size == 0) {
                         break;
                     }
-                    // the chunk holds only the launch's distinct cells, packed: a sparse set of probed cells reads
-                    // only those rows, as the CPU walk does, not every row between the first and the last
-                    int rowsUsed = 0;
-                    int lastCell = -1;
-                    int lastRow = 0;
-                    int distinct = 0;
-                    int size = 0;
-                    long cands = 0;
-                    java.util.Arrays.fill(perQuery, 0, bn, 0);
-                    while (at < pairCount && size < maxPairs) {
-                        long pair = pairs[at];
-                        if (!inBlock(pair, b0, bn)) {
-                            at++;
-                            continue;
-                        }
-                        int cell = cellOf(pair);
-                        int members = walk.cellEnd(cell) - walk.cellStart(cell);
-                        if (members > chunkRows) {
-                            LOG.info(() -> "cell larger than the GPU walk's row chunk; walking this target on the CPU");
-                            return false;
-                        }
-                        boolean newCell = cell != lastCell;
-                        if ((newCell && rowsUsed + members > chunkRows) || cands + members > maxCandidates) {
-                            break;
-                        }
-                        if (newCell) {
-                            lastCell = cell;
-                            lastRow = rowsUsed;
-                            launchCells[distinct] = cell;
-                            launchCellRows[distinct++] = rowsUsed;
-                            rowsUsed += members;
-                        }
-                        launchPairRows[size] = lastRow;
-                        launchPairs[size++] = at;
-                        perQuery[(int) pair - b0] += members;
-                        cands += members;
-                        at++;
-                    }
-                    // candidate offsets: each query's candidates contiguous, in cell order
-                    int offset = 0;
-                    for (int i = 0; i < bn; i++) {
-                        queryOffset.set(i, offset);
-                        queryCount.set(i, perQuery[i]);
-                        perQuery[i] = offset;
-                        offset += queryCount.get(i);
-                    }
-                    for (int p = 0; p < size; p++) {
-                        long pair = pairs[launchPairs[p]];
-                        int cell = cellOf(pair);
-                        int qi = (int) pair - b0;
-                        int first = walk.cellStart(cell);
-                        int end = walk.cellEnd(cell);
-                        pairFirst.set(p, launchPairRows[p]);
-                        pairEnd.set(p, launchPairRows[p] + end - first);
-                        pairOrdinal.set(p, first);
-                        pairQuery.set(p, qi);
-                        pairOffset.set(p, perQuery[qi]);
-                        perQuery[qi] += end - first;
-                    }
-                    long tr = System.nanoTime();
-                    tPrep += tr - tl;
-                    final int cells = distinct;
-                    IntStream.range(0, cells).parallel().forEach(c -> {
-                        int cell = launchCells[c];
-                        ByteBuffer dst = rowBuffer.duplicate().order(ByteOrder.LITTLE_ENDIAN);
-                        dst.position(launchCellRows[c] * dim * Float.BYTES);
-                        walk.copyRows(walk.cellStart(cell), walk.cellEnd(cell) - walk.cellStart(cell), dst);
-                    });
+                    tPrep += ready.prepNs;
+                    tRows += ready.rowsNs;
+                    int size = ready.size;
+                    long cands = ready.cands;
+                    // into TornadoVM's buffers (memory copies), then the staging is free for the next launch
+                    MemorySegment.copy(ready.first, 0, pairFirst.getSegment(), ValueLayout.JAVA_INT, 0, size);
+                    MemorySegment.copy(ready.end, 0, pairEnd.getSegment(), ValueLayout.JAVA_INT, 0, size);
+                    MemorySegment.copy(ready.ordinal, 0, pairOrdinal.getSegment(), ValueLayout.JAVA_INT, 0, size);
+                    MemorySegment.copy(ready.query, 0, pairQuery.getSegment(), ValueLayout.JAVA_INT, 0, size);
+                    MemorySegment.copy(ready.offset, 0, pairOffset.getSegment(), ValueLayout.JAVA_INT, 0, size);
+                    MemorySegment.copy(ready.queryOffset, 0, queryOffset.getSegment(), ValueLayout.JAVA_INT, 0, bn);
+                    MemorySegment.copy(ready.queryCount, 0, queryCount.getSegment(), ValueLayout.JAVA_INT, 0, bn);
+                    MemorySegment.copy(MemorySegment.ofBuffer(ready.rows), 0, rows.getSegment(), 0, (long) ready.rowsUsed * dim * Float.BYTES);
+                    next = java.util.concurrent.CompletableFuture.supplyAsync(prepare);
                     long te = System.nanoTime();
-                    tRows += te - tr;
                     scoreGrid.setGlobalWork((long) size * CellWalkKernels.GROUP, 1, 1);
                     topkGrid.setGlobalWork((long) bn * CellWalkKernels.GROUP, 1, 1);
                     var result = TRACE ? plan.withGraph(1).withGridScheduler(scheduler).withProfiler(uk.ac.manchester.tornado.api.enums.ProfilerMode.SILENT).execute()
@@ -523,11 +473,142 @@ public final class TornadoCompactionAccelerator implements CompactionAccelerator
                 long ms = (System.nanoTime() - t0) / 1_000_000;
                 int l = launches;
                 long c = candidates;
-                long[] t = { tQ / 1_000_000, tPrep / 1_000_000, tRows / 1_000_000, tExec / 1_000_000, tOut / 1_000_000, kernelNs / 1_000_000, writeNs / 1_000_000 };
+                long[] t = { tQ / 1_000_000, tPrep / 1_000_000, tRows / 1_000_000, tExec / 1_000_000, tOut / 1_000_000, kernelNs / 1_000_000, writeNs / 1_000_000, tWait / 1_000_000 };
                 LOG.info(() -> String.format(Locale.ROOT, "GPU cell walk: %d queries, %d pairs, %d candidates, %d launches, %d ms"
-                        + " (queries %d, pairs %d, rows %d, execute %d [kernels %d, to device %d], results %d)", n, pairCount, c, l, ms, t[0], t[1], t[2], t[3], t[5], t[6], t[4]));
+                        + " (queries %d; in the background: pairs %d, rows %d; waited %d; execute %d [kernels %d, to device %d]; results %d)",
+                        n, pairCount, c, l, ms, t[0], t[1], t[2], t[7], t[3], t[5], t[6], t[4]));
             }
             return true;
+        }
+
+        /**
+         * One launch planned on the host: its pairs, its queries' candidate offsets, and its distinct cells' rows read
+         * into a direct buffer. Filled by a background thread while the GPU runs the launch before.
+         */
+        static final class Staging {
+            final int[] first;
+            final int[] end;
+            final int[] ordinal;
+            final int[] query;
+            final int[] offset;
+            final int[] pairIndex;
+            final int[] pairRow;
+            final int[] cells;
+            final int[] cellRows;
+            final int[] queryOffset;
+            final int[] queryCount;
+            final int[] perQuery;
+            final ByteBuffer rows;
+            final int maxPairs;
+            final int maxCandidates;
+            final int chunkRows;
+            final int dim;
+            int size;
+            int rowsUsed;
+            long cands;
+            boolean tooLarge;
+            long prepNs;
+            long rowsNs;
+
+            Staging(int maxPairs, int maxCandidates, int chunkRows, int blockQueries, int dim) {
+                this.maxPairs = maxPairs;
+                this.maxCandidates = maxCandidates;
+                this.chunkRows = chunkRows;
+                this.dim = dim;
+                first = new int[maxPairs];
+                end = new int[maxPairs];
+                ordinal = new int[maxPairs];
+                query = new int[maxPairs];
+                offset = new int[maxPairs];
+                pairIndex = new int[maxPairs];
+                pairRow = new int[maxPairs];
+                cells = new int[chunkRows];
+                cellRows = new int[chunkRows];
+                queryOffset = new int[blockQueries];
+                queryCount = new int[blockQueries];
+                perQuery = new int[blockQueries];
+                rows = ByteBuffer.allocateDirect(chunkRows * dim * Float.BYTES).order(ByteOrder.LITTLE_ENDIAN);
+            }
+
+            /**
+             * Plans the next launch from {@code cursor[0]}: consecutive pairs of the block (in cell order) whose distinct
+             * cells fit one chunk of rows, packed; reads those rows. {@code size == 0} when the block has no more.
+             */
+            Staging prepare(CellWalk walk, long[] pairs, int pairCount, int[] cursor, int b0, int bn) {
+                long t0 = System.nanoTime();
+                int at = cursor[0];
+                size = 0;
+                rowsUsed = 0;
+                cands = 0;
+                tooLarge = false;
+                int lastCell = -1;
+                int lastRow = 0;
+                int distinct = 0;
+                java.util.Arrays.fill(perQuery, 0, bn, 0);
+                while (at < pairCount && size < maxPairs) {
+                    long pair = pairs[at];
+                    if (!inBlock(pair, b0, bn)) {
+                        at++;
+                        continue;
+                    }
+                    int cell = cellOf(pair);
+                    int members = walk.cellEnd(cell) - walk.cellStart(cell);
+                    if (members > chunkRows) {
+                        tooLarge = true;
+                        cursor[0] = at;
+                        return this;
+                    }
+                    boolean newCell = cell != lastCell;
+                    if ((newCell && rowsUsed + members > chunkRows) || cands + members > maxCandidates) {
+                        break;
+                    }
+                    if (newCell) {
+                        lastCell = cell;
+                        lastRow = rowsUsed;
+                        cells[distinct] = cell;
+                        cellRows[distinct++] = rowsUsed;
+                        rowsUsed += members;
+                    }
+                    pairRow[size] = lastRow;
+                    pairIndex[size++] = at;
+                    perQuery[(int) pair - b0] += members;
+                    cands += members;
+                    at++;
+                }
+                cursor[0] = at;
+                // candidate offsets: each query's candidates contiguous, in cell order
+                int run = 0;
+                for (int i = 0; i < bn; i++) {
+                    queryOffset[i] = run;
+                    queryCount[i] = perQuery[i];
+                    perQuery[i] = run;
+                    run += queryCount[i];
+                }
+                for (int p = 0; p < size; p++) {
+                    long pair = pairs[pairIndex[p]];
+                    int cell = cellOf(pair);
+                    int qi = (int) pair - b0;
+                    int f = walk.cellStart(cell);
+                    int e = walk.cellEnd(cell);
+                    first[p] = pairRow[p];
+                    end[p] = pairRow[p] + e - f;
+                    ordinal[p] = f;
+                    query[p] = qi;
+                    offset[p] = perQuery[qi];
+                    perQuery[qi] += e - f;
+                }
+                long t1 = System.nanoTime();
+                final int count = distinct;
+                IntStream.range(0, count).parallel().forEach(c -> {
+                    int cell = cells[c];
+                    ByteBuffer dst = rows.duplicate();
+                    dst.position(cellRows[c] * dim * Float.BYTES);
+                    walk.copyRows(walk.cellStart(cell), walk.cellEnd(cell) - walk.cellStart(cell), dst);
+                });
+                prepNs = t1 - t0;
+                rowsNs = System.nanoTime() - t1;
+                return this;
+            }
         }
 
         private static boolean inBlock(long pair, int b0, int bn) {
