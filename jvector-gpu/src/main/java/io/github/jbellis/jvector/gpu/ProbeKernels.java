@@ -45,7 +45,7 @@ final class ProbeKernels {
     /** Two-level probes: coarse lists per query, and candidates kept per query. */
     static final int P_COARSE_PROBES = 6;
     static final int P_LIST_CAP = 7;
-    static final int MAX_COARSE_PROBES = 128;
+    static final int MAX_COARSE_PROBES = 256;
 
     private ProbeKernels() {
     }

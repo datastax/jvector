@@ -86,10 +86,12 @@ public final class TornadoCompactionAccelerator implements CompactionAccelerator
     static final boolean TWO_LEVEL = Boolean.parseBoolean(System.getProperty("jvector.gpu.probe.twoLevel", "true"));
     /** Centers per coarse center ({@code -Djvector.gpu.probe.coarseRatio}, default 32). */
     static final int COARSE_RATIO = Integer.getInteger("jvector.gpu.probe.coarseRatio", 32);
-    /** Coarse lists a query scans ({@code -Djvector.gpu.probe.coarseProbes}, default 128). */
-    static final int COARSE_PROBES = Math.min(ProbeKernels.MAX_COARSE_PROBES, Integer.getInteger("jvector.gpu.probe.coarseProbes", 128));
-    /** Most candidate centers a query scores exactly ({@code -Djvector.gpu.probe.listCap}, default 4096). */
-    static final int LIST_CAP = Integer.getInteger("jvector.gpu.probe.listCap", 4096);
+    /** Coarse lists a query scans ({@code -Djvector.gpu.probe.coarseProbes}, default 256). */
+    static final int COARSE_PROBES = Math.min(ProbeKernels.MAX_COARSE_PROBES, Integer.getInteger("jvector.gpu.probe.coarseProbes", 256));
+    /** Most queries a two-level probe launch takes ({@code -Djvector.gpu.probe.block}, default 16,384). */
+    static final int TWO_LEVEL_BLOCK = Integer.getInteger("jvector.gpu.probe.block", 1 << 14);
+    /** Most candidate centers a query scores exactly ({@code -Djvector.gpu.probe.listCap}, default 8192). */
+    static final int LIST_CAP = Integer.getInteger("jvector.gpu.probe.listCap", 8192);
 
     /** Bytes of the score matrix of one block of probe queries ({@code -Djvector.gpu.probe.scoresMB}, default 1024). */
     static final long SCORE_BYTES = Long.getLong("jvector.gpu.probe.scoresMB", 256) << 20;
@@ -364,7 +366,9 @@ public final class TornadoCompactionAccelerator implements CompactionAccelerator
             long left = budget - (long) centers * dim * Float.BYTES - (long) coarse * dim * Float.BYTES - (long) centers * 8;
             long perQuery = (long) coarseStride * Float.BYTES * 2 + (long) dim * Float.BYTES + (long) LIST_CAP * 8
                     + (long) COARSE_PROBES * 4 + (long) maxProbes * 4 + 8;
-            blockQueries = (int) Math.max(ProbeKernels.TILE, Math.min(1 << 16, left / perQuery) / ProbeKernels.TILE * ProbeKernels.TILE);
+            // at most TWO_LEVEL_BLOCK queries a launch: the score matrices and candidate buffers have resident host copies
+            // too (TornadoVM mirrors every buffer), and a 65k-query block made them 7 GB of host memory at 10M
+            blockQueries = (int) Math.max(ProbeKernels.TILE, Math.min(TWO_LEVEL_BLOCK, left / perQuery) / ProbeKernels.TILE * ProbeKernels.TILE);
             centerRows = new FloatArray(centers * dim);
             centerNorms = new FloatArray(centers);
             coarseRows = new FloatArray(coarse * dim);
