@@ -54,6 +54,7 @@ import org.netlib.util.intW;
  * stores either generic sign/extra bits or the C++-style fast-scan projection code for 2/4-bit ASH.
  */
 public class AsymmetricHashing implements VectorCompressor<AsymmetricHashing.QuantizedVector>, Accountable {
+    private static final org.slf4j.Logger LOG = org.slf4j.LoggerFactory.getLogger(AsymmetricHashing.class);
     public static final int ITQ = 1, RANDOM = 2;
     private static final int MAGIC = 0x75EC4015;
 
@@ -325,11 +326,8 @@ public class AsymmetricHashing implements VectorCompressor<AsymmetricHashing.Qua
         final int quantizedDim = validateEncodedBits(encodedBits, HEADER_BITS, originalDim, bitsPerDimension);
         var ravvCopy = ravv.threadLocalSupplier().get();
 
-        System.out.println(
-                "\tASH initialized with landmarkCount=" + landmarkCount +
-                        ", quantizedDim=" + quantizedDim +
-                        ", bitsPerDimension=" + bitsPerDimension
-        );
+        LOG.info("ASH training: {} landmark(s), {} projected dimensions, {} bit(s) per dimension",
+                landmarkCount, quantizedDim, bitsPerDimension);
 
         // C=1 uses the same sample for its mean and learned projection.
         // Sample selection preserves ITQ's existing RNG sequence.
@@ -354,8 +352,11 @@ public class AsymmetricHashing implements VectorCompressor<AsymmetricHashing.Qua
             MiniBatchKMeansClusterer km = new MiniBatchKMeansClusterer(points, landmarkCount, 1024);
             VectorFloat<?> packed = km.cluster(/*unweightedIterations*/ 20, /*anisotropicIterations*/ 0);
             long kmEnd = System.nanoTime();
-            System.out.printf("\tKMeans++ (C=%d, N=%d, D=%d) took %.3f seconds%n",
-                    landmarkCount, points.length, originalDim, (kmEnd - kmStart) / 1e9);
+            if (LOG.isInfoEnabled()) {
+                LOG.info("ASH landmark k-means ({} landmarks, {} vectors, {} dimensions) finished in {} s",
+                        landmarkCount, points.length, originalDim,
+                        String.format(java.util.Locale.ROOT, "%.1f", (kmEnd - kmStart) / 1e9));
+            }
             landmarks = new VectorFloat<?>[landmarkCount];
             for (int c = 0; c < landmarkCount; c++) {
                 VectorFloat<?> mu = vectorTypeSupport.createFloatVector(originalDim);
@@ -2014,7 +2015,7 @@ public class AsymmetricHashing implements VectorCompressor<AsymmetricHashing.Qua
             Random rng,
             int nTrainingIterations
     ) {
-        logProgress("\t[stage] Starting runITQTrainer...");
+        LOG.info("ASH ITQ training started");
 
         validateBitsPerDimension(bitsPerDimension);
 
@@ -2029,9 +2030,9 @@ public class AsymmetricHashing implements VectorCompressor<AsymmetricHashing.Qua
         // X is [N x D], flat column-major for BLAS/LAPACK.
         double[] xCol = trainingData.xCol;
 
-        logProgress("\t[stage] Starting native PCA...");
+        LOG.debug("ASH ITQ: PCA started");
         double[] pCol = computePcaBasis(xCol, N, D, d);
-        logProgress("\t[stage] Completed native PCA...");
+        LOG.debug("ASH ITQ: PCA finished");
 
         // Xld = X @ P, shape [N x d].
         double[] xldCol = nativeMultiply(xCol, N, D, pCol, d);
@@ -2043,7 +2044,7 @@ public class AsymmetricHashing implements VectorCompressor<AsymmetricHashing.Qua
         // the loss uses the update matrix, so unquantized rows need not be retained.
         double[] projectedRows = new double[Math.multiplyExact(N, d)];
 
-        logProgress("\t[stage] ITQ training iterations started...");
+        LOG.debug("ASH ITQ: training iterations started");
         long startTime = System.nanoTime();
         // Repeated polar steps need FP32 accuracy; the accumulated update,
         // projection products and loss retain FP64. Final W uses a FP64 polar
@@ -2066,7 +2067,7 @@ public class AsymmetricHashing implements VectorCompressor<AsymmetricHashing.Qua
             ProjectionTrainingLoss loss = computeTrainingLossFromUpdateMatrix(rCol, mCol, N);
             printTrainingLoss(epoch, loss);
             if (epoch >= 8 && recentLosses[(epoch - 3) % 3] - loss.loss <= 0.01 * loss.loss) {
-                logProgress("ITQ early stop at epoch " + epoch);
+                LOG.info("ASH ITQ training converged at epoch {}", epoch);
                 break;
             }
             recentLosses[epoch % 3] = loss.loss;
@@ -2077,7 +2078,9 @@ public class AsymmetricHashing implements VectorCompressor<AsymmetricHashing.Qua
         new ASHOrthogonalizer(d, d).orthogonalize(mCol, rCol);
 
         double loopTime = (System.nanoTime() - startTime) / 1e9;
-        logProgress("\t[stage] ITQ training completed in " + loopTime + " seconds.");
+        if (LOG.isInfoEnabled()) {
+            LOG.info("ASH ITQ training finished in {} s", String.format(java.util.Locale.ROOT, "%.1f", loopTime));
+        }
 
         // W = P @ R, shape [D x d].
         double[] wCol = nativeMultiply(pCol, D, d, rCol, d);
@@ -2116,9 +2119,10 @@ public class AsymmetricHashing implements VectorCompressor<AsymmetricHashing.Qua
     }
 
     private static void printTrainingLoss(int epoch, ProjectionTrainingLoss loss) {
-        logProgress(String.format(java.util.Locale.ROOT,
-                "projection_train epoch=%2d ip_loss=%.5f loss=%.5f",
-                epoch, loss.ip, loss.loss));
+        if (LOG.isDebugEnabled()) {
+            LOG.debug(String.format(java.util.Locale.ROOT,
+                    "ASH ITQ: epoch %2d inner-product loss %.5f, loss %.5f", epoch, loss.ip, loss.loss));
+        }
     }
 
     private static final float[] K_TIGHT_START = {
@@ -2485,10 +2489,10 @@ public class AsymmetricHashing implements VectorCompressor<AsymmetricHashing.Qua
     private static double[] computePcaBasis(double[] xCol, int rows, int dims, int latent) {
         double[] basis = ASHCovariancePCA.projection(xCol, rows, dims, latent);
         if (basis != null) {
-            logProgress("\t[stage] PCA used FP64 covariance eigendecomposition");
+            LOG.debug("ASH ITQ: PCA used FP64 covariance eigendecomposition");
             return basis;
         }
-        logProgress("\t[stage] PCA used guarded direct SVD");
+        LOG.debug("ASH ITQ: PCA used guarded direct SVD");
         return extractPcaBasis(computeNativeVt(xCol, rows, dims), dims, latent);
     }
 
@@ -2982,11 +2986,6 @@ public class AsymmetricHashing implements VectorCompressor<AsymmetricHashing.Qua
             h = 31 * h + vectorHash(v);
         }
         return h;
-    }
-
-    private static void logProgress(String msg) {
-        System.out.println(msg);
-        System.out.flush();
     }
 
     @Override
