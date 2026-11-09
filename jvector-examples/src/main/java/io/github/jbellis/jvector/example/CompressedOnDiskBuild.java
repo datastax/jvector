@@ -163,7 +163,9 @@ final class CompressedOnDiskBuild implements IndexBuildStrategy {
         if (build.indexType != null) {
             buildCompressor = buildCodec == null ? null : buildCodec.get();
             double seconds = buildAndFlush(featureSets, build, ds, outputDir, handles);
+            long reopenStart = System.nanoTime();
             reopen(featureSets, outputDir, handles, indexes, fileSizes);
+            if (constructionMetrics != null) constructionMetrics.reopenTimeS = (System.nanoTime() - reopenStart) / 1e9;
             return seconds;
         }
 
@@ -309,6 +311,10 @@ final class CompressedOnDiskBuild implements IndexBuildStrategy {
                 flushSeconds += (System.nanoTime() - start) / 1e9;
             }
             double totalTime = buildSeconds + flushSeconds;
+            if (constructionMetrics != null) {
+                constructionMetrics.graphBuildTimeS = buildSeconds;
+                constructionMetrics.flushTimeS = flushSeconds;
+            }
             System.out.printf("Graph phases: buildAndCleanup=%.6f flush=%.6f seconds%n", buildSeconds, flushSeconds);
             System.out.format("Build and write %s in %ss%n", featureSets, totalTime);
             return totalTime;

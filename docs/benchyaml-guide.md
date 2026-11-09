@@ -70,6 +70,13 @@ the configured ASH construction policy applies. See
 [ASH configuration and defaults](ash-configuration.md#graph-construction)
 for the JVM setting.
 
+For `onDisk` builds, three construction metrics split the build: `graph_build_time_s`
+covers graph construction and cleanup, `flush_time_s` covers writing the completed
+graph and its features, and `reopen_time_s` covers reopening the written files.
+Graph build plus flush equals `index_build_time_s`; quantizer training and encoding
+are reported separately under `index_quant_time_s`. Select them under
+`metrics.construction` in the run YAML. A cached index reports none of them.
+
 ## Search
 
 Search uses the index selected by `construction.type`. Changes to stored features

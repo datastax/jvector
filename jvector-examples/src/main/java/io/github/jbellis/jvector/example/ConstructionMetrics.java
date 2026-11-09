@@ -36,6 +36,11 @@ final class ConstructionMetrics {
     // null means “not applicable / not measured”
     public Double indexBuildTimeS;
     public Long indexFileSizeBytes;
+    // Schema 3 on-disk phases: graph construction and cleanup, writing the completed graph,
+    // and reopening the written files. Graph build plus flush equals indexBuildTimeS.
+    public Double graphBuildTimeS;
+    public Double flushTimeS;
+    public Double reopenTimeS;
 
     // Index-construction phase (single pass per run)
     private final Map<String, QuantStats> indexByType = new HashMap<>();
@@ -76,11 +81,19 @@ final class ConstructionMetrics {
                     "Index file size (MB)", ".2f", indexFileSizeBytes / 1024.0 / 1024.0));
         }
 
+        appendPhase(out, "construction.graph_build_time_s", "Graph build time (s)", graphBuildTimeS);
+        appendPhase(out, "construction.flush_time_s", "Flush time (s)", flushTimeS);
+        appendPhase(out, "construction.reopen_time_s", "Reopen time (s)", reopenTimeS);
+
         // Index-construction quant timings
         appendQuant(out, "construction.index_quant_time_s", "Idx", indexByType, sumIndexQuantTimes);
 
         // Search-phase quant timings (note: search.* namespace matches other query-time metrics)
         appendQuant(out, "search.search_quant_time_s", "Search", searchByType, false);
+    }
+
+    private static void appendPhase(List<Metric> out, String key, String header, Double seconds) {
+        if (seconds != null) out.add(Metric.of(key, header, ".2f", seconds));
     }
 
     private static void appendQuant(List<Metric> out,

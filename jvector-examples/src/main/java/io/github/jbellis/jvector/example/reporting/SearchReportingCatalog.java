@@ -98,6 +98,9 @@ public final class SearchReportingCatalog {
                 ),
                 "construction", Map.of(
                         "index_build_time_s","construction.index_build_time_s",
+                        "graph_build_time_s","construction.graph_build_time_s",
+                        "flush_time_s","construction.flush_time_s",
+                        "reopen_time_s","construction.reopen_time_s",
                         "index_quant_time_s","@prefix:construction.index_quant_time_s",
                         "search_quant_time_s","@prefix:search.search_quant_time_s"
                 )

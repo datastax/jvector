@@ -245,6 +245,42 @@ public class TestGridASHIntegration {
     }
 
     @Test
+    public void schema3RecordsGraphBuildFlushAndReopenTimes() throws Exception {
+        var data = schema3Data();
+        var config = schema3Config("onDisk", "parallel", false, "None", "- type: None");
+        var spec = GridSpec.fromConfig(config);
+        var build = spec.buildPoints().get(0);
+        var features = spec.featuresFor(build, spec.search.cases().get(0));
+        var cache = OnDiskGraphIndexCache.initialize(temporary.newFolder().toPath());
+        var work = temporary.newFolder().toPath();
+
+        var fresh = new ConstructionMetrics(true);
+        var built = new CompressedOnDiskBuild(cache, work, () -> null, fresh, null, "schema3:None")
+                .build(features, build, data);
+        built.indexes.values().forEach(index -> { try { index.close(); } catch (Exception e) { throw new RuntimeException(e); } });
+        assertTrue(fresh.graphBuildTimeS > 0);
+        assertTrue(fresh.flushTimeS > 0);
+        assertTrue(fresh.reopenTimeS > 0);
+        assertEquals(built.buildTimeS, fresh.graphBuildTimeS + fresh.flushTimeS, 1e-9);
+        var recorded = new ArrayList<io.github.jbellis.jvector.example.benchmarks.Metric>();
+        fresh.appendTo(recorded);
+        var keys = recorded.stream().map(io.github.jbellis.jvector.example.benchmarks.Metric::getKey)
+                .collect(java.util.stream.Collectors.toSet());
+        assertTrue(keys.toString(), keys.containsAll(List.of("construction.graph_build_time_s",
+                "construction.flush_time_s", "construction.reopen_time_s")));
+
+        // A cache hit loads the cached index without building, flushing or reopening it.
+        var reused = new ConstructionMetrics(true);
+        var cached = new CompressedOnDiskBuild(cache, work, () -> null, reused, null, "schema3:None")
+                .build(features, build, data);
+        cached.indexes.values().forEach(index -> { try { index.close(); } catch (Exception e) { throw new RuntimeException(e); } });
+        assertNull(cached.buildTimeS);
+        assertNull(reused.graphBuildTimeS);
+        assertNull(reused.flushTimeS);
+        assertNull(reused.reopenTimeS);
+    }
+
+    @Test
     public void schema3RejectsFusedSearchWithoutReranking() {
         var error = assertThrows(IllegalArgumentException.class,
                 () -> schema3Config("onDisk", "parallel", true, "None",
