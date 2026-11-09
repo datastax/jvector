@@ -53,6 +53,9 @@ For database integration with ASH, see [ASH query callers and CPU budgeting](./d
 For ASH model parameters, construction modes, precision, JVM flags and their defaults,
 see [ASH configuration and defaults](./docs/ash-configuration.md).
 
+For ASH versus PQ construction time, recall and throughput on 6M and 10M datasets,
+see [ASH performance](./docs/ash-performance.md).
+
 The older step-by-step guide for JV can be found [here](./docs/legacy/jvector-step-by-step.md). New users should start with the tutorials mentioned earler, but the step-by-step guide contains useful commentary for advanced users.
 
 

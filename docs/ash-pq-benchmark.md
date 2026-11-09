@@ -29,67 +29,13 @@ steps through a whole study. The [BenchYAML Guide](benchyaml-guide.md) describes
 the index configuration, and [ASH configuration and defaults](ash-configuration.md)
 describes model and runtime settings.
 
-## Results: 6M and 10M datasets
+## Results
 
-ASH wins total construction in 6/6 configurations, recall in 12/12 cases and QPS
-in 22/24 cases. The sum of all six construction times is 48.5% lower with ASH.
-
-**Total construction seconds** (lower is better)
-
-| Dataset | Compression | PQ | ASH | ASH change |
-| --- | --- | ---: | ---: | ---: |
-| MPNet 10M | 32x (b=2) | 343.7 | **238.1** | −30.7% |
-| MPNet 10M | 16x (b=4) | 568.9 | **301.2** | −47.1% |
-| Cohere 10M | 32x (b=2) | 478.0 | **263.3** | −44.9% |
-| Cohere 10M | 16x (b=4) | 771.2 | **335.8** | −56.5% |
-| CAP 6M | 32x (b=2) | 295.6 | **190.2** | −35.6% |
-| CAP 6M | 16x (b=4) | 630.7 | **261.8** | −58.5% |
-| **Sum** | | 3,088.1 | **1,590.5** | −48.5% |
-
-**Recall@10 and queries per second** (higher is better)
-
-| Dataset | Compression | Rerank | PQ recall | ASH recall | PQ QPS, 1 core | ASH QPS, 1 core | PQ QPS, 8 cores | ASH QPS, 8 cores |
-| --- | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: |
-| MPNet 10M | 32x (b=2) | 1x | 0.54043 | **0.75532** | **9,349** | 9,012 | 77,609 | **81,421** |
-| MPNet 10M | 32x (b=2) | 2x | 0.71512 | **0.88903** | **7,540** | 7,266 | 61,759 | **62,913** |
-| MPNet 10M | 16x (b=4) | 1x | 0.72452 | **0.81330** | 7,224 | **9,860** | 63,221 | **76,619** |
-| MPNet 10M | 16x (b=4) | 2x | 0.86195 | **0.90050** | 5,661 | **7,397** | 48,894 | **57,709** |
-| Cohere 10M | 32x (b=2) | 1x | 0.52124 | **0.58682** | 7,642 | **9,067** | 62,520 | **72,500** |
-| Cohere 10M | 32x (b=2) | 2x | 0.70611 | **0.76181** | 5,826 | **6,875** | 48,494 | **55,340** |
-| Cohere 10M | 16x (b=4) | 1x | 0.59860 | **0.66033** | 6,145 | **8,339** | 50,152 | **65,660** |
-| Cohere 10M | 16x (b=4) | 2x | 0.75846 | **0.78864** | 4,684 | **6,122** | 38,369 | **49,100** |
-| CAP 6M | 32x (b=2) | 1x | 0.41240 | **0.72119** | 5,815 | **7,295** | 51,746 | **62,544** |
-| CAP 6M | 32x (b=2) | 2x | 0.59705 | **0.88574** | 4,748 | **5,756** | 41,022 | **48,482** |
-| CAP 6M | 16x (b=4) | 1x | 0.65664 | **0.80468** | 4,436 | **6,295** | 39,786 | **58,394** |
-| CAP 6M | 16x (b=4) | 2x | 0.83966 | **0.90749** | 3,550 | **4,774** | 31,393 | **41,777** |
-
-Compression ratios are nominal, and b is ASH bits per projected dimension.
-Rerank 1x and 2x rescore 10 and 20 candidates with NVQ. Each construction figure
-is the mean of two fresh builds. QPS is the mean of three timed samples in one
-query JVM per core count, run against the first build's index.
-
-Single-core QPS varies between graphs built from the same settings. On an
-earlier MPNet 10M 32x graph, ASH measured 10,414 / 7,838 QPS on one core
-(rerank 1x / 2x), above PQ. Repeated query runs on the reported graph averaged
-about 9,200 / 7,400, below PQ.
-
-The 1M recipes (MPNet, Cohere, Ada002 and OpenAI-3072) use the same parameters
-and protocol; their results are not part of this summary.
-
-### Measurement environment
-
-| | |
-| --- | --- |
-| CPU | One Intel Xeon 6985P-C socket: 48 physical cores, 2 threads per core, 504 MiB L3 |
-| Memory | 354 GiB in two NUMA nodes of about 177 GiB |
-| Storage | Local NVMe SSDs in RAID 10, XFS; the page cache was not dropped between runs |
-| OS | Debian 12, Linux 6.1; transparent huge pages enabled=always, defrag=madvise |
-| JVM | OpenJDK 22.0.2 (Temurin), `-Xms2g -Xmx128g`, default collector (G1, or Serial with one core) |
-| Placement | Construction on one thread of each of the 48 cores, memory interleaved on both nodes. Queries on 1 or 8 cores of node 0, memory on node 0 |
-| Native threads | BLAS and OpenMP thread counts equal the core count for construction and 1 for queries |
-
-Jobs ran one at a time with no other benchmark on the machine. PQ and ASH used
-the same machine, JDK, placement, input files and graph parameters.
+[ASH performance](ash-performance.md) reports the 6M and 10M results: ASH wins
+total construction in 6/6 configurations, recall in 12/12 cases and QPS in 22/24
+cases. It also describes the machine, JVM, placement and protocol used, so you
+can note any differences in your own runs. The 1M recipes (MPNet, Cohere, Ada002
+and OpenAI-3072) use the same parameters and protocol.
 
 ## Build the checkout
 
@@ -204,7 +150,8 @@ Construction refuses nonempty model and index caches, and query runs require
 them. The recipes set `useSavedIndexIfExists: Yes` so the graph outlives its
 construction JVM; nothing is deleted automatically. Do not run cases at the same
 time or share their CPUs with other work. Report any heap, CPU, NUMA or library
-differences from the measurement environment above.
+differences from the measurement environment in
+[ASH performance](ash-performance.md).
 
 Each run writes a complete `runs/<invocation>/command.sh`, including its
 environment, so the Java command can be rerun directly. The case directory holds
