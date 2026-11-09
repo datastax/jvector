@@ -80,6 +80,16 @@ public final class TornadoCompactionAccelerator implements CompactionAccelerator
 
     private Walker walker;
     private Prober prober;
+    private TwoLevelProber twoLevel;
+
+    /** Probes through coarse lists past MAX_PROBE_CENTERS ({@code -Djvector.gpu.probe.twoLevel}, default true). */
+    static final boolean TWO_LEVEL = Boolean.parseBoolean(System.getProperty("jvector.gpu.probe.twoLevel", "true"));
+    /** Centers per coarse center ({@code -Djvector.gpu.probe.coarseRatio}, default 32). */
+    static final int COARSE_RATIO = Integer.getInteger("jvector.gpu.probe.coarseRatio", 32);
+    /** Coarse lists a query scans ({@code -Djvector.gpu.probe.coarseProbes}, default 128). */
+    static final int COARSE_PROBES = Math.min(ProbeKernels.MAX_COARSE_PROBES, Integer.getInteger("jvector.gpu.probe.coarseProbes", 128));
+    /** Most candidate centers a query scores exactly ({@code -Djvector.gpu.probe.listCap}, default 4096). */
+    static final int LIST_CAP = Integer.getInteger("jvector.gpu.probe.listCap", 4096);
 
     /** Bytes of the score matrix of one block of probe queries ({@code -Djvector.gpu.probe.scoresMB}, default 1024). */
     static final long SCORE_BYTES = Long.getLong("jvector.gpu.probe.scoresMB", 256) << 20;
@@ -143,16 +153,31 @@ public final class TornadoCompactionAccelerator implements CompactionAccelerator
         if (!PROBE) {
             return false;
         }
-        // exact ranking costs queries x centers x dim, and the centers grow with the merge: past MAX_PROBE_CENTERS the
-        // compactor's beam is cheaper (at 10M x 1024, 313k centers made the GPU probes 1.7x slower than the CPU's)
-        if (probe.centerCount() > MAX_PROBE_CENTERS) {
-            return false;
-        }
         if (probe.maxProbes() > ProbeKernels.MAX_PROBES || probe.dimension() > CellWalkKernels.MAX_DIM) {
             return false;
         }
         int dim = probe.dimension();
         int centers = probe.centerCount();
+        // exact ranking costs queries x centers x dim, and the centers grow with the merge: past MAX_PROBE_CENTERS
+        // (at 10M x 1024, 313k centers made exact GPU probes 1.7x slower than the compactor's beam) the probes go
+        // through coarse lists instead, or stay on the CPU
+        if (centers > MAX_PROBE_CENTERS) {
+            if (!TWO_LEVEL) {
+                return false;
+            }
+            if (twoLevel == null || twoLevel.dim != dim || twoLevel.centers != centers || twoLevel.maxProbes != probe.maxProbes()) {
+                if (twoLevel != null) {
+                    twoLevel.close();
+                }
+                long budget = (long) (TornadoGraphBuildAccelerator.deviceMemoryBudget() * PROBE_SHARE);
+                if ((long) centers * dim * Float.BYTES > budget / 2) {
+                    LOG.info(() -> "the level-1 centers take more than half the GPU probe budget; probing on the CPU");
+                    return false;
+                }
+                twoLevel = new TwoLevelProber(dim, centers, probe.maxProbes(), budget);
+            }
+            return twoLevel.probe(probe);
+        }
         if (prober == null || prober.dim != dim || prober.centers != centers || prober.maxProbes != probe.maxProbes()) {
             if (prober != null) {
                 prober.close();
@@ -275,6 +300,250 @@ public final class TornadoCompactionAccelerator implements CompactionAccelerator
             if (TRACE) {
                 long ms = (System.nanoTime() - t0) / 1_000_000;
                 LOG.info(() -> String.format(Locale.ROOT, "GPU probes: %d queries x %d centers, %d probes each, %d ms", n, centers, want, ms));
+            }
+            return true;
+        }
+
+        @Override
+        public void close() {
+            plan.freeDeviceMemory();
+        }
+    }
+
+    /**
+     * The probe step for merges with many centers, as an inverted-list search over them: every {@link #COARSE_RATIO}-th
+     * center is a coarse center and every center joins the list of its nearest coarse center (once per merge, on the
+     * GPU); a query scores the coarse centers, scans its {@link #COARSE_PROBES} best lists exactly and keeps the best
+     * centers. About {@code coarse + COARSE_PROBES x COARSE_RATIO} center scores a query instead of all of them.
+     */
+    static final class TwoLevelProber implements AutoCloseable {
+        final int dim;
+        final int centers;
+        final int maxProbes;
+        final int coarse;
+        final int coarseStride;
+        final int blockQueries;
+        final FloatArray centerRows;
+        final FloatArray centerNorms;
+        final FloatArray coarseRows;
+        final FloatArray coarseNorms;
+        final IntArray uploadParams;
+        final IntArray listStart;
+        final IntArray listMembers;
+        final FloatArray block;
+        final IntArray assignParams;
+        final FloatArray assignScores;
+        final IntArray nearest;
+        final IntArray params;
+        final IntArray coarseParams;
+        final FloatArray coarseScores;
+        final IntArray coarseProbes;
+        final FloatArray candScore;
+        final IntArray candPos;
+        final IntArray candCount;
+        final IntArray probes;
+        final IntArray probeCount;
+        final WorkerGrid normsGrid;
+        final WorkerGrid coarseNormsGrid;
+        final WorkerGrid assignScoreGrid;
+        final WorkerGrid assignGrid;
+        final WorkerGrid coarseGrid;
+        final WorkerGrid coarseSelectGrid;
+        final WorkerGrid gatherGrid;
+        final WorkerGrid selectGrid;
+        final GridScheduler scheduler;
+        final TornadoExecutionPlan plan;
+        boolean ready;
+
+        TwoLevelProber(int dim, int centers, int maxProbes, long budget) {
+            this.dim = dim;
+            this.centers = centers;
+            this.maxProbes = maxProbes;
+            coarse = (centers + COARSE_RATIO - 1) / COARSE_RATIO;
+            coarseStride = (coarse + ProbeKernels.TILE - 1) / ProbeKernels.TILE * ProbeKernels.TILE;
+            long left = budget - (long) centers * dim * Float.BYTES - (long) coarse * dim * Float.BYTES - (long) centers * 8;
+            long perQuery = (long) coarseStride * Float.BYTES * 2 + (long) dim * Float.BYTES + (long) LIST_CAP * 8
+                    + (long) COARSE_PROBES * 4 + (long) maxProbes * 4 + 8;
+            blockQueries = (int) Math.max(ProbeKernels.TILE, Math.min(1 << 16, left / perQuery) / ProbeKernels.TILE * ProbeKernels.TILE);
+            centerRows = new FloatArray(centers * dim);
+            centerNorms = new FloatArray(centers);
+            coarseRows = new FloatArray(coarse * dim);
+            coarseNorms = new FloatArray(coarse);
+            uploadParams = new IntArray(4);
+            listStart = new IntArray(coarse + 1);
+            listMembers = new IntArray(centers);
+            block = new FloatArray(blockQueries * dim);
+            assignParams = new IntArray(8);
+            assignScores = new FloatArray(blockQueries * coarseStride);
+            nearest = new IntArray(blockQueries);
+            params = new IntArray(8);
+            coarseParams = new IntArray(8);
+            coarseScores = new FloatArray(blockQueries * coarseStride);
+            coarseProbes = new IntArray(blockQueries * COARSE_PROBES);
+            candScore = new FloatArray(blockQueries * LIST_CAP);
+            candPos = new IntArray(blockQueries * LIST_CAP);
+            candCount = new IntArray(blockQueries);
+            probes = new IntArray(blockQueries * maxProbes);
+            probeCount = new IntArray(blockQueries);
+            KernelContext ctx = new KernelContext();
+            // 0: the centers and the coarse centers, with their norms, kept on the device
+            TaskGraph upload = new TaskGraph("tlCenters")
+                    .transferToDevice(DataTransferMode.EVERY_EXECUTION, centerRows, coarseRows, uploadParams)
+                    .task("norms", CellWalkKernels::norms, ctx, centerRows, uploadParams, centerNorms)
+                    .task("coarseNorms", CellWalkKernels::norms, ctx, coarseRows, uploadParams, coarseNorms)
+                    .persistOnDevice(centerRows, centerNorms, coarseRows, coarseNorms);
+            // 1: a block of centers against the coarse centers: each one's nearest
+            TaskGraph assign = new TaskGraph("tlAssign")
+                    .consumeFromDevice("tlCenters", coarseRows, coarseNorms)
+                    .transferToDevice(DataTransferMode.EVERY_EXECUTION, block, assignParams)
+                    .task("scores", ProbeKernels::centerScores, ctx, block, coarseRows, coarseNorms, assignParams, assignScores)
+                    .task("argmax", ProbeKernels::argmaxRows, ctx, assignScores, assignParams, nearest)
+                    .transferToHost(DataTransferMode.EVERY_EXECUTION, nearest);
+            // 2: a block of queries: coarse scores, best lists, exact scores of their members, best centers
+            TaskGraph rank = new TaskGraph("tlProbe")
+                    .consumeFromDevice("tlCenters", centerRows, centerNorms, coarseRows, coarseNorms)
+                    .transferToDevice(DataTransferMode.FIRST_EXECUTION, listStart, listMembers)
+                    .transferToDevice(DataTransferMode.EVERY_EXECUTION, block, params, coarseParams)
+                    .task("coarse", ProbeKernels::centerScores, ctx, block, coarseRows, coarseNorms, coarseParams, coarseScores)
+                    .task("lists", ProbeKernels::selectTop, ctx, coarseScores, coarseParams, coarseProbes)
+                    .task("gather", ProbeKernels::gatherScores, ctx, block, centerRows, centerNorms, coarseProbes, listStart, listMembers, params,
+                            candScore, candPos, candCount)
+                    .task("select", ProbeKernels::selectListed, ctx, candScore, candPos, candCount, params, probes, probeCount)
+                    .transferToHost(DataTransferMode.EVERY_EXECUTION, probes, probeCount);
+            normsGrid = grid((long) centers * ProbeKernels.GROUP);
+            coarseNormsGrid = grid((long) coarse * ProbeKernels.GROUP);
+            assignScoreGrid = grid(ProbeKernels.GROUP);
+            assignGrid = grid(ProbeKernels.GROUP);
+            coarseGrid = grid(ProbeKernels.GROUP);
+            coarseSelectGrid = grid(ProbeKernels.GROUP);
+            gatherGrid = grid(ProbeKernels.GROUP);
+            selectGrid = grid(ProbeKernels.GROUP);
+            scheduler = new GridScheduler();
+            scheduler.addWorkerGrid("tlCenters.norms", normsGrid);
+            scheduler.addWorkerGrid("tlCenters.coarseNorms", coarseNormsGrid);
+            scheduler.addWorkerGrid("tlAssign.scores", assignScoreGrid);
+            scheduler.addWorkerGrid("tlAssign.argmax", assignGrid);
+            scheduler.addWorkerGrid("tlProbe.coarse", coarseGrid);
+            scheduler.addWorkerGrid("tlProbe.lists", coarseSelectGrid);
+            scheduler.addWorkerGrid("tlProbe.gather", gatherGrid);
+            scheduler.addWorkerGrid("tlProbe.select", selectGrid);
+            plan = new TornadoExecutionPlan(upload.snapshot(), assign.snapshot(), rank.snapshot());
+        }
+
+        private static WorkerGrid grid(long global) {
+            WorkerGrid g = new WorkerGrid1D(ProbeKernels.GROUP);
+            g.setLocalWork(ProbeKernels.GROUP, 1, 1);
+            g.setGlobalWork(global, 1, 1);
+            return g;
+        }
+
+        /** Once per merge: the centers on the device, and the coarse lists. */
+        private void prepare(CellProbe probe) {
+            long t0 = System.nanoTime();
+            int rowsPerTask = Math.max(1, centers / 64 + 1);
+            IntStream.range(0, (centers + rowsPerTask - 1) / rowsPerTask).parallel().forEach(t -> {
+                int from = t * rowsPerTask;
+                int count = Math.min(rowsPerTask, centers - from);
+                float[] rows = new float[count * dim];
+                probe.copyCenters(from, count, rows, 0);
+                MemorySegment.copy(rows, 0, centerRows.getSegment(), ValueLayout.JAVA_FLOAT, (long) from * dim * Float.BYTES, rows.length);
+            });
+            for (int c = 0; c < coarse; c++) {
+                MemorySegment.copy(centerRows.getSegment(), (long) c * COARSE_RATIO * dim * Float.BYTES, coarseRows.getSegment(),
+                        (long) c * dim * Float.BYTES, (long) dim * Float.BYTES);
+            }
+            uploadParams.set(CellWalkKernels.P_DIM, dim);
+            plan.withGraph(0).withGridScheduler(scheduler).execute();
+            // every center's nearest coarse center, in blocks
+            int similarity = Walker.similarityCode(probe.similarity());
+            int[] owner = new int[centers];
+            assignParams.set(ProbeKernels.P_DIM, dim);
+            assignParams.set(ProbeKernels.P_CENTERS, coarse);
+            assignParams.set(ProbeKernels.P_SIMILARITY, similarity);
+            assignParams.set(ProbeKernels.P_STRIDE, coarseStride);
+            for (int b0 = 0; b0 < centers; b0 += blockQueries) {
+                int nb = Math.min(blockQueries, centers - b0);
+                MemorySegment.copy(centerRows.getSegment(), (long) b0 * dim * Float.BYTES, block.getSegment(), 0, (long) nb * dim * Float.BYTES);
+                assignParams.set(ProbeKernels.P_QUERIES, nb);
+                int tilesQ = (nb + ProbeKernels.TILE - 1) / ProbeKernels.TILE;
+                assignScoreGrid.setGlobalWork((long) tilesQ * (coarseStride / ProbeKernels.TILE) * ProbeKernels.GROUP, 1, 1);
+                assignGrid.setGlobalWork((long) nb * ProbeKernels.GROUP, 1, 1);
+                plan.withGraph(1).withGridScheduler(scheduler).execute();
+                MemorySegment.copy(nearest.getSegment(), ValueLayout.JAVA_INT, 0, owner, b0, nb);
+            }
+            // the lists, by counting
+            int[] start = new int[coarse + 1];
+            for (int o : owner) {
+                start[o + 1]++;
+            }
+            for (int c = 0; c < coarse; c++) {
+                start[c + 1] += start[c];
+            }
+            int[] fill = java.util.Arrays.copyOf(start, coarse);
+            int[] members = new int[centers];
+            for (int c = 0; c < centers; c++) {
+                members[fill[owner[c]]++] = c;
+            }
+            MemorySegment.copy(start, 0, listStart.getSegment(), ValueLayout.JAVA_INT, 0, coarse + 1);
+            MemorySegment.copy(members, 0, listMembers.getSegment(), ValueLayout.JAVA_INT, 0, centers);
+            ready = true;
+            if (TRACE) {
+                int largest = 0;
+                for (int c = 0; c < coarse; c++) {
+                    largest = Math.max(largest, start[c + 1] - start[c]);
+                }
+                long ms = (System.nanoTime() - t0) / 1_000_000;
+                int l = largest;
+                LOG.info(() -> String.format(Locale.ROOT, "GPU coarse lists: %d centers in %d lists (largest %d), %d ms", centers, coarse, l, ms));
+            }
+        }
+
+        boolean probe(CellProbe probe) {
+            long t0 = System.nanoTime();
+            if (!ready) {
+                prepare(probe);
+            }
+            int n = probe.queryCount();
+            params.set(ProbeKernels.P_DIM, dim);
+            params.set(ProbeKernels.P_CENTERS, coarse);
+            params.set(ProbeKernels.P_SIMILARITY, Walker.similarityCode(probe.similarity()));
+            params.set(ProbeKernels.P_PROBES, maxProbes);
+            params.set(ProbeKernels.P_STRIDE, coarseStride);
+            params.set(ProbeKernels.P_COARSE_PROBES, Math.min(COARSE_PROBES, coarse));
+            params.set(ProbeKernels.P_LIST_CAP, LIST_CAP);
+            // the coarse step: queries against the coarse centers, each query's best lists
+            coarseParams.set(ProbeKernels.P_DIM, dim);
+            coarseParams.set(ProbeKernels.P_CENTERS, coarse);
+            coarseParams.set(ProbeKernels.P_SIMILARITY, Walker.similarityCode(probe.similarity()));
+            coarseParams.set(ProbeKernels.P_PROBES, Math.min(COARSE_PROBES, coarse));
+            coarseParams.set(ProbeKernels.P_STRIDE, coarseStride);
+            for (int b0 = 0; b0 < n; b0 += blockQueries) {
+                final int start = b0;
+                int nq = Math.min(blockQueries, n - b0);
+                IntStream.range(0, nq).parallel().forEach(i -> {
+                    float[] q = new float[dim];
+                    probe.query(start + i, q);
+                    MemorySegment.copy(q, 0, block.getSegment(), ValueLayout.JAVA_FLOAT, (long) i * dim * Float.BYTES, dim);
+                });
+                params.set(ProbeKernels.P_QUERIES, nq);
+                coarseParams.set(ProbeKernels.P_QUERIES, nq);
+                int tilesQ = (nq + ProbeKernels.TILE - 1) / ProbeKernels.TILE;
+                coarseGrid.setGlobalWork((long) tilesQ * (coarseStride / ProbeKernels.TILE) * ProbeKernels.GROUP, 1, 1);
+                coarseSelectGrid.setGlobalWork((long) nq * ProbeKernels.GROUP, 1, 1);
+                gatherGrid.setGlobalWork((long) nq * ProbeKernels.GROUP, 1, 1);
+                selectGrid.setGlobalWork((long) nq * ProbeKernels.GROUP, 1, 1);
+                plan.withGraph(2).withGridScheduler(scheduler).execute();
+                IntStream.range(0, nq).parallel().forEach(i -> {
+                    int count = probeCount.get(i);
+                    int[] row = new int[count];
+                    MemorySegment.copy(probes.getSegment(), ValueLayout.JAVA_INT, (long) i * maxProbes * Integer.BYTES, row, 0, count);
+                    probe.setProbes(start + i, row, 0, count);
+                });
+            }
+            if (TRACE) {
+                long ms = (System.nanoTime() - t0) / 1_000_000;
+                LOG.info(() -> String.format(Locale.ROOT, "GPU two-level probes: %d queries, %d of %d lists each, %d ms", n,
+                        Math.min(COARSE_PROBES, coarse), coarse, ms));
             }
             return true;
         }

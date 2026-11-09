@@ -42,6 +42,10 @@ final class ProbeKernels {
     static final int P_PROBES = 4;
     /** Columns of the score matrix: the center count rounded up to a whole tile. */
     static final int P_STRIDE = 5;
+    /** Two-level probes: coarse lists per query, and candidates kept per query. */
+    static final int P_COARSE_PROBES = 6;
+    static final int P_LIST_CAP = 7;
+    static final int MAX_COARSE_PROBES = 128;
 
     private ProbeKernels() {
     }
@@ -283,6 +287,265 @@ final class ProbeKernels {
         }
         for (int i = lid; i < want; i += GROUP) {
             probes.set(q * p + i, pos[i]);
+        }
+    }
+
+    /** Row {@code r}'s best column (ties to the lower one): each center's nearest coarse center. */
+    public static void argmaxRows(KernelContext ctx, FloatArray scores, IntArray params, IntArray best) {
+        int r = ctx.groupIdx;
+        int lid = ctx.localIdx;
+        int nc = params.get(P_CENTERS);
+        int stride = params.get(P_STRIDE);
+        float[] bs = ctx.allocateFloatLocalArray(GROUP);
+        int[] bi = ctx.allocateIntLocalArray(GROUP);
+        float b = -3.0e38f;
+        int at = 2147483647;
+        for (int e = lid; e < nc; e += GROUP) {
+            float v = scores.get(r * stride + e);
+            if (v > b) {
+                b = v;
+                at = e;
+            }
+        }
+        bs[lid] = b;
+        bi[lid] = at;
+        ctx.localBarrier();
+        for (int s = GROUP / 2; s > 0; s /= 2) {
+            if (lid < s) {
+                float o = bs[lid + s];
+                int oi = bi[lid + s];
+                if (o > bs[lid] || (o == bs[lid] && oi < bi[lid])) {
+                    bs[lid] = o;
+                    bi[lid] = oi;
+                }
+            }
+            ctx.localBarrier();
+        }
+        if (lid == 0) {
+            best.set(r, bi[0]);
+        }
+    }
+
+    /**
+     * Each query's candidates from its {@code M} best coarse lists: every member center scored exactly (one warp per
+     * center, lanes over the dimensions), at most {@code listCap} of them, written at {@code q * listCap}.
+     */
+    public static void gatherScores(KernelContext ctx, FloatArray queries, FloatArray centers, FloatArray centerNorms,
+                                    IntArray coarseProbes, IntArray listStart, IntArray listMembers, IntArray params,
+                                    FloatArray candScore, IntArray candPos, IntArray candCount) {
+        int q = ctx.groupIdx;
+        int lid = ctx.localIdx;
+        int dim = params.get(P_DIM);
+        int similarity = params.get(P_SIMILARITY);
+        int m = params.get(P_COARSE_PROBES);
+        int cap = params.get(P_LIST_CAP);
+        float[] qv = ctx.allocateFloatLocalArray(CellWalkKernels.MAX_DIM);
+        int[] starts = ctx.allocateIntLocalArray(MAX_COARSE_PROBES + 1);
+        int[] lists = ctx.allocateIntLocalArray(MAX_COARSE_PROBES);
+        float[] part = ctx.allocateFloatLocalArray(GROUP);
+        for (int d = lid; d < dim; d += GROUP) {
+            qv[d] = queries.get(q * dim + d);
+        }
+        if (lid == 0) {
+            int running = 0;
+            for (int j = 0; j < m; j++) {
+                int c = coarseProbes.get(q * m + j);
+                lists[j] = c;
+                starts[j] = running;
+                running += listStart.get(c + 1) - listStart.get(c);
+            }
+            starts[m] = running;
+        }
+        ctx.localBarrier();
+        int total = TornadoMath.min(starts[m], cap);
+        int warp = lid / 32;
+        int lane = lid - warp * 32;
+        for (int base = 0; base < total; base += GROUP / 32) {
+            int e = base + warp;
+            float dot = 0.0f;
+            int center = 0;
+            if (e < total) {
+                int j = 0;
+                while (j + 1 < m && starts[j + 1] <= e) {
+                    j++;
+                }
+                center = listMembers.get(listStart.get(lists[j]) + e - starts[j]);
+                int row = center * dim;
+                for (int d = lane; d < dim; d += 32) {
+                    dot += centers.get(row + d) * qv[d];
+                }
+            }
+            part[lid] = dot;
+            ctx.localBarrier();
+            if (lane == 0 && e < total) {
+                float sum = 0.0f;
+                for (int l = 0; l < 32; l++) {
+                    sum += part[lid + l];
+                }
+                candScore.set(q * cap + e, rank(centerNorms, similarity, 2147483647, center, sum));
+                candPos.set(q * cap + e, center);
+            }
+            ctx.localBarrier();
+        }
+        if (lid == 0) {
+            candCount.set(q, total);
+        }
+    }
+
+    /**
+     * As {@link #selectTop}, over each query's own candidate list ({@code candCount[q]} scores from
+     * {@code q * listCap}, their center positions in {@code candPos}); writes the best {@code P} positions and how many.
+     */
+    public static void selectListed(KernelContext ctx, FloatArray scores, IntArray candPos, IntArray candCount, IntArray params,
+                                    IntArray probes, IntArray probeCount) {
+        int q = ctx.groupIdx;
+        int lid = ctx.localIdx;
+        int nc = candCount.get(q);
+        int p = params.get(P_PROBES);
+        int stride = params.get(P_LIST_CAP);
+        float[] red = ctx.allocateFloatLocalArray(GROUP);
+        float[] red2 = ctx.allocateFloatLocalArray(GROUP);
+        int[] counts = ctx.allocateIntLocalArray(GROUP);
+        float[] keys = ctx.allocateFloatLocalArray(MAX_PROBES);
+        int[] pos = ctx.allocateIntLocalArray(MAX_PROBES);
+        int base = q * stride;
+        int want = TornadoMath.min(p, nc);
+        // smallest and largest score
+        float mn = 3.0e38f;
+        float mx = -3.0e38f;
+        for (int e = lid; e < nc; e += GROUP) {
+            float v = scores.get(base + e);
+            mn = TornadoMath.min(mn, v);
+            mx = TornadoMath.max(mx, v);
+        }
+        red[lid] = mn;
+        red2[lid] = mx;
+        ctx.localBarrier();
+        for (int s = GROUP / 2; s > 0; s /= 2) {
+            if (lid < s) {
+                red[lid] = TornadoMath.min(red[lid], red[lid + s]);
+                red2[lid] = TornadoMath.max(red2[lid], red2[lid + s]);
+            }
+            ctx.localBarrier();
+        }
+        // invariant: count(score >= lo) >= want > count(score >= hi)
+        float lo = red[0];
+        float hi = red2[0] + TornadoMath.max(1.0f, TornadoMath.abs(red2[0]));
+        ctx.localBarrier();
+        for (int it = 0; it < 40; it++) {
+            float mid = lo + (hi - lo) * 0.5f;
+            int c = 0;
+            for (int e = lid; e < nc; e += GROUP) {
+                if (scores.get(base + e) >= mid) {
+                    c++;
+                }
+            }
+            counts[lid] = c;
+            ctx.localBarrier();
+            for (int s = GROUP / 2; s > 0; s /= 2) {
+                if (lid < s) {
+                    counts[lid] += counts[lid + s];
+                }
+                ctx.localBarrier();
+            }
+            int total = counts[0];
+            ctx.localBarrier();
+            if (total >= want) {
+                lo = mid;
+            } else {
+                hi = mid;
+            }
+        }
+        // gather: scores >= hi (fewer than want), then those in [lo, hi) in position order; each thread takes a
+        // contiguous range of positions
+        int per = (nc + GROUP - 1) / GROUP;
+        int from = lid * per;
+        int to = TornadoMath.min(nc, from + per);
+        int above = 0;
+        int inside = 0;
+        for (int e = from; e < to; e++) {
+            float v = scores.get(base + e);
+            if (v >= hi) {
+                above++;
+            } else if (v >= lo) {
+                inside++;
+            }
+        }
+        counts[lid] = above;
+        ctx.localBarrier();
+        if (lid == 0) {
+            int run = 0;
+            for (int i = 0; i < GROUP; i++) {
+                int v = counts[i];
+                counts[i] = run;
+                run += v;
+            }
+            pos[0] = run;
+        }
+        ctx.localBarrier();
+        int aboveAt = counts[lid];
+        int aboveTotal = pos[0];
+        ctx.localBarrier();
+        counts[lid] = inside;
+        ctx.localBarrier();
+        if (lid == 0) {
+            int run = 0;
+            for (int i = 0; i < GROUP; i++) {
+                int v = counts[i];
+                counts[i] = run;
+                run += v;
+            }
+        }
+        ctx.localBarrier();
+        int insideAt = aboveTotal + counts[lid];
+        for (int i = lid; i < MAX_PROBES; i += GROUP) {
+            keys[i] = -3.0e38f;
+            pos[i] = 2147483647;
+        }
+        ctx.localBarrier();
+        for (int e = from; e < to; e++) {
+            float v = scores.get(base + e);
+            if (v >= hi) {
+                keys[aboveAt] = v;
+                pos[aboveAt] = e;
+                aboveAt++;
+            } else if (v >= lo) {
+                if (insideAt < want) {
+                    keys[insideAt] = v;
+                    pos[insideAt] = e;
+                }
+                insideAt++;
+            }
+        }
+        ctx.localBarrier();
+        // bitonic sort, best first: larger score, then smaller position
+        for (int size = 2; size <= MAX_PROBES; size *= 2) {
+            for (int step = size / 2; step > 0; step /= 2) {
+                for (int i = lid; i < MAX_PROBES; i += GROUP) {
+                    int j = i ^ step;
+                    if (j > i) {
+                        boolean descending = (i & size) == 0;
+                        float ki = keys[i];
+                        float kj = keys[j];
+                        int pi = pos[i];
+                        int pj = pos[j];
+                        boolean iFirst = ki > kj || (ki == kj && pi < pj);
+                        if (descending != iFirst) {
+                            keys[i] = kj;
+                            keys[j] = ki;
+                            pos[i] = pj;
+                            pos[j] = pi;
+                        }
+                    }
+                }
+                ctx.localBarrier();
+            }
+        }
+        for (int i = lid; i < want; i += GROUP) {
+            probes.set(q * p + i, candPos.get(base + pos[i]));
+        }
+        if (lid == 0) {
+            probeCount.set(q, want);
         }
     }
 }
