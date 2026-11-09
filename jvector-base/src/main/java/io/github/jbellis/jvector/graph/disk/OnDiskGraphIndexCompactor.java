@@ -201,7 +201,9 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
     // a cell holds a few members per source, so the beam is wide.
     static final int CELL_BUDGET = 4096;
     static final int CELL_ASSIGN_EF = 8;      // level-1 beam width when assigning a node's cell
-    static final int CELL_PROBE_EF = 64;      // level-1 beam width when choosing a node's probe cells
+    static final int CELL_PROBE_EF = 64;
+    /** Most cells an accelerator ranks per query ({@code -Djvector.compaction.probes}). */
+    static final int MAX_ACCELERATED_PROBES = Integer.getInteger("jvector.compaction.probes", 1024);      // level-1 beam width when choosing a node's probe cells
     // The merged upper layers in source ids, per level >= 1: node i of a level is
     // (mergedSrc[l][i], mergedNode[l][i]) and its neighbours sit at [i * degree + j], -1 padded.
     // Merged before the ordinals exist (they define the cells), written after level 0.
@@ -1574,6 +1576,17 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
         scratch.probeCount = n;
     }
 
+    /** As {@link #selectCellsByBeam}, from an accelerator's ranked level-1 positions for query {@code i}. */
+    private void selectCellsFromProbe(Scratch scratch, CellProbe probe, int i) {
+        int n = 0;
+        int base = i * probe.maxProbes();
+        for (int r = 0; r < probe.counts[i]; r++) {
+            int cell = cellWalkPosition[cellMap.nodes[1][probe.probes[base + r]]];
+            if (cell >= 0 && cell < cellCount) scratch.probeCells[n++] = cell;
+        }
+        scratch.probeCount = n;
+    }
+
     /** The best-scoring level-1 position a beam of width {@code ef} from {@code startPos} scores. */
     private static int bestLevel1ByBeam(HubMap map, HubMap.Scorer scorer, int startPos, int ef, IntHashSet visited, long[] scored) {
         int count = beam(map, scorer, 1, startPos, ef, visited, scored);
@@ -2416,9 +2429,36 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
         final boolean needNorms = similarityFunction != VectorSimilarityFunction.DOT_PRODUCT;
         final VectorFloat<?>[] queries = new VectorFloat<?>[n];
         final float[] queryNorm2 = new float[n];
-        // phase 1: query vectors and probe cells; (cell << 32 | node index) pairs per target, per task
         final int tasks1 = Math.max(1, Math.min(taskWindowSize * 4, n / 256));
         final int chunk = (n + tasks1 - 1) / tasks1;
+        // with an accelerator, the queries are decoded first and it may rank every query's cells at once
+        CellProbe accelerated = null;
+        if (accelerator != null && exactMode && accelerator.supports(similarityFunction, dimension)) {
+            List<Callable<Void>> decode = new ArrayList<>();
+            for (int c = 0; c < tasks1; c++) {
+                final int from = c * chunk, to = Math.min(n, from + chunk);
+                if (from >= to) continue;
+                decode.add(() -> {
+                    Scratch sc = scratchLocal.get();
+                    if (sc.wide == null) sc.wide = new WideDecoder(candidateStore, exactMode, pqWide, dimension);
+                    for (int i = from; i < to; i++) {
+                        VectorFloat<?> q = vectorTypeSupport.createFloatVector(dimension);
+                        sc.wide.decode(lo + i, q);
+                        queries[i] = q;
+                        queryNorm2[i] = needNorms ? VectorUtil.dotProduct(q, q) : 0f;
+                    }
+                    return null;
+                });
+            }
+            joinAll(decode);
+            int maxProbes = Math.min(MAX_ACCELERATED_PROBES, Math.min(cellCount, beamScoredCapacity(CELL_PROBE_EF, cellMap.degree[1])));
+            CellProbe probe = new CellProbe(queries, n, cellMap, dimension, similarityFunction, maxProbes);
+            if (accelerator.probe(probe)) {
+                accelerated = probe;
+            }
+        }
+        final CellProbe probed = accelerated;
+        // phase 1: query vectors and probe cells; (cell << 32 | node index) pairs per target, per task
         final long[][][] pairsByTask = new long[tasks1][j.targets][];
         final int[][] countByTask = new int[tasks1][j.targets];
         List<Callable<Void>> phase1 = new ArrayList<>();
@@ -2437,15 +2477,22 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
                 for (int t = 0; t < j.targets; t++) pairs[t] = new long[Math.max(64, (to - from) * 6)];
                 for (int i = from; i < to; i++) {
                     int newOrd = lo + i;
-                    VectorFloat<?> q = vectorTypeSupport.createFloatVector(dimension);
-                    sc.wide.decode(newOrd, q);
-                    queries[i] = q;
-                    queryNorm2[i] = needNorms ? VectorUtil.dotProduct(q, q) : 0f;
+                    VectorFloat<?> q = queries[i];
+                    if (q == null) {
+                        q = vectorTypeSupport.createFloatVector(dimension);
+                        sc.wide.decode(newOrd, q);
+                        queries[i] = q;
+                        queryNorm2[i] = needNorms ? VectorUtil.dotProduct(q, q) : 0f;
+                    }
                     int ownCell = cellOf(src, newOrd);
                     if (ownCell < 0) continue;
-                    sc.cellScorer.setQuery(q);
                     sc.probeCount = 0;
-                    selectCellsByBeam(sc, sc.cellScorer, cellToPosition[ownCell]);
+                    if (probed != null) {
+                        selectCellsFromProbe(sc, probed, i);
+                    } else {
+                        sc.cellScorer.setQuery(q);
+                        selectCellsByBeam(sc, sc.cellScorer, cellToPosition[ownCell]);
+                    }
                     sc.probeNode = -1;
                     for (int target = 0; target < sources.size(); target++) {
                         int ti = j.targetIndex[target];

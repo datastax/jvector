@@ -41,4 +41,13 @@ public interface CompactionAccelerator {
      * @return true if it did the walk; false to leave it to the compactor, which then walks as usual
      */
     boolean walk(CellWalk walk);
+
+    /**
+     * Ranks the cells each query of a range probes ({@link CellProbe#setProbes}), in place of the compactor's beam search.
+     *
+     * @return true if it ranked them; false (the default) to leave it to the compactor
+     */
+    default boolean probe(CellProbe probe) {
+        return false;
+    }
 }

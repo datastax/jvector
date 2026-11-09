@@ -23,13 +23,15 @@ import java.util.concurrent.atomic.AtomicInteger;
 import io.github.jbellis.jvector.vector.VectorSimilarityFunction;
 
 /**
- * A {@link CompactionAccelerator} in plain Java, through {@link CellWalk}'s public contract only: every (cell, query)
- * pair's members scored with {@link CellWalk#score}, the top k kept per query. Tests select it as {@value #NAME}.
+ * A {@link CompactionAccelerator} in plain Java, through the public contracts of {@link CellProbe} and {@link CellWalk}
+ * only: every query ranks every center exactly, and every (cell, query) pair's members are scored with
+ * {@link CellWalk#score}, the top k kept per query. Tests select it as {@value #NAME}.
  */
 public final class ReferenceCompactionAccelerator implements CompactionAccelerator {
 
     public static final String NAME = "reference";
     static final AtomicInteger WALKS = new AtomicInteger();
+    static final AtomicInteger PROBES = new AtomicInteger();
 
     @Override
     public String name() {
@@ -77,6 +79,46 @@ public final class ReferenceCompactionAccelerator implements CompactionAccelerat
             walk.setTopK(i, best[i], 0, sizes[i]);
         }
         WALKS.incrementAndGet();
+        return true;
+    }
+
+    @Override
+    public boolean probe(CellProbe probe) {
+        int dim = probe.dimension();
+        int centers = probe.centerCount();
+        float[] rows = new float[centers * dim];
+        probe.copyCenters(0, centers, rows, 0);
+        float[] q = new float[dim];
+        float[] center = new float[dim];
+        int want = Math.min(probe.maxProbes(), centers);
+        for (int i = 0; i < probe.queryCount(); i++) {
+            probe.query(i, q);
+            Integer[] order = new Integer[centers];
+            float[] rank = new float[centers];
+            for (int c = 0; c < centers; c++) {
+                System.arraycopy(rows, c * dim, center, 0, dim);
+                float dot = dot(q, center);
+                float norm2 = dot(center, center);
+                switch (probe.similarity()) {
+                    case EUCLIDEAN:
+                        rank[c] = 2 * dot - norm2;
+                        break;
+                    case COSINE:
+                        rank[c] = dot / (float) Math.sqrt(Math.max(1e-12, norm2));
+                        break;
+                    default:
+                        rank[c] = dot;
+                }
+                order[c] = c;
+            }
+            java.util.Arrays.sort(order, (x, y) -> Float.compare(rank[y], rank[x]));
+            int[] best = new int[want];
+            for (int r = 0; r < want; r++) {
+                best[r] = order[r];
+            }
+            probe.setProbes(i, best, 0, want);
+        }
+        PROBES.incrementAndGet();
         return true;
     }
 
