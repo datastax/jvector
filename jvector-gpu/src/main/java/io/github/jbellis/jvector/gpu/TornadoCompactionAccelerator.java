@@ -24,6 +24,7 @@ import java.util.Locale;
 import java.util.logging.Logger;
 import java.util.stream.IntStream;
 
+import io.github.jbellis.jvector.graph.disk.CellProbe;
 import io.github.jbellis.jvector.graph.disk.CellWalk;
 import io.github.jbellis.jvector.graph.disk.CompactionAccelerator;
 import io.github.jbellis.jvector.vector.VectorSimilarityFunction;
@@ -66,7 +67,14 @@ public final class TornadoCompactionAccelerator implements CompactionAccelerator
     /** Candidate scores per launch. */
     static final int MAX_CANDIDATES = 1 << 27;
 
+    /** Whether the probe step runs on the GPU too ({@code -Djvector.gpu.probe}, default true). */
+    static final boolean PROBE = Boolean.parseBoolean(System.getProperty("jvector.gpu.probe", "true"));
+
     private Walker walker;
+    private Prober prober;
+
+    /** Bytes of the score matrix of one block of probe queries ({@code -Djvector.gpu.probe.scoresMB}, default 1024). */
+    static final long SCORE_BYTES = Long.getLong("jvector.gpu.probe.scoresMB", 1024) << 20;
 
     @Override
     public String name() {
@@ -100,6 +108,139 @@ public final class TornadoCompactionAccelerator implements CompactionAccelerator
             walker = new Walker(dim);
         }
         return walker.walk(walk);
+    }
+
+    @Override
+    public boolean probe(CellProbe probe) {
+        if (!PROBE) {
+            return false;
+        }
+        if (probe.maxProbes() > ProbeKernels.MAX_PROBES || probe.dimension() > CellWalkKernels.MAX_DIM) {
+            return false;
+        }
+        int dim = probe.dimension();
+        int centers = probe.centerCount();
+        if (prober == null || prober.dim != dim || prober.centers != centers || prober.maxProbes != probe.maxProbes()) {
+            if (prober != null) {
+                prober.close();
+            }
+            prober = new Prober(dim, centers, probe.maxProbes());
+        }
+        return prober.probe(probe);
+    }
+
+    /**
+     * The probe step: every query against every center with a tiled matrix product, then each query's best centers.
+     * The centers stay on the device; the queries go in blocks whose score matrix fits {@link #SCORE_BYTES}.
+     */
+    static final class Prober implements AutoCloseable {
+        final int dim;
+        final int centers;
+        final int maxProbes;
+        final int stride;
+        final int blockQueries;
+        final FloatArray centerRows;
+        final FloatArray centerNorms;
+        final IntArray centerParams;
+        final FloatArray queries;
+        final IntArray params;
+        final FloatArray scores;
+        final IntArray probes;
+        final WorkerGrid normsGrid;
+        final WorkerGrid scoreGrid;
+        final WorkerGrid selectGrid;
+        final GridScheduler scheduler;
+        final TornadoExecutionPlan plan;
+
+        Prober(int dim, int centers, int maxProbes) {
+            this.dim = dim;
+            this.centers = centers;
+            this.maxProbes = maxProbes;
+            stride = (centers + ProbeKernels.TILE - 1) / ProbeKernels.TILE * ProbeKernels.TILE;
+            int byScores = (int) Math.min(Integer.MAX_VALUE / stride, SCORE_BYTES / ((long) stride * Float.BYTES));
+            blockQueries = Math.max(ProbeKernels.TILE, byScores / ProbeKernels.TILE * ProbeKernels.TILE);
+            centerRows = new FloatArray(centers * dim);
+            centerNorms = new FloatArray(centers);
+            centerParams = new IntArray(4);
+            queries = new FloatArray(blockQueries * dim);
+            params = new IntArray(8);
+            scores = new FloatArray(blockQueries * stride);
+            probes = new IntArray(blockQueries * maxProbes);
+            KernelContext ctx = new KernelContext();
+            TaskGraph upload = new TaskGraph("centers")
+                    .transferToDevice(DataTransferMode.EVERY_EXECUTION, centerRows, centerParams)
+                    .task("norms", CellWalkKernels::norms, ctx, centerRows, centerParams, centerNorms)
+                    .persistOnDevice(centerRows, centerNorms);
+            TaskGraph rank = new TaskGraph("probe")
+                    .consumeFromDevice("centers", centerRows, centerNorms)
+                    .transferToDevice(DataTransferMode.EVERY_EXECUTION, queries, params)
+                    .task("scores", ProbeKernels::centerScores, ctx, queries, centerRows, centerNorms, params, scores)
+                    .task("select", ProbeKernels::selectTop, ctx, scores, params, probes)
+                    .transferToHost(DataTransferMode.EVERY_EXECUTION, probes);
+            normsGrid = new WorkerGrid1D(CellWalkKernels.GROUP);
+            normsGrid.setLocalWork(CellWalkKernels.GROUP, 1, 1);
+            normsGrid.setGlobalWork((long) centers * CellWalkKernels.GROUP, 1, 1);
+            scoreGrid = new WorkerGrid1D(ProbeKernels.GROUP);
+            scoreGrid.setLocalWork(ProbeKernels.GROUP, 1, 1);
+            selectGrid = new WorkerGrid1D(ProbeKernels.GROUP);
+            selectGrid.setLocalWork(ProbeKernels.GROUP, 1, 1);
+            scheduler = new GridScheduler();
+            scheduler.addWorkerGrid("centers.norms", normsGrid);
+            scheduler.addWorkerGrid("probe.scores", scoreGrid);
+            scheduler.addWorkerGrid("probe.select", selectGrid);
+            plan = new TornadoExecutionPlan(upload.snapshot(), rank.snapshot());
+        }
+
+        boolean probe(CellProbe probe) {
+            long t0 = System.nanoTime();
+            // the centers, once per range: copied out of the hub map, uploaded, their norms computed on the device
+            int rowsPerTask = Math.max(1, centers / 64 + 1);
+            IntStream.range(0, (centers + rowsPerTask - 1) / rowsPerTask).parallel().forEach(t -> {
+                int from = t * rowsPerTask;
+                int count = Math.min(rowsPerTask, centers - from);
+                float[] rows = new float[count * dim];
+                probe.copyCenters(from, count, rows, 0);
+                MemorySegment.copy(rows, 0, centerRows.getSegment(), ValueLayout.JAVA_FLOAT, (long) from * dim * Float.BYTES, rows.length);
+            });
+            centerParams.set(CellWalkKernels.P_DIM, dim);
+            plan.withGraph(0).withGridScheduler(scheduler).execute();
+            int n = probe.queryCount();
+            params.set(ProbeKernels.P_DIM, dim);
+            params.set(ProbeKernels.P_CENTERS, centers);
+            params.set(ProbeKernels.P_SIMILARITY, Walker.similarityCode(probe.similarity()));
+            params.set(ProbeKernels.P_PROBES, maxProbes);
+            params.set(ProbeKernels.P_STRIDE, stride);
+            int want = Math.min(maxProbes, centers);
+            for (int b0 = 0; b0 < n; b0 += blockQueries) {
+                final int start = b0;
+                int nq = Math.min(blockQueries, n - b0);
+                IntStream.range(0, nq).parallel().forEach(i -> {
+                    float[] q = new float[dim];
+                    probe.query(start + i, q);
+                    MemorySegment.copy(q, 0, queries.getSegment(), ValueLayout.JAVA_FLOAT, (long) i * dim * Float.BYTES, dim);
+                });
+                params.set(ProbeKernels.P_QUERIES, nq);
+                int tilesQ = (nq + ProbeKernels.TILE - 1) / ProbeKernels.TILE;
+                scoreGrid.setGlobalWork((long) tilesQ * (stride / ProbeKernels.TILE) * ProbeKernels.GROUP, 1, 1);
+                selectGrid.setGlobalWork((long) nq * ProbeKernels.GROUP, 1, 1);
+                plan.withGraph(1).withGridScheduler(scheduler).execute();
+                IntStream.range(0, nq).parallel().forEach(i -> {
+                    int[] row = new int[want];
+                    MemorySegment.copy(probes.getSegment(), ValueLayout.JAVA_INT, (long) i * maxProbes * Integer.BYTES, row, 0, want);
+                    probe.setProbes(start + i, row, 0, want);
+                });
+            }
+            if (TRACE) {
+                long ms = (System.nanoTime() - t0) / 1_000_000;
+                LOG.info(() -> String.format(Locale.ROOT, "GPU probes: %d queries x %d centers, %d probes each, %d ms", n, centers, want, ms));
+            }
+            return true;
+        }
+
+        @Override
+        public void close() {
+            plan.freeDeviceMemory();
+        }
     }
 
     /** The buffers and the execution plan for one dimension, reused across walks. */
@@ -323,7 +464,7 @@ public final class TornadoCompactionAccelerator implements CompactionAccelerator
             return (int) (pair >>> 32);
         }
 
-        private static int similarityCode(VectorSimilarityFunction similarity) {
+        static int similarityCode(VectorSimilarityFunction similarity) {
             switch (similarity) {
                 case DOT_PRODUCT:
                     return CellWalkKernels.SIM_DOT;
