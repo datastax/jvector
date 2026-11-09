@@ -48,7 +48,7 @@ including runnable 100k-vector examples and optional integration with PQ and NVQ
 
 For writing completed graphs with FP or NVQ features, see [Deferred batch serialization](./docs/deferred-batch-writer.md). It works with application vector sources and preloaded data; dataset prefetching is optional.
 
-For database integration with ASH, see [ASH query callers and CPU budgeting](./docs/ash-query-integration.md), covering caller concurrency, bounded admission, state ownership and latency validation.
+For database integration with ASH, see [Integrating ASH queries into a database](./docs/ash-query-integration.md), covering caller concurrency, bounded admission, state ownership and latency validation.
 
 For ASH model parameters, construction modes, precision, JVM flags and their defaults,
 see [ASH configuration and defaults](./docs/ash-configuration.md).

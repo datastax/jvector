@@ -26,10 +26,10 @@ From the repository root, using JDK 22 or newer:
 ```bash
 mvn package -DskipTests
 java --add-modules=jdk.incubator.vector --enable-native-access=ALL-UNNAMED -Xmx8g \
-  -cp jvector-examples/target/jvector-examples-4.0.3-SNAPSHOT-jar-with-dependencies.jar \
+  -cp jvector-examples/target/jvector-examples-4.1.0-SNAPSHOT-jar-with-dependencies.jar \
   io.github.jbellis.jvector.example.HelloASHWorldInt8
 java --add-modules=jdk.incubator.vector --enable-native-access=ALL-UNNAMED -Xmx8g \
-  -cp jvector-examples/target/jvector-examples-4.0.3-SNAPSHOT-jar-with-dependencies.jar \
+  -cp jvector-examples/target/jvector-examples-4.1.0-SNAPSHOT-jar-with-dependencies.jar \
   io.github.jbellis.jvector.example.HelloASHWorldFp16
 ```
 
@@ -72,7 +72,7 @@ and vector ownership; the second trains and encodes with PQ and NVQ. See
 source lifecycle, and integration guidance.
 
 ### SiftSmall 
-A simple benchmark for the sift dataset located in the [siftsmall](./siftsmall) directory in the project root.
+A simple benchmark for the sift dataset located in the [siftsmall](../siftsmall) directory in the project root.
 
 > `mvn compile exec:exec@sift`
 

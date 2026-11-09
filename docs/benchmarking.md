@@ -126,9 +126,9 @@ after cleanup. The parallel writer defaults to 64 records per batch. See the
 [BenchYAML Guide](benchyaml-guide.md#construction) for configuration and
 [Deferred batch serialization](deferred-batch-writer.md) for writer details.
 
-
 ## Fused PQ and ASH comparison
 
-The [standalone comparison recipe](ash-pq-benchmark.md) provides fixed, byte-matched
-configurations for all four 1M dataset cases, native packaging commands, CPU/NUMA
-placement, construction repetitions, and direct/queued query measurements.
+[Reproducing ASH versus PQ](ash-pq-benchmark.md) provides byte-matched recipes
+for the 1M and the 6M/10M datasets, scripts that run one case or a whole study,
+and the measurement protocol. [ASH performance](ash-performance.md) reports the
+results.

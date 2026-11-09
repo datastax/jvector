@@ -164,8 +164,8 @@ The cross-compile file used for each direction lives in this directory:
 
 | File | Direction |
 |------|-----------|
-| [`aarch64-cross.ini`](../aarch64-cross.ini) | x86_64 host → aarch64 target |
-| [`x86_64-cross.ini`](../x86_64-cross.ini) | aarch64 host → x86_64 target |
+| [`aarch64-cross.ini`](aarch64-cross.ini) | x86_64 host → aarch64 target |
+| [`x86_64-cross.ini`](x86_64-cross.ini) | aarch64 host → x86_64 target |
 
 Meson reads the cross file (via `--cross-file`) and sets
 `host_machine.cpu_family` to the target arch, which causes `meson.build` to
@@ -461,7 +461,7 @@ An unrecognised value is silently ignored and full CPU detection is used.
 ## Adding a new SIMD kernel
 
 The kernel registry is driven by the X-macro file
-[`jvector_simd_kernel_list.h`](jvector_simd_kernel_list.h). A single entry
+[`jvector_simd_kernel_list.h`](src/jvector_simd_kernel_list.h). A single entry
 there auto-generates:
 
 - the public C declaration in `jvector_simd.h` (exported to Java via FFM)
@@ -706,7 +706,7 @@ if (max_isa != MaxIsa::SSE42 && max_isa != MaxIsa::AVX2
 }
 ```
 
-If the required CPUID bits are not yet in [`jvector_cpu_features.h`](jvector_cpu_features.h),
+If the required CPUID bits are not yet in [`jvector_cpu_features.h`](src/jvector_cpu_features.h),
 add them to the `CpuFeature` enum and populate them in
 `populate_cpu_features()`.
 
@@ -736,7 +736,7 @@ HWY_FLATTEN float my_kernel(const float *a, size_t length)
 
 Add a `JV_REQUIRE_HWY_*` guard so the build fails loudly if the compiler selects
 the wrong Highway target for this translation unit. The existing checks for
-`JV_REQUIRE_HWY_AVX3` and `JV_REQUIRE_HWY_AVX2` in [`assert_hwy_targets.h`](assert_hwy_targets.h)
+`JV_REQUIRE_HWY_AVX3` and `JV_REQUIRE_HWY_AVX2` in [`assert_hwy_targets.h`](src/assert_hwy_targets.h)
 show the pattern — add an `#elif` block for the new tier:
 
 ```cpp
@@ -1006,7 +1006,7 @@ retaining a singleton path. Applications continue
 to issue synchronous searches; no query executor or nested native thread pool
 is created. Base-vector encoding and training remain FP32.
 
-Database developers should follow [ASH query callers and CPU budgeting](../../../../docs/ash-query-integration.md)
+Database developers should follow [Integrating ASH queries into a database](../../../../docs/ash-query-integration.md)
 for caller concurrency, bounded admission, resource ownership and latency
 validation. The [maintainer design](../../../../docs/ash-query-batching-design.md)
 describes coordination separately. Native batch entry points accept counts above

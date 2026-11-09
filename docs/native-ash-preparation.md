@@ -1,3 +1,19 @@
+<!--
+Copyright DataStax, Inc.
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+-->
+
 # Native ASH projection and symmetric construction scoring
 
 ASH models prepare an immutable provider-specific projection when their Stiefel
@@ -33,8 +49,7 @@ the existing exact signed-short LUT. It uses 32-bit partial sums and bounded
 chunks accumulated into 64-bit totals, rather than letting a short or integer
 sum overflow. The graph builder's pair-oriented API uses the pair kernel;
 callers of `ASHSymmetricScorer.blockScorerFor` use the native LUT kernel. Existing
-C>1 formulas and the graph-neighborhood scorer are unchanged. The graph study
-uses C=1 throughout.
+C>1 formulas and the graph-neighborhood scorer are unchanged.
 
 Projection and symmetric symbols are optional and looked up independently. Loading an older
 compatible library preserves Java projection and symmetric implementations.
@@ -179,14 +194,14 @@ uses packed nibbles, byte shuffles and independent integer accumulators.
 
 The transferable principles here are preparing contiguous immutable weights,
 amortizing native dispatch over a complete operation, reusing query loads, and
-accumulating compact codes without materializing decoded vectors. This port
+accumulating compact codes without materializing decoded vectors. JVector
 implements a single-query Highway matrix-vector operation because graph query
 latency must include preparation for each query. The IVF implementation does
 not provide a graph-construction symmetric scorer. Its quantized uint8 query
 LUTs are not substituted for the graph's existing exact symmetric integer LUTs.
-The kernels in this change are independent implementations of these operations.
+JVector's kernels are independent implementations of these operations.
 
-## Validation and measurement
+## Validation
 
 Targeted regression checks compare projection with a double-precision oracle,
 packed pair dots with an independent decoder, and integer LUT ranges with
@@ -194,62 +209,20 @@ packed pair dots with an independent decoder, and integer LUT ranges with
 both FFM modes, concurrent projections, bounds/alias rejection and absent native
 symbols. Both JDK 22 and JDK 25 are checked with normal dispatch and the existing
 AVX3_DL, AVX3, AVX2 and SSE/scalar ISA caps. The generic kernel translation unit
-also compiles for ARM NEON on Apple Silicon. SVE/SVE2 execution is not validated
-on this host.
+also compiles for ARM NEON on Apple Silicon. SVE/SVE2 execution is not yet validated.
 
-Performance collection uses unchanged standard BenchYAML, existing inclusive
-timers, normal query preparation, deferred writes and NVQ reranking. Before and
-after query runs load the same saved model and graph, retain stock warmup and
-samples, and use 1 or 8 scoring threads pinned to physical cores. Traced small
-BenchYAML preflights confirm actual native calls; tracing is disabled for all
-performance measurements. Separate fresh full-data builds verify construction.
-The focused cases are MPNet at the 2-bit ASH budget and OpenAI3072 at the 4-bit
-ASH budget on both JDKs. They are not a replacement for the earlier full PQ/ASH
-matrix.
+## Batched FP32 encoding
 
-## FP32 encodeAll measurements (JDK 22, October 31, 2026)
+`encodeAll()` projects worker-local batches with Highway FP32 instead of
+projecting one vector at a time. On four 1M-vector datasets (ITQ, C=1, D/2,
+48 physical cores) this reduced BenchYAML's ASH encoding time by 1.2x to 5.7x,
+with the largest gains at higher dimensions, and produced byte-identical trained
+models. Training and graph writing are measured separately.
 
-These are standard BenchYAML `construction.index_quant_time_s.ASH.encoding_time_s`
-measurements for four 1M-vector datasets, ITQ, C=1 and D/2. They time the complete
-`encodeAll()` operation, including normalization, projection, quantization and
-result packing. They are not timings of individual `encode()` calls. Training
-and graph/write are separate metrics. The first native packing cost is included.
-
-Both runs use physical CPUs 0–47 with memory interleaved across NUMA nodes 0 and
-1. The before version encodes each vector with Panama FP32; the after version
-encodes worker-local batches with Highway FP32. Both use fresh model and
-index caches, the native scoring provider, deferred parallel writes, NVQ
-reranking, and FP16 query projection. All eight serialized trained models are
-byte-identical between the two runs. Each cell is one full construction run;
-these are not repeated-run averages.
-
-| Dataset | ASH case | Before (s) | After (s) | Speedup |
-| --- | --- | ---: | ---: | ---: |
-| MPNet | 2-bit | 1.140 | 0.800 | 1.43× |
-| MPNet | 4-bit | 1.205 | 0.986 | 1.22× |
-| Cohere | 2-bit | 1.699 | 0.960 | 1.77× |
-| Cohere | 4-bit | 2.049 | 1.264 | 1.62× |
-| Ada002 | 2-bit | 5.793 | 1.344 | 4.31× |
-| Ada002 | 4-bit | 6.057 | 1.896 | 3.19× |
-| OpenAI3072 | 2-bit | 20.621 | 3.641 | 5.66× |
-| OpenAI3072 | 4-bit | 25.240 | 4.712 | 5.36× |
-
-The current code was checked on JDK 22 with native and Panama providers, and
-native batch projection with the AVX2 and SSE/scalar ISA caps. The native module
-passed 12 projection/FP16 tests; the general ASH suite passed 41 tests with two
-provider-specific skips under native, and 39 with four skips under Panama.
-Each lower-ISA projection pass ran four tests. The optional standalone Meson
-C++ test targets were unavailable on this host; the Java native tests invoke
-the actual dispatched C++ kernels and require the new batch symbol.
-
-Fresh graph recall was also recorded, but these independent parallel graph
-builds do not isolate an encoding-only recall effect. Model and graph formats,
-query FP16 arithmetic, and scoring kernels were not changed by this extension.
-
-## Preferred oneDNN FP32 encoding projection (November 1, 2026)
+## oneDNN FP32 encoding projection
 
 The native provider automatically prefers the existing sequential oneDNN add-on
-for FP32 `projectBatch()` when its new entry point is available. It executes row-major
+for FP32 `projectBatch()` when its entry point is available. It executes row-major
 SGEMM as `[B,D] * transpose([d,D]) -> [B,d]`, with FP32 inputs, weights and outputs.
 The adapter shares the immutable Highway matrix, avoiding a second packed model
 copy, and reuses the existing calling-thread native input/output buffers. Its
@@ -260,9 +233,8 @@ The sequential-runtime build assertion prevents nested oneDNN thread pools.
 Single-vector `encode()` retains Highway FP32 projection. The wrapper delegates
 query precision selection to the same original projection: FP16 queries remain
 FP16 in automatic/required modes, with their existing FP32 fallback. Database
-encoding never converts to FP16. Java code selection and landmark correction
-remain unchanged. The slower experimental native quantizer was archived outside
-the production tree after repeated MPNet 2-bit regressions; it is not packaged.
+encoding never converts to FP16. Code selection and landmark correction stay in
+Java.
 
 The optional library retains its existing package/resource name for compatibility.
 Both FP32 and FP16 loaders validate ABI 1, handle missing/denied/unsupported
@@ -271,8 +243,8 @@ with ABI 1 but without the FP32 symbol also keeps Highway. Unsupported oneDNN
 FP32 execution falls back to Highway batch projection; invalid arguments,
 allocation failures and unexpected runtime errors propagate. FP16 additionally
 checks representable range, and explicit `fp16` selection requires support.
-No production selection flag, benchmark-specific path or BenchYAML change was
-added. The existing `-Dnative.onednn=true` build packages both operations.
+There is no selection flag; the `-Dnative.onednn=true` build packages both
+operations.
 
 BLAS kernels can use different FP32 reduction orders for different batch shapes.
 The 9-bit reconstruction check therefore uses its existing per-component code
@@ -284,26 +256,9 @@ shapes, batch tails/counts above 32, immutable model copies and concurrent model
 switching. A direct ABI test requires successful oneDNN SGEMM, preventing a
 Highway fallback from passing as a oneDNN test.
 
-### Repeated BenchYAML measurements
-
-Each case used three alternating matched control/candidate pairs with JDK 22,
-CPUs 0-47 and NUMA interleave across nodes 0 and 1. Both variants include the same
-backing-array residual-normalization improvement and Java code generator. Both
-use C=1, ITQ, D/2, deferred parallel writing and NVQ reranking. Each process builds
-fresh model/index caches; input/output copies, library/JIT first use and scratch
-allocation are included in BenchYAML's existing `encoding_time_s` field. These
-are `encodeAll()` times, not standalone `encode()` or query-throughput results.
-
-| Case | Highway median (range), s | oneDNN median (range), s | Ratio of medians |
-| --- | ---: | ---: | ---: |
-| mpnet-1m, 2-bit | 0.665 (0.622-0.665) | 0.589 (0.550-0.604) | 1.13x |
-| openai-3072-1m, 4-bit | 4.055 (3.996-4.092) | 3.926 (3.913-3.955) | 1.03x |
-
-oneDNN was faster in each of the three matched pairs for both datasets. The
-OpenAI3072 gain is modest; these measurements do not establish improvements for
-all other datasets, code widths or hardware. Median graph recall@10 was 81.901%
-versus 81.844% for MPNet and 79.280% versus 79.310% for OpenAI3072. Independent
-parallel graph rebuilds vary and do not isolate an encoding-only recall effect.
+In repeated BenchYAML construction runs, oneDNN FP32 encoding was 1.13x faster
+than Highway for MPNet 1M at 2 bits and 1.03x faster for OpenAI-3072 1M at
+4 bits, with equivalent graph recall.
 
 ## ITQ training workspaces
 

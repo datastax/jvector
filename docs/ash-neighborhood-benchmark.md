@@ -1,3 +1,19 @@
+<!--
+Copyright DataStax, Inc.
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+-->
+
 # ASH neighborhood scoring and isolated full-scan benchmarks
 
 The graph decoder and `DistancesASH` use the same `ASHNeighborhoodScorer`.
@@ -60,7 +76,7 @@ slot, so an `avx3_spr` dispatch report currently executes that AVX-512 implement
 exposes no public raw-pointer interface. The provider detects the optional ASH
 symbol when its ASH capability is queried, after library loading. Libraries without
 that symbol retain the existing Java LUT path; unrelated native operations do not
-acquire a dependency on the new kernel. An explicitly requested native benchmark
+acquire a dependency on this kernel. An explicitly requested native benchmark
 fails if that capability is absent, preventing a mislabeled fallback measurement.
 The binding validates dimensions, lengths, and LUT/output non-aliasing before C++. Native output is unspecified on error. Status values are part
 of the ABI: 0 means success, 1 an invalid C=1 landmark, and 2 an invalid shape.
@@ -80,30 +96,22 @@ safepoints during the longer call. Both paths retain the one-neighborhood-per-ca
 contract. Enable `jextract.trace.downcalls=true` only for untimed diagnosis.
 
 Native float vectors are heap-backed. Their Vector API stores write directly to
-the backing float array, which avoids the HotSpot 22 `intoMemorySegment` compiler
-crash encountered during development. Compiler exclusions are not required by the
-reviewed implementation. The regression suite exercises compiled stores at every
+the backing float array, which avoids a HotSpot 22 `intoMemorySegment` compiler
+crash without compiler exclusions. The regression suite exercises compiled stores at every
 float vector width and nonzero offsets.
 
 ## Build and launch with JDK 22
 
-The reported experiments use JDK 22. Runtime and toolchain selection belong to the
-launcher and the repository's module requirements; the benchmark imposes no exact
-runtime-version check. The examples module retains the repository's Java 16
-source/API compatibility; the native module uses the repository's JDK 22 FFM API.
+Use JDK 22 for measurements; the benchmark does not check the runtime version.
+The examples module keeps the repository's Java 16 source compatibility, and the
+native module uses the JDK 22 FFM API.
 
-The native build uses the repository's existing Meson targets and compiler policy.
-The pre-existing Sapphire Rapids target documents GCC 12+ or Clang 14+ requirements;
-this ASH change adds no ISA target, compiler selection, or higher compiler floor.
-For the reported benchmark server, the launcher sets `CXX=/usr/bin/g++-12`.
-Production toolchains continue to use Meson's existing selection behavior.
-
-The build script retains the original dependency installation, command tracing,
-version check, and resource-publication behavior, including deleting the old
-resource library before compilation. Its sole change is to omit `--wipe` when no
-configured Meson tree exists, supporting first builds on older Meson releases.
-Configured trees still wipe exactly as before. A failed build continues to stop
-Maven and leaves no old resource library to package.
+The native build uses the repository's Meson targets and compiler policy. The
+Sapphire Rapids target requires GCC 12+ or Clang 14+; ASH adds no ISA target or
+compiler requirement. If the default compiler is older, set `CXX`, for example
+`CXX=/usr/bin/g++-12`. The build script omits `--wipe` when no Meson tree is
+configured yet, so first builds work on older Meson releases. A failed build
+stops Maven and leaves no stale resource library to package.
 
 In IntelliJ, run `io.github.jbellis.jvector.example.DistancesASH` with JDK 22 and
 these VM options, changing the fixture path as appropriate:
@@ -135,8 +143,7 @@ these VM options, changing the fixture path as appropriate:
 ```
 
 To create a fixture, supply `base.fvecs query.fvecs` as program arguments. An
-optional third ground-truth argument is accepted for launcher compatibility and
-is unused. Input loading reads only the requested prefixes; queries are normalized
+optional third ground-truth argument is accepted and ignored. Input loading reads only the requested prefixes; queries are normalized
 and base vectors retain their original values. Models, encoded vectors, and packed
 neighborhoods are created outside timing. Replaying an existing fixture needs no
 program arguments and performs no training, encoding, or packing.
@@ -145,7 +152,7 @@ Fixtures are published only after a complete write; existing destinations are
 preserved. Separate names are required for different bit widths or shapes.
 Replay checks version, lengths, model dimensions, query values, payload sizes, and
 truncation/trailing data. The printed SHA-256 identifies the exact stored inputs.
-Fixture format version 1 and its existing serialized bytes remain compatible.
+The fixture format is version 1.
 
 For command-line launches, build the reactor and resolve a classpath with the
 repository's Maven tooling. Set CPU affinity explicitly, for example
@@ -181,7 +188,7 @@ count; input work does not grow with worker count. Actual preparation bottleneck
 contention, and scheduling overhead stay visible in the measured result.
 
 Validation is independent of the LUT kernel and projects queries in double
-precision. It checks serialized header effects and uses the unchanged tolerance
+precision. It checks serialized header effects and uses the tolerance
 `3e-5 + 3e-5 * abs(expected)`. Both expected and actual scores must be finite.
 Validation, fixture I/O, and worker creation are outside the timed scan stream.
 
@@ -193,8 +200,8 @@ Panama provider. Keep fixture hash, query index, bit width, block shape, access
 order, JDK, heap, warmup, and affinity identical. The `Scorer:` line identifies the
 actual execution path; the native provider's kernel description identifies its ISA.
 
-The initial Cohere fixtures fit in the server's shared last-level cache. These
-measurements describe repeated in-memory scoring, without disk I/O. Results are
+Small fixtures can fit in a CPU's shared last-level cache. These measurements
+describe repeated in-memory scoring, without disk I/O. Results are
 specific to the tested workload and hardware. Pipelined full-scan throughput does
 not by itself describe adaptive graph traversal latency or graph-search scaling.
 
@@ -212,9 +219,8 @@ not by itself describe adaptive graph traversal latency or graph-search scaling.
 | `scoringWarmupSeconds` | 1.0 | Warmup duration |
 | `validationNeighborhoods` | 1024 | Evenly spaced neighborhoods checked per saved query |
 
-The former `neighborhoodsPerQuery` setting is rejected: a full scan always covers
-the complete fixture. Malformed integer options fail rather than selecting a
-silent fallback value.
+A full scan always covers the complete fixture. Malformed integer options fail
+rather than selecting a silent fallback value.
 
 ## Regression checks
 

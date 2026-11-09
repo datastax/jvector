@@ -137,7 +137,7 @@ precision. See the [precision guide](ash-projection-precision.md#benchyaml-runs)
 
 `MKL_NUM_THREADS`, `OMP_NUM_THREADS`, `OPENBLAS_NUM_THREADS` and
 `GOTO_NUM_THREADS` are native-runtime environment controls, not ASH model
-parameters. Avoid nested native query pools. The standalone launcher sets them
+parameters. Avoid nested native query pools. The ASH versus PQ study scripts set them
 to one for queries and the core budget for construction; it also sets
 `MKL_DYNAMIC=FALSE` and `ONEDNN_VERBOSE=0`. OS affinity
 (`numactl --physcpubind`) and memory placement (`--membind`, `--interleave`)
@@ -153,7 +153,7 @@ writer selection, compression, and reranking.
 Set BenchYAML query delivery and batch limits in the
 [ASH search parameters](benchyaml-guide.md#ash-query-parameters). Database
 integrations select their own admission policy and executors. See
-[ASH query callers and CPU budgeting](ash-query-integration.md).
+[Integrating ASH queries into a database](ash-query-integration.md).
 
 | Setting | Default | Optional values / definition |
 | --- | --- | --- |
@@ -170,12 +170,12 @@ report loaded response times and mean batch size. Unloaded latency and loaded
 response time describe different measurements. Independent build/query JVM
 repetitions are launch choices, not model defaults; preserve individual CSVs.
 
-The standalone launcher accepts `JVECTOR_BENCH_DATA_DIR` (required local input
+The ASH versus PQ case script (`run-ash-pq-benchmark.sh`) accepts `JVECTOR_BENCH_DATA_DIR` (required local input
 directory), `JVECTOR_BENCH_CATALOG` (`catalog-1m.yml`; optionally
 `catalog-large.yml`), `JVECTOR_BENCH_HEAP` (`128g`), and
 `JVECTOR_BENCH_NUMA_POLICY` (`bind:0`; alternatively `interleave:<nodes>`).
-These defaults belong to the launcher, not the library. See the
-[BenchYAML guide](ash-pq-benchmark.md) for launch and artifact details.
+These defaults belong to the script, not the library. See the
+[Reproducing ASH versus PQ](ash-pq-benchmark.md) for launch and artifact details.
 
 ## Diagnostics
 

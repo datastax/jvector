@@ -69,11 +69,11 @@ use `-XX:ActiveProcessorCount` consistently when appropriate. Neither property
 pins threads. Use the database's scheduler, OS affinity or container controls,
 and place query execution and index memory together on NUMA systems.
 
-For an integration retaining only synchronous searches, the earlier caller
+For an integration retaining only synchronous searches, the caller
 recommendation is 4C bounded caller threads, with the same physical CPU budget.
 That does not mean an asynchronous integration needs 4C execution workers.
-Both execution modes are measured separately by the
-[reproducible BenchYAML comparison](ash-pq-benchmark.md).
+[Reproducing ASH versus PQ](ash-pq-benchmark.md) measures both execution modes
+separately.
 
 ## Library responsibilities and host responsibilities
 

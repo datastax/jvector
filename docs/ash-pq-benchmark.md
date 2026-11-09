@@ -14,7 +14,7 @@ See the License for the specific language governing permissions and
 limitations under the License.
 -->
 
-# ASH versus PQ: results and how to reproduce them
+# Reproducing ASH versus PQ
 
 This study compares fused ASH and fused PQ graph indexes at matched code sizes:
 both store the same bytes per vector, including ASH's five-byte header. It uses
