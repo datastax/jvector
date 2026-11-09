@@ -90,6 +90,58 @@ final class NativeASHSymmetricKernels {
                 : pairOrdinary(MemorySegment.ofArray(aCodes), MemorySegment.ofArray(bCodes), bytes, dimensions, bits);
     }
 
+    /** 2/4-bit codes at offsets in larger arrays (flat code pages). Same arithmetic as {@link #dot}. */
+    static float dotAt(byte[] aCodes, int aOffset, byte[] bCodes, int bOffset, int dimensions, int bits) {
+        if (dimensions < 0 || (bits != 2 && bits != 4)) throw badOffsetShape();
+        if (PAIR_CRITICAL == null) throw pairUnavailable();
+        long bytes = ((long) dimensions * bits + 7) / 8;
+        if (aOffset < 0 || bOffset < 0 || aOffset + bytes > aCodes.length || bOffset + bytes > bCodes.length)
+            throw outOfBounds("ASH code array ranges");
+        if (TRACE) trace(PAIR_SYMBOL, dimensions, bits);
+        return dimensions <= MAX_CRITICAL_WORK
+                ? pairCriticalAt(aCodes, aOffset, bCodes, bOffset, dimensions, bits)
+                : pairOrdinary(MemorySegment.ofArray(aCodes).asSlice(aOffset, bytes),
+                               MemorySegment.ofArray(bCodes).asSlice(bOffset, bytes), bytes, dimensions, bits);
+    }
+
+    /** 1-bit sign words at offsets in larger arrays (code pages). Same arithmetic as {@link #dot}. */
+    static float binaryDotAt(long[] aBits, int aOffset, long[] bBits, int bOffset, int dimensions) {
+        if (dimensions < 0) throw badPairShape();
+        if (PAIR_CRITICAL == null) throw pairUnavailable();
+        long words = (dimensions + 63L) / 64;
+        if (aOffset < 0 || bOffset < 0 || aOffset + words > aBits.length || bOffset + words > bBits.length)
+            throw outOfBounds("ASH bit array ranges");
+        if (TRACE) trace(PAIR_SYMBOL, dimensions, 1);
+        return dimensions <= MAX_CRITICAL_WORK
+                ? pairCriticalAt(aBits, aOffset, bBits, bOffset, dimensions)
+                : pairOrdinary(MemorySegment.ofArray(aBits).asSlice((long) aOffset * Long.BYTES, words * Long.BYTES),
+                               MemorySegment.ofArray(bBits).asSlice((long) bOffset * Long.BYTES, words * Long.BYTES),
+                               words * Long.BYTES, dimensions, 1);
+    }
+
+    private static float pairCriticalAt(long[] a, int aOffset, long[] b, int bOffset, int dimensions) {
+        try {
+            return (float) PAIR_CRITICAL.invokeExact(MemorySegment.ofArray(a).asSlice((long) aOffset * Long.BYTES),
+                                                     MemorySegment.ofArray(b).asSlice((long) bOffset * Long.BYTES), dimensions, 1);
+        } catch (RuntimeException | Error e) {
+            throw e;
+        } catch (Throwable t) {
+            throw unexpected(PAIR_SYMBOL, t);
+        }
+    }
+
+    // Hot path for dotAt: as in pairCritical, the sliced segments stay local to invokeExact.
+    private static float pairCriticalAt(byte[] a, int aOffset, byte[] b, int bOffset, int dimensions, int bits) {
+        try {
+            return (float) PAIR_CRITICAL.invokeExact(MemorySegment.ofArray(a).asSlice(aOffset),
+                                                     MemorySegment.ofArray(b).asSlice(bOffset), dimensions, bits);
+        } catch (RuntimeException | Error e) {
+            throw e;
+        } catch (Throwable t) {
+            throw unexpected(PAIR_SYMBOL, t);
+        }
+    }
+
     // Hot path: segments are created and consumed here so they don't escape after inlining.
     private static float pairCritical(byte[] a, byte[] b, int dimensions, int bits) {
         try {
@@ -193,6 +245,10 @@ final class NativeASHSymmetricKernels {
 
     private static IllegalArgumentException badPairShape() {
         return new IllegalArgumentException("Symmetric ASH requires nonnegative dimensions and bits in {1,2,4}");
+    }
+
+    private static IllegalArgumentException badOffsetShape() {
+        return new IllegalArgumentException("Offset symmetric ASH requires nonnegative dimensions and bits in {2,4}");
     }
 
     private static UnsupportedOperationException pairUnavailable() {

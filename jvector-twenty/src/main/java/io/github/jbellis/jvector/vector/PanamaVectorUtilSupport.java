@@ -118,30 +118,54 @@ class PanamaVectorUtilSupport implements VectorUtilSupport {
         // Keep the Vector API compilation units small and species compile-time constant.
         // A shared, large dispatch body can leave boxed vectors in graph-pruning callers.
         return switch (bits) {
-            case 1 -> ashSymmetricBinary(aBits, bBits, dimensions);
-            case 2 -> ashSymmetricTwoBit(aCodes, bCodes, dimensions);
-            case 4 -> ashSymmetricFourBit(aCodes, bCodes, dimensions);
+            case 1 -> ashSymmetricBinary(aBits, 0, bBits, 0, dimensions);
+            case 2 -> ashSymmetricTwoBit(aCodes, 0, bCodes, 0, dimensions);
+            case 4 -> ashSymmetricFourBit(aCodes, 0, bCodes, 0, dimensions);
             default -> throw new IllegalArgumentException("Symmetric SIMD supports 1, 2, and 4 bits");
         };
     }
 
-    private static float ashSymmetricBinary(long[] aBits, long[] bBits, int dimensions) {
+    @Override
+    public boolean supportsAshSymmetricDotAt() { return true; }
+
+    @Override
+    public float ashSymmetricDotAt(byte[] aCodes, int aOffset, byte[] bCodes, int bOffset,
+                                   int dimensions, int bits) {
+        if (dimensions < 0 || (bits != 2 && bits != 4))
+            throw new IllegalArgumentException("Offset symmetric ASH requires nonnegative dimensions and bits in {2,4}");
+        long bytes = ((long) dimensions * bits + 7) / 8;
+        if (aOffset < 0 || bOffset < 0 || aOffset + bytes > aCodes.length || bOffset + bytes > bCodes.length)
+            throw new IndexOutOfBoundsException("ASH code array ranges");
+        return bits == 2 ? ashSymmetricTwoBit(aCodes, aOffset, bCodes, bOffset, dimensions)
+                : ashSymmetricFourBit(aCodes, aOffset, bCodes, bOffset, dimensions);
+    }
+
+    @Override
+    public float ashSymmetricBinaryDotAt(long[] aBits, int aOffset, long[] bBits, int bOffset, int dimensions) {
+        if (dimensions < 0) throw new IllegalArgumentException("dimensions must be nonnegative");
+        int words = (int) ((dimensions + 63L) >>> 6);
+        Objects.checkFromIndexSize(aOffset, words, aBits.length);
+        Objects.checkFromIndexSize(bOffset, words, bBits.length);
+        return ashSymmetricBinary(aBits, aOffset, bBits, bOffset, dimensions);
+    }
+
+    private static float ashSymmetricBinary(long[] aBits, int aOff, long[] bBits, int bOff, int dimensions) {
         var longs = ASH_SYM_LONGS;
             long mismatches = 0;
             int words = dimensions >>> 6;
             for (int w = 0; w < words; w += longs.length()) {
                 var mask = longs.indexInRange(w, words);
-                var a = LongVector.fromArray(longs, aBits, w, mask);
-                var b = LongVector.fromArray(longs, bBits, w, mask);
+                var a = LongVector.fromArray(longs, aBits, aOff + w, mask);
+                var b = LongVector.fromArray(longs, bBits, bOff + w, mask);
                 mismatches += a.lanewise(VectorOperators.XOR, b)
                         .lanewise(VectorOperators.BIT_COUNT).reduceLanes(VectorOperators.ADD);
             }
             int tail = dimensions & 63;
-            if (tail != 0) mismatches += Long.bitCount((aBits[words] ^ bBits[words]) & ((1L << tail) - 1));
+            if (tail != 0) mismatches += Long.bitCount((aBits[aOff + words] ^ bBits[bOff + words]) & ((1L << tail) - 1));
             return dimensions - 2f * mismatches;
     }
 
-    private static float ashSymmetricTwoBit(byte[] aCodes, byte[] bCodes, int dimensions) {
+    private static float ashSymmetricTwoBit(byte[] aCodes, int aOff, byte[] bCodes, int bOff, int dimensions) {
         var longs = ASH_SYM_LONGS;
             // The doubled signed code is sign * (1 + 2*magnitudeBit).
             // Weighted popcounts evaluate its product without unpacking components.
@@ -151,8 +175,8 @@ class PanamaVectorUtilSupport implements VectorUtilSupport {
             for (int word = 0; word < words; word += longs.length()) {
                 var byteSpecies = ASH_SYM_WORD_BYTES;
                 var byteMask = byteSpecies.indexInRange(word * 8, words * 8);
-                var a = ByteVector.fromArray(byteSpecies, aCodes, word * 8, byteMask).reinterpretAsLongs();
-                var b = ByteVector.fromArray(byteSpecies, bCodes, word * 8, byteMask).reinterpretAsLongs();
+                var a = ByteVector.fromArray(byteSpecies, aCodes, aOff + word * 8, byteMask).reinterpretAsLongs();
+                var b = ByteVector.fromArray(byteSpecies, bCodes, bOff + word * 8, byteMask).reinterpretAsLongs();
                 var negative = a.lanewise(VectorOperators.XOR, b).lanewise(VectorOperators.LSHR, 1).and(slots);
                 var ma = a.and(slots);
                 var mb = b.and(slots);
@@ -170,8 +194,8 @@ class PanamaVectorUtilSupport implements VectorUtilSupport {
             if (tail != 0) {
                 long a = 0, b = 0;
                 for (int j = 0; j < (tail + 3) / 4; j++) {
-                    a |= (long) (aCodes[words * 8 + j] & 255) << (8 * j);
-                    b |= (long) (bCodes[words * 8 + j] & 255) << (8 * j);
+                    a |= (long) (aCodes[aOff + words * 8 + j] & 255) << (8 * j);
+                    b |= (long) (bCodes[bOff + words * 8 + j] & 255) << (8 * j);
                 }
                 long valid = slots & ((1L << (2 * tail)) - 1);
                 long negative = ((a ^ b) >>> 1) & valid;
@@ -184,7 +208,7 @@ class PanamaVectorUtilSupport implements VectorUtilSupport {
             return sum * 0.25f;
     }
 
-    private static float ashSymmetricFourBit(byte[] aCodes, byte[] bCodes, int dimensions) {
+    private static float ashSymmetricFourBit(byte[] aCodes, int aOff, byte[] bCodes, int bOff, int dimensions) {
         var bytes = ASH_SYM_BYTES;
         var shorts = ASH_SYM_SHORTS;
         int count = dimensions / 2;
@@ -192,8 +216,8 @@ class PanamaVectorUtilSupport implements VectorUtilSupport {
         for (int offset = 0; offset < count; offset += bytes.length()) {
             int active = Math.min(bytes.length(), count - offset);
             var mask = bytes.indexInRange(0, active);
-            var a = ByteVector.fromArray(bytes, aCodes, offset, mask);
-            var b = ByteVector.fromArray(bytes, bCodes, offset, mask);
+            var a = ByteVector.fromArray(bytes, aCodes, aOff + offset, mask);
+            var b = ByteVector.fromArray(bytes, bCodes, bOff + offset, mask);
             var total = jdk.incubator.vector.ShortVector.zero(shorts);
             for (int shift = 0; shift < 8; shift += 4) {
                 var ax = a.lanewise(VectorOperators.LSHR, shift);
@@ -216,7 +240,7 @@ class PanamaVectorUtilSupport implements VectorUtilSupport {
             sum -= 2L * (bytes.length() - active); // zero padding decodes to -1 in each nibble
         }
         if ((dimensions & 1) != 0) {
-            int a = aCodes[count] & 15, b = bCodes[count] & 15;
+            int a = aCodes[aOff + count] & 15, b = bCodes[bOff + count] & 15;
             int av = (2 * (a & 7) + 1) * ((a & 8) == 0 ? -1 : 1);
             int bv = (2 * (b & 7) + 1) * ((b & 8) == 0 ? -1 : 1);
             sum += av * bv;
@@ -237,17 +261,17 @@ class PanamaVectorUtilSupport implements VectorUtilSupport {
     public boolean usesAshProjectionTuning() { return PanamaASHKernels.projectionTuningEnabled(); }
 
     @Override
-    public float ashProjectionDotTuned(float[] query, byte[] code, int dimensions, int bitsPerDimension) {
+    public float ashProjectionDotTuned(float[] query, byte[] code, int codeOffset, int dimensions, int bitsPerDimension) {
         if (!supportsAshProjectionScoring()) {
-            return VectorUtilSupport.super.ashProjectionDot(query, code, dimensions, bitsPerDimension);
+            return VectorUtilSupport.super.ashProjectionDot(query, code, codeOffset, dimensions, bitsPerDimension);
         }
-        return PanamaASHKernels.projectionDot(query, code, dimensions, bitsPerDimension);
+        return PanamaASHKernels.projectionDot(query, code, codeOffset, dimensions, bitsPerDimension);
     }
 
     @Override
-    public float ashProjectionDot(float[] query, byte[] code, int dimensions, int bitsPerDimension) {
+    public float ashProjectionDot(float[] query, byte[] code, int codeOffset, int dimensions, int bitsPerDimension) {
         if (!supportsAshProjectionScoring()) {
-            return VectorUtilSupport.super.ashProjectionDot(query, code, dimensions, bitsPerDimension);
+            return VectorUtilSupport.super.ashProjectionDot(query, code, codeOffset, dimensions, bitsPerDimension);
         }
         if (bitsPerDimension != 2 && bitsPerDimension != 4) {
             throw new IllegalArgumentException("Projection scoring requires 2 or 4 bits per dimension");
@@ -255,13 +279,13 @@ class PanamaVectorUtilSupport implements VectorUtilSupport {
         Objects.checkFromIndexSize(0, dimensions, query.length);
         int perByte = 8 / bitsPerDimension;
         int bytes = dimensions / perByte + (dimensions % perByte == 0 ? 0 : 1);
-        Objects.checkFromIndexSize(0, bytes, code.length);
+        Objects.checkFromIndexSize(codeOffset, bytes, code.length);
         int sign = 1 << (bitsPerDimension - 1);
         int[] indices = bitsPerDimension == 2 ? ASH_TWO_BIT_QUERY_INDICES : ASH_FOUR_BIT_QUERY_INDICES;
         FloatVector sum = FloatVector.zero(ASH_FLOATS);
         for (int base = 0; base < bytes; base += ASH_FLOATS.length()) {
             int activeBytes = Math.min(ASH_FLOATS.length(), bytes - base);
-            var packed = (IntVector) ByteVector.fromArray(ASH_BYTES, code, base,
+            var packed = (IntVector) ByteVector.fromArray(ASH_BYTES, code, codeOffset + base,
                     ASH_BYTES.indexInRange(0, activeBytes)).convertShape(VectorOperators.B2I, ASH_INTS, 0);
             for (int slot = 0; slot < perByte; slot++) {
                 int remaining = dimensions - base * perByte - slot;

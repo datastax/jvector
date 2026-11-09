@@ -24,20 +24,30 @@ public final class ASHLutScoring {
 
     /** Checks a canonical packed code against a 16-entry table for each nibble. */
     public static void checkCanonicalBounds(byte[] code, int groups, float[] lut) {
+        checkCanonicalBounds(code, 0, groups, lut);
+    }
+
+    /** As {@link #checkCanonicalBounds(byte[], int, float[])} for the code starting at {@code codeOffset}. */
+    public static void checkCanonicalBounds(byte[] code, int codeOffset, int groups, float[] lut) {
         Objects.requireNonNull(code, "code");
         Objects.requireNonNull(lut, "lut");
         if (groups <= 0) throw new IllegalArgumentException("groups must be positive");
-        if ((groups + 1L) / 2 > code.length || (long) groups * 16 > lut.length) {
+        if (codeOffset < 0 || codeOffset + (groups + 1L) / 2 > code.length || (long) groups * 16 > lut.length) {
             throw new IndexOutOfBoundsException("Canonical ASH code or LUT is too small");
         }
     }
 
     /** Scalar reference; the unused high nibble of an odd final group is ignored. */
     public static float dotCanonical(byte[] code, int groups, float[] lut) {
-        checkCanonicalBounds(code, groups, lut);
+        return dotCanonical(code, 0, groups, lut);
+    }
+
+    /** As {@link #dotCanonical(byte[], int, float[])} for the code starting at {@code codeOffset}. */
+    public static float dotCanonical(byte[] code, int codeOffset, int groups, float[] lut) {
+        checkCanonicalBounds(code, codeOffset, groups, lut);
         float sum = 0;
         for (int group = 0; group < groups; group++) {
-            int nibble = (code[group >>> 1] >>> ((group & 1) * 4)) & 15;
+            int nibble = (code[codeOffset + (group >>> 1)] >>> ((group & 1) * 4)) & 15;
             sum += lut[group * 16 + nibble];
         }
         return sum;

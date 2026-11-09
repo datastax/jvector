@@ -79,6 +79,10 @@ public class TestASHMemoryAccounting {
         return f.get(object);
     }
 
+    private static long pagesShallow(Object[] pages) {
+        return pages == null ? 0 : RamUsageEstimator.shallowSizeOf(pages);
+    }
+
     private static long blockBytes(byte[][] blocks) {
         long bytes = RamUsageEstimator.shallowSizeOf(blocks);
         for (byte[] block : blocks) bytes += RamUsageEstimator.sizeOf(block);
@@ -111,12 +115,19 @@ public class TestASHMemoryAccounting {
             for (int count : new int[]{1,17,1024}) {
                 var data = codes(ash, count);
                 var vectors = new ASHVectors(ash, data);
-                long expectedDelta = RamUsageEstimator.shallowSizeOf(data)
-                        - RamUsageEstimator.shallowSizeOf(new Object[0])
+                // Code pages plus decoded headers, with no per-vector object or array.
+                var store = (ASHCodes) field(vectors, "codes");
+                var none = (ASHCodes) field(empty, "codes");
+                long expectedDelta = pagesShallow(store.signPages) + pagesShallow(store.bodyPages)
+                        - pagesShallow(none.signPages) - pagesShallow(none.bodyPages)
                         + 2*(RamUsageEstimator.sizeOf(new float[count])-RamUsageEstimator.sizeOf(new float[0]))
                         + RamUsageEstimator.sizeOf(new byte[count])-RamUsageEstimator.sizeOf(new byte[0]);
-                for (var code : data) expectedDelta += code.ramBytesUsed();
+                if (store.signPages != null) for (long[] page : store.signPages) expectedDelta += RamUsageEstimator.sizeOf(page);
+                if (store.bodyPages != null) for (byte[] page : store.bodyPages) expectedDelta += RamUsageEstimator.sizeOf(page);
                 assertEquals(expectedDelta, vectors.ramBytesUsed()-empty.ramBytesUsed());
+                long payload = (long) count * (store.signWords * Long.BYTES + store.bodyBytes + ASHCodes.HEADER_RAM_BYTES);
+                assertTrue("bits=" + bits + " count=" + count + " must not exceed its payload by more than page and"
+                        + " array headers", vectors.ramBytesUsed() - empty.ramBytesUsed() <= payload + 256);
                 long bytes = vectors.ramBytesUsed();
                 for (int i=0;i<10;i++) assertEquals(bytes, vectors.ramBytesUsed());
                 assertEquals(bytes, vectors.reorderByLandmarkFast().vectors.ramBytesUsed());
@@ -125,7 +136,7 @@ public class TestASHMemoryAccounting {
     }
 
     @Test
-    public void sharedOrdinalsAreChargedConservativelyWithoutIdentityMaps() throws Exception {
+    public void sharedInputVectorsAreCopiedAndChargedPerOrdinal() throws Exception {
         var ash = model(2, 1);
         var data = codes(ash, 2);
         var separate = new ASHVectors(ash, data);
@@ -134,28 +145,32 @@ public class TestASHMemoryAccounting {
     }
 
     @Test
-    public void conservativeLargeCollectionTotalsUseLongArithmetic() throws Exception {
+    public void oversizedInputArraysAreNotRetained() throws Exception {
         var ash = model(4, 1);
         var code = codes(ash, 1)[0];
-        code.extraBits = new byte[8192]; // Valid oversized capacity; only its code prefix is scored.
+        code.extraBits = new byte[8192]; // Valid oversized capacity; only its code prefix is stored.
         var data = new AsymmetricHashing.QuantizedVector[300_000];
         Arrays.fill(data, code);
         var vectors = new ASHVectors(ash, data);
+        var store = (ASHCodes) field(vectors, "codes");
         assertTrue((long)data.length*code.ramBytesUsed() > Integer.MAX_VALUE);
-        assertTrue(vectors.ramBytesUsed() > Integer.MAX_VALUE);
-        long bytes = vectors.ramBytesUsed();
-        assertEquals(bytes, vectors.ramBytesUsed());
+        long payload = (long) data.length * (store.bodyBytes + ASHCodes.HEADER_RAM_BYTES);
+        assertTrue(vectors.ramBytesUsed() - ash.ramBytesUsed() < payload + (1 << 16));
+        assertEquals(code.extraBits.length, 8192);
+        assertEquals(store.bodyBytes, vectors.get(7).extraBits.length);
     }
 
     @Test
-    public void productionCodeLayoutsExposeThePreviouslyMissingPerVectorStorage() {
+    public void productionCodeLayoutsRetainLittleMoreThanTheirSerializedSize() {
         for (int bits : new int[]{2,4}) for (int dimension : new int[]{384,512,768,1536}) {
-            var code = AsymmetricHashing.QuantizedVector.createEmpty(dimension, bits);
-            long missing = code.ramBytesUsed()+2L*Float.BYTES+Byte.BYTES
-                    - AsymmetricHashing.QuantizedVector.serializedSizeBytes(dimension,bits);
-            assertTrue(missing > 0);
-            System.out.printf("ASH_RETAINED_LAYOUT refs=%d bits=%d projected=%d extra_per_million=%d%n",
-                    RamUsageEstimator.NUM_BYTES_OBJECT_REF,bits,dimension,missing*1_000_000L);
+            int vectors = 100_000;
+            var codes = ASHCodes.allocate(vectors, dimension, bits);
+            // Per vector: the code body, plus 4 bytes because the two binary16 headers are kept as floats.
+            long perVector = AsymmetricHashing.QuantizedVector.serializedSizeBytes(dimension, bits)
+                    - AsymmetricHashing.HEADER_BYTES + ASHCodes.HEADER_RAM_BYTES;
+            long overhead = codes.ramBytesUsed() - vectors * perVector;
+            assertTrue("bits=" + bits + " dims=" + dimension + " overhead=" + overhead,
+                    overhead >= 0 && overhead < 64L * 1024);
         }
     }
 
@@ -240,10 +255,9 @@ public class TestASHMemoryAccounting {
             assertTrue(pool.awaitTermination(30, java.util.concurrent.TimeUnit.SECONDS));
         }
         assertEquals(serial.ramBytesUsed(), parallel.ramBytesUsed());
+        // A vector without a complete code is rejected when the collection is built.
         var bad = codes(ash, 17); bad[0].extraBits = new byte[0];
-        var broken = new ASHVectors(ash, bad); long before = broken.ramBytesUsed();
-        assertThrows(IllegalArgumentException.class, () -> broken.symmetricProjectionBlocks(8));
-        assertEquals(before, broken.ramBytesUsed());
+        assertThrows(IllegalArgumentException.class, () -> new ASHVectors(ash, bad));
     }
 
     @Test
@@ -251,15 +265,12 @@ public class TestASHMemoryAccounting {
         for (int bits : new int[]{1,2,4}) {
             var ash = model(bits, 2); var vectors = new ASHVectors(ash, codes(ash, 17));
             long before = vectors.ramBytesUsed();
-            long[] previousFlat = (long[])field(vectors, "flatPackedVectors");
             vectors.diversityFunctionFor(0, VectorSimilarityFunction.DOT_PRODUCT);
             Object symmetric = field(vectors, "diversityScorer");
             float[][] dots = (float[][]) field(symmetric, "landmarkDots");
             long expected = RamUsageEstimator.shallowSizeOf(symmetric)+RamUsageEstimator.shallowSizeOf(dots);
             for (float[] row : dots) expected += RamUsageEstimator.sizeOf(row);
             expected += RamUsageEstimator.shallowSizeOf((float[])field(symmetric, "centeredOffsets"));
-            expected += RamUsageEstimator.shallowSizeOf((long[])field(vectors, "flatPackedVectors"))
-                    - RamUsageEstimator.shallowSizeOf(previousFlat);
             assertEquals(expected, vectors.ramBytesUsed()-before);
             long after = vectors.ramBytesUsed();
             vectors.diversityFunctionFor(1, VectorSimilarityFunction.DOT_PRODUCT);
@@ -268,12 +279,14 @@ public class TestASHMemoryAccounting {
     }
 
     @Test
-    public void oneBitFlatAndBlockRepresentationsAreBothCharged() throws Exception {
+    public void oneBitSingleScoringAddsNoCopyAndBlockLayoutIsCharged() throws Exception {
         assumeTrue(VectorizationProvider.getInstance().getVectorUtilSupport().supportsAshMaskedLoad());
         var ash = model(1, 1); var vectors = new ASHVectors(ash, codes(ash, 17));
-        long before = vectors.ramBytesUsed();
-        long[] flat = vectors.getFlatPackedVectors();
-        assertEquals(RamUsageEstimator.sizeOf(flat), vectors.ramBytesUsed()-before);
+        long ownBefore = vectors.ramBytesUsed() - ash.ramBytesUsed();
+        // Single-vector SIMD scoring reads the stored sign pages in place. Query preparation may
+        // initialize provider weights in the model, so compare the collection's own bytes.
+        vectors.scoreFunctionFor(ash.landmarks[0], VectorSimilarityFunction.DOT_PRODUCT).similarityTo(3);
+        assertEquals(ownBefore, vectors.ramBytesUsed() - ash.ramBytesUsed());
         var query = ash.landmarks[0];
         for (int block : new int[]{8,16,8}) {
             vectors.blockScorerFor(query, VectorSimilarityFunction.DOT_PRODUCT, block);
@@ -281,7 +294,7 @@ public class TestASHMemoryAccounting {
             // Query preparation may initialize provider weights; subtract model growth.
             long own = vectors.ramBytesUsed()-ash.ramBytesUsed();
             assertTrue(packed != null);
-            assertTrue(own >= RamUsageEstimator.sizeOf(flat)+RamUsageEstimator.sizeOf(packed));
+            assertTrue(own >= RamUsageEstimator.sizeOf(packed));
             long stable = vectors.ramBytesUsed();
             vectors.blockScorerFor(query, VectorSimilarityFunction.DOT_PRODUCT, block);
             assertEquals(stable, vectors.ramBytesUsed());

@@ -80,6 +80,11 @@ final class NativeASHKernels {
     static boolean isFourBitDotAvailable() { return ADDRESS_OF_FOUR_BIT != null; }
 
     static float dotFourBit(float[] query, byte[] code, int dimensions) {
+        return dotFourBit(query, code, 0, dimensions);
+    }
+
+    /** Projection dot with the 4-bit code starting at {@code codeOffset}. */
+    static float dotFourBit(float[] query, byte[] code, int codeOffset, int dimensions) {
         if (!isFourBitDotAvailable()) {
             throw new UnsupportedOperationException("Native 4-bit ASH projection scoring is unavailable");
         }
@@ -87,18 +92,18 @@ final class NativeASHKernels {
         Objects.requireNonNull(code, "code");
         Objects.checkFromIndexSize(0, dimensions, query.length);
         long bytes = (dimensions + 1L) / 2;
-        if (bytes > code.length) throw new IndexOutOfBoundsException("Canonical ASH code is too small");
+        if (codeOffset < 0 || codeOffset + bytes > code.length)
+            throw new IndexOutOfBoundsException("Canonical ASH code is too small");
         if (dimensions == 0) return 0f;
         if (dimensions <= MAX_CRITICAL_LANE_GROUPS) {
-            return invokeDot(CRITICAL_FOUR_BIT,
-                    MemorySegment.ofArray(query), MemorySegment.ofArray(code), dimensions);
+            return dotFourBitCritical(query, code, codeOffset, dimensions);
         }
         try (Arena arena = Arena.ofConfined()) {
             long queryBytes = (long) dimensions * Float.BYTES;
             MemorySegment nativeQuery = arena.allocate(queryBytes, Float.BYTES);
             MemorySegment nativeCode = arena.allocate(bytes);
             MemorySegment.copy(MemorySegment.ofArray(query), 0, nativeQuery, 0, queryBytes);
-            MemorySegment.copy(MemorySegment.ofArray(code), 0, nativeCode, 0, bytes);
+            MemorySegment.copy(MemorySegment.ofArray(code), codeOffset, nativeCode, 0, bytes);
             return invokeDot(ORDINARY_FOUR_BIT, nativeQuery, nativeCode, dimensions);
         }
     }
@@ -115,15 +120,21 @@ final class NativeASHKernels {
 
     static boolean isCanonicalLutAvailable() { return ADDRESS_OF_CANONICAL != null; }
 
-    /** One short heap-access call per direct node; no decoding or temporary output array. */
     static float dotCanonical(byte[] code, int groups, float[] lut) {
+        return dotCanonical(code, 0, groups, lut);
+    }
+
+    /**
+     * One short heap-access call per direct node, for the code starting at {@code codeOffset};
+     * no decoding or temporary output array.
+     */
+    static float dotCanonical(byte[] code, int codeOffset, int groups, float[] lut) {
         if (!isCanonicalLutAvailable()) {
             throw new UnsupportedOperationException("Native canonical ASH LUT scoring is unavailable");
         }
-        ASHLutScoring.checkCanonicalBounds(code, groups, lut);
+        ASHLutScoring.checkCanonicalBounds(code, codeOffset, groups, lut);
         if (groups <= MAX_CRITICAL_LANE_GROUPS) {
-            return invokeDot(CRITICAL_CANONICAL,
-                    MemorySegment.ofArray(code), MemorySegment.ofArray(lut), groups);
+            return dotCanonicalCritical(code, codeOffset, groups, lut);
         }
         // Bound time in a critical call by the same group/lane work budget as
         // neighborhood scoring. Unusually large legal codes may reach safepoints.
@@ -132,10 +143,22 @@ final class NativeASHKernels {
             long lutBytes = (long) groups * LUT_ENTRIES_PER_GROUP * Float.BYTES;
             MemorySegment nativeCode = arena.allocate(bytes);
             MemorySegment nativeLut = arena.allocate(lutBytes, Float.BYTES);
-            MemorySegment.copy(MemorySegment.ofArray(code), 0, nativeCode, 0, bytes);
+            MemorySegment.copy(MemorySegment.ofArray(code), codeOffset, nativeCode, 0, bytes);
             MemorySegment.copy(MemorySegment.ofArray(lut), 0, nativeLut, 0, lutBytes);
             return invokeDot(ORDINARY_CANONICAL, nativeCode, nativeLut, groups);
         }
+    }
+
+    // Hot paths: each heap segment is created next to its invokeExact so, once the
+    // static final handle inlines, escape analysis can scalar-replace it.
+    private static float dotFourBitCritical(float[] query, byte[] code, int codeOffset, int dimensions) {
+        return invokeDot(CRITICAL_FOUR_BIT, MemorySegment.ofArray(query),
+                MemorySegment.ofArray(code).asSlice(codeOffset), dimensions);
+    }
+
+    private static float dotCanonicalCritical(byte[] code, int codeOffset, int groups, float[] lut) {
+        return invokeDot(CRITICAL_CANONICAL, MemorySegment.ofArray(code).asSlice(codeOffset),
+                MemorySegment.ofArray(lut), groups);
     }
 
     private static float invokeDot(MethodHandle handle, MemorySegment first,

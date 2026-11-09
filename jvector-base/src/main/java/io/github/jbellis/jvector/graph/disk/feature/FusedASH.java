@@ -64,6 +64,8 @@ public class FusedASH extends AbstractFeature implements FusedFeature {
     private final Supplier<FusedASHDecoder.QueryScratch> queryScratchFactory;
     private final ThreadLocal<byte[]> writeScratch;
     private final ThreadLocal<AsymmetricHashing.QuantizedVector[]> packingRefs;
+    // Reusable per-thread copies of neighbor codes read from compact ASHVectors storage.
+    private final ThreadLocal<AsymmetricHashing.QuantizedVector[]> neighborCopies;
 
     public FusedASH(int maxDegree, AsymmetricHashing ash) {
         this(maxDegree, ash, FusedASHLayout.chooseBlockSize(maxDegree));
@@ -91,6 +93,12 @@ public class FusedASH extends AbstractFeature implements FusedFeature {
         this.queryScratchFactory = () -> new FusedASHDecoder.QueryScratch(ash, maxDegree, blockSize);
         this.writeScratch = ThreadLocal.withInitial(() -> new byte[featureSize]);
         this.packingRefs = ThreadLocal.withInitial(() -> new AsymmetricHashing.QuantizedVector[maxDegree]);
+        this.neighborCopies = ThreadLocal.withInitial(() -> {
+            var copies = new AsymmetricHashing.QuantizedVector[maxDegree];
+            for (int i = 0; i < maxDegree; i++)
+                copies[i] = AsymmetricHashing.QuantizedVector.createEmpty(ash.quantizedDim, ash.bitsPerDimension);
+            return copies;
+        });
     }
 
     @Override
@@ -166,6 +174,7 @@ public class FusedASH extends AbstractFeature implements FusedFeature {
         Arrays.fill(scratch, (byte) 0);
 
         var refs = ash.bitsPerDimension == 1 ? null : packingRefs.get();
+        var copies = state.vectors == null ? null : neighborCopies.get();
         var neighbors = state.view.getNeighborsIterator(0, state.nodeId);
         int count = 0;
         try {
@@ -175,7 +184,14 @@ public class FusedASH extends AbstractFeature implements FusedFeature {
                     throw new IOException("Node " + state.nodeId + " has more than maxDegree=" + maxDegree + " neighbors");
                 }
 
-                var compressed = state.compressedVectorFunction.apply(node);
+                AsymmetricHashing.QuantizedVector compressed;
+                if (copies != null) {
+                    // Copy out of the compact store; no allocation per neighbor.
+                    compressed = copies[count];
+                    state.vectors.copyTo(node, compressed);
+                } else {
+                    compressed = state.compressedVectorFunction.apply(node);
+                }
                 if (ash.bitsPerDimension == 1) {
                     packForFused(scratch, count, compressed);
                 } else {
@@ -331,18 +347,26 @@ public class FusedASH extends AbstractFeature implements FusedFeature {
         public final ImmutableGraphIndex.View view;
         public final IntFunction<AsymmetricHashing.QuantizedVector> compressedVectorFunction;
         public final int nodeId;
+        /** When non-null, neighbor codes are copied from here into reusable storage instead. */
+        final ASHVectors vectors;
 
         public State(ImmutableGraphIndex.View view, ASHVectors ashVectors, int nodeId) {
-            this(view, ashVectors::get, nodeId);
+            this(view, ashVectors::get, nodeId, ashVectors);
         }
 
         public State(
                 ImmutableGraphIndex.View view,
                 IntFunction<AsymmetricHashing.QuantizedVector> compressedVectorFunction,
                 int nodeId) {
+            this(view, compressedVectorFunction, nodeId, null);
+        }
+
+        private State(ImmutableGraphIndex.View view, IntFunction<AsymmetricHashing.QuantizedVector> compressedVectorFunction,
+                      int nodeId, ASHVectors vectors) {
             this.view = view;
             this.compressedVectorFunction = compressedVectorFunction;
             this.nodeId = nodeId;
+            this.vectors = vectors;
         }
     }
 }

@@ -371,17 +371,15 @@ Dense row and block matrices use their corresponding storage layouts; other
 `RealMatrix` implementations retain a dense storage estimate without calling
 `getData()`, which could materialize a matrix copy.
 
-`ASHVectors.ramBytesUsed()` includes its compressor once, its reference array,
-per-vector objects and primitive arrays, cached scales/offsets/landmark IDs,
-and any retained packed or symmetric-scoring caches. It uses heap capacity and
-array/object layout estimates, not serialized code sizes. Vector totals are
-accumulated in the existing constructor pass. Packed-block totals are charged
-when a layout is successfully created and include a small conservative allowance
-for map bookkeeping. Polling the estimate is constant-time with respect to vector
-count, even after packed caches are created. Repeated ordinals sharing vector
-objects or backing arrays are conservatively charged per ordinal; no large
-identity map is allocated to deduplicate caller-owned aliases. The vectors and
-model arrays must remain immutable after construction, as required by scoring.
+`ASHVectors.ramBytesUsed()` includes its compressor once, its compact code
+pages and decoded scale/offset/landmark arrays, and any retained packed or
+symmetric-scoring caches. It uses heap array layout estimates, not serialized
+code sizes. Code storage is sized when the pages are allocated. Packed-block
+totals are charged when a layout is successfully created and include a small
+conservative allowance for map bookkeeping. Polling the estimate is
+constant-time with respect to vector count, even after packed caches are
+created. Vectors passed to the public constructor are copied, so repeated
+ordinals sharing one input vector are charged per ordinal. The model arrays must remain immutable after construction, as required by scoring.
 
 Cached fused ASH sources report their owned source object and quantized vector,
 including its primitive arrays, without charging the shared compressor. Shared

@@ -27,7 +27,6 @@ import io.github.jbellis.jvector.vector.VectorizationProvider;
 import io.github.jbellis.jvector.vector.types.VectorFloat;
 
 import java.io.IOException;
-import java.util.Arrays;
 import java.util.Objects;
 
 /**
@@ -43,15 +42,17 @@ import java.util.Objects;
  *   <li>Vectorized versions of scoring</li>
  * </ul>
  *
- * <p>Fused graph neighborhoods are scored separately by {@link FusedASHDecoder},
- * using the same similarity scale and shared numerical kernels.</p>
+ * <p>Codes are held in one compact {@link ASHCodes} store with no per-vector objects;
+ * every scorer reads them in place. Fused graph neighborhoods are scored separately by
+ * {@link FusedASHDecoder}, from the on-disk index, using the same similarity scale and
+ * shared numerical kernels.</p>
  */
 public class ASHVectors implements CompressedVectors {
 
     final AsymmetricHashing ash;
-    final AsymmetricHashing.QuantizedVector[] compressedVectors;
+    /** The only copy of the stored codes and headers; see {@link ASHCodes}. */
+    final ASHCodes codes;
     final ASHScorer scorer;
-    private final long vectorDataBytes;
     private final long containerBytes;
     // Immutable, optional construction cache produced by the bounded encoding workers.
     // Raw input vectors are never retained. Loaded/individually encoded collections use
@@ -98,7 +99,7 @@ public class ASHVectors implements CompressedVectors {
         }
     }
 
-    // Cached scalar headers (avoid object chasing in blocked scorer)
+    // Decoded headers, owned by codes; aliased for the scorers' hot loops.
     private final float[] scales;   // scale_i = ||x_i − μ|| / ||code_i||
     private final float[] offsets;  // offset_i = <x_i, μ> − ||μ||^2
     private final byte[] landmarks;
@@ -112,92 +113,45 @@ public class ASHVectors implements CompressedVectors {
     private volatile long[] packedBits = null;
     private int packedBlockCount = 0;
 
-    // Flat row-major sign bits for single-vector SIMD (built lazily, 1-bit path only)
-    // Layout: [v0_w0, v0_w1, ... v0_wN, v1_w0, ...]
-    private volatile long[] flatPackedVectors = null;
-
     // Immutable, body-only nibble blocks shared by queries. Header arrays contain
     // decoded binary16 values; the serialized header remains 40 bits per vector.
     private final java.util.concurrent.ConcurrentMap<Integer, byte[][]> projectionBlocks =
             new java.util.concurrent.ConcurrentHashMap<>();
 
     /**
-     * Initialize ASHVectors with an array of ASH-compressed vectors.
+     * Initialize ASHVectors by copying an array of ASH-compressed vectors into compact storage.
+     * The vectors are not retained, so later changes to them are not seen.
      *
-     * <p>
-     * The array is treated as immutable after construction.
+     * @throws IllegalArgumentException if a vector does not have this compressor's code shape
      */
     public ASHVectors(AsymmetricHashing ash,
                       AsymmetricHashing.QuantizedVector[] compressedVectors) {
-        this(ash, compressedVectors, null);
+        this(ash, ASHCodes.copyOf(compressedVectors, ash.quantizedDim, ash.bitsPerDimension), null);
     }
 
-    ASHVectors(AsymmetricHashing ash, AsymmetricHashing.QuantizedVector[] compressedVectors,
-               float[] symmetricOffsets) {
-        if (symmetricOffsets != null && symmetricOffsets.length != compressedVectors.length)
+    /** Takes ownership of {@code codes}, which must not change afterward. */
+    ASHVectors(AsymmetricHashing ash, ASHCodes codes, float[] symmetricOffsets) {
+        if (codes.quantizedDim != ash.quantizedDim || codes.bitsPerDimension != ash.bitsPerDimension)
+            throw new IllegalArgumentException("ASH codes do not match the compressor's code shape");
+        if (symmetricOffsets != null && symmetricOffsets.length != codes.size)
             throw new IllegalArgumentException("Symmetric offsets must match encoded vector count");
         this.symmetricOffsets = symmetricOffsets;
         this.ash = ash;
-        this.compressedVectors = compressedVectors;
+        this.codes = codes;
         this.scorer = new ASHScorer(ash);
 
         this.d = ash.quantizedDim;
         this.words = AsymmetricHashing.QuantizedVector.wordsForDims(d);
 
-        int n = compressedVectors.length;
-        this.scales = new float[n];
-        this.offsets = new float[n];
-        this.landmarks = new byte[n];
-        long dataBytes = 0;
-        for (int i = 0; i < n; i++) {
-            var v = compressedVectors[i];
-            dataBytes = Math.addExact(dataBytes, v.ramBytesUsed());
-            scales[i]    = v.scale;
-            offsets[i]   = v.offset;
-            landmarks[i] = v.landmark;
-        }
-        this.vectorDataBytes = dataBytes;
+        this.scales = codes.scales;
+        this.offsets = codes.offsets;
+        this.landmarks = codes.landmarks;
         this.containerBytes = containerBytes();
-    }
-
-    // Private constructor that trusts prebuilt arrays (for vector landmark sorting)
-    private ASHVectors(AsymmetricHashing ash,
-                       AsymmetricHashing.QuantizedVector[] compressedVectors,
-                       float[] scales,
-                       float[] offsets,
-                       byte[] landmarks,
-                       long vectorDataBytes,
-                       float[] symmetricOffsets) {
-        this.symmetricOffsets = symmetricOffsets;
-        this.ash = ash;
-        this.compressedVectors = compressedVectors;
-        this.scorer = new ASHScorer(ash);
-
-        this.d = ash.quantizedDim;
-        this.words = AsymmetricHashing.QuantizedVector.wordsForDims(d);
-
-        // Defensive sanity checks (cheap)
-        if (scales.length != compressedVectors.length ||
-                offsets.length != compressedVectors.length ||
-                landmarks.length != compressedVectors.length) {
-            throw new IllegalArgumentException("Header arrays must match compressedVectors length");
-        }
-
-        this.scales = scales;
-        this.offsets = offsets;
-        this.landmarks = landmarks;
-        this.vectorDataBytes = vectorDataBytes; // Reordering preserves the same vector multiset.
-        this.containerBytes = containerBytes();
-
-        // packedBits cache starts empty (as usual)
-        this.packedBlockSize = -1;
-        this.packedBits = null;
-        this.packedBlockCount = 0;
     }
 
     @Override
     public int count() {
-        return compressedVectors.length;
+        return codes.size;
     }
 
     /**
@@ -215,12 +169,10 @@ public class ASHVectors implements CompressedVectors {
         ash.write(out, version);
 
         // Write vector count
-        out.writeInt(compressedVectors.length);
+        out.writeInt(codes.size);
 
-        // Write vectors
-        for (var v : compressedVectors) {
-            v.write(out, ash.quantizedDim, ash.bitsPerDimension);
-        }
+        // Write vectors, each in the AsymmetricHashing.QuantizedVector format
+        codes.write(out);
     }
 
     public static ASHVectors load(RandomAccessReader in) throws IOException {
@@ -231,13 +183,7 @@ public class ASHVectors implements CompressedVectors {
             throw new IOException("Invalid compressed vector count " + size);
         }
 
-        var compressedVectors = new AsymmetricHashing.QuantizedVector[size];
-        for (int i = 0; i < size; i++) {
-            compressedVectors[i] =
-                    AsymmetricHashing.QuantizedVector.load(in, ash.quantizedDim, ash.bitsPerDimension);
-        }
-
-        return new ASHVectors(ash, compressedVectors);
+        return new ASHVectors(ash, ASHCodes.load(in, size, ash.quantizedDim, ash.bitsPerDimension), null);
     }
 
     @Override
@@ -252,8 +198,7 @@ public class ASHVectors implements CompressedVectors {
         // ASHScorer dispatches canonical 2/4-bit projection scoring to SIMD when available.
         // The packed masked-add path below is specific to one-bit codes.
         if (ash.bitsPerDimension != 1) {
-            final ASHScorer.ASHScoreFunction f = scorer.scoreFunctionFor(query, similarityFunction);
-            return node -> ASHScorer.toSimilarity(f.similarityTo(compressedVectors[node]));
+            return nodeScoreFunction(scorer.codeScorerFor(scorer.precomputeQuery(query)));
         }
 
         final AshSingleKernel kernel = AshSingleKernel.fromProperty();
@@ -261,8 +206,7 @@ public class ASHVectors implements CompressedVectors {
 
         // Scalar forced
         if (kernel == AshSingleKernel.SCALAR) {
-            final ASHScorer.ASHScoreFunction f = scorer.scoreFunctionFor(query, similarityFunction);
-            return node -> ASHScorer.toSimilarity(f.similarityTo(compressedVectors[node]));
+            return nodeScoreFunction(scorer.codeScorerFor(scorer.precomputeQuery(query)));
         }
 
         // AUTO/SIMD: use SIMD scorer only when backend supports masked-load kernel;
@@ -277,21 +221,38 @@ public class ASHVectors implements CompressedVectors {
         if (kernel == AshSingleKernel.SIMD) {
             throw new IllegalStateException("ASH single-vector SIMD is unavailable on " + vecUtil.getClass().getName());
         }
-        final ASHScorer.ASHScoreFunction f = scorer.scoreFunctionFor(query, similarityFunction);
-        return node -> ASHScorer.toSimilarity(f.similarityTo(compressedVectors[node]));
+        return nodeScoreFunction(scorer.codeScorerFor(scorer.precomputeQuery(query)));
+    }
+
+    /**
+     * Applies {@code f} to stored codes in place, in graph similarity units. One lambda per storage
+     * shape keeps each call site free of null checks for the array a bit width does not use.
+     */
+    private ScoreFunction.ApproximateScoreFunction nodeScoreFunction(ASHScorer.CodeScorer f) {
+        final ASHCodes c = codes;
+        if (c.signWords == 0) {
+            return node -> ASHScorer.toSimilarity(f.dot(null, 0, c.bodyPage(node), c.bodyOffset(node),
+                    scales[node], offsets[node], landmarks[node] & 0xFF));
+        }
+        if (c.bodyBytes == 0) {
+            return node -> ASHScorer.toSimilarity(f.dot(c.signPage(node), c.signOffset(node), null, 0,
+                    scales[node], offsets[node], landmarks[node] & 0xFF));
+        }
+        return node -> ASHScorer.toSimilarity(f.dot(c.signPage(node), c.signOffset(node),
+                c.bodyPage(node), c.bodyOffset(node), scales[node], offsets[node], landmarks[node] & 0xFF));
     }
 
     // ============================================================================
-    // ASH single vector scoring (Optimized Zero-Copy, 1-bit only)
+    // ASH single vector scoring (1-bit only, reads the stored sign pages in place)
     // ============================================================================
 
     private final class SimdASHScoreFunction implements ScoreFunction.ApproximateScoreFunction {
         private final QueryPrecompute qp;
         private final VectorUtilSupport vecUtil;
 
-        // Cached Arrays (Zero-Copy)
+        // Query state and the stored sign pages, read in place
         private final float[] tildeQPool;
-        private final long[] allPackedVectors;
+        private final ASHCodes codes;
 
         private final int d;
         private final int words;
@@ -309,8 +270,7 @@ public class ASHVectors implements CompressedVectors {
             // 1. Grab direct reference to the pool
             this.tildeQPool = qp.tildeQPool;
 
-            // 2. Trigger/Get the flat array from the outer class
-            this.allPackedVectors = getFlatPackedVectors();
+            this.codes = ASHVectors.this.codes;
         }
 
         @Override
@@ -318,14 +278,13 @@ public class ASHVectors implements CompressedVectors {
 
             final int c = landmarks[node2] & 0xFF;
             final int qOffset = c * d;
-            final int packedBase = node2 * words;
 
-            // Run existing optimized 1-bit kernel.
+            // Run existing optimized 1-bit kernel on the node's sign words in its page.
             final float maskedAdd = vecUtil.ashMaskedAdd_512(
                     tildeQPool,
                     qOffset,
-                    allPackedVectors,
-                    packedBase,
+                    codes.signPage(node2),
+                    codes.signOffset(node2),
                     d,
                     words
             );
@@ -359,20 +318,19 @@ public class ASHVectors implements CompressedVectors {
      */
     private static final class LegacyASHBlockScorer implements ASHBlockScorer {
 
-        private final ASHScorer.ASHScoreFunction scorer;
-        private final AsymmetricHashing.QuantizedVector[] vectors;
+        /** Per-node scorer already in graph similarity units. */
+        private final ScoreFunction.ApproximateScoreFunction scorer;
+        private final int size;
 
-        LegacyASHBlockScorer(
-                ASHScorer.ASHScoreFunction scorer,
-                AsymmetricHashing.QuantizedVector[] vectors) {
+        LegacyASHBlockScorer(ScoreFunction.ApproximateScoreFunction scorer, int size) {
             this.scorer = scorer;
-            this.vectors = vectors;
+            this.size = size;
         }
 
         @Override
         public void scoreRange(int start, int count, float[] out) {
             if (count < 0) throw new IllegalArgumentException("count must be >= 0");
-            if (start < 0 || start + count > vectors.length) {
+            if (start < 0 || start + count > size) {
                 throw new IllegalArgumentException(
                         "Range out of bounds: [" + start + ", " + (start + count) + ")"
                 );
@@ -384,7 +342,7 @@ public class ASHVectors implements CompressedVectors {
 
             final int end = start + count;
             for (int i = start, o = 0; i < end; i++, o++) {
-                out[o] = ASHScorer.toSimilarity(scorer.similarityTo(vectors[i]));
+                out[o] = scorer.similarityTo(i);
             }
         }
     }
@@ -402,10 +360,7 @@ public class ASHVectors implements CompressedVectors {
                     "ASH block scorer supports DOT_PRODUCT only");
         }
 
-        ASHScorer.ASHScoreFunction f =
-                scorer.scalarScoreFunctionFor(query);
-
-        return new LegacyASHBlockScorer(f, compressedVectors);
+        return new LegacyASHBlockScorer(nodeScoreFunction(scorer.scalarCodeScorerFor(query)), codes.size);
     }
 
     /**
@@ -475,7 +430,7 @@ public class ASHVectors implements CompressedVectors {
         // ------------------------------------------------------------
         if (kernel == AshBlockKernel.SCALAR || !supportsSimd) {
             return new ScalarASHBlockScorer(
-                    compressedVectors,
+                    codes,
                     scales,
                     offsets,
                     landmarks,
@@ -489,7 +444,7 @@ public class ASHVectors implements CompressedVectors {
         ensurePackedBits(blockSize);
 
         return new SimdASHBlockScorer(
-                compressedVectors,
+                codes.size,
                 scales,
                 offsets,
                 landmarks,
@@ -505,8 +460,7 @@ public class ASHVectors implements CompressedVectors {
             return new SimdASHScoreFunction(new QueryPrecompute(qp.d, qp.C, qp.tildeQPool,
                     qp.sumTildeQByLandmark, qp.dotQMuByLandmark));
         }
-        var f = scorer.scoreFunctionFor(qp, simd);
-        return node -> ASHScorer.toSimilarity(f.similarityTo(compressedVectors[node]));
+        return nodeScoreFunction(scorer.codeScorerFor(qp, simd));
     }
 
     ASHBlockScorer blockScorerFor(ASHScorer.QueryPrecompute prepared, int blockSize, boolean simd) {
@@ -516,29 +470,28 @@ public class ASHVectors implements CompressedVectors {
             return new LutASHBlockScorer(prepared, blockSize, simd);
         }
         if (ash.bitsPerDimension != 1) {
-            return new LegacyASHBlockScorer(scorer.scoreFunctionFor(prepared, simd), compressedVectors);
+            return new LegacyASHBlockScorer(nodeScoreFunction(scorer.codeScorerFor(prepared, simd)), codes.size);
         }
         var qp = new QueryPrecompute(prepared.d, prepared.C, prepared.tildeQPool,
                 prepared.sumTildeQByLandmark, prepared.dotQMuByLandmark);
-        if (!simd) return new ScalarASHBlockScorer(compressedVectors, scales, offsets, landmarks, qp);
+        if (!simd) return new ScalarASHBlockScorer(codes, scales, offsets, landmarks, qp);
         ensurePackedBits(blockSize);
-        return new SimdASHBlockScorer(compressedVectors, scales, offsets, landmarks, packedBits, blockSize, qp);
+        return new SimdASHBlockScorer(codes.size, scales, offsets, landmarks, packedBits, blockSize, qp);
     }
 
     private byte[][] packProjectionBlocks(int blockSize) {
-        int count = compressedVectors.length;
+        int count = codes.size;
         int bytes = FusedASHLayout.canonicalCodeBytes(d, ash.bitsPerDimension);
+        if (bytes > codes.bodyBytes) throw new IllegalStateException("ASH projection codes are shorter than their layout");
         byte[][] blocks = new byte[count / blockSize + (count % blockSize == 0 ? 0 : 1)][];
         long bytesUsed = RamUsageEstimator.shallowSizeOf(blocks);
         for (int block = 0; block < blocks.length; block++) {
             byte[] body = new byte[Math.multiplyExact(bytes, blockSize)];
             int base = block * blockSize;
             for (int lane = 0; lane < Math.min(blockSize, count - base); lane++) {
-                byte[] code = compressedVectors[base + lane].extraBits;
-                if (code == null || code.length < bytes) {
-                    throw new IllegalArgumentException("Missing ASH projection code at ordinal " + (base + lane));
-                }
-                for (int i = 0; i < bytes; i++) body[i * blockSize + lane] = code[i];
+                byte[] page = codes.bodyPage(base + lane);
+                int at = codes.bodyOffset(base + lane);
+                for (int i = 0; i < bytes; i++) body[i * blockSize + lane] = page[at + i];
             }
             blocks[block] = body;
             bytesUsed = Math.addExact(bytesUsed, RamUsageEstimator.sizeOf(body));
@@ -587,7 +540,7 @@ public class ASHVectors implements CompressedVectors {
 
         @Override
         public void scoreRange(int start, int count, float[] out) {
-            Objects.checkFromIndexSize(start, count, compressedVectors.length);
+            Objects.checkFromIndexSize(start, count, codes.size);
             Objects.checkFromIndexSize(0, count, out.length);
             for (int done = 0; done < count;) {
                 int ordinal = start + done;
@@ -622,7 +575,7 @@ public class ASHVectors implements CompressedVectors {
             return;
         }
 
-        final int n = compressedVectors.length;
+        final int n = codes.size;
         packedBlockSize = blockSize;
         packedBlockCount = (n + blockSize - 1) / blockSize;
         packedBits = new long[packedBlockCount * words * blockSize];
@@ -634,49 +587,12 @@ public class ASHVectors implements CompressedVectors {
             for (int w = 0; w < words; w++) {
                 int dstBase = (b * words + w) * blockSize;
                 for (int lane = 0; lane < blockLen; lane++) {
-                    packedBits[dstBase + lane] =
-                            compressedVectors[baseOrd + lane].binaryVector[w];
+                    int node = baseOrd + lane;
+                    packedBits[dstBase + lane] = codes.signPage(node)[codes.signOffset(node) + w];
                 }
                 // remaining lanes default to 0
             }
         }
-    }
-
-    /**
-     * Returns a monolithic long[] containing all 1-bit sign payloads.
-     * <p>
-     * This method is thread-safe and computes the view lazily.
-     * Use this for single-vector SIMD scoring to avoid pointer chasing.
-     * </p>
-     */
-    public long[] getFlatPackedVectors() {
-        if (ash.bitsPerDimension != 1) {
-            throw new IllegalStateException("Flat packed sign-bit cache supports only 1-bit ASH");
-        }
-        if (flatPackedVectors == null) {
-            synchronized (this) {
-                if (flatPackedVectors == null) {
-                    flatPackedVectors = createFlatPackedVectors();
-                }
-            }
-        }
-        return flatPackedVectors;
-    }
-
-    private long[] createFlatPackedVectors() {
-        final int n = compressedVectors.length;
-        if (n == 0) return new long[0];
-
-        // words is already a class field
-        long[] flat = new long[n * words];
-
-        for (int i = 0; i < n; i++) {
-            var v = compressedVectors[i];
-            if (v != null && v.binaryVector != null) {
-                System.arraycopy(v.binaryVector, 0, flat, i * words, words);
-            }
-        }
-        return flat;
     }
 
     /**
@@ -690,7 +606,7 @@ public class ASHVectors implements CompressedVectors {
      */
     private static final class ScalarASHBlockScorer implements ASHBlockScorer {
 
-        private final AsymmetricHashing.QuantizedVector[] vectors;
+        private final ASHCodes codes;
         private final float[] scales;
         private final float[] offsets;
         private final byte[] landmarks;
@@ -702,14 +618,14 @@ public class ASHVectors implements CompressedVectors {
         private final int words;
 
         ScalarASHBlockScorer(
-                AsymmetricHashing.QuantizedVector[] vectors,
+                ASHCodes codes,
                 float[] scales,
                 float[] offsets,
                 byte[] landmarks,
                 QueryPrecompute qp)
         {
 
-            this.vectors = vectors;
+            this.codes = codes;
             this.scales = scales;
             this.offsets = offsets;
             this.landmarks = landmarks;
@@ -725,7 +641,7 @@ public class ASHVectors implements CompressedVectors {
         @Override
         public void scoreRange(int start, int count, float[] out) {
             if (count < 0) throw new IllegalArgumentException("count must be >= 0");
-            if (start < 0 || start + count > vectors.length) {
+            if (start < 0 || start + count > codes.size) {
                 throw new IllegalArgumentException("Range out of bounds: [" + start + ", " + (start + count) + ")");
             }
             if (out.length < count) throw new IllegalArgumentException("out.length < count");
@@ -740,10 +656,11 @@ public class ASHVectors implements CompressedVectors {
                 float maskedAdd = 0f;
 
                 // bit-walk against landmark-specific q̃
-                final long[] bits = vectors[idx].binaryVector;
+                final long[] bits = codes.signPage(idx);
+                final int bitsOffset = codes.signOffset(idx);
                 int baseDim = 0;
                 for (int w = 0; w < words && baseDim < d; w++, baseDim += 64) {
-                    long word = bits[w];
+                    long word = bits[bitsOffset + w];
                     while (word != 0L) {
                         int bit = Long.numberOfTrailingZeros(word);
                         int j = baseDim + bit;
@@ -783,7 +700,7 @@ public class ASHVectors implements CompressedVectors {
      */
     private static final class SimdASHBlockScorer implements ASHBlockScorer {
 
-        private final AsymmetricHashing.QuantizedVector[] vectors;
+        private final int size;
         private final float[] scales;
         private final float[] offsets;
         private final byte[] landmarks;
@@ -807,7 +724,7 @@ public class ASHVectors implements CompressedVectors {
         private final VectorUtilSupport vecUtil;
 
         SimdASHBlockScorer(
-                AsymmetricHashing.QuantizedVector[] vectors,
+                int size,
                 float[] scales,
                 float[] offsets,
                 byte[] landmarks,
@@ -817,7 +734,7 @@ public class ASHVectors implements CompressedVectors {
 
             this.vecUtil = VectorizationProvider.getInstance().getVectorUtilSupport();
 
-            this.vectors = vectors;
+            this.size = size;
             this.scales = scales;
             this.offsets = offsets;
             this.landmarks = landmarks;
@@ -840,7 +757,7 @@ public class ASHVectors implements CompressedVectors {
         @Override
         public void scoreRange(int start, int count, float[] out) {
             if (count < 0) throw new IllegalArgumentException("count must be >= 0");
-            if (start < 0 || start + count > vectors.length) {
+            if (start < 0 || start + count > size) {
                 throw new IllegalArgumentException("Range out of bounds: [" + start + ", " + (start + count) + ")");
             }
             if (out.length < count) throw new IllegalArgumentException("out.length < count");
@@ -982,10 +899,10 @@ public class ASHVectors implements CompressedVectors {
 
     /**
      * Stable, linear-time reorder by landmark id ({@code C <= 256}).
-     * Fills reordered header arrays in the same pass (no second constructor scan).
+     * The result holds its own reordered copy of the codes.
      */
     public LandmarkOrder reorderByLandmarkFast() {
-        final int n = compressedVectors.length;
+        final int n = codes.size;
         final int C = ash.landmarkCount;
 
         // Count per landmark
@@ -1010,24 +927,14 @@ public class ASHVectors implements CompressedVectors {
 
         final int[] writePos = landmarkOffsets.clone();
 
-        final AsymmetricHashing.QuantizedVector[] newVecs = new AsymmetricHashing.QuantizedVector[n];
-        final float[] newScales = new float[n];
-        final float[] newOffsets = new float[n];
         final float[] newSymmetricOffsets = symmetricOffsets == null ? null : new float[n];
-        final byte[] newLandmarks = new byte[n];
         final int[] newToOld = new int[n];
 
         // Preserve an ordinal map so we can go back and forth
         for (int oldOrd = 0; oldOrd < n; oldOrd++) {
             final int c = this.landmarks[oldOrd] & 0xFF;
             final int newOrd = writePos[c]++;
-
-            newVecs[newOrd] = this.compressedVectors[oldOrd];
-            newScales[newOrd] = this.scales[oldOrd];
-            newOffsets[newOrd] = this.offsets[oldOrd];
             if (newSymmetricOffsets != null) newSymmetricOffsets[newOrd] = symmetricOffsets[oldOrd];
-            newLandmarks[newOrd] = this.landmarks[oldOrd];
-
             newToOld[newOrd] = oldOrd;
         }
 
@@ -1036,7 +943,7 @@ public class ASHVectors implements CompressedVectors {
             oldToNew[newToOld[newOrd]] = newOrd;
         }
 
-        ASHVectors reordered = new ASHVectors(ash, newVecs, newScales, newOffsets, newLandmarks, vectorDataBytes, newSymmetricOffsets);
+        ASHVectors reordered = new ASHVectors(ash, codes.permute(newToOld), newSymmetricOffsets);
         return new LandmarkOrder(reordered, newToOld, oldToNew, landmarkOffsets);
     }
 
@@ -1134,8 +1041,20 @@ public class ASHVectors implements CompressedVectors {
         return symmetric.scoreFunctionFor(node1);
     }
 
+    /**
+     * A new, independent copy of the stored vector. Allocates; for repeated reads into reusable
+     * storage use {@link #copyTo}. Scorers read the stored codes in place.
+     */
     public AsymmetricHashing.QuantizedVector get(int ordinal) {
-        return compressedVectors[ordinal];
+        return codes.get(ordinal);
+    }
+
+    /**
+     * Copies the stored vector into {@code dest}, replacing its arrays only if their lengths do not
+     * match this compressor's code shape.
+     */
+    public void copyTo(int ordinal, AsymmetricHashing.QuantizedVector dest) {
+        codes.copyTo(ordinal, dest);
     }
 
     @Override
@@ -1155,48 +1074,45 @@ public class ASHVectors implements CompressedVectors {
 
     private long containerBytes() {
         return RamUsageEstimator.shallowSizeOfInstance(ASHVectors.class)
-                + RamUsageEstimator.shallowSizeOf(compressedVectors)
-                + RamUsageEstimator.sizeOf(scales) + RamUsageEstimator.sizeOf(offsets)
-                + RamUsageEstimator.sizeOf(landmarks) + RamUsageEstimator.shallowSizeOf(scorer)
+                + RamUsageEstimator.shallowSizeOf(scorer)
                 + RamUsageEstimator.shallowSizeOf(symmetricOffsets)
                 + RamUsageEstimator.shallowSizeOf(projectionBlocks)
                 + RamUsageEstimator.shallowSizeOf(projectionCacheBytes);
     }
 
     /**
-     * Retained compressor, vector heap storage and published caches, analogous to PQVectors.
-     * Vector objects/arrays are charged per ordinal (conservative for caller-shared vectors).
+     * Retained compressor, code storage and published caches, analogous to PQVectors.
      * Query-local scorers and worker scratch are owned by callers and excluded here.
-     * Immutable payload totals are cached at construction; lazy cache totals at allocation.
+     * Code storage is fixed at construction; lazy cache totals are added at allocation.
      */
     @Override
     public long ramBytesUsed() {
         ASHSymmetricScorer symmetric = diversityScorer;
-        return ash.ramBytesUsed() + containerBytes + vectorDataBytes + projectionCacheBytes.get()
-                + RamUsageEstimator.shallowSizeOf(packedBits) + RamUsageEstimator.shallowSizeOf(flatPackedVectors)
+        return ash.ramBytesUsed() + containerBytes + codes.ramBytesUsed() + projectionCacheBytes.get()
+                + RamUsageEstimator.shallowSizeOf(packedBits)
                 + (symmetric == null ? 0 : symmetric.ramBytesUsed());
     }
 
+    /** Equal compressors and the same stored vectors in the same order. */
     @Override
     public boolean equals(Object o) {
         if (this == o) return true;
         if (o == null || getClass() != o.getClass()) return false;
 
         ASHVectors that = (ASHVectors) o;
-        return Objects.equals(ash, that.ash)
-                && Arrays.equals(compressedVectors, that.compressedVectors);
+        return Objects.equals(ash, that.ash) && codes.contentEquals(that.codes);
     }
 
     @Override
     public int hashCode() {
         int result = Objects.hash(ash);
-        result = 31 * result + Arrays.hashCode(compressedVectors);
+        result = 31 * result + codes.contentHash();
         return result;
     }
 
     @Override
     public String toString() {
-        return "ASHVectors{count=" + compressedVectors.length +
+        return "ASHVectors{count=" + codes.size +
                 ", ash=" + ash + '}';
     }
 }

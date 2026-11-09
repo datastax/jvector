@@ -108,6 +108,21 @@ class NativeVectorUtilSupport extends PanamaVectorUtilSupport
     }
 
     @Override
+    public float ashSymmetricBinaryDotAt(long[] aBits, int aOffset, long[] bBits, int bOffset, int dimensions) {
+        return NativeASHSymmetricKernels.hasPairKernel()
+                ? NativeASHSymmetricKernels.binaryDotAt(aBits, aOffset, bBits, bOffset, dimensions)
+                : super.ashSymmetricBinaryDotAt(aBits, aOffset, bBits, bOffset, dimensions);
+    }
+
+    @Override
+    public float ashSymmetricDotAt(byte[] aCodes, int aOffset, byte[] bCodes, int bOffset,
+                                   int dimensions, int bits) {
+        return NativeASHSymmetricKernels.hasPairKernel()
+                ? NativeASHSymmetricKernels.dotAt(aCodes, aOffset, bCodes, bOffset, dimensions, bits)
+                : super.ashSymmetricDotAt(aCodes, aOffset, bCodes, bOffset, dimensions, bits);
+    }
+
+    @Override
     public void ashSymmetricLutScore(byte[] codes, int groups, int stride, int lane, int count,
                                      short[] lut, float[] out, int outOffset) {
         if (NativeASHSymmetricKernels.hasLutKernel())
@@ -133,16 +148,16 @@ class NativeVectorUtilSupport extends PanamaVectorUtilSupport
     }
 
     @Override
-    public float ashProjectionDot(float[] query, byte[] code, int dimensions, int bitsPerDimension) {
+    public float ashProjectionDot(float[] query, byte[] code, int codeOffset, int dimensions, int bitsPerDimension) {
         if (bitsPerDimension == 4 && NativeASHKernels.isFourBitDotAvailable()) {
-            return NativeASHKernels.dotFourBit(query, code, dimensions);
+            return NativeASHKernels.dotFourBit(query, code, codeOffset, dimensions);
         }
         if (REQUIRE_NATIVE_ASH) {
             requireNativeAshSingleScoring(bitsPerDimension);
             if (bitsPerDimension == 2)
                 throw new IllegalStateException("Native b=2 scoring requires its prepared LUT; use ASHScorer");
         }
-        return super.ashProjectionDot(query, code, dimensions, bitsPerDimension);
+        return super.ashProjectionDot(query, code, codeOffset, dimensions, bitsPerDimension);
     }
 
     @Override
@@ -151,8 +166,8 @@ class NativeVectorUtilSupport extends PanamaVectorUtilSupport
     }
 
     @Override
-    public float ashCanonicalLutDot(byte[] code, int groups, float[] lut) {
-        return NativeASHKernels.dotCanonical(code, groups, lut);
+    public float ashCanonicalLutDot(byte[] code, int codeOffset, int groups, float[] lut) {
+        return NativeASHKernels.dotCanonical(code, codeOffset, groups, lut);
     }
 
     @Override

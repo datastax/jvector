@@ -105,18 +105,23 @@ public final class ASHScorer {
      * Scorer for dot product approximation.
      */
     ASHScoreFunction scoreFunctionFor(QueryPrecompute qp) {
+        return forVectors(codeScorerFor(qp));
+    }
+
+    /** As {@link #scoreFunctionFor(QueryPrecompute)}, scoring codes in place. */
+    CodeScorer codeScorerFor(QueryPrecompute qp) {
         if (ash.bitsPerDimension == 1) {
-            return oneBitDotProductScoreFunction(qp);
+            return oneBitDotProductScorer(qp);
         }
 
         if (AsymmetricHashing.usesFastScanProjectionCode(ash.bitsPerDimension)) {
-            return fastScanProjectionDotProductScoreFunction(qp);
+            return fastScanProjectionDotProductScorer(qp);
         }
 
         if (ASHVectors.AshSingleKernel.fromProperty() == ASHVectors.AshSingleKernel.SIMD) {
             throw new UnsupportedOperationException("SIMD ASH projection scoring supports 2 and 4 bits per dimension");
         }
-        return genericMultibitDotProductScoreFunction(qp);
+        return genericMultibitDotProductScorer(qp);
     }
 
     /** Reuses a fused scorer's table for direct nodes when the backend supports it. */
@@ -137,31 +142,39 @@ public final class ASHScorer {
 
     /** Prepared encoded-query state; uses the same arithmetic as the raw-query scorer. */
     ASHScoreFunction scoreFunctionFor(QueryPrecompute qp, boolean simd) {
-        if (ash.bitsPerDimension == 1) return oneBitDotProductScoreFunction(qp);
-        if (AsymmetricHashing.usesFastScanProjectionCode(ash.bitsPerDimension)) {
-            return fastScanProjectionDotProductScoreFunction(qp, simd);
-        }
-        if (simd) throw new UnsupportedOperationException("SIMD ASH requires bits 1, 2, or 4");
-        return genericMultibitDotProductScoreFunction(qp);
+        return forVectors(codeScorerFor(qp, simd));
     }
 
-    private ASHScoreFunction oneBitDotProductScoreFunction(QueryPrecompute qp) {
+    /** As {@link #scoreFunctionFor(QueryPrecompute, boolean)}, scoring codes in place. */
+    CodeScorer codeScorerFor(QueryPrecompute qp, boolean simd) {
+        if (ash.bitsPerDimension == 1) return oneBitDotProductScorer(qp);
+        if (AsymmetricHashing.usesFastScanProjectionCode(ash.bitsPerDimension)) {
+            return fastScanProjectionDotProductScorer(qp, simd);
+        }
+        if (simd) throw new UnsupportedOperationException("SIMD ASH requires bits 1, 2, or 4");
+        return genericMultibitDotProductScorer(qp);
+    }
+
+    /** Adapts a code scorer to standalone vectors, whose arrays start at offset zero. */
+    static ASHScoreFunction forVectors(CodeScorer scorer) {
+        return v -> scorer.dot(v.binaryVector, 0, v.extraBits, 0, v.scale, v.offset, v.landmark & 0xFF);
+    }
+
+    private CodeScorer oneBitDotProductScorer(QueryPrecompute qp) {
         final int d = qp.d;
         final int C = qp.C;
         final int words = AsymmetricHashing.QuantizedVector.wordsForDims(d);
 
-        return (AsymmetricHashing.QuantizedVector v) -> {
-            final int c = v.landmark & 0xFF; // unsigned [0,C)
+        return (bits, bitsOffset, body, bodyOffset, scale, offset, c) -> {
             assert c < C : "Invalid landmark id " + c + " for landmarkCount=" + C;
 
             // maskedAdd = <q̃_c, b>, where b ∈ {0,1}^d is stored as packed longs.
             float maskedAdd = 0f;
 
             final int tildeBase = c * d;
-            final long[] bits = v.binaryVector;
             int dimBase = 0;
             for (int w = 0; w < words && dimBase < d; w++, dimBase += 64) {
-                long word = bits[w];
+                long word = bits[bitsOffset + w];
                 while (word != 0L) {
                     int bit = Long.numberOfTrailingZeros(word);
                     int idx = dimBase + bit;
@@ -174,23 +187,28 @@ public final class ASHScorer {
 
             // 1-bit ASH dot-product approximation:
             //   scale * (2<q̃_c,b> - <q̃_c,1>) + <q,μ_c> + offset
-            return v.scale * (2f * maskedAdd - qp.sumTildeQByLandmark[c])
+            return scale * (2f * maskedAdd - qp.sumTildeQByLandmark[c])
                     + qp.dotQMuByLandmark[c]
-                    + v.offset;
+                    + offset;
         };
     }
 
     /** Independent scalar oracle for the reference block-scoring API. */
     ASHScoreFunction scalarScoreFunctionFor(VectorFloat<?> query) {
-        QueryPrecompute qp = precomputeQuery(query);
-        if (ash.bitsPerDimension == 1) return oneBitDotProductScoreFunction(qp);
-        if (AsymmetricHashing.usesFastScanProjectionCode(ash.bitsPerDimension)) {
-            return fastScanProjectionDotProductScoreFunction(qp, false);
-        }
-        return genericMultibitDotProductScoreFunction(qp);
+        return forVectors(scalarCodeScorerFor(query));
     }
 
-    private ASHScoreFunction fastScanProjectionDotProductScoreFunction(QueryPrecompute qp) {
+    /** As {@link #scalarScoreFunctionFor}, scoring codes in place. */
+    CodeScorer scalarCodeScorerFor(VectorFloat<?> query) {
+        QueryPrecompute qp = precomputeQuery(query);
+        if (ash.bitsPerDimension == 1) return oneBitDotProductScorer(qp);
+        if (AsymmetricHashing.usesFastScanProjectionCode(ash.bitsPerDimension)) {
+            return fastScanProjectionDotProductScorer(qp, false);
+        }
+        return genericMultibitDotProductScorer(qp);
+    }
+
+    private CodeScorer fastScanProjectionDotProductScorer(QueryPrecompute qp) {
         final var backend = VectorizationProvider.getInstance().getVectorUtilSupport();
         final var mode = ASHVectors.AshSingleKernel.fromProperty();
         if (mode == ASHVectors.AshSingleKernel.SIMD && !backend.supportsAshProjectionScoring()) {
@@ -198,10 +216,10 @@ public final class ASHScorer {
                     + backend.getClass().getName() + " does not support projection scoring");
         }
         final boolean simd = mode != ASHVectors.AshSingleKernel.SCALAR && backend.supportsAshProjectionScoring();
-        return fastScanProjectionDotProductScoreFunction(qp, simd);
+        return fastScanProjectionDotProductScorer(qp, simd);
     }
 
-    private ASHScoreFunction fastScanProjectionDotProductScoreFunction(QueryPrecompute qp, boolean simd) {
+    private CodeScorer fastScanProjectionDotProductScorer(QueryPrecompute qp, boolean simd) {
         final int d = qp.d;
         final int C = qp.C;
         final int bitsPerDimension = ash.bitsPerDimension;
@@ -217,36 +235,33 @@ public final class ASHScorer {
             final int groups = FusedASHLayout.codeGroups(d, bitsPerDimension);
             final float[] lut = new float[Math.multiplyExact(groups, 16)];
             FusedASHLayout.buildQueryLut(qp.qProj, d, bitsPerDimension, lut);
-            return v -> v.scale * backend.ashCanonicalLutDot(v.extraBits, groups, lut)
-                    + qp.dotQMuByLandmark[v.landmark & 255] + v.offset;
+            return (bits, bitsOffset, code, codeOffset, scale, offset, c) ->
+                    scale * backend.ashCanonicalLutDot(code, codeOffset, groups, lut)
+                    + qp.dotQMuByLandmark[c] + offset;
         }
 
         // Keep tuning dispatch out of the per-vector default kernel. Its compact
         // compilation shape matters for end-to-end scoring throughput on HotSpot.
         if (simd && backend.usesAshProjectionTuning()) {
-            return v -> v.scale * backend.ashProjectionDotTuned(qp.qProj, v.extraBits, d, bitsPerDimension)
-                    + qp.dotQMuByLandmark[v.landmark & 255] + v.offset;
+            return (bits, bitsOffset, code, codeOffset, scale, offset, c) ->
+                    scale * backend.ashProjectionDotTuned(qp.qProj, code, codeOffset, d, bitsPerDimension)
+                    + qp.dotQMuByLandmark[c] + offset;
         }
 
-        return (AsymmetricHashing.QuantizedVector v) -> {
-            final int c = v.landmark & 0xFF; // unsigned [0,C)
+        return (bits, bitsOffset, code, codeOffset, scale, offset, c) -> {
             assert c < C : "Invalid landmark id " + c + " for landmarkCount=" + C;
 
             // C++ projection-mode scoring:
             //   score = scale * <Aq, code> + <q, μ_c> + stored_offset
             // stored_offset already includes -scale * <Aμ_c, code>.
-            float ip = simd ? backend.ashProjectionDot(qp.qProj, v.extraBits, d, bitsPerDimension)
-                    : AsymmetricHashing.dotProjectionCode(
-                    qp.qProj,
-                    v.extraBits,
-                    d,
-                    bitsPerDimension);
+            float ip = simd ? backend.ashProjectionDot(qp.qProj, code, codeOffset, d, bitsPerDimension)
+                    : AsymmetricHashing.dotProjectionCode(qp.qProj, code, codeOffset, d, bitsPerDimension);
 
-            return v.scale * ip + qp.dotQMuByLandmark[c] + v.offset;
+            return scale * ip + qp.dotQMuByLandmark[c] + offset;
         };
     }
 
-    private ASHScoreFunction genericMultibitDotProductScoreFunction(QueryPrecompute qp) {
+    private CodeScorer genericMultibitDotProductScorer(QueryPrecompute qp) {
         final int d = qp.d;
         final int C = qp.C;
         final int bitsPerDimension = ash.bitsPerDimension;
@@ -254,18 +269,15 @@ public final class ASHScorer {
         final int signMagnitudeOffset = 1 << exBits;
         final float centerBias = -(signMagnitudeOffset - 0.5f);
 
-        return (AsymmetricHashing.QuantizedVector v) -> {
-            final int c = v.landmark & 0xFF; // unsigned [0,C)
+        return (signBits, signOffset, extraBits, extraOffset, scale, offset, c) -> {
             assert c < C : "Invalid landmark id " + c + " for landmarkCount=" + C;
 
             final int tildeBase = c * d;
-            final long[] signBits = v.binaryVector;
-            final byte[] extraBits = v.extraBits;
 
             float ip = 0f;
             for (int j = 0; j < d; j++) {
-                int sign = AsymmetricHashing.QuantizedVector.getBit(signBits, j) ? 1 : 0;
-                int extra = AsymmetricHashing.QuantizedVector.readExtraCode(extraBits, j, exBits);
+                int sign = AsymmetricHashing.QuantizedVector.getBit(signBits, signOffset, j) ? 1 : 0;
+                int extra = AsymmetricHashing.QuantizedVector.readExtraCode(extraBits, extraOffset, j, exBits);
 
                 // Matches the C++ generic scalar reconstruction formula:
                 //   (sign << exBits) + extra - (2^exBits - 0.5)
@@ -273,7 +285,7 @@ public final class ASHScorer {
                 ip += qp.tildeQPool[tildeBase + j] * code;
             }
 
-            return v.scale * ip + qp.dotQMuByLandmark[c] + v.offset;
+            return scale * ip + qp.dotQMuByLandmark[c] + offset;
         };
     }
 
@@ -359,5 +371,16 @@ public final class ASHScorer {
     @FunctionalInterface
     public interface ASHScoreFunction {
         float similarityTo(AsymmetricHashing.QuantizedVector vector2);
+    }
+
+    /**
+     * Raw dot product of a prepared query with one code read in place: sign words from {@code bits}
+     * at {@code bitsOffset} and the byte body from {@code body} at {@code bodyOffset} (either is
+     * unused when the bit width stores none), with the code's decoded header and unsigned landmark.
+     * Lets {@link ASHVectors} score its compact pages and standalone vectors with one formula.
+     */
+    @FunctionalInterface
+    interface CodeScorer {
+        float dot(long[] bits, int bitsOffset, byte[] body, int bodyOffset, float scale, float offset, int landmark);
     }
 }

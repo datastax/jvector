@@ -78,6 +78,25 @@ Construction policy can change the graph, recall and QPS. Use fresh indexes
 when comparing modes: the graph cache key does not include this JVM property,
 so changing it does not invalidate an existing cached graph.
 
+### In-memory code layout
+
+`ASHVectors` keeps one copy of the codes, in compact pages. Each vector's code
+body (sign words, projection code or extra bits) sits back to back with the
+others, with no per-vector object, array or padding. Scale, offset and landmark
+are decoded once into three parallel arrays. Every scorer, symmetric and
+asymmetric, reads the codes in place, and the encoder writes straight into the
+pages.
+
+Retained memory per vector is the serialized size plus 4 bytes, because the two
+binary16 header fields are held as floats: for example 101 bytes on disk and
+105 bytes in memory for 768-D at 32x. Pages hold up to 256 KiB, which keeps
+them below G1's smallest humongous-object threshold so the collector never
+rounds them up to whole regions. `ASHVectors.get(i)` returns an allocated copy;
+`copyTo(i, dest)` fills reusable storage. Optional caches built for block
+scoring (`blockScorerFor` with a block size) hold a second, interleaved copy and
+are charged in `ramBytesUsed()` when created; graph construction and search do
+not build them.
+
 ## Query projection and scoring
 
 | JVM property | Default | Optional values and definition |

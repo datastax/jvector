@@ -702,7 +702,12 @@ public class AsymmetricHashing implements VectorCompressor<AsymmetricHashing.Qua
     }
 
     static int flatNibble(byte[] code, int group) {
-        int v = code[group >>> 1] & 0xFF;
+        return flatNibble(code, 0, group);
+    }
+
+    /** Nibble {@code group} of the code starting at {@code codeOffset}. */
+    static int flatNibble(byte[] code, int codeOffset, int group) {
+        int v = code[codeOffset + (group >>> 1)] & 0xFF;
         return ((group & 1) == 0) ? (v & 0x0F) : ((v >>> 4) & 0x0F);
     }
 
@@ -711,11 +716,15 @@ public class AsymmetricHashing implements VectorCompressor<AsymmetricHashing.Qua
             int dimension,
             int bitsPerDimension
     ) {
+        return projectionFieldForDimension(projectionCode, 0, dimension, bitsPerDimension);
+    }
+
+    static int projectionFieldForDimension(byte[] projectionCode, int codeOffset, int dimension, int bitsPerDimension) {
         int groupDims = projectionDimsPerNibble(bitsPerDimension);
         int group = dimension / groupDims;
         int slot = dimension - group * groupDims;
         int mask = (1 << bitsPerDimension) - 1;
-        return (flatNibble(projectionCode, group) >>> (slot * bitsPerDimension)) & mask;
+        return (flatNibble(projectionCode, codeOffset, group) >>> (slot * bitsPerDimension)) & mask;
     }
 
     static float decodeProjectionComponent(int field, int bitsPerDimension) {
@@ -735,8 +744,13 @@ public class AsymmetricHashing implements VectorCompressor<AsymmetricHashing.Qua
             int dimension,
             int bitsPerDimension
     ) {
+        return projectionComponent(projectionCode, 0, dimension, bitsPerDimension);
+    }
+
+    /** Component {@code dimension} of the code starting at {@code codeOffset}. */
+    static float projectionComponent(byte[] projectionCode, int codeOffset, int dimension, int bitsPerDimension) {
         return decodeProjectionComponent(
-                projectionFieldForDimension(projectionCode, dimension, bitsPerDimension),
+                projectionFieldForDimension(projectionCode, codeOffset, dimension, bitsPerDimension),
                 bitsPerDimension);
     }
 
@@ -746,12 +760,18 @@ public class AsymmetricHashing implements VectorCompressor<AsymmetricHashing.Qua
             int quantizedDim,
             int bitsPerDimension
     ) {
+        return dotProjectionCode(projectedVector, projectionCode, 0, quantizedDim, bitsPerDimension);
+    }
+
+    /** Scalar projection dot with the code starting at {@code codeOffset}. */
+    static float dotProjectionCode(float[] projectedVector, byte[] projectionCode, int codeOffset,
+                                   int quantizedDim, int bitsPerDimension) {
         int groupDims = projectionDimsPerNibble(bitsPerDimension);
         int groups = projectionCodeGroups(quantizedDim, bitsPerDimension);
         float sum = 0.0f;
 
         for (int group = 0; group < groups; group++) {
-            int nibble = flatNibble(projectionCode, group);
+            int nibble = flatNibble(projectionCode, codeOffset, group);
             int baseDim = group * groupDims;
             for (int slot = 0; slot < groupDims; slot++) {
                 int dim = baseDim + slot;
@@ -768,11 +788,15 @@ public class AsymmetricHashing implements VectorCompressor<AsymmetricHashing.Qua
 
     /** Header-calibrated correction for symmetric scoring, using the stored code/header. */
     float centeredOffset(QuantizedVector vector) {
-        int c = vector.landmark & 255;
+        return centeredOffset(vector.scale, vector.offset, vector.landmark, vector.extraBits, 0);
+    }
+
+    /** As {@link #centeredOffset(QuantizedVector)} for a header and a body stored at {@code bodyOffset}. */
+    float centeredOffset(float scale, float offset, byte landmark, byte[] body, int bodyOffset) {
+        int c = landmark & 255;
         if (c >= landmarkCount) throw new IllegalArgumentException("Invalid landmark " + c);
-        if (!usesFastScanProjectionCode(bitsPerDimension)) return vector.offset;
-        return vector.offset + vector.scale * dotProjectionCode(
-                landmarkProj[c], vector.extraBits, quantizedDim, bitsPerDimension);
+        if (!usesFastScanProjectionCode(bitsPerDimension)) return offset;
+        return offset + scale * dotProjectionCode(landmarkProj[c], body, bodyOffset, quantizedDim, bitsPerDimension);
     }
 
     // ---------------------------------------------------------------------
@@ -1181,7 +1205,12 @@ public class AsymmetricHashing implements VectorCompressor<AsymmetricHashing.Qua
         }
 
         static boolean getBit(long[] words, int bitIndex) {
-            return ((words[bitIndex >>> 6] >>> (bitIndex & 63)) & 1L) != 0L;
+            return getBit(words, 0, bitIndex);
+        }
+
+        /** Bit {@code bitIndex} of the sign words starting at {@code wordOffset}. */
+        static boolean getBit(long[] words, int wordOffset, int bitIndex) {
+            return ((words[wordOffset + (bitIndex >>> 6)] >>> (bitIndex & 63)) & 1L) != 0L;
         }
 
         static void writeExtraCode(byte[] extraBits, int dim, int exBits, int code) {
@@ -1194,10 +1223,15 @@ public class AsymmetricHashing implements VectorCompressor<AsymmetricHashing.Qua
         }
 
         static int readExtraCode(byte[] extraBits, int dim, int exBits) {
+            return readExtraCode(extraBits, 0, dim, exBits);
+        }
+
+        /** As {@link #readExtraCode(byte[], int, int)} for extra bits starting at {@code byteOffset}. */
+        static int readExtraCode(byte[] extraBits, int byteOffset, int dim, int exBits) {
             int code = 0;
             int bitPos = dim * exBits;
             for (int bit = 0; bit < exBits; bit++, bitPos++) {
-                code |= ((extraBits[bitPos >>> 3] >>> (bitPos & 7)) & 1) << bit;
+                code |= ((extraBits[byteOffset + (bitPos >>> 3)] >>> (bitPos & 7)) & 1) << bit;
             }
             return code;
         }
@@ -1527,7 +1561,8 @@ public class AsymmetricHashing implements VectorCompressor<AsymmetricHashing.Qua
         final int n = ravv.size();
         final int parallelism = Math.max(1, simdExecutor.getParallelism());
         final int chunkSize = (int) (((long) n + parallelism - 1) / parallelism);
-        final QuantizedVector[] out = new QuantizedVector[n];
+        // Encoded straight into the compact store; no per-vector objects are retained.
+        final ASHCodes out = ASHCodes.allocate(n, quantizedDim, bitsPerDimension);
         // Fill while each encoded vector is hot; never reread the raw input for setup.
         final float[] symmetricOffsets = usesFastScanProjectionCode(bitsPerDimension) ? new float[n] : null;
         final var ravvSupplier = ravv.threadLocalSupplier();
@@ -1557,7 +1592,7 @@ public class AsymmetricHashing implements VectorCompressor<AsymmetricHashing.Qua
         return new ASHVectors(this, out, symmetricOffsets);
     }
 
-    private void encodeRange(RandomAccessVectorValues source, QuantizedVector[] out,
+    private void encodeRange(RandomAccessVectorValues source, ASHCodes out,
                              float[] symmetricOffsets, int start, int end) {
         int capacity = Math.min(ENCODING_BATCH_SIZE, end - start);
         float[][] inputs = new float[capacity][originalDimension];
@@ -1565,6 +1600,11 @@ public class AsymmetricHashing implements VectorCompressor<AsymmetricHashing.Qua
         float[] residualNorms = new float[capacity];
         int[] ordinals = new int[capacity];
         double[] absNorm = new double[quantizedDim];
+        // Per-batch scratch, copied into the store once complete. Never modified: the code for missing vectors.
+        QuantizedVector[] scratch = new QuantizedVector[capacity];
+        for (int k = 0; k < capacity; k++) scratch[k] = QuantizedVector.createEmpty(quantizedDim, bitsPerDimension);
+        final QuantizedVector missing = QuantizedVector.createEmpty(quantizedDim, bitsPerDimension);
+        final float missingOffset = symmetricOffsets == null ? 0f : centeredOffset(missing);
         int count = 0;
         try (var cursor = VectorAccess.openRange(source, start, end)) {
             int expected = start;
@@ -1572,35 +1612,39 @@ public class AsymmetricHashing implements VectorCompressor<AsymmetricHashing.Qua
                 int i = cursor.ordinal();
                 if (i != expected++) throw new IllegalStateException("Unexpected encoding ordinal");
                 VectorFloat<?> vector = cursor.vector();
-                QuantizedVector dest = QuantizedVector.createEmpty(quantizedDim, bitsPerDimension);
-                out[i] = dest;
                 if (vector == null) {
-                    if (symmetricOffsets != null) symmetricOffsets[i] = centeredOffset(dest);
+                    out.set(i, missing);
+                    if (symmetricOffsets != null) symmetricOffsets[i] = missingOffset;
                     continue;
                 }
+                QuantizedVector dest = scratch[count];
                 float residualNorm = prepareEncoding(vector, dest);
                 normalizeResidual(vector, landmarks[dest.landmark & 0xFF], residualNorm, inputs[count]);
                 residualNorms[count] = residualNorm;
                 ordinals[count] = i;
                 if (++count == capacity) {
-                    encodeBatch(inputs, projected, residualNorms, ordinals, count, absNorm, out, symmetricOffsets);
+                    encodeBatch(inputs, projected, residualNorms, ordinals, count, absNorm, scratch, out, symmetricOffsets);
                     count = 0;
                 }
             }
             if (expected != end) throw new IllegalStateException("Incomplete encoding range");
         }
-        if (count != 0) encodeBatch(inputs, projected, residualNorms, ordinals, count, absNorm, out, symmetricOffsets);
+        if (count != 0) encodeBatch(inputs, projected, residualNorms, ordinals, count, absNorm, scratch, out, symmetricOffsets);
     }
 
     private void encodeBatch(float[][] inputs, float[][] projected, float[] residualNorms,
-                             int[] ordinals, int count, double[] absNorm, QuantizedVector[] out,
-                             float[] symmetricOffsets) {
+                             int[] ordinals, int count, double[] absNorm, QuantizedVector[] scratch,
+                             ASHCodes out, float[] symmetricOffsets) {
         stiefelTransform.projectBatch(inputs, projected, count);
         for (int i = 0; i < count; i++) {
-            QuantizedVector dest = out[ordinals[i]];
+            QuantizedVector dest = scratch[i];
+            // Quantizers OR bits and nibbles into place, so reused scratch starts from zero.
+            Arrays.fill(dest.binaryVector, 0L);
+            Arrays.fill(dest.extraBits, (byte) 0);
             float codeNorm = RandomBinaryQuantizer.quantizeProjected(projected[i], bitsPerDimension,
                     dest.binaryVector, dest.extraBits, absNorm);
             float correction = finishEncoding(dest, residualNorms[i], codeNorm);
+            out.set(ordinals[i], dest);
             if (symmetricOffsets != null) symmetricOffsets[ordinals[i]] = correction;
         }
     }
@@ -2629,7 +2673,7 @@ public class AsymmetricHashing implements VectorCompressor<AsymmetricHashing.Qua
         return halfBitsToFloat(floatToHalfBits(value));
     }
 
-    private static void writeFloat16(IndexWriter out, float value) throws IOException {
+    static void writeFloat16(IndexWriter out, float value) throws IOException {
         int bits = floatToHalfBits(value);
 
         // Explicit big-endian byte order, matching Java DataOutput-style primitives.
@@ -2637,7 +2681,7 @@ public class AsymmetricHashing implements VectorCompressor<AsymmetricHashing.Qua
         out.writeByte((byte) (bits & 0xFF));
     }
 
-    private static float readFloat16(RandomAccessReader in) throws IOException {
+    static float readFloat16(RandomAccessReader in) throws IOException {
         int hi = readUnsignedByte(in);
         int lo = readUnsignedByte(in);
         return halfBitsToFloat((hi << 8) | lo);

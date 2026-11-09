@@ -43,7 +43,12 @@ public interface VectorUtilSupport {
 
   /** Explicitly tuned projection kernel; the ordinary entry point retains its compact default loop. */
   default float ashProjectionDotTuned(float[] query, byte[] code, int dimensions, int bitsPerDimension) {
-    return ashProjectionDot(query, code, dimensions, bitsPerDimension);
+    return ashProjectionDotTuned(query, code, 0, dimensions, bitsPerDimension);
+  }
+
+  /** As {@link #ashProjectionDotTuned(float[], byte[], int, int)} for the code starting at {@code codeOffset}. */
+  default float ashProjectionDotTuned(float[] query, byte[] code, int codeOffset, int dimensions, int bitsPerDimension) {
+    return ashProjectionDot(query, code, codeOffset, dimensions, bitsPerDimension);
   }
 
   /** Whether ASH nibble lookup and accumulation are implemented with SIMD. */
@@ -70,6 +75,27 @@ public interface VectorUtilSupport {
     throw new UnsupportedOperationException("Symmetric ASH SIMD is unavailable on this backend");
   }
 
+  /** Whether {@link #ashSymmetricDotAt} is implemented (2- and 4-bit codes at array offsets). */
+  default boolean supportsAshSymmetricDotAt() { return false; }
+
+  /**
+   * Symmetric 2/4-bit packed dot product of codes stored at offsets inside larger arrays.
+   * Same result as {@link #ashSymmetricDot} on the corresponding standalone code arrays.
+   */
+  default float ashSymmetricDotAt(byte[] aCodes, int aOffset, byte[] bCodes, int bOffset,
+                                  int dimensions, int bits) {
+    throw new UnsupportedOperationException("Offset symmetric ASH SIMD is unavailable on this backend");
+  }
+
+  /**
+   * Symmetric 1-bit dot product, {@code dimensions - 2 * mismatches}, of sign words stored at offsets
+   * inside larger arrays. Same result as {@link #ashSymmetricDot} with {@code bits == 1}.
+   * Available whenever {@link #supportsAshSymmetricScoring()} is.
+   */
+  default float ashSymmetricBinaryDotAt(long[] aBits, int aOffset, long[] bBits, int bOffset, int dimensions) {
+    throw new UnsupportedOperationException("Symmetric ASH SIMD is unavailable on this backend");
+  }
+
   /** Whether canonical 2/4-bit projection codes have a single-vector SIMD kernel. */
   default boolean supportsAshProjectionScoring() { return false; }
 
@@ -86,21 +112,31 @@ public interface VectorUtilSupport {
 
   /** Projection dot only; callers apply the vector's scale, offset and landmark term. */
   default float ashCanonicalLutDot(byte[] code, int groups, float[] lut) {
-    return ASHLutScoring.dotCanonical(code, groups, lut);
+    return ashCanonicalLutDot(code, 0, groups, lut);
+  }
+
+  /** As {@link #ashCanonicalLutDot(byte[], int, float[])} for the code starting at {@code codeOffset}. */
+  default float ashCanonicalLutDot(byte[] code, int codeOffset, int groups, float[] lut) {
+    return ASHLutScoring.dotCanonical(code, codeOffset, groups, lut);
   }
 
   /** Dot product of a projected query with a canonical signed-magnitude 2/4-bit code. */
   default float ashProjectionDot(float[] query, byte[] code, int dimensions, int bitsPerDimension) {
+    return ashProjectionDot(query, code, 0, dimensions, bitsPerDimension);
+  }
+
+  /** As {@link #ashProjectionDot(float[], byte[], int, int)} for the code starting at {@code codeOffset}. */
+  default float ashProjectionDot(float[] query, byte[] code, int codeOffset, int dimensions, int bitsPerDimension) {
     if (bitsPerDimension != 2 && bitsPerDimension != 4) {
       throw new IllegalArgumentException("Projection scoring requires 2 or 4 bits per dimension");
     }
     java.util.Objects.checkFromIndexSize(0, dimensions, query.length);
     int perByte = 8 / bitsPerDimension;
-    java.util.Objects.checkFromIndexSize(0, dimensions / perByte + (dimensions % perByte == 0 ? 0 : 1), code.length);
+    java.util.Objects.checkFromIndexSize(codeOffset, dimensions / perByte + (dimensions % perByte == 0 ? 0 : 1), code.length);
     int sign = 1 << (bitsPerDimension - 1);
     float sum = 0;
     for (int i = 0; i < dimensions; i++) {
-      int field = (code[i / perByte] & 255) >>> ((i % perByte) * bitsPerDimension);
+      int field = (code[codeOffset + i / perByte] & 255) >>> ((i % perByte) * bitsPerDimension);
       float magnitude = (field & (sign - 1)) + 0.5f;
       sum += query[i] * ((field & sign) == 0 ? -magnitude : magnitude);
     }

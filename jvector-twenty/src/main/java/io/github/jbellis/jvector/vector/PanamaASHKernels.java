@@ -168,12 +168,13 @@ final class PanamaASHKernels {
         return result.reinterpretAsFloats();
     }
 
-    static float projectionDot(float[] query, byte[] code, int dimensions, int bits) {
+    /** Projection dot with the code starting at {@code codeOffset}. */
+    static float projectionDot(float[] query, byte[] code, int codeOffset, int dimensions, int bits) {
         if (bits != 2 && bits != 4) throw new IllegalArgumentException("Projection scoring requires 2 or 4 bits per dimension");
         Objects.checkFromIndexSize(0, dimensions, query.length);
         int perByte = 8 / bits;
         int bytes = dimensions / perByte + (dimensions % perByte == 0 ? 0 : 1);
-        Objects.checkFromIndexSize(0, bytes, code.length);
+        Objects.checkFromIndexSize(codeOffset, bytes, code.length);
         int sign = 1 << (bits - 1);
         int[] indices = bits == 2 ? TWO_BIT_INDICES : FOUR_BIT_INDICES;
         FloatVector a0 = FloatVector.zero(F);
@@ -189,7 +190,7 @@ final class PanamaASHKernels {
             int remainingChunks = (bytes - base - 1) / F.length() + 1;
             int chunks = Math.min(PROJECTION_UNROLL, remainingChunks);
             for (int u = 0; u < chunks; u++, base += F.length()) {
-                var packed = loadCodes(code, base, B.indexInRange(0, Math.min(F.length(), bytes - base)));
+                var packed = loadCodes(code, codeOffset + base, B.indexInRange(0, Math.min(F.length(), bytes - base)));
                 // Reuse each widened code byte across its 2/4 projected dimensions.
                 // Keep the decode, query gather and accumulation in one compilation unit.
                 for (int slot = 0; slot < perByte; slot++) {
