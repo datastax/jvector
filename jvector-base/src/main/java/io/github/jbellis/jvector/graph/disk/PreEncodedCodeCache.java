@@ -219,6 +219,24 @@ public final class PreEncodedCodeCache implements AutoCloseable {
         }
     }
 
+    /**
+     * Copies the codes of ordinals {@code [fromOrdinal, fromOrdinal + count)}, which are contiguous in the mapping, into
+     * {@code dst} at its position, advancing it. Safe to call concurrently.
+     */
+    public void copyRows(int fromOrdinal, int count, ByteBuffer dst) {
+        int ordinal = fromOrdinal, left = count;
+        while (left > 0) {
+            int chunk = ordinal / codesPerChunk;
+            int inChunk = ordinal - chunk * codesPerChunk;
+            int here = Math.min(left, codesPerChunk - inChunk);
+            ByteBuffer src = chunks[chunk].duplicate();
+            src.limit((inChunk + here) * codeSize).position(inChunk * codeSize);
+            dst.put(src);
+            ordinal += here;
+            left -= here;
+        }
+    }
+
     /** Copies the code at {@code ordinal} into {@code dst}, which must hold at least {@link #codeSize()} bytes. */
     public void get(int ordinal, byte[] dst) {
         int chunk = ordinal / codesPerChunk;

@@ -164,6 +164,9 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
     // hub map holds the upper layers' vectors, and level 0 scans, scores and diversifies on vectors.
     private boolean exactMode;
     private volatile ExactJoin exactJoin;   // full-precision merge: scan results of the node range level 0 is processing
+    /** Walks cells elsewhere (e.g. on a GPU) when one is selected with {@link CompactionAccelerators#PROPERTY}; else null. */
+    private final CompactionAccelerator accelerator = CompactionAccelerators.find().orElse(null);
+    private final java.util.concurrent.atomic.LongAdder acceleratedWalks = new java.util.concurrent.atomic.LongAdder();
     private final LongAdder finalizeRowsTouched = new LongAdder(), finalizeRowsRequested = new LongAdder();
     private ThreadLocal<Scratch> scratchLocal;  // the per-thread scratch of the current compaction (set by compactLevels)
     // What level 0 evaluates candidates from: the wide code for coded sources, the vectors
@@ -2486,6 +2489,13 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
             Arrays.parallelSort(pairs);
             pairTotal += total;
             final int[] starts = cellStart[target];
+            if (accelerator != null && exactMode && accelerator.supports(similarityFunction, dimension)) {
+                var walk = new CellWalk(j, ti, queries, pairs, total, starts, candidateStore, dimension, similarityFunction);
+                if (accelerator.walk(walk)) {
+                    acceleratedWalks.increment();
+                    continue;
+                }
+            }
             // split the sorted pairs into contiguous cell ranges for the workers
             int tasks2 = Math.max(1, Math.min(taskWindowSize * 8, total / 4096));
             List<Callable<Void>> phase2 = new ArrayList<>();
@@ -2544,8 +2554,9 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
             }
             joinAll(phase2);
         }
-        log.info("Cell walk: source {} ordinals [{}, {}): probes {} ms, {} (cell, node) pairs over {} targets, walk {} ms",
-                 src, lo, hi, (t1 - t0) / 1_000_000, pairTotal, j.targets, (System.nanoTime() - t1) / 1_000_000);
+        log.info("Cell walk: source {} ordinals [{}, {}): probes {} ms, {} (cell, node) pairs over {} targets, walk {} ms{}",
+                 src, lo, hi, (t1 - t0) / 1_000_000, pairTotal, j.targets, (System.nanoTime() - t1) / 1_000_000,
+                 accelerator == null ? "" : " (" + accelerator.name() + ": " + acceleratedWalks.sumThenReset() + " targets)");
         return j;
     }
 
