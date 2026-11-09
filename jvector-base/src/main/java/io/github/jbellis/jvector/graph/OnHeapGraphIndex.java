@@ -32,7 +32,8 @@ import io.github.jbellis.jvector.graph.similarity.ScoreFunction;
 import io.github.jbellis.jvector.util.Accountable;
 import io.github.jbellis.jvector.util.BitSet;
 import io.github.jbellis.jvector.util.Bits;
-import io.github.jbellis.jvector.util.DenseIntMap;
+import io.github.jbellis.jvector.util.IntMap;
+import io.github.jbellis.jvector.util.PagedIntMap;
 import io.github.jbellis.jvector.util.RamUsageEstimator;
 import io.github.jbellis.jvector.util.SparseIntMap;
 import io.github.jbellis.jvector.util.ThreadSafeGrowableBitSet;
@@ -83,6 +84,15 @@ public class OnHeapGraphIndex implements MutableGraphIndex {
 
     private final boolean isHierarchical;
 
+    /**
+     * Dense node maps use {@link PagedIntMap}: slots never move, so updates are a single CAS with no
+     * lock. A read-write-locked map ({@link io.github.jbellis.jvector.util.DenseIntMap}) made every
+     * concurrent neighbor update take a shared lock, whose contention caused large build-time swings.
+     */
+    static <T> IntMap<T> newDenseNodeMap(int initialCapacity) {
+        return new PagedIntMap<>(initialCapacity);
+    }
+
     OnHeapGraphIndex(List<Integer> maxDegrees, int dimension, double overflowRatio, DiversityProvider diversityProvider, boolean isHierarchical) {
         this.overflowRatio = overflowRatio;
         this.maxDegrees = new IntArrayList();
@@ -92,7 +102,7 @@ public class OnHeapGraphIndex implements MutableGraphIndex {
         this.completions = new CompletionTracker(1024);
         // Initialize the base layer (layer 0) with a dense map.
         this.layers.add(new ConcurrentNeighborMap(
-                new DenseIntMap<>(1024),
+                newDenseNodeMap(1024),
                 diversityProvider,
                 getDegree(0),
                 (int) (getDegree(0) * overflowRatio))
