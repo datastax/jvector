@@ -98,7 +98,7 @@ public final class WalkBench {
     }
 
     /** Fraction of nodes whose base-layer neighbour sets are identical, and the mean overlap, in dataset ordinals. */
-    private static void compareLists(Path a, Path b, int[] aToDataset, int[] bToDataset) throws Exception {
+    static void compareLists(Path a, Path b, int[] aToDataset, int[] bToDataset) throws Exception {
         int[] datasetToB = new int[bToDataset.length];
         for (int i = 0; i < bToDataset.length; i++) {
             datasetToB[bToDataset[i]] = i;

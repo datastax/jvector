@@ -134,7 +134,7 @@ public final class WikipediaBench {
     }
 
     /** An .ivecs file: each row a little-endian int count, then that many ints. */
-    private static List<int[]> ivecs(Path path) throws IOException {
+    static List<int[]> ivecs(Path path) throws IOException {
         List<int[]> rows = new ArrayList<>();
         try (var in = new DataInputStream(new java.io.BufferedInputStream(Files.newInputStream(path), 1 << 20))) {
             while (true) {

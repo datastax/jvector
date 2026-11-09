@@ -66,6 +66,9 @@ public final class TornadoCompactionAccelerator implements CompactionAccelerator
     static final long QUERY_BYTES = Long.getLong("jvector.gpu.walk.queryMB", 2048) << 20;
     /** (cell, query) pairs per launch. */
     static final int MAX_PAIRS = 1 << 24;
+    /** Shares of TornadoVM's device memory budget ({@code -Dtornado.device.memory}) for the walk and the probes. */
+    static final double WALK_SHARE = 0.6;
+    static final double PROBE_SHARE = 0.25;
     /** Candidate scores per launch. */
     static final int MAX_CANDIDATES = 1 << 27;
 
@@ -76,7 +79,7 @@ public final class TornadoCompactionAccelerator implements CompactionAccelerator
     private Prober prober;
 
     /** Bytes of the score matrix of one block of probe queries ({@code -Djvector.gpu.probe.scoresMB}, default 1024). */
-    static final long SCORE_BYTES = Long.getLong("jvector.gpu.probe.scoresMB", 1024) << 20;
+    static final long SCORE_BYTES = Long.getLong("jvector.gpu.probe.scoresMB", 256) << 20;
 
     @Override
     public String name() {
@@ -103,11 +106,13 @@ public final class TornadoCompactionAccelerator implements CompactionAccelerator
             return false;
         }
         int dim = walk.dimension();
-        if (walker == null || walker.dim != dim) {
+        // sized to the compactor's range: TornadoVM keeps a resident host copy of every buffer, so a block larger than
+        // the range would only take host memory from the merge's page cache
+        if (walker == null || walker.dim != dim || walker.blockQueries < Math.min(walk.queryCount(), walker.maxBlockQueries)) {
             if (walker != null) {
                 walker.close();
             }
-            walker = new Walker(dim);
+            walker = new Walker(dim, (long) (TornadoGraphBuildAccelerator.deviceMemoryBudget() * WALK_SHARE), walk.queryCount());
         }
         return walker.walk(walk);
     }
@@ -144,7 +149,12 @@ public final class TornadoCompactionAccelerator implements CompactionAccelerator
             if (prober != null) {
                 prober.close();
             }
-            prober = new Prober(dim, centers, probe.maxProbes());
+            long budget = (long) (TornadoGraphBuildAccelerator.deviceMemoryBudget() * PROBE_SHARE);
+            if ((long) centers * dim * Float.BYTES > budget / 2) {
+                LOG.info(() -> "the level-1 centers take more than half the GPU probe budget; probing on the CPU");
+                return false;
+            }
+            prober = new Prober(dim, centers, probe.maxProbes(), budget);
         }
         return prober.probe(probe);
     }
@@ -172,12 +182,16 @@ public final class TornadoCompactionAccelerator implements CompactionAccelerator
         final GridScheduler scheduler;
         final TornadoExecutionPlan plan;
 
-        Prober(int dim, int centers, int maxProbes) {
+        Prober(int dim, int centers, int maxProbes, long budget) {
             this.dim = dim;
             this.centers = centers;
             this.maxProbes = maxProbes;
             stride = (centers + ProbeKernels.TILE - 1) / ProbeKernels.TILE * ProbeKernels.TILE;
-            int byScores = (int) Math.min(Integer.MAX_VALUE / stride, SCORE_BYTES / ((long) stride * Float.BYTES));
+            // the score matrix and the query block share what the centers leave of the budget
+            long left = budget - (long) centers * dim * Float.BYTES;
+            long perQuery = (long) stride * Float.BYTES + (long) dim * Float.BYTES + (long) maxProbes * Integer.BYTES;
+            long scoreBytes = Math.min(SCORE_BYTES, left / perQuery * stride * Float.BYTES);
+            int byScores = (int) Math.min(Integer.MAX_VALUE / stride, scoreBytes / ((long) stride * Float.BYTES));
             blockQueries = Math.max(ProbeKernels.TILE, byScores / ProbeKernels.TILE * ProbeKernels.TILE);
             centerRows = new FloatArray(centers * dim);
             centerNorms = new FloatArray(centers);
@@ -267,7 +281,10 @@ public final class TornadoCompactionAccelerator implements CompactionAccelerator
     static final class Walker implements AutoCloseable {
         final int dim;
         final int blockQueries;
+        final int maxBlockQueries;
         final int chunkRows;
+        final int maxPairs;
+        final int maxCandidates;
         final FloatArray queries;
         final FloatArray queryNorms;
         final FloatArray rows;
@@ -290,22 +307,32 @@ public final class TornadoCompactionAccelerator implements CompactionAccelerator
         final GridScheduler scheduler;
         final TornadoExecutionPlan plan;
 
-        Walker(int dim) {
+        Walker(int dim, long budget, int rangeQueries) {
             this.dim = dim;
             long rowBytes = (long) dim * Float.BYTES;
-            blockQueries = (int) Math.max(1024, Math.min(Integer.MAX_VALUE / dim, QUERY_BYTES / rowBytes));
-            chunkRows = (int) Math.max(1024, Math.min(Integer.MAX_VALUE / dim, CHUNK_BYTES / rowBytes));
+            // the budget split: at most 40% queries (with their top k, and no more than the range has), 10% rows,
+            // 15% candidates, 5% pairs; TornadoVM mirrors each buffer in host memory, so these are host bytes too
+            long perQuery = rowBytes + (long) CellWalkKernels.MAX_K * 8 + 16;
+            maxBlockQueries = (int) Math.max(1024, Math.min(Integer.MAX_VALUE / dim, Math.min(QUERY_BYTES / rowBytes, (long) (budget * 0.40) / perQuery)));
+            blockQueries = Math.max(1024, Math.min(maxBlockQueries, rangeQueries));
+            chunkRows = (int) Math.max(1024, Math.min(Integer.MAX_VALUE / dim, Math.min(CHUNK_BYTES, (long) (budget * 0.10)) / rowBytes));
+            maxCandidates = (int) Math.max(1 << 20, Math.min(MAX_CANDIDATES, (long) (budget * 0.15) / 8));
+            maxPairs = (int) Math.max(1 << 16, Math.min(MAX_PAIRS, (long) (budget * 0.05) / 16));
+            if (TRACE) {
+                LOG.info(() -> String.format(Locale.ROOT, "GPU walk buffers for a %.1f GB budget: %d queries a block, %d rows a chunk, %d pairs and %d candidates a launch",
+                        budget / 1e9, blockQueries, chunkRows, maxPairs, maxCandidates));
+            }
             int k = CellWalkKernels.MAX_K;
             queries = new FloatArray(blockQueries * dim);
             queryNorms = new FloatArray(blockQueries);
             rows = new FloatArray(chunkRows * dim);
-            pairFirst = new IntArray(MAX_PAIRS);
-            pairEnd = new IntArray(MAX_PAIRS);
-            pairQuery = new IntArray(MAX_PAIRS);
-            pairOffset = new IntArray(MAX_PAIRS);
+            pairFirst = new IntArray(maxPairs);
+            pairEnd = new IntArray(maxPairs);
+            pairQuery = new IntArray(maxPairs);
+            pairOffset = new IntArray(maxPairs);
             params = new IntArray(4);
-            candScore = new FloatArray(MAX_CANDIDATES);
-            candOrdinal = new IntArray(MAX_CANDIDATES);
+            candScore = new FloatArray(maxCandidates);
+            candOrdinal = new IntArray(maxCandidates);
             queryOffset = new IntArray(blockQueries);
             queryCount = new IntArray(blockQueries);
             topScore = new FloatArray(blockQueries * k);
@@ -351,7 +378,7 @@ public final class TornadoCompactionAccelerator implements CompactionAccelerator
             params.set(CellWalkKernels.P_SIMILARITY, similarityCode(walk.similarity()));
             params.set(CellWalkKernels.P_K, k);
             ByteBuffer rowBuffer = rows.getSegment().asByteBuffer().order(ByteOrder.LITTLE_ENDIAN);
-            int[] launchPairs = new int[MAX_PAIRS];
+            int[] launchPairs = new int[maxPairs];
             int[] perQuery = new int[blockQueries];
             int launches = 0;
             long candidates = 0;
@@ -393,7 +420,7 @@ public final class TornadoCompactionAccelerator implements CompactionAccelerator
                     int size = 0;
                     long cands = 0;
                     java.util.Arrays.fill(perQuery, 0, bn, 0);
-                    while (at < pairCount && size < MAX_PAIRS) {
+                    while (at < pairCount && size < maxPairs) {
                         long pair = pairs[at];
                         if (!inBlock(pair, b0, bn)) {
                             at++;
@@ -402,7 +429,7 @@ public final class TornadoCompactionAccelerator implements CompactionAccelerator
                         int cell = cellOf(pair);
                         int end = walk.cellEnd(cell);
                         int members = end - walk.cellStart(cell);
-                        if (end - row0 > chunkRows || cands + members > MAX_CANDIDATES) {
+                        if (end - row0 > chunkRows || cands + members > maxCandidates) {
                             break;
                         }
                         launchPairs[size++] = at;
