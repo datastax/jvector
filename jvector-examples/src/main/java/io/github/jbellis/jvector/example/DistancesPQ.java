@@ -44,10 +44,6 @@ public class DistancesPQ {
      *  - Configurable training and single-thread scoring executors
      *  - Compression budget selected with jvector.pq.subspaces (exact bytes), or jvector.pq.mFactor
      *
-     * Set jvector.bench.recall and jvector.bench.recall-only for a complete ADC recall scan
-     * with normalized queries, deterministic ties, optional rankings and a saved PQ artifact.
-     * This mode omits the throughput loops; it does not measure scoring speed.
-     *
      * Fast PQ path = PQDecoder (precomputedScoreFunctionFor).
      */
     public static void testPQEncodings(String filenameBase, String filenameQueries, String filenameGT) throws IOException {
@@ -56,11 +52,6 @@ public class DistancesPQ {
         // ------------------------------------------------------------
         final boolean RUN_RECALL_CHECK =
                 Boolean.parseBoolean(System.getProperty("jvector.bench.recall", "false"));
-
-        final boolean recallOnly = Boolean.getBoolean("jvector.bench.recall-only");
-        if (recallOnly && !RUN_RECALL_CHECK) {
-            throw new IllegalArgumentException("recall-only requires jvector.bench.recall=true");
-        }
 
         final int RECALL_K =
                 Integer.getInteger("jvector.bench.recall.k", 10);
@@ -77,12 +68,6 @@ public class DistancesPQ {
         final List<VectorFloat<?>> queries = allQueries.subList(0, Math.min(maxQueries, allQueries.size()));
         if (vectors.isEmpty() || queries.isEmpty()) {
             throw new IllegalArgumentException("Base and query vectors must be nonempty");
-        }
-        if (recallOnly) {
-            // Match the query-normalization policy used by the neighborhood recall benchmark.
-            for (VectorFloat<?> query : queries) {
-                VectorUtil.l2normalize(query);
-            }
         }
         System.out.format("\t%d base and %d measured query vectors loaded%n", vectors.size(), queries.size());
 
@@ -198,14 +183,6 @@ public class DistancesPQ {
 
 
         System.out.println("\tShared PQ compressor size = " + pq.compressorSize() + " bytes");
-        if (recallOnly) {
-            try {
-                PQRecallEvaluator.run(pqVecs, queries, groundTruth, RECALL_K, simdExecutor);
-            } finally {
-                simdExecutor.shutdown();
-            }
-            return;
-        }
 
         // ============================================================
         // [1] Accuracy (NOT timed)
