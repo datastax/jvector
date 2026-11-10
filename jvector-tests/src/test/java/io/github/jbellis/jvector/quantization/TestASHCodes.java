@@ -157,8 +157,10 @@ public class TestASHCodes {
                         // The 1-bit SIMD kernel accumulates in a different order.
                         assertEquals("bits=1 dim=" + dim + " i=" + i, expected, actual, 1e-5f * Math.max(1f, Math.abs(expected)));
                     } else {
-                        assertEquals("bits=" + bits + " dim=" + dim + " i=" + i,
-                                Float.floatToIntBits(expected), Float.floatToIntBits(actual));
+                        // A code's tail may be summed in vector or scalar order depending on
+                        // where it sits in its array.
+                        assertEquals("bits=" + bits + " dim=" + dim + " i=" + i, expected, actual,
+                                1e-5f * Math.max(1f, Math.abs(expected)));
                     }
                 }
             }
@@ -227,10 +229,13 @@ public class TestASHCodes {
                     // Exact length: no kernel may read query elements past the dimension count.
                     float[] query = new float[dims];
                     for (int k = 0; k < dims; k++) query[k] = (float) random.nextGaussian();
-                    assertEquals(where, Float.floatToIntBits(vu.ashProjectionDot(query, a, dims, bits)),
-                            Float.floatToIntBits(vu.ashProjectionDot(query, aPage, aOff, dims, bits)));
-                    assertEquals(where, Float.floatToIntBits(vu.ashProjectionDotTuned(query, a, dims, bits)),
-                            Float.floatToIntBits(vu.ashProjectionDotTuned(query, aPage, aOff, dims, bits)));
+                    // Summation order may depend on the offset, so allow rounding differences.
+                    float direct = vu.ashProjectionDot(query, a, dims, bits);
+                    assertEquals(where, direct, vu.ashProjectionDot(query, aPage, aOff, dims, bits),
+                            1e-5f * Math.max(1f, Math.abs(direct)));
+                    float tuned = vu.ashProjectionDotTuned(query, a, dims, bits);
+                    assertEquals(where, tuned, vu.ashProjectionDotTuned(query, aPage, aOff, dims, bits),
+                            1e-5f * Math.max(1f, Math.abs(tuned)));
                     int groups = FusedASHLayout.codeGroups(dims, bits);
                     float[] lut = new float[groups * 16];
                     for (int k = 0; k < lut.length; k++) lut[k] = (float) random.nextGaussian();

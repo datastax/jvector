@@ -33,6 +33,10 @@ import jdk.incubator.vector.VectorShape;
 import java.util.List;
 
 class PanamaVectorUtilSupport implements VectorUtilSupport {
+    // JDK 20's C2 miscompiles the masked AVX-512 loads and stores in the ASH kernels,
+    // which crashes or corrupts the heap. JDK 20 is past end of life, so ASH uses the
+    // scalar kernels there. The constant folds away on later JDKs.
+    private static final boolean ASH_SIMD = Runtime.version().feature() != 20;
     private static final VectorSpecies<Float> ASH_FLOATS = FloatVector.SPECIES_PREFERRED;
     private static final VectorSpecies<Integer> ASH_INTS = VectorSpecies.of(
             int.class, ASH_FLOATS.vectorShape());
@@ -58,6 +62,8 @@ class PanamaVectorUtilSupport implements VectorUtilSupport {
         return indices;
     }
 
+    // Indices for a partial block: inactive lanes repeat the first query element, so the
+    // gather stays in range without a mask.
     private static int[][] ashTailQueryIndices(int dimensionsPerByte) {
         int[][] tails = new int[ASH_FLOATS.length()][];
         for (int active = 1; active < tails.length; active++) {
@@ -110,7 +116,7 @@ class PanamaVectorUtilSupport implements VectorUtilSupport {
     }
 
     @Override
-    public boolean supportsAshSymmetricScoring() { return true; }
+    public boolean supportsAshSymmetricScoring() { return ASH_SIMD; }
 
     @Override
     public float ashSymmetricDot(long[] aBits, byte[] aCodes, long[] bBits, byte[] bCodes,
@@ -126,7 +132,7 @@ class PanamaVectorUtilSupport implements VectorUtilSupport {
     }
 
     @Override
-    public boolean supportsAshSymmetricDotAt() { return true; }
+    public boolean supportsAshSymmetricDotAt() { return ASH_SIMD; }
 
     @Override
     public float ashSymmetricDotAt(byte[] aCodes, int aOffset, byte[] bCodes, int bOffset,
@@ -249,10 +255,10 @@ class PanamaVectorUtilSupport implements VectorUtilSupport {
     }
 
     @Override
-    public boolean supportsAshProjectionScoring() { return PanamaASHKernels.supported(); }
+    public boolean supportsAshProjectionScoring() { return ASH_SIMD && PanamaASHKernels.supported(); }
 
     @Override
-    public boolean supportsAshLutScoring() { return PanamaASHKernels.supported(); }
+    public boolean supportsAshLutScoring() { return ASH_SIMD && PanamaASHKernels.supported(); }
 
     @Override
     public String ashKernelDescription() { return PanamaASHKernels.description(); }
@@ -282,31 +288,56 @@ class PanamaVectorUtilSupport implements VectorUtilSupport {
         Objects.checkFromIndexSize(codeOffset, bytes, code.length);
         int sign = 1 << (bitsPerDimension - 1);
         int[] indices = bitsPerDimension == 2 ? ASH_TWO_BIT_QUERY_INDICES : ASH_FOUR_BIT_QUERY_INDICES;
+        int lanes = ASH_FLOATS.length();
+        // No masked loads or gathers: JDK 20's C2 miscompiles masked AVX-512 memory
+        // operations here. Whole blocks need no mask. A partial final block loads its
+        // bytes unmasked when the array extends past them (extra lanes are discarded),
+        // gathers with indices that stay in range, and masks only the register addition.
+        // Otherwise the tail is scalar, so results may differ in the last bit by position.
+        int fullBytes = (dimensions / (lanes * perByte)) * lanes;
+        int loadBytes = ASH_BYTES.length();
         FloatVector sum = FloatVector.zero(ASH_FLOATS);
-        for (int base = 0; base < bytes; base += ASH_FLOATS.length()) {
-            int activeBytes = Math.min(ASH_FLOATS.length(), bytes - base);
-            var packed = (IntVector) ByteVector.fromArray(ASH_BYTES, code, codeOffset + base,
-                    ASH_BYTES.indexInRange(0, activeBytes)).convertShape(VectorOperators.B2I, ASH_INTS, 0);
+        int base = 0;
+        for (; base < fullBytes && base + loadBytes <= bytes; base += lanes) {
+            var packed = (IntVector) ByteVector.fromArray(ASH_BYTES, code, codeOffset + base)
+                    .convertShape(VectorOperators.B2I, ASH_INTS, 0);
+            for (int slot = 0; slot < perByte; slot++) {
+                sum = sum.add(ashProjectionTerm(query, packed, base * perByte + slot, indices, slot, bitsPerDimension));
+            }
+        }
+        if (base < bytes && bytes - base <= lanes && codeOffset + base + loadBytes <= code.length) {
+            var packed = (IntVector) ByteVector.fromArray(ASH_BYTES, code, codeOffset + base)
+                    .convertShape(VectorOperators.B2I, ASH_INTS, 0);
+            int[][] tails = bitsPerDimension == 2 ? ASH_TWO_BIT_TAIL_INDICES : ASH_FOUR_BIT_TAIL_INDICES;
             for (int slot = 0; slot < perByte; slot++) {
                 int remaining = dimensions - base * perByte - slot;
                 if (remaining <= 0) break;
-                int active = Math.min(ASH_FLOATS.length(), (remaining - 1) / perByte + 1);
-                var mask = ASH_FLOATS.indexInRange(0, active);
-                var fields = packed.lanewise(VectorOperators.LSHR, slot * bitsPerDimension);
-                var magnitude = ((FloatVector) fields.and(sign - 1)
-                        .convertShape(VectorOperators.I2F, ASH_FLOATS, 0)).add(0.5f);
-                var values = magnitude.blend(magnitude.neg(), fields.and(sign)
-                        .compare(VectorOperators.EQ, 0).cast(ASH_FLOATS));
-                // For a partial final block, inactive lanes gather the first valid query
-                // element, so the gather itself needs no mask; the mask applies to the sum.
-                // A masked AVX-512 gather is miscompiled by JDK 20's C2, so avoid it.
-                int[] gatherIndices = active == ASH_FLOATS.length() ? indices
-                        : (bitsPerDimension == 2 ? ASH_TWO_BIT_TAIL_INDICES : ASH_FOUR_BIT_TAIL_INDICES)[active];
-                var q = FloatVector.fromArray(ASH_FLOATS, query, base * perByte + slot, gatherIndices, 0);
-                sum = sum.add(q.mul(values), mask);
+                int active = Math.min(lanes, (remaining - 1) / perByte + 1);
+                int[] gather = active == lanes ? indices : tails[active];
+                sum = sum.add(ashProjectionTerm(query, packed, base * perByte + slot, gather, slot, bitsPerDimension),
+                        ASH_FLOATS.indexInRange(0, active));
             }
+            base = bytes;
         }
-        return sum.reduceLanes(VectorOperators.ADD);
+        float total = sum.reduceLanes(VectorOperators.ADD);
+        for (int i = base * perByte; i < dimensions; i++) {
+            int field = (code[codeOffset + i / perByte] & 255) >>> ((i % perByte) * bitsPerDimension);
+            float magnitude = (field & (sign - 1)) + 0.5f;
+            total += query[i] * ((field & sign) == 0 ? -magnitude : magnitude);
+        }
+        return total;
+    }
+
+    // One slot of a block: decode signed-magnitude fields and multiply by the gathered query.
+    private static FloatVector ashProjectionTerm(float[] query, IntVector packed, int queryOffset,
+                                                 int[] gather, int slot, int bitsPerDimension) {
+        int sign = 1 << (bitsPerDimension - 1);
+        var fields = packed.lanewise(VectorOperators.LSHR, slot * bitsPerDimension);
+        var magnitude = ((FloatVector) fields.and(sign - 1)
+                .convertShape(VectorOperators.I2F, ASH_FLOATS, 0)).add(0.5f);
+        var values = magnitude.blend(magnitude.neg(), fields.and(sign)
+                .compare(VectorOperators.EQ, 0).cast(ASH_FLOATS));
+        return FloatVector.fromArray(ASH_FLOATS, query, queryOffset, gather, 0).mul(values);
     }
 
     @Override
@@ -1916,7 +1947,7 @@ class PanamaVectorUtilSupport implements VectorUtilSupport {
 
     @Override
     public boolean supportsAshMaskedLoad() {
-        return true;
+        return ASH_SIMD;
     }
 
     @Override
