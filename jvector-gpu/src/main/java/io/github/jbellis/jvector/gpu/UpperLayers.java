@@ -26,8 +26,10 @@ import java.util.stream.IntStream;
 /**
  * The layers above the base layer of a hierarchical graph (HNSW-style). Every node gets a level from JVector's own
  * distribution; layer {@code L} holds the nodes with level {@code >= L}, a few percent of the nodes for layer 1 and
- * fewer for each layer above. Each layer is built like the base layer, from exact candidates: they are cheap at
- * these sizes. The layers use the wide candidate list, as their long edges connect distant parts of the graph.
+ * fewer for each layer above. Each layer is built like the base layer, from exact candidates, which are cheap at
+ * these sizes; a layer of more than {@link #EXACT_MAX} nodes (level 1 of a 10M dataset has about 312k) uses NN-Descent,
+ * as the base layer does. The layers use the wide candidate list, as their long edges connect distant parts of the
+ * graph.
  * <p>
  * The levels are known before the build starts, so the build can copy the upper-layer vectors out early
  * ({@link #gather}) and compute the layers ({@link #build}) while the base layer is being installed.
@@ -52,6 +54,9 @@ final class UpperLayers {
         return new Nodes(ids, upperLevels, HostRows.gather(rows, ids, dim, arena));
     }
 
+    /** Largest layer built from exact candidates ({@code -Djvector.gpu.upperExactMax}, default 65,536); larger layers use NN-Descent. */
+    static final int EXACT_MAX = Integer.getInteger("jvector.gpu.upperExactMax", 1 << 16);
+
     /**
      * Builds every upper layer, bottom up.
      *
@@ -73,8 +78,20 @@ final class UpperLayers {
                 continue;
             }
             MemorySegment rows = lvl == 1 ? nodes.rows() : HostRows.gather(nodes.rows(), positions, dim, arena);
-            var exact = Candidates.exact(rows, m, dim, Math.min(candidates, m - 1), metric);
-            var adjacency = GpuGraphBuilder.build(PackedVectors.of(rows, m, dim, normalise, euclidean), m, exact, maxDegree, alpha);
+            // exact candidates cost m x m scores: past EXACT_MAX nodes (a 10M dataset's level 1 has 312k) NN-Descent is cheaper
+            int kk = Math.min(candidates, m - 1);
+            long t0 = System.nanoTime();
+            var exact = m > EXACT_MAX
+                    ? Candidates.nnDescent(rows, m, dim, kk, metric, Candidates.Batching.of(m, dim))
+                    : Candidates.exact(rows, m, dim, kk, metric);
+            long t1 = System.nanoTime();
+            var packed = PackedVectors.of(rows, m, dim, normalise, euclidean);
+            long t2 = System.nanoTime();
+            var adjacency = GpuGraphBuilder.build(packed, m, exact, maxDegree, alpha);
+            if (Boolean.getBoolean("jvector.gpu.trace")) {
+                System.err.printf("upper layer %d: %d nodes, candidates %.2f s, pack %.2f s, prune %.2f s%n", lvl, m, (t1 - t0) / 1e9,
+                        (t2 - t1) / 1e9, (System.nanoTime() - t2) / 1e9);
+            }
             layers.add(new Layer(lvl, members, adjacency));
         }
         return layers;
