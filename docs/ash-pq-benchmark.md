@@ -21,11 +21,14 @@ both store the same bytes per vector, including ASH's five-byte header. It uses
 ordinary packaged JVector code and `io.github.jbellis.jvector.example.BenchYAML`;
 no separate query harness, source overlay or profiling agent is involved.
 
-The [index configurations](../jvector-examples/yaml-configs/index-parameters/studies/ash-vs-pq)
-define each case. The [run configurations and dataset catalogs](../jvector-examples/yaml-configs/ash-pq)
-define what is measured and where the input files are. Two scripts run them:
-`run-ash-pq-benchmark.sh` runs one case in one JVM, and `run-ash-pq-study.py`
-steps through a whole study. The [BenchYAML Guide](benchyaml-guide.md) describes
+Each case comes in two forms. The published results used
+[separate JVMs](../jvector-examples/yaml-configs/index-parameters/studies/ash-vs-pq)
+for construction and for each query core budget, run by `run-ash-pq-benchmark.sh`
+(one case) and `run-ash-pq-study.py` (a whole study). Future runs use
+[one JVM per case](../jvector-examples/yaml-configs/index-parameters/studies/ash-vs-pq-single-jvm):
+it builds the index once and queries it with 1 and 8 search workers. The
+[run configurations and dataset catalogs](../jvector-examples/yaml-configs/ash-pq)
+define what is measured and where the input files are. The [BenchYAML Guide](benchyaml-guide.md) describes
 the index configuration, and [ASH configuration and defaults](ash-configuration.md)
 describes model and runtime settings.
 
@@ -157,6 +160,27 @@ Each run writes a complete `runs/<invocation>/command.sh`, including its
 environment, so the Java command can be rerun directly. The case directory holds
 copies of the catalog, dataset metadata and dataset list, because BenchYAML
 resolves them relative to its working directory.
+
+## Run one case in one JVM
+
+`benchyaml-play.sh` builds the checkout, then runs one recipe in a single JVM on one
+hardware thread of each physical core, with machine settings from a
+[server profile](../jvector-examples/bench-profiles/README.md):
+
+```bash
+BENCH_RUN_CONFIG=jvector-examples/yaml-configs/ash-pq/run-single-jvm.yml \
+  jvector-examples/benchyaml-play.sh \
+  jvector-examples/yaml-configs/index-parameters/studies/ash-vs-pq-single-jvm/mpnet10m-2bit-ash.yml
+```
+
+Each recipe sets `construction.workers: max` and `search.workers: [1, 8]`.
+Construction, including BLAS during training, uses every physical core. Queries
+then use one and eight search threads: direct PQ search runs on that many caller
+threads, and queued ASH search on that many workers. All of the JVM's CPUs stay
+available to other threads, such as garbage collection, so a 1-worker measurement
+is not confined to one core as it is in the separate-JVM protocol. Compare
+one-JVM results with each other, and check them against the published results
+before replacing those.
 
 ## Measurements and artifacts
 

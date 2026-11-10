@@ -16,6 +16,8 @@ The index YAML sets concurrency: `construction.workers` for training, encoding, 
 and writing, and `search.workers` for queries, each a number or `max` (the platform's physical
 cores). `search.workers` is a sweep, so `[1, 8]` queries the same index with 1 and then 8 workers.
 The launcher sets where the JVM may run, and the run YAML sets what is printed and logged.
+JVector sets native BLAS threads itself (the construction pool's size during training), so the
+launcher clears `MKL_NUM_THREADS` and the other BLAS thread variables.
 
 `BENCH_RUN_CONFIG` selects the run YAML (default `yaml-configs/run-config.yml`).
 `BENCH_DEBUG=<port>` waits for a debugger on that port.
@@ -36,4 +38,7 @@ by git because profiles hold machine paths. Each recipe runs in its own director
 ## IntelliJ
 
 The repository's `.run/` directory holds run configurations for experiments. Each names a recipe
-and a run YAML, and takes machine settings from your profile.
+and a run YAML, and takes machine settings from your profile. To add one for another recipe,
+copy an existing file, then change its name and the recipe path in `SCRIPT_OPTIONS`; every case in
+[ash-vs-pq-single-jvm](../yaml-configs/index-parameters/studies/ash-vs-pq-single-jvm) runs with
+`run-single-jvm.yml`.
