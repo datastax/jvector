@@ -129,6 +129,11 @@ public final class OnDiskGraphIndexCache {
         public final boolean addHierarchy;
         public final boolean refineFinalGraph;
         public final String compressorId;
+        /** Base vectors in the dataset; two datasets or profiles sharing a name must not share a graph. */
+        public final int baseCount;
+        public final int dimension;
+        /** NVQ subvectors when the feature set stores NVQ vectors, otherwise 0. */
+        public final int nvqSubvectors;
 
         private CacheKey(String datasetName,
                          Set<FeatureId> featureSet,
@@ -138,7 +143,10 @@ public final class OnDiskGraphIndexCache {
                          float alpha,
                          boolean addHierarchy,
                          boolean refineFinalGraph,
-                         String compressorId) {
+                         String compressorId,
+                         int baseCount,
+                         int dimension,
+                         int nvqSubvectors) {
             this.datasetName = datasetName;
             this.featureSet = featureSet;
             this.M = M;
@@ -148,6 +156,9 @@ public final class OnDiskGraphIndexCache {
             this.addHierarchy = addHierarchy;
             this.refineFinalGraph = refineFinalGraph;
             this.compressorId = compressorId;
+            this.baseCount = baseCount;
+            this.dimension = dimension;
+            this.nvqSubvectors = nvqSubvectors;
         }
     }
 
@@ -163,20 +174,28 @@ public final class OnDiskGraphIndexCache {
                         float alpha,
                         boolean addHierarchy,
                         boolean refineFinalGraph,
-                        VectorCompressor<?> buildCompressor) {
+                        VectorCompressor<?> buildCompressor,
+                        int baseCount,
+                        int dimension,
+                        int nvqSubvectors) {
         Objects.requireNonNull(datasetName, "datasetName");
         Objects.requireNonNull(featureSet, "featureSet");
         Objects.requireNonNull(buildCompressor, "buildCompressor");
         String compressorId = buildCompressor.toString().replaceAll("\\s+", "");
         return keyWithCompressorId(datasetName, featureSet, M, efConstruction, neighborOverflow, alpha,
-                addHierarchy, refineFinalGraph, compressorId);
+                addHierarchy, refineFinalGraph, compressorId, baseCount, dimension, nvqSubvectors);
     }
 
     public CacheKey keyWithCompressorId(String datasetName, Set<FeatureId> featureSet, int M,
                                          int efConstruction, float neighborOverflow, float alpha,
-                                         boolean addHierarchy, boolean refineFinalGraph, String compressorId) {
+                                         boolean addHierarchy, boolean refineFinalGraph, String compressorId,
+                                         int baseCount, int dimension, int nvqSubvectors) {
+        if (baseCount <= 0 || dimension <= 0 || nvqSubvectors < 0)
+            throw new IllegalArgumentException("Cache key needs a positive vector count and dimension");
+        if (featureSet.contains(FeatureId.NVQ_VECTORS) != (nvqSubvectors > 0))
+            throw new IllegalArgumentException("NVQ subvectors must be given exactly when NVQ vectors are stored");
         return new CacheKey(datasetName, featureSet, M, efConstruction, neighborOverflow, alpha,
-                addHierarchy, refineFinalGraph, compressorId);
+                addHierarchy, refineFinalGraph, compressorId, baseCount, dimension, nvqSubvectors);
     }
 
     /**
@@ -334,7 +353,6 @@ public final class OnDiskGraphIndexCache {
             return new Entry(true, "", Path.of(""), Path.of(""));
         }
 
-        // TODO include index and quantization version(s) in signature
         static Entry compute(Path cacheDir, CacheKey key) {
             String rawName = Paths.get(key.datasetName).getFileName().toString();
             String datasetBase = rawName.replaceFirst("\\.[^.]+$", "");
@@ -344,9 +362,14 @@ public final class OnDiskGraphIndexCache {
                     .sorted()
                     .collect(Collectors.joining("-"));
 
+            // The on-disk format, the dataset's shape and the NVQ layout all change the file; the
+            // quantizer ids in compressorId carry their own model parameters and versions.
             String signature = String.join("_",
                     datasetBase,
-                    featureSetName,
+                    "n" + key.baseCount,
+                    "d" + key.dimension,
+                    "fmt" + OnDiskGraphIndex.CURRENT_VERSION,
+                    featureSetName + (key.nvqSubvectors > 0 ? "-nvq" + key.nvqSubvectors : ""),
                     "M" + key.M,
                     "ef" + key.efConstruction,
                     "of" + key.neighborOverflow,

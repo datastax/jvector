@@ -37,8 +37,13 @@ final class NVQProvider implements FeatureProvider {
         ctx.supplyFromVector(FeatureId.NVQ_VECTORS, vector -> new NVQ.State(nvq.encode(vector)));
     }
 
+    /** Subvector count the benchmark uses for NVQ; also part of the on-disk graph cache key. */
+    static int subvectors(int dimension) {
+        return dimension <= 2 ? 1 : 2;
+    }
+
     static NVQuantization train(RandomAccessVectorValues vectors, VectorFloat<?> mean) {
-        int nSubVectors = vectors.dimension() <= 2 ? 1 : 2;
+        int nSubVectors = subvectors(vectors.dimension());
         return mean == null ? NVQuantization.compute(vectors, nSubVectors) : NVQuantization.create(mean, nSubVectors);
     }
 

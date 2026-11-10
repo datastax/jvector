@@ -106,12 +106,15 @@ final class CompressedOnDiskBuild implements IndexBuildStrategy {
         Map<Set<FeatureId>, OnDiskGraphIndexCache.WriteHandle> handles = new LinkedHashMap<>();
 
         try {
+            int baseCount = ds.getBaseRavv().size(), dimension = ds.getDimension();
             for (Set<FeatureId> fs : featureSets) {
+                int nvq = fs.contains(FeatureId.NVQ_VECTORS) ? NVQProvider.subvectors(dimension) : 0;
                 var key = cacheIdentity == null
                         ? cache.key(ds.getName(), fs, build.M, build.efConstruction, build.neighborOverflow, build.alpha,
-                                build.addHierarchy, build.refineFinalGraph, buildCompressor)
+                                build.addHierarchy, build.refineFinalGraph, buildCompressor, baseCount, dimension, nvq)
                         : cache.keyWithCompressorId(ds.getName(), fs, build.M, build.efConstruction, build.neighborOverflow,
-                                build.alpha, build.addHierarchy, build.refineFinalGraph, cacheIdentity);
+                                build.alpha, build.addHierarchy, build.refineFinalGraph, cacheIdentity,
+                                baseCount, dimension, nvq);
                 var cached = cache.tryLoad(key);
 
                 if (cached.isPresent()) {

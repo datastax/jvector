@@ -302,11 +302,14 @@ public class Grid {
                 Supplier<VectorCompressor<?>> fusedCodec = fused
                         ? () -> getCompressor(searchParams, ds, constructionMetrics, Phase.INDEX, quantTypeOf(searchParams))
                         : null;
+                // The graph depends on query projection only when construction scores with it;
+                // symmetric-all scoring never projects, so its graphs are shared across precisions.
+                String ashMode = buildParams instanceof CompressorParameters.ASHParameters
+                        ? GraphBuilderFactory.ashConstructionMode(build) : null;
                 String cacheIdentity = "schema3:" + compressorId(buildParams, ds)
-                        + (buildParams instanceof CompressorParameters.ASHParameters
-                                ? ":" + GraphBuilderFactory.ashConstructionMode(build) + ":"
-                                        + System.getProperty("jvector.ash.queryProjection", "auto")
-                                : "")
+                        + (ashMode == null ? ""
+                                : ":" + ashMode + ("symmetric-all".equals(ashMode) ? ""
+                                        : ":" + System.getProperty("jvector.ash.queryProjection", "auto")))
                         + (fused ? ":" + compressorId(searchParams, ds) : "");
                 strategy = new CompressedOnDiskBuild(cache, workDirectory, buildCodec, constructionMetrics,
                         fusedCodec, cacheIdentity);
