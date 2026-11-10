@@ -15,6 +15,7 @@
  */
 package io.github.jbellis.jvector.quantization;
 
+import io.github.jbellis.jvector.annotations.Experimental;
 import io.github.jbellis.jvector.graph.similarity.PreparedQuery;
 import io.github.jbellis.jvector.graph.similarity.QueryPreparer;
 import io.github.jbellis.jvector.util.RamUsageEstimator;
@@ -29,6 +30,7 @@ import java.util.Objects;
  * matrix as synchronous scoring, and calls an already formed batch directly.
  * Encoding and training representations are unaffected.
  */
+@Experimental
 public final class ASHQueryPreparer implements QueryPreparer {
     private final AsymmetricHashing ash;
     private final ASHScorer scorer;

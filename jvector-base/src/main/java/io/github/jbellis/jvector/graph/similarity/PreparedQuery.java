@@ -15,6 +15,7 @@
  */
 package io.github.jbellis.jvector.graph.similarity;
 
+import io.github.jbellis.jvector.annotations.Experimental;
 import io.github.jbellis.jvector.util.Accountable;
 import io.github.jbellis.jvector.vector.types.VectorFloat;
 
@@ -28,6 +29,7 @@ import io.github.jbellis.jvector.vector.types.VectorFloat;
  * the usual executor, queue or other happens-before handoff. No executor or
  * request queue is created by this API.
  */
+@Experimental
 public interface PreparedQuery extends Accountable {
     /** Borrowed FP32 query snapshot for reranking; callers must not modify it. */
     VectorFloat<?> queryVector();

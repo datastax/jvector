@@ -16,6 +16,7 @@
 
 package io.github.jbellis.jvector.quantization;
 
+import io.github.jbellis.jvector.annotations.Experimental;
 import io.github.jbellis.jvector.disk.IndexWriter;
 import io.github.jbellis.jvector.disk.RandomAccessReader;
 import io.github.jbellis.jvector.graph.similarity.ScoreFunction;
@@ -47,6 +48,7 @@ import java.util.Objects;
  * {@link FusedASHDecoder}, from the on-disk index, using the same similarity scale and
  * shared numerical kernels.</p>
  */
+@Experimental
 public class ASHVectors implements CompressedVectors {
 
     final AsymmetricHashing ash;

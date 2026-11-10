@@ -15,6 +15,7 @@
  */
 package io.github.jbellis.jvector.graph.similarity;
 
+import io.github.jbellis.jvector.annotations.Experimental;
 import io.github.jbellis.jvector.util.Accountable;
 import io.github.jbellis.jvector.vector.types.VectorFloat;
 
@@ -23,6 +24,7 @@ import io.github.jbellis.jvector.vector.types.VectorFloat;
  * thread. Distinct output states may be prepared concurrently. The caller owns
  * scheduling, admission, input lifetime during each call, and output reuse.
  */
+@Experimental
 public interface QueryPreparer extends Accountable {
     /** Allocates one reusable state. Shared model weights are not copied. */
     PreparedQuery newState();

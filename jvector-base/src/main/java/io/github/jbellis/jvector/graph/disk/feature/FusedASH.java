@@ -16,6 +16,7 @@
 
 package io.github.jbellis.jvector.graph.disk.feature;
 
+import io.github.jbellis.jvector.annotations.Experimental;
 import io.github.jbellis.jvector.disk.IndexWriter;
 import io.github.jbellis.jvector.disk.RandomAccessReader;
 import io.github.jbellis.jvector.graph.ImmutableGraphIndex;
@@ -54,6 +55,7 @@ import java.util.function.Supplier;
  * Core standalone ASH may support additional bit widths, but those are not part
  * of the fused graph hot path.</p>
  */
+@Experimental
 public class FusedASH extends AbstractFeature implements FusedFeature {
     private static final long INLINE_SOURCE_BYTES = RamUsageEstimator.shallowSizeOfInstance(FusedASHInlineSource.class);
     private final int maxDegree;

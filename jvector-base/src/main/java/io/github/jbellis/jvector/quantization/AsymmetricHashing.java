@@ -16,6 +16,7 @@
 
 package io.github.jbellis.jvector.quantization;
 
+import io.github.jbellis.jvector.annotations.Experimental;
 import io.github.jbellis.jvector.annotations.VisibleForTesting;
 import io.github.jbellis.jvector.disk.IndexWriter;
 import io.github.jbellis.jvector.disk.RandomAccessReader;
@@ -54,6 +55,7 @@ import org.netlib.util.intW;
  * orthonormal projection. The 1-bit case stores only sign bits; multibit ASH
  * stores either generic sign/extra bits or the C++-style fast-scan projection code for 2/4-bit ASH.
  */
+@Experimental
 public class AsymmetricHashing implements VectorCompressor<AsymmetricHashing.QuantizedVector>, Accountable {
     private static final org.slf4j.Logger LOG = org.slf4j.LoggerFactory.getLogger(AsymmetricHashing.class);
     public static final int ITQ = 1, RANDOM = 2;

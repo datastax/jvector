@@ -15,6 +15,7 @@
  */
 package io.github.jbellis.jvector.util;
 
+import io.github.jbellis.jvector.annotations.Experimental;
 import io.github.jbellis.jvector.vector.VectorizationProvider;
 
 /**
@@ -30,6 +31,7 @@ import io.github.jbellis.jvector.vector.VectorizationProvider;
  *
  * <p>Scopes nest: closing one restores the count that was in effect when it opened.</p>
  */
+@Experimental
 public final class BlasThreads {
     private static final ThreadLocal<Integer> ACTIVE = new ThreadLocal<>();
     private static final Scope NONE = () -> { };
