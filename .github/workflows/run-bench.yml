@@ -92,9 +92,9 @@ jobs:
       - name: Set up GCC
         run: |
           sudo apt install -y gcc
-      - name: Install Meson and Ninja
+      - name: Install native build dependencies
         run: |
-          sudo apt update && sudo apt install -y meson ninja-build
+          sudo apt update && sudo apt install -y cmake meson ninja-build
       - uses: actions/checkout@v4
       - name: Set up JDK ${{ matrix.jdk }}
         uses: actions/setup-java@v3

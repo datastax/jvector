@@ -50,9 +50,9 @@ jobs:
       - name: Set up GCC
         run: |
           sudo apt install -y gcc
-      - name: Install Meson, Ninja, and GTest
+      - name: Install native build dependencies and GTest
         run: |
-          sudo apt update && sudo apt install -y meson ninja-build pkg-config libgtest-dev
+          sudo apt update && sudo apt install -y cmake meson ninja-build pkg-config libgtest-dev
       - uses: actions/checkout@v4
       - name: Initialize Git Submodules
         run: git submodule update --init
@@ -159,10 +159,10 @@ jobs:
         if: matrix.os == 'ubuntu-latest'
         run: |
           sudo apt install -y gcc
-      - name: Install Meson and Ninja
+      - name: Install native build dependencies
         if: matrix.os == 'ubuntu-latest'
         run: |
-          sudo apt update && sudo apt install -y meson ninja-build
+          sudo apt update && sudo apt install -y cmake meson ninja-build
       - name: Compile, run tests, and package (JDK 22)
         run: mvn -B verify
         if: matrix.jdk == '22'

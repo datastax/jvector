@@ -53,9 +53,9 @@ jobs:
         run: |
           sudo apt install -y gcc g++
 
-      - name: Install Meson, Ninja, and GTest
+      - name: Install native build dependencies and GTest
         run: |
-          sudo apt update && sudo apt install -y meson ninja-build pkg-config libgtest-dev
+          sudo apt update && sudo apt install -y cmake meson ninja-build pkg-config libgtest-dev
 
       - uses: actions/checkout@v4
 
