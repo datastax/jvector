@@ -16,7 +16,7 @@ construction:
   compression:
     - type: None
   reranking:
-    type: NVQ
+    type: None
   useSavedIndexIfExists: No
 
 search:
