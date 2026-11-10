@@ -1,228 +1,229 @@
-## Introduction to approximate nearest neighbor search
+# JVector
 
-Exact nearest neighbor search (k-nearest-neighbor or KNN) is prohibitively expensive at higher dimensions, because approaches to segment the search space that work in 2D or 3D like quadtree or k-d tree devolve to linear scans at higher dimensions.  This is one aspect of what is called “[the curse of dimensionality](https://en.wikipedia.org/wiki/Curse_of_dimensionality).”
+JVector is a Java library for approximate nearest neighbor (ANN) vector search. It builds graph
+indexes that combine an HNSW-style hierarchy with Vamana (the algorithm behind DiskANN) in every
+layer, can be built concurrently and incrementally, and can be searched from disk with compressed
+vectors. JVector targets Java 11 and uses SIMD acceleration on newer JVMs.
 
-With larger datasets, it is almost always more useful to get an approximate answer in logarithmic time, than the exact answer in linear time.  This is abbreviated as ANN (approximate nearest neighbor) search.
+- [Why graph indexes](#why-graph-indexes)
+- [How JVector searches](#how-jvector-searches)
+- [Getting started](#getting-started)
+- [Choosing a quantizer](#choosing-a-quantizer)
+- [Benchmarking with BenchYAML](#benchmarking-with-benchyaml)
+- [SIMD and native acceleration](#simd-and-native-acceleration)
+- [Research](#research)
+- [Building and testing](#building-and-testing)
 
-There are two broad categories of ANN index:
-* Partition-based indexes, like [LSH or IVF](https://www.datastax.com/guides/what-is-a-vector-index) or [SCANN](https://github.com/google-research/google-research/tree/master/scann)
-* Graph indexes, like [HNSW](https://arxiv.org/abs/1603.09320) or [DiskANN](https://www.microsoft.com/en-us/research/project/project-akupara-approximate-nearest-neighbor-search-for-large-scale-semantic-search/)
+## Why graph indexes
 
-Graph-based indexes tend to be simpler to implement and faster, but more importantly they can be constructed and updated incrementally.  This makes them a much better fit for a general-purpose index than partitioning approaches that only work on static datasets that are completely specified up front.  That is why all the major commercial vector indexes use graph approaches.
+Exact nearest neighbor search is prohibitively expensive at high dimension: methods that partition
+space well in two or three dimensions, such as k-d trees, degrade to linear scans as dimension
+grows ("[the curse of dimensionality](https://en.wikipedia.org/wiki/Curse_of_dimensionality)"). For
+large datasets, an approximate answer in logarithmic time is usually more useful than an exact
+answer in linear time.
 
-JVector is a graph index that merges the DiskANN and HNSW family trees.
-JVector borrows the hierarchical structure from HNSW, and uses Vamana (the algorithm behind DiskANN) within each layer.
+ANN indexes are either partition-based, like [LSH or IVF](https://www.datastax.com/guides/what-is-a-vector-index)
+and [ScaNN](https://github.com/google-research/google-research/tree/master/scann), or graph-based,
+like [HNSW](https://arxiv.org/abs/1603.09320) and
+[DiskANN](https://www.microsoft.com/en-us/research/project/project-akupara-approximate-nearest-neighbor-search-for-large-scale-semantic-search/).
+Graph indexes tend to be faster and, more importantly, can be built and updated incrementally, which
+makes them a better fit for a general-purpose index than partitioning schemes that need the whole
+dataset up front.
 
+## How JVector searches
 
-## JVector Architecture
+JVector's graph has an in-memory hierarchy of upper layers for fast navigation and a base layer that
+can live on disk. Construction uses nonblocking concurrency control and scales linearly with cores:
 
-JVector is a graph-based index that builds on the HNSW and DiskANN designs with composable extensions.
-
-JVector implements a multi-layer graph with nonblocking concurrency control, allowing construction to scale linearly with the number of cores:
 ![JVector scales linearly as thread count increases](https://github.com/jbellis/jvector/assets/42158/f0127bfc-6c45-48b9-96ea-95b2120da0d9)
 
-The upper layers of the hierarchy are represented by an in-memory adjacency list per node. This allows for quick navigation with no IOs.
-The bottom layer of the graph is represented by an on-disk adjacency list per node. JVector uses additional data stored inline to support two-pass searches, with the first pass powered by lossily compressed representations of the vectors kept in memory, and the second by a more accurate representation read from disk.  The first pass can be performed with
-* Product quantization (PQ), optionally with [anisotropic weighting](https://arxiv.org/abs/1908.10396)
-* [Binary quantization](https://huggingface.co/blog/embedding-quantization) (BQ)
-* Fused PQ, where PQ codebooks are written inline with the graph adjacency list
+Searches run in two passes. The first pass traverses the graph using compact, approximate scores
+from a quantizer; the second reranks the best candidates with a more accurate representation stored
+in the index:
 
-The second pass can be performed with
-* Full resolution float32 vectors
-* NVQ, which uses a non-uniform technique to quantize vectors with high-accuracy
+| Pass | Options |
+| --- | --- |
+| Traversal | Product quantization (PQ), optionally with anisotropic weighting; binary quantization (BQ); Asymmetric Scalar Hashing (ASH); or full-precision vectors |
+| Fused traversal | Fused PQ or fused ASH: each node's adjacency list carries its neighbors' codes, so the codes are read with the graph instead of held in memory |
+| Reranking | Full-precision (FP32) vectors or NVQ, a high-accuracy non-uniform quantization |
 
-[This two-pass design reduces memory usage and reduces latency while preserving accuracy](https://thenewstack.io/why-vector-size-matters/).  
+[This two-pass design reduces memory use and latency while preserving accuracy](https://thenewstack.io/why-vector-size-matters/).
+JVector can also use two-pass searches while *building* an index, so indexes larger than memory can
+be constructed, and searches stay logarithmic within a single index instead of merging results
+from many:
 
-Additionally, JVector is unique in offering the ability to construct the index itself using two-pass searches, allowing larger-than-memory indexes to be built:
 ![Much larger indexes](https://github.com/jbellis/jvector/assets/42158/34cb8094-68fa-4dc3-b3ce-4582fdbd77e1)
 
-This is important because it allows you to take advantage of logarithmic search within a single index, instead of spilling over to linear-time merging of results from multiple indexes.
+## Getting started
 
-
-## Getting started with JVector
-
-Introductory tutorials for JVector are available in [docs/tutorials](./docs/tutorials/). Start with the [basic tutorial](./docs/tutorials/1-intro-tutorial.md) or review [VectorIntro.java](./jvector-examples/src/main/java/io/github/jbellis/jvector/example/tutorial/VectorIntro.java) for a simple example using JVector.
-
-For file-backed input datasets, see [Batched input vector access](./docs/batched-vector-access.md),
-including runnable 100k-vector examples and optional integration with PQ and NVQ.
-
-For writing completed graphs with FP or NVQ features, see [Deferred batch serialization](./docs/deferred-batch-writer.md). It works with application vector sources and preloaded data; dataset prefetching is optional.
-
-For database integration with ASH, see [Integrating ASH queries into a database](./docs/ash-query-integration.md), covering caller concurrency, bounded admission, state ownership and latency validation.
-
-For ASH model parameters, construction modes, precision, JVM flags and their defaults,
-see [ASH configuration and defaults](./docs/ash-configuration.md).
-
-For ASH versus PQ construction time, recall and throughput on 6M and 10M datasets,
-see [ASH performance](./docs/ash-performance.md).
-
-The older step-by-step guide for JV can be found [here](./docs/legacy/jvector-step-by-step.md). New users should start with the tutorials mentioned earler, but the step-by-step guide contains useful commentary for advanced users.
-
-
-## SIMD provider selection
-
-On Java 22+ with the Vector API enabled, JVector automatically prefers its Google
-Highway native provider when the native library is available. Native libraries are
-bundled for Linux x86-64 (SSE4.2 or newer) and Linux AArch64. Use these JVM options:
+JVector is published to Maven Central as `io.github.jbellis:jvector`. Run with these JVM options to
+enable SIMD acceleration (see [SIMD and native acceleration](#simd-and-native-acceleration)):
 
 ```text
 --add-modules jdk.incubator.vector
 --enable-native-access=ALL-UNNAMED
 ```
 
-Omitting native access can produce restricted-method warnings. If native access is
-denied by the runtime or JVM options, automatic selection falls back to Panama;
-an explicitly forced native provider fails during initialization. For named-module
-deployments, enable native access for the module containing JVector's native code.
-
-Operations implemented by Highway use native kernels; remaining operations use the
-inherited Panama/Java Vector API implementation with native vector storage. Native
-ISA selection remains automatic and respects the existing `JVECTOR_MAX_ISA` cap.
-
-| JVM property | Effect |
-| --- | --- |
-| No provider property | Prefer native on Java 22+; use Panama when native is unavailable |
-| `-Djvector.enable_native_vectorization=false` | Disable automatic native selection |
-| `-Djvector.vectorization_provider=panama` | Explicitly select Panama |
-| `-Djvector.vectorization_provider=native` | Explicitly require native; fail if it cannot load |
-| `-Djvector.vectorization_provider=default` | Explicitly select the scalar provider |
-
-The explicit `jvector.vectorization_provider` property takes precedence over the
-native-enable property. The former
-`jvector.experimental.enable_native_vectorization` name is a deprecated compatibility
-alias; the new `jvector.enable_native_vectorization` name takes precedence when both
-are supplied. Both names default to `true` when neither is supplied. Provider
-selection happens once per JVM. Java 20/21 uses
-Panama when available. Older runtimes, or runtimes without the Vector API module,
-retain the scalar fallback. Neither Panama nor native is enabled by these defaults
-when the existing runtime compatibility checks reject SIMD support.
-
-Native selection also changes the concrete vector type to `MemorySegmentVectorFloat`.
-Use the `VectorFloat` interface instead of casting to `ArrayVectorFloat` or assuming
-that `VectorFloat.get()` returns a `float[]`. Both built-in float vector types support
-`FloatArray.array()` for array access and `copyFrom` between their storage types.
-Native vector operations still require vectors created by the selected provider;
-copy external vectors into provider-created vectors before passing them to those
-operations. To retain the previous provider and storage choice, disable automatic
-native selection with `-Djvector.enable_native_vectorization=false`.
-
-## The research behind the algorithms
-
-* Foundational work: [HNSW](https://ieeexplore.ieee.org/abstract/document/8594636) and [DiskANN](https://suhasjs.github.io/files/diskann_neurips19.pdf) papers, and [a higher level explainer](https://www.datastax.com/guides/hierarchical-navigable-small-worlds)
-* [Anisotropic PQ paper](https://arxiv.org/abs/1908.10396)
-* [Quicker ADC paper](https://arxiv.org/abs/1812.09162)
-* [NVQ paper](https://arxiv.org/abs/2509.18471)
-
-## Developing and Testing
-This project is organized as a [multimodule Maven build](https://maven.apache.org/guides/mini/guide-multiple-modules.html). The intent is to produce a multirelease jar suitable for use as
-a dependency from any Java 11 code. When run on a Java 20+ JVM with the Vector module enabled, optimized vector
-providers will be used. In general, the project is structured to be built with JDK 20+, but when `JAVA_HOME` is set to
-Java 11 -> Java 19, certain build features will still be available.
-
-### Cloning
-
-This repository uses a Git submodule for [Google Highway](https://github.com/google/highway), located at
-`jvector-native/src/main/native/third_party/highway`. After cloning, initialise it with:
+The fastest way in is the hello-world programs in [jvector-examples](./jvector-examples). They download
+small public datasets on first use. Build them once from the repository root:
 
 ```bash
 git submodule update --init
+mvn -pl jvector-examples -am -DskipTests package
+JAR=$(ls jvector-examples/target/jvector-examples-*-jar-with-dependencies.jar)
 ```
 
-Or clone with submodules in one step:
+| Program | What it shows |
+| --- | --- |
+| [HelloVectorWorld](./jvector-examples/src/main/java/io/github/jbellis/jvector/example/HelloVectorWorld.java) | Build an in-memory graph and search it, in about twenty lines |
+| [HelloASHWorldFp16](./jvector-examples/src/main/java/io/github/jbellis/jvector/example/HelloASHWorldFp16.java) | Train ASH, build a graph, write a fused ASH index with NVQ reranking, reopen it, and search synchronously and through the queued API |
+| [HelloASHWorldInt8](./jvector-examples/src/main/java/io/github/jbellis/jvector/example/HelloASHWorldInt8.java) | The same with INT8 query projection, for processors with VNNI or AMX |
+| [HelloBatchedVectors](./jvector-examples/src/main/java/io/github/jbellis/jvector/example/HelloBatchedVectors.java) and [HelloBatchedQuantization](./jvector-examples/src/main/java/io/github/jbellis/jvector/example/HelloBatchedQuantization.java) | Batched access to file-backed vectors, and encoding them with PQ and NVQ |
 
 ```bash
-git clone --recurse-submodules <repo-url>
+java --add-modules jdk.incubator.vector --enable-native-access=ALL-UNNAMED \
+  -cp "$JAR" io.github.jbellis.jvector.example.HelloVectorWorld
 ```
 
-### Building native libraries
+The [examples README](./jvector-examples/README.md) covers each program, and the
+[tutorials](./docs/tutorials/) walk through the API step by step, starting with
+[the introduction](./docs/tutorials/1-intro-tutorial.md).
 
-**Native builds include oneDNN by default for ASH on JDK 22 or newer.**
-It is automatically preferred for FP32 base-vector batch projection and FP16
-query projection on supported CPUs. Highway FP32 remains the portable fallback.
-Install CMake 3.13+ in addition to the C++ compiler, Meson, and Ninja, then build
-from the repository root:
+Integrators should also read:
+
+- [Batched input vector access](./docs/batched-vector-access.md) for file-backed input datasets.
+- [Deferred batch serialization](./docs/deferred-batch-writer.md) for writing completed graphs.
+- [UPGRADING.md](./UPGRADING.md) for API and on-disk format changes between releases.
+
+## Choosing a quantizer
+
+| Quantizer | Use it for | Notes |
+| --- | --- | --- |
+| **ASH** | Graph traversal at high compression | Most accurate at a given code size; fused or in memory; dot product only |
+| **PQ** | Graph traversal at moderate compression | Fused or in memory; any similarity; optional anisotropic weighting |
+| **BQ** | Very fast, coarse traversal | One bit per dimension |
+| **NVQ** | Reranking | Stored in the graph; high accuracy at about a quarter of FP32's size |
+
+### ASH
+
+ASH (Asymmetric Scalar Hashing) reduces the dimension of database vectors with a learned orthonormal
+projection, then scalar-quantizes each projected dimension to a few bits, while keeping queries in
+their original form. At the same code size it is more accurate than additive and scalar quantizers,
+trains and encodes quickly, and scores with SIMD lookups. JVector is the first graph index to support
+it. On 6M and 10M datasets at matched code sizes, fused ASH built faster than fused PQ, was more
+accurate in every case, and was faster in nearly every case; see [ASH performance](./docs/ash-performance.md).
+
+Start with the HelloASHWorld programs above, then:
+
+- [ASH configuration and defaults](./docs/ash-configuration.md): model parameters, construction
+  scoring, precision and JVM settings.
+- [Integrating ASH queries into a database](./docs/ash-query-integration.md): concurrency, bounded
+  admission and batched query projection.
+- [Choosing ASH query-projection precision](./docs/ash-projection-precision.md): FP16, FP32 or INT8
+  by processor.
+
+ASH scores dot product only, so use `DOT_PRODUCT` with normalized vectors for cosine similarity.
+Fused ASH requires on-disk format version 7, which earlier JVector releases cannot read. Training
+uses the system BLAS and LAPACK (MKL or OpenBLAS) when installed, with a slower Java fallback.
+
+## Benchmarking with BenchYAML
+
+BenchYAML builds and measures indexes from YAML descriptions of datasets, index parameters and
+measurements. From the repository root, this runs the default set of small public datasets, which
+download on first use:
 
 ```bash
-mvn -pl jvector-native -am package
+mvn compile exec:exec@bench -pl jvector-examples -am
 ```
 
-Meson fetches the pinned oneDNN source and Maven packages its statically linked
-add-on with the native JAR. Deploy that JAR with the native provider; no separate
-oneDNN runtime installation or per-machine library symlinks are required.
-Use `-Dnative.onednn=false` to build a Highway-only package with FP32 fallback.
-See the [oneDNN installation and fallback details](./jvector-native/src/main/native/README.md#recommended-onednn-build-and-package).
-For explicit INT8 query projection and processor-family recommendations, see
-[Choosing ASH query-projection precision](./docs/ash-projection-precision.md).
+Select datasets by name with `-DbenchArgs="cohere ada002"`, or run one index configuration by path,
+such as an [example pipeline](./jvector-examples/yaml-configs/index-parameters/README.md). Compressed
+datasets use fused ASH by default.
 
+- [How to run benchmarks](./docs/benchmarking.md): datasets, parameters, and output.
+- [BenchYAML Guide](./docs/benchyaml-guide.md): every construction and search field.
+- [Benchmark launcher](./jvector-examples/bench-profiles/README.md): rebuild and run one experiment
+  in one JVM from the command line or IntelliJ.
+- [Reproducing ASH versus PQ](./docs/ash-pq-benchmark.md): the published comparison.
 
-The native SIMD library (`libjvector.so`) is built with [Meson](https://mesonbuild.com/) + [Ninja](https://ninja-build.org/)
-and requires **g++ 11+**. Supported platforms: **Linux x86-64** (SSE4.2, AVX2, AVX-512) and **Linux AArch64** (NEON, SVE, SVE2).
-The entry-point script is `jvector-native/src/main/native/src/build_native_lib.sh`. Run it from that directory.
+## SIMD and native acceleration
+
+On Java 22 and later, JVector prefers its native provider, built on
+[Google Highway](https://github.com/google/highway), when the native library is available. Native
+libraries are bundled for Linux x86-64 (SSE4.2 or newer) and Linux AArch64. Java 20 and 21 use the
+Panama Vector API, and older runtimes use a scalar Java implementation.
+
+| JVM property | Effect |
+| --- | --- |
+| None | Prefer native on Java 22+, else Panama, else scalar |
+| `-Djvector.enable_native_vectorization=false` | Disable automatic native selection |
+| `-Djvector.vectorization_provider=panama` | Select Panama |
+| `-Djvector.vectorization_provider=native` | Require native; fail if it cannot load |
+| `-Djvector.vectorization_provider=default` | Select the scalar provider |
+
+If native access is denied, automatic selection falls back to Panama. For named-module deployments,
+enable native access for the module containing JVector's native code. Native ISA selection is
+automatic and can be capped with `JVECTOR_MAX_ISA`.
+
+The native provider stores vectors as `MemorySegmentVectorFloat`. Use the `VectorFloat` interface
+rather than casting to `ArrayVectorFloat`; `FloatArray.array()` gives array access, and native
+operations need vectors created by the selected provider.
+
+ASH uses native kernels for query projection and scoring, and an optional add-on built on
+[oneDNN](https://github.com/uxlfoundation/oneDNN) for FP16 and INT8 query projection and batch
+encoding. Each falls back to a portable implementation when unavailable.
+
+## Research
+
+- Foundations: the [HNSW](https://ieeexplore.ieee.org/abstract/document/8594636) and
+  [DiskANN](https://suhasjs.github.io/files/diskann_neurips19.pdf) papers, and
+  [a higher-level explainer](https://www.datastax.com/guides/hierarchical-navigable-small-worlds)
+- [ASH: Asymmetric Scalar Hashing With Learned Dimensionality Reduction for High-Fidelity Vector Quantization](https://arxiv.org/abs/2606.07870) (CIKM 2026)
+- [NVQ](https://arxiv.org/abs/2509.18471)
+- [Anisotropic PQ](https://arxiv.org/abs/1908.10396)
+- [Quicker ADC](https://arxiv.org/abs/1812.09162)
+
+## Building and testing
+
+JVector is a [multimodule Maven build](https://maven.apache.org/guides/mini/guide-multiple-modules.html)
+that produces a multirelease JAR usable from Java 11:
+
+| Module | Contents |
+| --- | --- |
+| [jvector-base](./jvector-base) | Core library, compiled for Java 11 |
+| [jvector-twenty](./jvector-twenty) | Panama Vector API provider, compiled for Java 20 |
+| [jvector-native](./jvector-native) | Native provider and libraries, Java 22 |
+| [jvector-multirelease](./jvector-multirelease) | Packages the three modules above as the published `jvector` JAR |
+| [jvector-examples](./jvector-examples) | Examples, BenchYAML and benchmarks |
+| [jvector-tests](./jvector-tests) | Tests, runnable on Java 11 and newer |
+
+Build with JDK 22 or newer. The Highway sources are a Git submodule:
 
 ```bash
-cd jvector-native/src/main/native/src
-bash build_native_lib.sh
+git clone --recurse-submodules https://github.com/datastax/jvector.git
+# or, in an existing clone:
+git submodule update --init
 ```
 
-On a fresh Ubuntu machine you can install all required dependencies (g++, meson, ninja) and build in one step:
+The native library is built with [Meson](https://mesonbuild.com/) and [Ninja](https://ninja-build.org/)
+and needs g++ 11 or newer; the oneDNN add-on also needs CMake 3.13 or newer, and Meson fetches its
+pinned source. Maven builds both and packages them in the native JAR; `-Dnative.onednn=false` builds
+without oneDNN. The [native library README](./jvector-native/src/main/native/README.md) covers build
+options, ISA dispatch, adding kernels and
+[ABI compatibility](./jvector-native/src/main/native/README.md#native-abi-compatibility).
+On Ubuntu, `bash build_native_lib.sh --auto-install-deps` (in `jvector-native/src/main/native/src`)
+installs the toolchain and builds the library.
+
+Run the tests with:
 
 ```bash
-cd jvector-native/src/main/native/src
-bash build_native_lib.sh --auto-install-deps
+mvn test                                       # all modules, with the SIMD providers on JDK 20+
+mvn -DskipScalar=false test                    # also run the scalar provider tests
+mvn -Pjdk11 test                               # against Java 11
+mvn -Dsurefire.failIfNoSpecifiedTests=false -Dtest=TestNeighborArray test   # one class
 ```
 
-For other distributions the script will print the install commands needed. See
-[`jvector-native/src/main/native/README.md`](./jvector-native/src/main/native/README.md) for full build options,
-Maven integration, ISA dispatch details, and how to add new kernels.
-The [native ABI compatibility guide](./jvector-native/src/main/native/README.md#native-abi-compatibility)
-explains the supported ABI set, startup checks, and how to preserve compatibility
-when changing native entry points.
+`-Dtest` also accepts methods and patterns, such as `TestNeighborArray#testRetain*`.
+`failIfNoSpecifiedTests=false` is needed because Surefire otherwise requires a match in every module.
 
----
-
-Base code is in [jvector-base](./jvector-base) and will be built for Java 11 releases, restricting language features and APIs
-appropriately. Code in [jvector-twenty](./jvector-twenty) will be compiled for Java 20 language features/APIs and included in the final
-multirelease jar targeting supported JVMs. [jvector-multirelease](./jvector-multirelease) packages [jvector-base](./jvector-base) and [jvector-twenty](./jvector-twenty) as a
-multirelease jar for release. [jvector-examples](./jvector-examples) is an additional sibling module that uses the reactor-representation of
-jvector-base/jvector-twenty to run example code. [jvector-tests](./jvector-tests) contains tests for the project, capable of running against
-both Java 11 and Java 20+ JVMs.
-
-To run tests, use `mvn test`. To run tests against Java 20+, use `mvn test`. To run tests against Java 11, use `mvn -Pjdk11 test`.
-To run a single test class, use the Maven Surefire test filtering capability, e.g.,
-`mvn -Dsurefire.failIfNoSpecifiedTests=false -Dtest=TestNeighborArray test`.
-You may also use method-level filtering and patterns, e.g.,
-`mvn -Dsurefire.failIfNoSpecifiedTests=false -Dtest=TestNeighborArray#testRetain* test`.
-(The `failIfNoSpecifiedTests` option works around a quirk of surefire: it is happy to run `test` with submodules with empty test sets,
-but as soon as you supply a filter, it wants at least one match in every submodule.)
-
-You can run `SiftSmall` and `Bench` directly to get an idea of what all is going on here. `Bench` will automatically download required datasets to the `dataset_cache` directory.
-The files used by `SiftSmall` can be found in the [siftsmall directory](./siftsmall) in the project root.
-
-To run either class, you can use the Maven exec-plugin via the following incantations:
-
-> `mvn compile exec:exec@bench`
-
-or for Sift:
-
-> `mvn compile exec:exec@sift`
-
-`Bench` takes an optional `benchArgs` argument that can be set to a list of whitespace-separated regexes. If any of the
-provided regexes match within a dataset name, that dataset will be included in the benchmark. For example, to run only the glove
-and nytimes datasets, you could use:
-
-> `mvn compile exec:exec@bench -DbenchArgs="glove nytimes"`
-
-To run Sift/Bench without the JVM vector module available, you can use the following invocations:
-
-> `mvn -Pjdk11 compile exec:exec@bench`
-
-> `mvn -Pjdk11 compile exec:exec@sift`
-
-The `... -Pjdk11` invocations will also work with `JAVA_HOME` pointing at a Java 11 installation.
-
-See [How to run benchmarks](./docs/benchmarking.md) for dataset setup and commands, and the
-[BenchYAML Guide](./docs/benchyaml-guide.md) for construction and search configuration.
-
-To release, configure `~/.m2/settings.xml` to point to OSSRH and run `mvn -Prelease clean deploy`.
-
----
+To release, configure `~/.m2/settings.xml` for OSSRH and run `mvn -Prelease clean deploy`.
