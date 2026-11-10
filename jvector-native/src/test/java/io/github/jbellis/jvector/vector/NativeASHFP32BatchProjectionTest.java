@@ -116,6 +116,30 @@ class NativeASHFP32BatchProjectionTest {
     }
 
     @Test
+    void fp32QueryViewAdvertisesBatchingAndMatchesSingleQueries() {
+        String previous = System.getProperty("jvector.ash.queryProjection");
+        try {
+            System.setProperty("jvector.ash.queryProjection", "fp32");
+            Random random = new Random(5521);
+            float[][] matrix = random(random, 64, 128);
+            var query = prepared(matrix).forQueryScoring();
+            // Queued ASH search prepares queries in batches only when the view says it can.
+            assertTrue(query.supportsBatchProjection());
+            float[][] inputs = random(random, 8, 128);
+            float[][] batched = new float[8][64];
+            query.projectBatch(inputs, batched, 8);
+            for (int i = 0; i < 8; i++) {
+                float[] single = new float[64];
+                query.project(inputs[i], single);
+                for (int r = 0; r < 64; r++) assertEquals(single[r], batched[i][r], 1e-4f);
+            }
+        } finally {
+            if (previous == null) System.clearProperty("jvector.ash.queryProjection");
+            else System.setProperty("jvector.ash.queryProjection", previous);
+        }
+    }
+
+    @Test
     void fp32ArithmeticSupportsArbitraryBatchSizesAndSimdTails() {
         Random random = new Random(32145);
         for (int[] shape : new int[][]{{1,1},{3,7},{33,65},{384,768},{1536,3072}}) {

@@ -92,6 +92,10 @@ final class NativeASHFP32BatchProjection implements VectorUtilSupport.AshProject
         return query == fallback ? this : query;
     }
 
+    /** projectBatch always succeeds: oneDNN SGEMM, or the Highway batch kernel when oneDNN declines. */
+    @Override
+    public boolean supportsBatchProjection() { return true; }
+
     @Override
     public void projectBatch(float[][] inputs, float[][] outputs, int count) {
         VectorUtilSupport.AshProjection.validateBatch(inputs, outputs, count);
