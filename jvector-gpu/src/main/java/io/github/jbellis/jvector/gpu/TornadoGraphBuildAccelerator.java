@@ -233,17 +233,30 @@ public final class TornadoGraphBuildAccelerator implements GraphBuildAccelerator
     }
 
     /** Installs the lists of one layer; {@code members[x]} is the node of row {@code x}, or row x itself if null. */
+    /**
+     * Installs a layer's lists into the builder: the {@link NodeArray}s are built on all cores, then handed over by this
+     * thread alone. {@code addGraphNodeWithNeighbors} writes several words every thread shares (the map's lock and
+     * size, the highest node id, the entry point, the completion clock), so calling it from many threads is slower than
+     * from one: 1M nodes take 0.11 s from one thread against 0.24 s from 32 (i9-13900K), and 0.13 s against 3.2-4.4 s
+     * from 128 (Neoverse N1).
+     */
     private static void install(GraphIndexBuilder builder, int level, GpuGraphBuilder.Adjacency adjacency, int[] members) {
         int slots = PruneKernels.SLOTS;
-        IntStream.range(0, adjacency.sizes().length).parallel().forEach(x -> {
+        int count = adjacency.sizes().length;
+        NodeArray[] lists = new NodeArray[count];
+        IntStream.range(0, count).parallel().forEach(x -> {
             int size = adjacency.sizes()[x];
             var list = new NodeArray(Math.max(size, 1));
             for (int c = 0; c < size; c++) {
                 int id = adjacency.ids()[x * slots + c];
                 list.addInOrder(members == null ? id : members[id], adjacency.scores()[x * slots + c]);
             }
-            builder.addGraphNodeWithNeighbors(level, members == null ? x : members[x], list);
+            lists[x] = list;
         });
+        for (int x = 0; x < count; x++) {
+            builder.addGraphNodeWithNeighbors(level, members == null ? x : members[x], lists[x]);
+            lists[x] = null;
+        }
     }
 
     /** The node most similar to the centroid, the usual entry point of a single-layer graph. */
