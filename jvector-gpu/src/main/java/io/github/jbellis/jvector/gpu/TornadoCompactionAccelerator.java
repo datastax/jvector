@@ -80,6 +80,10 @@ public final class TornadoCompactionAccelerator implements CompactionAccelerator
 
     private Walker walker;
     private Prober prober;
+    private MmaProber mmaProber;
+
+    /** Exact probes score on tensor cores, FP16 in and FP32 accumulate ({@code -Djvector.gpu.probe.mma}, default true). */
+    static final boolean PROBE_MMA = Boolean.parseBoolean(System.getProperty("jvector.gpu.probe.mma", "true"));
     private TwoLevelProber twoLevel;
 
     /** Probes through coarse lists past MAX_PROBE_CENTERS ({@code -Djvector.gpu.probe.twoLevel}, default true). */
@@ -90,6 +94,8 @@ public final class TornadoCompactionAccelerator implements CompactionAccelerator
     static final int COARSE_PROBES = Math.min(ProbeKernels.MAX_COARSE_PROBES, Integer.getInteger("jvector.gpu.probe.coarseProbes", 256));
     /** Most queries a two-level probe launch takes ({@code -Djvector.gpu.probe.block}, default 16,384). */
     static final int TWO_LEVEL_BLOCK = Integer.getInteger("jvector.gpu.probe.block", 1 << 14);
+    /** Coarse lists a query scans for its single nearest center ({@code -Djvector.gpu.probe.assignLists}, default 16). */
+    static final int ASSIGN_LISTS = Integer.getInteger("jvector.gpu.probe.assignLists", 16);
     /** Most candidate centers a query scores exactly ({@code -Djvector.gpu.probe.listCap}, default 8192). */
     static final int LIST_CAP = Integer.getInteger("jvector.gpu.probe.listCap", 8192);
 
@@ -179,6 +185,15 @@ public final class TornadoCompactionAccelerator implements CompactionAccelerator
                 twoLevel = new TwoLevelProber(dim, centers, probe.maxProbes(), budget);
             }
             return twoLevel.probe(probe);
+        }
+        if (PROBE_MMA) {
+            if (mmaProber == null || !mmaProber.matches(probe)) {
+                if (mmaProber != null) {
+                    mmaProber.close();
+                }
+                mmaProber = new MmaProber(probe, (long) (TornadoGraphBuildAccelerator.deviceMemoryBudget() * PROBE_SHARE));
+            }
+            return mmaProber.probe(probe);
         }
         if (prober == null || prober.dim != dim || prober.centers != centers || prober.maxProbes != probe.maxProbes()) {
             if (prober != null) {
@@ -302,6 +317,175 @@ public final class TornadoCompactionAccelerator implements CompactionAccelerator
             if (TRACE) {
                 long ms = (System.nanoTime() - t0) / 1_000_000;
                 LOG.info(() -> String.format(Locale.ROOT, "GPU probes: %d queries x %d centers, %d probes each, %d ms", n, centers, want, ms));
+            }
+            return true;
+        }
+
+        @Override
+        public void close() {
+            plan.freeDeviceMemory();
+        }
+    }
+
+    /** Packs {@code dim} floats into {@code words} ints of two FP16 halves (low = even dimension), zero padded. */
+    static void packRow(float[] row, int dim, MemorySegment dst, long firstWord, int words) {
+        for (int w = 0; w < words; w++) {
+            int d = 2 * w;
+            int lo = d < dim ? Float.floatToFloat16(row[d]) & 0xFFFF : 0;
+            int hi = d + 1 < dim ? Float.floatToFloat16(row[d + 1]) & 0xFFFF : 0;
+            dst.setAtIndex(ValueLayout.JAVA_INT, firstWord + w, lo | (hi << 16));
+        }
+    }
+
+    /**
+     * The exact probe step on tensor cores: every query against every center ({@link ProbeKernels#centerScoresMma},
+     * FP16 in, FP32 accumulate), the dots turned into ranks, then each query's best centers. The probes only choose
+     * cells, which the compactor then scans with exact scores, so FP16 inputs are enough here. The packed centers are
+     * uploaded once and stay on the device; a prober is rebuilt when the centers change.
+     */
+    static final class MmaProber implements AutoCloseable {
+        final int dim;
+        final int words;
+        final int centers;
+        final int maxProbes;
+        final int stride;
+        final int blockQueries;
+        final float[] fingerprint;
+        final IntArray centersPacked;
+        final FloatArray centerNorms;
+        final IntArray queriesPacked;
+        final IntArray params;
+        final FloatArray scores;
+        final IntArray probes;
+        final WorkerGrid scoreGrid;
+        final WorkerGrid rankGrid;
+        final WorkerGrid selectGrid;
+        final GridScheduler scheduler;
+        final TornadoExecutionPlan plan;
+
+        MmaProber(CellProbe probe, long budget) {
+            dim = probe.dimension();
+            words = (dim + 15) / 16 * 8;
+            centers = probe.centerCount();
+            maxProbes = probe.maxProbes();
+            stride = (centers + ProbeKernels.MMA_TILE - 1) / ProbeKernels.MMA_TILE * ProbeKernels.MMA_TILE;
+            long left = budget - (long) centers * words * Integer.BYTES;
+            long perQuery = (long) stride * Float.BYTES + (long) words * Integer.BYTES + (long) maxProbes * Integer.BYTES;
+            long byScores = Math.min(SCORE_BYTES / ((long) stride * Float.BYTES), left / perQuery);
+            blockQueries = (int) Math.max(ProbeKernels.MMA_TILE, Math.min(Integer.MAX_VALUE / stride, byScores) / ProbeKernels.MMA_TILE * ProbeKernels.MMA_TILE);
+            centersPacked = new IntArray(centers * words);
+            centerNorms = new FloatArray(centers);
+            queriesPacked = new IntArray(blockQueries * words);
+            params = new IntArray(16);
+            scores = new FloatArray(blockQueries * stride);
+            probes = new IntArray(blockQueries * maxProbes);
+            fingerprint = fingerprint(probe);
+            // the centers: packed to FP16 and their norms, on the host, uploaded with the first launch
+            int rowsPerTask = Math.max(1, centers / 64 + 1);
+            IntStream.range(0, (centers + rowsPerTask - 1) / rowsPerTask).parallel().forEach(t -> {
+                int from = t * rowsPerTask;
+                int count = Math.min(rowsPerTask, centers - from);
+                float[] rows = new float[count * dim];
+                float[] row = new float[dim];
+                probe.copyCenters(from, count, rows, 0);
+                for (int r = 0; r < count; r++) {
+                    System.arraycopy(rows, r * dim, row, 0, dim);
+                    packRow(row, dim, centersPacked.getSegment(), (long) (from + r) * words, words);
+                    double norm = 0;
+                    for (float v : row) {
+                        norm += (double) v * v;
+                    }
+                    centerNorms.set(from + r, (float) norm);
+                }
+            });
+            KernelContext ctx = new KernelContext();
+            TaskGraph rank = new TaskGraph("mmaProbe")
+                    .transferToDevice(DataTransferMode.FIRST_EXECUTION, centersPacked, centerNorms)
+                    .transferToDevice(DataTransferMode.EVERY_EXECUTION, queriesPacked, params)
+                    .task("scores", ProbeKernels::centerScoresMma, ctx, queriesPacked, centersPacked, params, scores)
+                    .task("rank", ProbeKernels::rankScores, ctx, scores, centerNorms, params)
+                    .task("select", ProbeKernels::selectTop, ctx, scores, params, probes)
+                    .transferToHost(DataTransferMode.EVERY_EXECUTION, probes);
+            if (maxProbes == 1) {
+                // the nearest center only (the compactor's cell assignment): an arg-max, not a sorted top k
+                rank = new TaskGraph("mmaProbe")
+                        .transferToDevice(DataTransferMode.FIRST_EXECUTION, centersPacked, centerNorms)
+                        .transferToDevice(DataTransferMode.EVERY_EXECUTION, queriesPacked, params)
+                        .task("scores", ProbeKernels::centerScoresMma, ctx, queriesPacked, centersPacked, params, scores)
+                        .task("rank", ProbeKernels::rankScores, ctx, scores, centerNorms, params)
+                        .task("select", ProbeKernels::argmaxRows, ctx, scores, params, probes)
+                        .transferToHost(DataTransferMode.EVERY_EXECUTION, probes);
+            }
+            scoreGrid = new WorkerGrid1D(ProbeKernels.MMA_GROUP);
+            scoreGrid.setLocalWork(ProbeKernels.MMA_GROUP, 1, 1);
+            rankGrid = new WorkerGrid1D(ProbeKernels.GROUP);
+            rankGrid.setLocalWork(ProbeKernels.GROUP, 1, 1);
+            selectGrid = new WorkerGrid1D(ProbeKernels.GROUP);
+            selectGrid.setLocalWork(ProbeKernels.GROUP, 1, 1);
+            scheduler = new GridScheduler();
+            scheduler.addWorkerGrid("mmaProbe.scores", scoreGrid);
+            scheduler.addWorkerGrid("mmaProbe.rank", rankGrid);
+            scheduler.addWorkerGrid("mmaProbe.select", selectGrid);
+            plan = new TornadoExecutionPlan(rank.snapshot());
+        }
+
+        /** A few center values that tell one merge's centers from another's. */
+        private static float[] fingerprint(CellProbe probe) {
+            int dim = probe.dimension();
+            int n = probe.centerCount();
+            float[] f = new float[3 * dim];
+            probe.copyCenters(0, 1, f, 0);
+            probe.copyCenters(n / 2, 1, f, dim);
+            probe.copyCenters(n - 1, 1, f, 2 * dim);
+            return f;
+        }
+
+        boolean matches(CellProbe probe) {
+            return probe.dimension() == dim && probe.centerCount() == centers && probe.maxProbes() == maxProbes
+                    && java.util.Arrays.equals(fingerprint, fingerprint(probe));
+        }
+
+        boolean probe(CellProbe probe) {
+            long t0 = System.nanoTime();
+            int n = probe.queryCount();
+            params.set(ProbeKernels.P_DIM, dim);
+            params.set(ProbeKernels.P_WORDS, words);
+            params.set(ProbeKernels.P_CENTERS, centers);
+            params.set(ProbeKernels.P_SIMILARITY, Walker.similarityCode(probe.similarity()));
+            params.set(ProbeKernels.P_PROBES, maxProbes);
+            params.set(ProbeKernels.P_STRIDE, stride);
+            int want = Math.min(maxProbes, centers);
+            long kernelNs = 0;
+            for (int b0 = 0; b0 < n; b0 += blockQueries) {
+                final int start = b0;
+                int nq = Math.min(blockQueries, n - b0);
+                IntStream.range(0, nq).parallel().forEach(i -> {
+                    float[] q = new float[dim];
+                    probe.query(start + i, q);
+                    packRow(q, dim, queriesPacked.getSegment(), (long) i * words, words);
+                });
+                params.set(ProbeKernels.P_QUERIES, nq);
+                int tilesQ = (nq + ProbeKernels.MMA_TILE - 1) / ProbeKernels.MMA_TILE;
+                scoreGrid.setGlobalWork((long) tilesQ * (stride / ProbeKernels.MMA_TILE) * ProbeKernels.MMA_GROUP, 1, 1);
+                rankGrid.setGlobalWork((long) nq * ProbeKernels.GROUP, 1, 1);
+                selectGrid.setGlobalWork((long) nq * ProbeKernels.GROUP, 1, 1);
+                if (TRACE) {
+                    var result = plan.withGridScheduler(scheduler).withProfiler(uk.ac.manchester.tornado.api.enums.ProfilerMode.SILENT).execute();
+                    kernelNs += result.getProfilerResult().getDeviceKernelTime();
+                } else {
+                    plan.withGridScheduler(scheduler).execute();
+                }
+                IntStream.range(0, nq).parallel().forEach(i -> {
+                    int[] row = new int[want];
+                    MemorySegment.copy(probes.getSegment(), ValueLayout.JAVA_INT, (long) i * maxProbes * Integer.BYTES, row, 0, want);
+                    probe.setProbes(start + i, row, 0, want);
+                });
+            }
+            if (TRACE) {
+                long ms = (System.nanoTime() - t0) / 1_000_000;
+                long kms = kernelNs / 1_000_000;
+                LOG.info(() -> String.format(Locale.ROOT, "GPU probes (tensor cores): %d queries x %d centers, %d probes each, %d ms (kernels %d)",
+                        n, centers, want, ms, kms));
             }
             return true;
         }
@@ -508,18 +692,20 @@ public final class TornadoCompactionAccelerator implements CompactionAccelerator
                 prepare(probe);
             }
             int n = probe.queryCount();
+            // the nearest center alone (cell assignment) needs few lists; a ranked list of probes needs many
+            int lists = Math.min(maxProbes == 1 ? ASSIGN_LISTS : COARSE_PROBES, coarse);
             params.set(ProbeKernels.P_DIM, dim);
             params.set(ProbeKernels.P_CENTERS, coarse);
             params.set(ProbeKernels.P_SIMILARITY, Walker.similarityCode(probe.similarity()));
             params.set(ProbeKernels.P_PROBES, maxProbes);
             params.set(ProbeKernels.P_STRIDE, coarseStride);
-            params.set(ProbeKernels.P_COARSE_PROBES, Math.min(COARSE_PROBES, coarse));
+            params.set(ProbeKernels.P_COARSE_PROBES, lists);
             params.set(ProbeKernels.P_LIST_CAP, LIST_CAP);
             // the coarse step: queries against the coarse centers, each query's best lists
             coarseParams.set(ProbeKernels.P_DIM, dim);
             coarseParams.set(ProbeKernels.P_CENTERS, coarse);
             coarseParams.set(ProbeKernels.P_SIMILARITY, Walker.similarityCode(probe.similarity()));
-            coarseParams.set(ProbeKernels.P_PROBES, Math.min(COARSE_PROBES, coarse));
+            coarseParams.set(ProbeKernels.P_PROBES, lists);
             coarseParams.set(ProbeKernels.P_STRIDE, coarseStride);
             for (int b0 = 0; b0 < n; b0 += blockQueries) {
                 final int start = b0;
@@ -547,7 +733,7 @@ public final class TornadoCompactionAccelerator implements CompactionAccelerator
             if (TRACE) {
                 long ms = (System.nanoTime() - t0) / 1_000_000;
                 LOG.info(() -> String.format(Locale.ROOT, "GPU two-level probes: %d queries, %d of %d lists each, %d ms", n,
-                        Math.min(COARSE_PROBES, coarse), coarse, ms));
+                        lists, coarse, ms));
             }
             return true;
         }

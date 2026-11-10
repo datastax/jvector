@@ -17,7 +17,9 @@
 package io.github.jbellis.jvector.gpu;
 
 import uk.ac.manchester.tornado.api.KernelContext;
+import uk.ac.manchester.tornado.api.enums.MMAShape;
 import uk.ac.manchester.tornado.api.math.TornadoMath;
+import uk.ac.manchester.tornado.api.types.HalfFloat;
 import uk.ac.manchester.tornado.api.types.arrays.FloatArray;
 import uk.ac.manchester.tornado.api.types.arrays.IntArray;
 
@@ -135,6 +137,120 @@ final class ProbeKernels {
         return dot;
     }
 
+    /** Rows and columns of a tile of {@link #centerScoresMma}: six warps, 16 rows each, against twelve 8-column blocks. */
+    static final int MMA_TILE = 96;
+    static final int MMA_GROUP = 192;
+    /** Words (two FP16 halves each) of a packed row: the dimension padded to 16, halved. */
+    static final int P_WORDS = 8;
+
+    /**
+     * Dot products of a block of queries with all centers on tensor cores ({@code mma.sync m16n8k16}, FP16 inputs,
+     * FP32 accumulation), {@code scores[q * stride + c]}; {@code stride} is the center count rounded up to
+     * {@value #MMA_TILE}. One work-group of six warps per 96 x 96 tile: each 16-dimension slice of the tile's queries
+     * (the A operand) and of its centers (the B operand, transposed) is staged in local memory, as in
+     * {@code PruneKernels.gramMmaPacked}. Rows are packed FP16, two halves per int (low = even dimension). Queries and
+     * centers past the end count as zero vectors; {@link #rankScores} turns the dots into ranks and masks the padding.
+     */
+    public static void centerScoresMma(KernelContext ctx, IntArray qPacked, IntArray cPacked, IntArray params, FloatArray scores) {
+        int group = ctx.groupIdx;
+        int lid = ctx.localIdx;
+        int warp = lid / 32;
+        int words = params.get(P_WORDS);
+        int nq = params.get(P_QUERIES);
+        int nc = params.get(P_CENTERS);
+        int stride = params.get(P_STRIDE);
+        int tilesC = stride / MMA_TILE;
+        int tq = group / tilesC;
+        int tc = group - tq * tilesC;
+        int[] aForm = ctx.allocateIntLocalArray(768);
+        int[] bForm = ctx.allocateIntLocalArray(768);
+        float[] f0 = ctx.mmaFragment(0.0f);
+        float[] f1 = ctx.mmaFragment(0.0f);
+        float[] f2 = ctx.mmaFragment(0.0f);
+        float[] f3 = ctx.mmaFragment(0.0f);
+        float[] f4 = ctx.mmaFragment(0.0f);
+        float[] f5 = ctx.mmaFragment(0.0f);
+        float[] f6 = ctx.mmaFragment(0.0f);
+        float[] f7 = ctx.mmaFragment(0.0f);
+        float[] f8 = ctx.mmaFragment(0.0f);
+        float[] f9 = ctx.mmaFragment(0.0f);
+        float[] f10 = ctx.mmaFragment(0.0f);
+        float[] f11 = ctx.mmaFragment(0.0f);
+        int aOffset = warp * 16 * 8 * 4;
+        for (int w0 = 0; w0 < words; w0 += 8) {
+            for (int e = lid; e < 768; e += 192) {
+                int q = tq * 96 + e / 8;
+                int v = 0;
+                if (q < nq) {
+                    v = qPacked.get(q * words + w0 + e % 8);
+                }
+                aForm[e] = v;
+            }
+            for (int e = lid; e < 768; e += 192) {
+                int c = e / 64;
+                int kr = (e % 64) / 4;
+                int jp = e % 4;
+                int j0 = tc * 96 + c * 8 + 2 * jp;
+                int j1 = j0 + 1;
+                int word = w0 + kr / 2;
+                int shift = (kr % 2) * 16;
+                int v0 = 0;
+                if (j0 < nc) {
+                    v0 = cPacked.get(j0 * words + word);
+                }
+                int v1 = 0;
+                if (j1 < nc) {
+                    v1 = cPacked.get(j1 * words + word);
+                }
+                bForm[e] = ((v0 >>> shift) & 0xFFFF) | (((v1 >>> shift) & 0xFFFF) << 16);
+            }
+            ctx.localBarrier();
+            HalfFloat[] fa = ctx.mmaLoadA(aForm, 16, aOffset);
+            f0 = ctx.mma(fa, ctx.mmaLoadB(bForm, 16, 0), f0, MMAShape.M16N8K16);
+            f1 = ctx.mma(fa, ctx.mmaLoadB(bForm, 16, 256), f1, MMAShape.M16N8K16);
+            f2 = ctx.mma(fa, ctx.mmaLoadB(bForm, 16, 512), f2, MMAShape.M16N8K16);
+            f3 = ctx.mma(fa, ctx.mmaLoadB(bForm, 16, 768), f3, MMAShape.M16N8K16);
+            f4 = ctx.mma(fa, ctx.mmaLoadB(bForm, 16, 1024), f4, MMAShape.M16N8K16);
+            f5 = ctx.mma(fa, ctx.mmaLoadB(bForm, 16, 1280), f5, MMAShape.M16N8K16);
+            f6 = ctx.mma(fa, ctx.mmaLoadB(bForm, 16, 1536), f6, MMAShape.M16N8K16);
+            f7 = ctx.mma(fa, ctx.mmaLoadB(bForm, 16, 1792), f7, MMAShape.M16N8K16);
+            f8 = ctx.mma(fa, ctx.mmaLoadB(bForm, 16, 2048), f8, MMAShape.M16N8K16);
+            f9 = ctx.mma(fa, ctx.mmaLoadB(bForm, 16, 2304), f9, MMAShape.M16N8K16);
+            f10 = ctx.mma(fa, ctx.mmaLoadB(bForm, 16, 2560), f10, MMAShape.M16N8K16);
+            f11 = ctx.mma(fa, ctx.mmaLoadB(bForm, 16, 2816), f11, MMAShape.M16N8K16);
+            ctx.localBarrier();
+        }
+        int row = tq * 96 + warp * 16;
+        int col = tc * 96;
+        ctx.mmaStore(f0, scores, row, col + 0, stride);
+        ctx.mmaStore(f1, scores, row, col + 8, stride);
+        ctx.mmaStore(f2, scores, row, col + 16, stride);
+        ctx.mmaStore(f3, scores, row, col + 24, stride);
+        ctx.mmaStore(f4, scores, row, col + 32, stride);
+        ctx.mmaStore(f5, scores, row, col + 40, stride);
+        ctx.mmaStore(f6, scores, row, col + 48, stride);
+        ctx.mmaStore(f7, scores, row, col + 56, stride);
+        ctx.mmaStore(f8, scores, row, col + 64, stride);
+        ctx.mmaStore(f9, scores, row, col + 72, stride);
+        ctx.mmaStore(f10, scores, row, col + 80, stride);
+        ctx.mmaStore(f11, scores, row, col + 88, stride);
+    }
+
+    /**
+     * Turns the dots of {@link #centerScoresMma} into scores ordered like JVector's similarity (as
+     * {@link #centerScores} writes them) and masks the padded columns. One work-group per query.
+     */
+    public static void rankScores(KernelContext ctx, FloatArray scores, FloatArray centerNorms, IntArray params) {
+        int q = ctx.groupIdx;
+        int lid = ctx.localIdx;
+        int nc = params.get(P_CENTERS);
+        int similarity = params.get(P_SIMILARITY);
+        int stride = params.get(P_STRIDE);
+        for (int c = lid; c < stride; c += GROUP) {
+            scores.set(q * stride + c, rank(centerNorms, similarity, nc, c, scores.get(q * stride + c)));
+        }
+    }
+
     /**
      * Each query's best {@code P} centers, best first (ties to the lower position). The P-th best score is bracketed
      * by bisection between the smallest and largest score (40 counting passes: the bracket shrinks to the float
@@ -176,7 +292,8 @@ final class ProbeKernels {
         float lo = red[0];
         float hi = red2[0] + TornadoMath.max(1.0f, TornadoMath.abs(red2[0]));
         ctx.localBarrier();
-        for (int it = 0; it < 40; it++) {
+        int it = 0;
+        while (it < 40) {
             float mid = lo + (hi - lo) * 0.5f;
             int c = 0;
             for (int e = lid; e < nc; e += GROUP) {
@@ -194,11 +311,17 @@ final class ProbeKernels {
             }
             int total = counts[0];
             ctx.localBarrier();
-            if (total >= want) {
+            if (total == want) {
+                // exactly the best ones lie at or above mid: no narrower bracket is needed
+                lo = mid;
+                hi = mid;
+                it = 40;
+            } else if (total > want) {
                 lo = mid;
             } else {
                 hi = mid;
             }
+            it++;
         }
         // gather: scores >= hi (fewer than want), then those in [lo, hi) in position order; each thread takes a
         // contiguous range of positions
@@ -432,7 +555,8 @@ final class ProbeKernels {
         float lo = red[0];
         float hi = red2[0] + TornadoMath.max(1.0f, TornadoMath.abs(red2[0]));
         ctx.localBarrier();
-        for (int it = 0; it < 40; it++) {
+        int it = 0;
+        while (it < 40) {
             float mid = lo + (hi - lo) * 0.5f;
             int c = 0;
             for (int e = lid; e < nc; e += GROUP) {
@@ -450,11 +574,17 @@ final class ProbeKernels {
             }
             int total = counts[0];
             ctx.localBarrier();
-            if (total >= want) {
+            if (total == want) {
+                // exactly the best ones lie at or above mid: no narrower bracket is needed
+                lo = mid;
+                hi = mid;
+                it = 40;
+            } else if (total > want) {
                 lo = mid;
             } else {
                 hi = mid;
             }
+            it++;
         }
         // gather: scores >= hi (fewer than want), then those in [lo, hi) in position order; each thread takes a
         // contiguous range of positions
