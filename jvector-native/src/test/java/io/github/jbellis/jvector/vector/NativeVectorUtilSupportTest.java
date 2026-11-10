@@ -132,6 +132,49 @@ class NativeVectorUtilSupportTest {
         }
     }
 
+    private VectorFloat<?> filled(int n, float value) {
+        float[] a = new float[n];
+        java.util.Arrays.fill(a, value);
+        return types.createFloatVector(a);
+    }
+
+    private void assertRejectsMismatchedLengths(java.util.function.BiConsumer<VectorFloat<?>, VectorFloat<?>> op) {
+        for (int[] lens : new int[][]{{8, 4}, {4, 8}, {1, 0}, {0, 1}, {33, 32}}) {
+            var a = filled(lens[0], 1);
+            var b = filled(lens[1], 2);
+            assertThrows(IllegalArgumentException.class, () -> op.accept(a, b));
+        }
+        // valid empty inputs and equal lengths succeed
+        op.accept(filled(0, 1), filled(0, 2));
+        op.accept(filled(17, 1), filled(17, 2));
+    }
+
+    @Test
+    void addInPlaceRejectsMismatchedLengths() {
+        assertRejectsMismatchedLengths(support::addInPlace);
+    }
+
+    @Test
+    void subInPlaceRejectsMismatchedLengths() {
+        assertRejectsMismatchedLengths(support::subInPlace);
+    }
+
+    @Test
+    void minInPlaceRejectsMismatchedLengths() {
+        assertRejectsMismatchedLengths(support::minInPlace);
+    }
+
+    @Test
+    void inPlaceOpsKeepValidResults() {
+        var a = filled(17, 5);
+        support.addInPlace(a, filled(17, 2));
+        assertEquals(7f, a.get(16));
+        support.subInPlace(a, filled(17, 3));
+        assertEquals(4f, a.get(0));
+        support.minInPlace(a, filled(17, 1));
+        assertEquals(1f, a.get(10));
+    }
+
     private static void requireNativeProvider() {
         assumeTrue(VectorizationProvider.getInstance() instanceof NativeVectorizationProvider,
                    "Native jvector provider not available");
