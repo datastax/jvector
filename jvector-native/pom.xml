@@ -43,6 +43,8 @@
                 <configuration>
                     <excludes>
                         <exclude>src/main/native/subprojects/onednn/**</exclude>
+                        <exclude>src/main/native/subprojects/packagecache/**</exclude>
+                        <exclude>src/main/native/subprojects/.wraplock</exclude>
                     </excludes>
                 </configuration>
             </plugin>
