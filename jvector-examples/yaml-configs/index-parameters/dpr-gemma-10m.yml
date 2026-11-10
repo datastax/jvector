@@ -2,6 +2,7 @@ yamlSchemaVersion: 3
 onDiskIndexVersion: 7
 
 dataset: dpr-gemma-10m
+useDatasetPrefetching: false
 
 construction:
   type: onDisk

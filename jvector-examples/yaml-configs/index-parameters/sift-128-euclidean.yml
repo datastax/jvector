@@ -10,7 +10,7 @@ construction:
   outDegree: [32]
   efConstruction: [100]
   neighborOverflow: [1.2f]
-  addHierarchy: [No]
+  addHierarchy: [Yes]
   refineFinalGraph: [Yes]
   fusedGraph: [No]
   compression:
@@ -22,7 +22,7 @@ construction:
 #        k: 256
 #        anisotropicThreshold: -1.0
   reranking:
-    type: None
+    type: NVQ
   useSavedIndexIfExists: No
 
 search:

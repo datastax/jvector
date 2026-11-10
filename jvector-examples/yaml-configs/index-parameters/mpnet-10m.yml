@@ -15,7 +15,7 @@ construction:
   compression:
     - type: ASH
       parameters:
-        encodedBits: 808
+        compressionRatio: 32
         optimizer: ITQ
         landmarkCount: 1
         bitsPerDimension: 2
@@ -27,12 +27,12 @@ construction:
 
 search:
   topKOverquery:
-    10: [1.0, 2.0]
+    10: [1.0]
   useSearchPruning: [No]
   compression:
     - type: ASH
       parameters:
-        encodedBits: 808
+        compressionRatio: 32
         optimizer: ITQ
         landmarkCount: 1
         bitsPerDimension: 2

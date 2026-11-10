@@ -5,12 +5,12 @@ dataset: cohere-10M
 
 construction:
   type: onDisk
-  outDegree: [64]
-  efConstruction: [200]
-  neighborOverflow: [1.6f]
-  addHierarchy: [No]
+  outDegree: [32]
+  efConstruction: [100]
+  neighborOverflow: [1.2f]
+  addHierarchy: [Yes]
   refineFinalGraph: [Yes]
-  fusedGraph: [No]
+  fusedGraph: [Yes]
   compression:
     - type: ASH
       parameters:
@@ -25,13 +25,12 @@ construction:
 #        k: 256
 #        anisotropicThreshold: -1.0
   reranking:
-    type: FP32
+    type: NVQ
   useSavedIndexIfExists: No # If yes, the system will attempt to locate a cached copy of the index instead of constructing
 
 search:
   topKOverquery:
-    10: [1.00, 1.25, 1.56, 1.95, 2.44, 3.05, 3.81, 4.77, 5.96, 7.45, 9.31, 11.64]
-#    100: [1.0]
+    10: [1.0]
   useSearchPruning: [No]
   compression:
     - type: ASH

@@ -11,8 +11,8 @@ construction:
   # type: inMemory     # Omit writerMode, fusedGraph, and useSavedIndexIfExists.
   # writerMode: parallel  # Default for onDisk.
   # writerMode: sequential
-  outDegree: [64]
-  efConstruction: [200]
+  outDegree: [32]
+  efConstruction: [100]
   neighborOverflow: [1.2f]
   addHierarchy: [Yes]
   refineFinalGraph: [Yes]
@@ -50,7 +50,7 @@ construction:
 search:
   topKOverquery:
     10: [1.0, 2.0, 5.0, 10.0]
-#    100: [1.0, 2.0]
+    100: [1.0, 2.0]
   useSearchPruning: [No]
   compression:
     - type: ASH
