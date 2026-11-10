@@ -59,6 +59,17 @@ public class IndexParametersTest {
     }
 
     @Test
+    public void fullPrecisionSearchRejectsAnyReranker() throws Exception {
+        for (var reranker : List.of("NVQ", "FP32")) {
+            var file = new File(directory.getRoot(), "rerank-" + reranker + ".yml");
+            Files.writeString(file.toPath(), config("test").replace("reranking:\n    type: None", "reranking:\n    type: " + reranker));
+            var e = assertThrows(IllegalArgumentException.class, () -> MultiConfig.getConfig(file.getPath()));
+            assertTrue(e.getMessage(), e.getMessage().endsWith("Search type None scores with full-precision vectors, so "
+                    + reranker + " reranking does not apply. Use reranking.type None"));
+        }
+    }
+
+    @Test
     public void exactNameFindsTheDatasetDefault() throws Exception {
         write("mpnet-1m.yml", "mpnet-1m");
         write("default.yml", "default");

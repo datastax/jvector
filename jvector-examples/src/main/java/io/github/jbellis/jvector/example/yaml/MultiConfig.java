@@ -254,8 +254,9 @@ public class MultiConfig {
             if (fused && !List.of("ASH", "PQ").contains(entry.type)) {
                 throw new IllegalArgumentException("fusedGraph requires ASH or PQ search compression");
             }
-            if ("None".equals(entry.type) && "FP32".equals(reranking)) {
-                throw new IllegalArgumentException("FP32 reranking repeats source-vector traversal scores. Use reranking.type None");
+            if ("None".equals(entry.type) && !"None".equals(reranking)) {
+                throw new IllegalArgumentException("Search type None scores with full-precision vectors, so "
+                        + reranking + " reranking does not apply. Use reranking.type None");
             }
         }
     }

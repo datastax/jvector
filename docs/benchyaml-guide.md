@@ -129,8 +129,8 @@ selected scorer or layout requires a reranker, Grid throws an exception during
 configuration validation. The fused ASH and PQ scorer setup requires an FP32 or
 NVQ scoring feature.
 
-Grid rejects settings that do not apply to the case and reranking that repeats
-the traversal scorer with the same vectors and arithmetic. Explicit precision
+Grid rejects settings that do not apply to the case. Search type `None` scores
+with full-precision vectors, so it requires `reranking.type: None`. Explicit precision
 requests require support on the selected provider and machine.
 
 ## Quantizer parameters
