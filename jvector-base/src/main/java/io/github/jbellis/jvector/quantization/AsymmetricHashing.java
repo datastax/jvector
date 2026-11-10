@@ -24,6 +24,7 @@ import io.github.jbellis.jvector.graph.VectorAccess;
 import io.github.jbellis.jvector.graph.disk.OnDiskGraphIndex;
 import io.github.jbellis.jvector.util.Accountable;
 import io.github.jbellis.jvector.util.CallerBatchProcessor;
+import io.github.jbellis.jvector.util.BlasThreads;
 import io.github.jbellis.jvector.util.PhysicalCoreExecutor;
 import io.github.jbellis.jvector.util.RamUsageEstimator;
 import io.github.jbellis.jvector.vector.VectorUtil;
@@ -305,6 +306,36 @@ public class AsymmetricHashing implements VectorCompressor<AsymmetricHashing.Qua
                                                int encodedBits,
                                                int landmarkCount,
                                                int bitsPerDimension) throws IOException {
+        try (var blas = BlasThreads.singleUnlessLimited()) {
+            return train(ravv, optimizer, encodedBits, landmarkCount, bitsPerDimension);
+        }
+    }
+
+    /**
+     * Initialize ASH index-wide parameters, letting native BLAS and LAPACK use as many threads as
+     * {@code executor} has. Without an executor, training uses one BLAS thread (see
+     * {@link BlasThreads}); other training work uses the library's physical-core pool either way.
+     *
+     * @param executor the pool whose parallelism sets the BLAS thread count
+     * @see #initialize(RandomAccessVectorValues, int, int, int, int)
+     */
+    public static AsymmetricHashing initialize(RandomAccessVectorValues ravv,
+                                               int optimizer,
+                                               int encodedBits,
+                                               int landmarkCount,
+                                               int bitsPerDimension,
+                                               ForkJoinPool executor) throws IOException {
+        Objects.requireNonNull(executor, "executor");
+        try (var blas = BlasThreads.limit(Math.max(1, executor.getParallelism()))) {
+            return train(ravv, optimizer, encodedBits, landmarkCount, bitsPerDimension);
+        }
+    }
+
+    private static AsymmetricHashing train(RandomAccessVectorValues ravv,
+                                           int optimizer,
+                                           int encodedBits,
+                                           int landmarkCount,
+                                           int bitsPerDimension) throws IOException {
         validateBitsPerDimension(bitsPerDimension);
 
         if (landmarkCount < 1 || landmarkCount > 256) {
@@ -1521,6 +1552,12 @@ public class AsymmetricHashing implements VectorCompressor<AsymmetricHashing.Qua
      * @throws RuntimeException if the native SVD fails
      */
     public static StiefelTransform runWithoutTraining(int D, int d, Random rng) {
+        try (var blas = BlasThreads.singleUnlessLimited()) {
+            return randomTransform(D, d, rng);
+        }
+    }
+
+    private static StiefelTransform randomTransform(int D, int d, Random rng) {
         if (d <= 0 || d > D) {
             throw new IllegalArgumentException("Invalid d=" + d + " for D=" + D);
         }

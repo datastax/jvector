@@ -23,9 +23,11 @@ import io.github.jbellis.jvector.quantization.BinaryQuantization;
 import io.github.jbellis.jvector.quantization.NVQuantization;
 import io.github.jbellis.jvector.quantization.ProductQuantization;
 import io.github.jbellis.jvector.quantization.VectorCompressor;
+import io.github.jbellis.jvector.util.PhysicalCoreExecutor;
 import io.github.jbellis.jvector.vector.VectorSimilarityFunction;
 
 import java.io.IOException;
+import java.util.concurrent.ForkJoinTask;
 
 public abstract class CompressorParameters {
     public static final CompressorParameters NONE = new NoCompressionParameters();
@@ -204,12 +206,16 @@ public abstract class CompressorParameters {
         @Override
         public VectorCompressor<?> computeCompressor(DataSet ds) {
             try {
+                // Native BLAS uses the construction pool's size when training runs in it,
+                // otherwise the library's physical-core pool.
+                var executor = ForkJoinTask.inForkJoinPool() ? ForkJoinTask.getPool() : PhysicalCoreExecutor.pool();
                 return AsymmetricHashing.initialize(
                         ds.getBaseRavv(),
                         optimizer,
                         encodedBits,
                         landmarkCount,
-                        bitsPerDimension);
+                        bitsPerDimension,
+                        executor);
             } catch (IOException e) {
                 throw new RuntimeException(e);
             }

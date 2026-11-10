@@ -20,6 +20,8 @@ import dev.ludovic.netlib.blas.BLAS;
 import dev.ludovic.netlib.lapack.LAPACK;
 import org.netlib.util.intW;
 
+import io.github.jbellis.jvector.util.BlasThreads;
+
 import java.util.Objects;
 
 /**
@@ -41,6 +43,12 @@ final class ASHCovariancePCA {
      * reported rather than hidden by the fallback.</p>
      */
     static double[] projection(double[] x, int rows, int dims, int latent) {
+        try (var blas = BlasThreads.singleUnlessLimited()) {
+            return computeProjection(x, rows, dims, latent);
+        }
+    }
+
+    private static double[] computeProjection(double[] x, int rows, int dims, int latent) {
         Objects.requireNonNull(x, "x");
         if (rows <= 0 || dims <= 0 || latent <= 0 || latent > dims
                 || (long) rows * dims > Integer.MAX_VALUE || (long) dims * dims > Integer.MAX_VALUE

@@ -20,6 +20,8 @@ import dev.ludovic.netlib.blas.BLAS;
 import dev.ludovic.netlib.lapack.LAPACK;
 import org.netlib.util.intW;
 
+import io.github.jbellis.jvector.util.BlasThreads;
+
 import java.util.Objects;
 
 /**
@@ -82,6 +84,12 @@ final class ASHFloatOrthogonalizer {
      * including on failure; every successful call overwrites the whole output.
      */
     void orthogonalize(double[] source, double[] destination) {
+        try (var blas = BlasThreads.singleUnlessLimited()) {
+            orthogonalizeInScope(source, destination);
+        }
+    }
+
+    private void orthogonalizeInScope(double[] source, double[] destination) {
         Objects.requireNonNull(source, "source");
         Objects.requireNonNull(destination, "destination");
         if (source.length != elements || destination.length != elements || source == destination) {

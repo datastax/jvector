@@ -135,13 +135,26 @@ precision. See the [precision guide](ash-projection-precision.md#benchyaml-runs)
 | `-Xms`, `-Xmx` | JVM ergonomics | Initial / maximum heap; account for resident input, model and construction memory. |
 | `-ea`, `-da` | Assertions normally disabled | Enable / disable Java assertions; independent of numerical precision. |
 
-`MKL_NUM_THREADS`, `OMP_NUM_THREADS`, `OPENBLAS_NUM_THREADS` and
-`GOTO_NUM_THREADS` are native-runtime environment controls, not ASH model
-parameters. Avoid nested native query pools. The ASH versus PQ study scripts set them
-to one for queries and the core budget for construction; it also sets
-`MKL_DYNAMIC=FALSE` and `ONEDNN_VERBOSE=0`. OS affinity
-(`numactl --physcpubind`) and memory placement (`--membind`, `--interleave`)
-are deployment choices.
+### BLAS threads
+
+ASH training is the only BLAS and LAPACK user. JVector sets the native BLAS
+thread count for its own calls, so a host does not need to configure MKL or
+OpenBLAS: training uses one BLAS thread, or as many as the executor passed to
+`AsymmetricHashing.initialize(..., ForkJoinPool executor)`. Queries never call
+BLAS. With the native provider, the count is applied per calling thread through
+MKL's `MKL_Set_Num_Threads_Local` or OpenBLAS's `openblas_set_num_threads_local`;
+OpenBLAS releases before 0.3.27 only have a process-wide setting, which JVector
+sets for the duration of training. Other providers leave BLAS threading to
+`MKL_NUM_THREADS`, `OMP_NUM_THREADS` and `OPENBLAS_NUM_THREADS`.
+`io.github.jbellis.jvector.util.BlasThreads` applies the same limit to a host's
+own BLAS work.
+
+BenchYAML trains in its construction pool, so BLAS uses `construction.workers`
+threads (all physical cores by default). Set `MKL_DYNAMIC=FALSE` so MKL uses the
+count it is given. The ASH versus PQ study scripts also set the thread variables,
+to one for queries and the core budget for construction, as in the published
+runs. OS affinity (`numactl --physcpubind`) and memory placement (`--membind`,
+`--interleave`) are deployment choices.
 
 ## Graph and search parameters in BenchYAML
 

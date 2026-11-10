@@ -54,6 +54,16 @@ class NativeVectorUtilSupport extends PanamaVectorUtilSupport
                 .getString(0);
     }
 
+    @Override
+    public int setBlasThreadsLocal(int threads) {
+        return NativeBlasThreads.set(threads);
+    }
+
+    /** How BLAS thread counts are applied: an MKL or OpenBLAS setting, or {@code none}. */
+    public String getBlasThreadControl() {
+        return NativeBlasThreads.description();
+    }
+
     /**
      * Returns the value of {@code JVECTOR_MAX_ISA} that was in effect when the
      * native library was loaded, or {@code null} if the variable was absent or

@@ -125,8 +125,10 @@ printf '\nRecipe   %s\nCPUs     %s (%s physical cores), memory interleaved on NU
 debug=()
 [[ -z ${BENCH_DEBUG:-} ]] || debug=("-agentlib:jdwp=transport=dt_socket,server=y,suspend=y,address=*:$BENCH_DEBUG")
 cd "$work"
+# JVector sets BLAS threads for its own calls (one, or the construction pool's size), so the
+# BLAS thread variables are cleared rather than set here.
 exec env -u JAVA_TOOL_OPTIONS -u JDK_JAVA_OPTIONS -u _JAVA_OPTIONS \
-  MKL_NUM_THREADS="$cores" OMP_NUM_THREADS="$cores" OPENBLAS_NUM_THREADS="$cores" GOTO_NUM_THREADS="$cores" \
+  -u MKL_NUM_THREADS -u OMP_NUM_THREADS -u OPENBLAS_NUM_THREADS -u GOTO_NUM_THREADS \
   MKL_DYNAMIC=FALSE ONEDNN_VERBOSE=0 \
   numactl --physcpubind="$cpus" --interleave="$nodes" "$jdk/bin/java" "${debug[@]}" \
   --add-modules=jdk.incubator.vector --enable-native-access=ALL-UNNAMED -da -Xms2g "-Xmx${BENCH_HEAP:-128g}" \

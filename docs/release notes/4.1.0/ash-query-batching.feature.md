@@ -10,4 +10,4 @@ paths, and source/concurrency metadata. The repository includes fixed fused PQ/A
 comparison configurations and standalone reproduction commands.
 
 See [query integration](../../ash-query-integration.md) and the
-[BenchYAML reproduction guide](../../ash-pq-benchmark.md).
+[Reproducing ASH versus PQ](../../ash-pq-benchmark.md).

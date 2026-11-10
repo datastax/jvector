@@ -771,4 +771,13 @@ public interface VectorUtilSupport {
     return Float.NaN;
   }
 
+  /**
+   * Sets the native BLAS thread count for calls made on the current thread, as
+   * {@link io.github.jbellis.jvector.util.BlasThreads} requests. Returns the setting to restore
+   * afterward, or -1 when this provider cannot control BLAS threads.
+   */
+  default int setBlasThreadsLocal(int threads) {
+    return -1;
+  }
+
 }
