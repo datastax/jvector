@@ -2227,10 +2227,13 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
             int liveCount = numLiveNodesPerSource.get(s);
             long[] keyed = new long[liveCount];
             AtomicInteger fill = new AtomicInteger();
+            // with an accelerator, every node's cell is its nearest level-1 node, ranked by the accelerator
+            boolean assigned = regionMode && accelerator != null && accelerator.supports(similarityFunction, dimension)
+                    && assignCellsAccelerated(source, alive, size, hubMapRef, walkPositionRef, keyed, fill);
             // enough windows to keep every worker busy on small sources, at most 256K nodes each
             int window = Math.max(4096, Math.min(1 << 18, size / (4 * taskWindowSize) + 1));
             List<Callable<Void>> tasks = new ArrayList<>();
-            for (int from = 0; from < size; from += window) {
+            for (int from = 0; !assigned && from < size; from += window) {
                 final int lo = from;
                 final int hi = Math.min(size, from + window);
                 tasks.add(() -> {
@@ -2321,6 +2324,68 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
         log.info("Region ordinals assigned ({}): {} ordinals across {} sources in {} ms", regionMode ? "region order" : "PQ-prefix order",
                 next, numSources, (System.nanoTime() - t0) / 1_000_000);
         return mappers;
+    }
+
+    /** Nodes per block of {@link #assignCellsAccelerated}: their vectors are held on the heap while the block is ranked. */
+    private static final int ASSIGN_BLOCK = 1 << 14;
+
+    /**
+     * The region keys of one source through the accelerator: the source's live vectors are read in blocks (in
+     * parallel, in node order), and each block's nearest level-1 nodes come from {@link CompactionAccelerator#probe}
+     * with one probe a query.
+     *
+     * @return false if the accelerator declined the first block (nothing was written); the caller then assigns as usual
+     */
+    private boolean assignCellsAccelerated(OnDiskGraphIndex source, FixedBitSet alive, int size, HubMap hubMap, int[] walkPosition,
+                                           long[] keyed, AtomicInteger fill) {
+        long t0 = System.nanoTime();
+        final int[] nodes = new int[ASSIGN_BLOCK];
+        final VectorFloat<?>[] vecs = new VectorFloat<?>[ASSIGN_BLOCK];
+        for (int i = 0; i < ASSIGN_BLOCK; i++) {
+            vecs[i] = vectorTypeSupport.createFloatVector(dimension);
+        }
+        int node = 0;
+        boolean first = true;
+        while (node < size) {
+            int count = 0;
+            int from = node;
+            while (node < size && count < ASSIGN_BLOCK) {
+                if (alive.get(node)) nodes[count++] = node;
+                node++;
+            }
+            if (count == 0) break;
+            source.prefetchL0Records(from, node - 1);
+            final int n = count;
+            int chunk = Math.max(256, n / Math.max(1, taskWindowSize) + 1);
+            List<Callable<Void>> reads = new ArrayList<>();
+            for (int lo = 0; lo < n; lo += chunk) {
+                final int a = lo, b = Math.min(n, lo + chunk);
+                reads.add(() -> {
+                    try (var view = (OnDiskGraphIndex.View) source.getView()) {
+                        for (int i = a; i < b; i++) {
+                            view.getVectorInto(nodes[i], vecs[i], 0);
+                        }
+                    }
+                    return null;
+                });
+            }
+            joinAll(reads);
+            CellProbe probe = new CellProbe(vecs, n, hubMap, dimension, similarityFunction, 1);
+            if (!accelerator.probe(probe)) {
+                if (first) {
+                    return false;
+                }
+                throw new IllegalStateException("the compaction accelerator declined a block after accepting an earlier one");
+            }
+            first = false;
+            for (int i = 0; i < n; i++) {
+                int landing = probe.counts[i] > 0 ? hubMap.nodes[1][probe.probes[i]] : -1;
+                int pos = landing >= 0 && landing < walkPosition.length ? walkPosition[landing] : Integer.MAX_VALUE;
+                keyed[fill.getAndIncrement()] = ((pos & 0xFFFFFFFFL) << 32) | (nodes[i] & 0xFFFFFFFFL);
+            }
+        }
+        log.info("Region keys of {} nodes from the accelerator ({}) in {} ms", fill.get(), accelerator.name(), (System.nanoTime() - t0) / 1_000_000);
+        return true;
     }
 
     private void joinAll(List<Callable<Void>> tasks) {
