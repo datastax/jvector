@@ -129,8 +129,9 @@ public class MultiConfig {
                             + configFile.getAbsolutePath());
                 }
 
-                // Validate supported versions
-                if (cfg.getYamlSchemaVersion() != 2 && cfg.getYamlSchemaVersion() != 3) {
+                // Validate supported versions. Schema 1 and 2 share one layout; schema 2 only
+                // marked files written after ASH was added, so earlier schema 1 files still load.
+                if (cfg.getYamlSchemaVersion() < 1 || cfg.getYamlSchemaVersion() > 3) {
                     throw new IllegalArgumentException("Unsupported yamlSchemaVersion="
                             + cfg.getYamlSchemaVersion() + " in " + configFile.getAbsolutePath());
                 }
@@ -151,7 +152,7 @@ public class MultiConfig {
         // Legacy yamlSchemaVersion "0": lenient parsing (ignore unknown fields like search.benchmarks)
         if (WARNED_LEGACY.compareAndSet(false, true)) {
             System.err.println("WARNING: Deprecated legacy YAML schema detected (no yamlSchemaVersion). "
-                    + "Unknown fields will be ignored. Please migrate configs to yamlSchemaVersion: 1 and run-config.yml.");
+                    + "Unknown fields will be ignored. Please migrate configs to yamlSchemaVersion: 3 and run-config.yml.");
         }
 
         try {
