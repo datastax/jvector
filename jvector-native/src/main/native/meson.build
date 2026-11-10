@@ -255,8 +255,13 @@ if get_option('onednn').enabled()
   # oneDNN's aggregate archive has no source files of its own. Meson's CMake
   # converter marks that aggregate non-PIC, although all constituent object
   # libraries are PIC. Re-archive those objects with the correct metadata.
+  onednn_archive_inputs = [onednn_project.target('dnnl').extract_all_objects(recursive: true)]
+  # The CMake build links KleidiAI as a separate static target on AArch64.
+  if 'kleidiai_ops' in onednn_project.target_list()
+    onednn_archive_inputs += [onednn_project.target('kleidiai_ops').extract_all_objects(recursive: true)]
+  endif
   onednn_objects = static_library('ash_onednn',
-    objects: onednn_project.target('dnnl').extract_all_objects(recursive: true),
+    objects: onednn_archive_inputs,
     pic: true,
   )
   onednn_dependency = onednn_project.dependency('dnnl').partial_dependency(
