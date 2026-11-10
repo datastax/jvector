@@ -1011,11 +1011,8 @@ public class ASHVectors implements CompressedVectors {
     }
 
     /**
-     * For ASH, precomputed and non-precomputed scoring are currently identical.
-     *
-     * <p>
-     * TODO:
-     *  - Evaluate caching projected queries or other query-dependent state.
+     * Same as {@link #scoreFunctionFor}: ASH prepares the query once, projection included,
+     * when the score function is created, so there is nothing further to precompute.
      */
     @Override
     public ScoreFunction.ApproximateScoreFunction precomputedScoreFunctionFor(

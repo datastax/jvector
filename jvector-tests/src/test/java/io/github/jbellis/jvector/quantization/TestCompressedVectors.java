@@ -28,6 +28,8 @@ import io.github.jbellis.jvector.vector.types.VectorFloat;
 import org.junit.Test;
 
 import java.io.File;
+import java.nio.ByteBuffer;
+import java.nio.file.Files;
 import java.util.List;
 
 import static io.github.jbellis.jvector.TestUtil.createRandomVectors;
@@ -36,6 +38,8 @@ import static io.github.jbellis.jvector.TestUtil.nextInt;
 import static java.lang.Math.abs;
 import static java.lang.Math.log;
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 @ThreadLeakScope(ThreadLeakScope.Scope.NONE)
 public class TestCompressedVectors extends RandomizedTest {
@@ -258,5 +262,50 @@ public class TestCompressedVectors extends RandomizedTest {
     @Test
     public void testCenteringDisturbance() {
 
+    }
+
+    @Test
+    public void testAshRequiresFormatVersionSevenOrLater() throws Exception {
+        var vectors = createRandomVectors(256, 64);
+        vectors.forEach(VectorUtil::l2normalize);
+        var ravv = new ListRandomAccessVectorValues(vectors, 64);
+        var ash = AsymmetricHashing.initialize(ravv, AsymmetricHashing.RANDOM,
+                AsymmetricHashing.HEADER_BITS + 64, 1, 2);
+        int current = io.github.jbellis.jvector.graph.disk.OnDiskGraphIndex.CURRENT_VERSION;
+
+        File file = File.createTempFile("ashtest", ".model");
+        try (var writer = new SimpleWriter(file.toPath())) {
+            ash.write(writer, current);
+        }
+        try (var readerSupplier = new SimpleMappedReader.Supplier(file.toPath())) {
+            var loaded = AsymmetricHashing.load(readerSupplier.get());
+            assertEquals(ash.originalDimension, loaded.originalDimension);
+            assertEquals(ash.quantizedDim, loaded.quantizedDim);
+        }
+
+        File older = File.createTempFile("ashtest", ".model");
+        try (var writer = new SimpleWriter(older.toPath())) {
+            var e = assertThrows(IllegalArgumentException.class,
+                    () -> ash.write(writer, AsymmetricHashing.MIN_FORMAT_VERSION - 1));
+            assertTrue(e.getMessage().endsWith("got " + (AsymmetricHashing.MIN_FORMAT_VERSION - 1)), e.getMessage());
+        }
+
+        // The header is the magic number, then the format version.
+        byte[] model = Files.readAllBytes(file.toPath());
+        for (int version : new int[] {AsymmetricHashing.MIN_FORMAT_VERSION - 1, current + 1}) {
+            assertLoadFails(model, 4, version, "got " + version);
+        }
+        assertLoadFails(model, 0, 0x12345678, "Invalid ASH magic: 0x12345678");
+    }
+
+    private static void assertLoadFails(byte[] model, int offset, int value, String message) throws Exception {
+        byte[] patched = model.clone();
+        ByteBuffer.wrap(patched, offset, Integer.BYTES).putInt(value);
+        File file = File.createTempFile("ashtest", ".model");
+        Files.write(file.toPath(), patched);
+        try (var readerSupplier = new SimpleMappedReader.Supplier(file.toPath())) {
+            var e = assertThrows(IllegalArgumentException.class, () -> AsymmetricHashing.load(readerSupplier.get()));
+            assertTrue(e.getMessage().endsWith(message), e.getMessage());
+        }
     }
 }

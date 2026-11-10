@@ -58,9 +58,11 @@ public class AsymmetricHashing implements VectorCompressor<AsymmetricHashing.Qua
     private static final org.slf4j.Logger LOG = org.slf4j.LoggerFactory.getLogger(AsymmetricHashing.class);
     public static final int ITQ = 1, RANDOM = 2;
     private static final int MAGIC = 0x75EC4015;
+    /** The first on-disk graph format version that can store ASH (version 7, which added FUSED_ASH). */
+    public static final int MIN_FORMAT_VERSION = 7;
 
     // ---------------------------------------------------------------------
-    // Training configuration (reference defaults; TODO tune later)
+    // Training configuration (defaults used for all published results)
     // ---------------------------------------------------------------------
 
     /**
@@ -74,7 +76,7 @@ public class AsymmetricHashing implements VectorCompressor<AsymmetricHashing.Qua
     /** Bounds transpose scratch while keeping writes to the training matrix contiguous. */
     private static final int TRAINING_TRANSPOSE_TILE_ROWS = 32;
 
-    /** Final setting TBD. */
+    /** ITQ iterations. */
     private static final int TRAINING_ITERS = 25;
 
     /** Default number of stored bits per projected dimension. */
@@ -153,18 +155,15 @@ public class AsymmetricHashing implements VectorCompressor<AsymmetricHashing.Qua
     // Immutable retained Java storage; native/query representations are charged lazily.
     private final long heapBytes;
 
-    private final BinaryQuantizer randomQuantizer = new RandomBinaryQuantizer();
-    private final BinaryQuantizer itqQuantizer = new ItqBinaryQuantizer();
+    // Both optimizers quantize the projected body the same way; they differ only in the
+    // learned transform.
+    private final BinaryQuantizer quantizer = new ProjectedBinaryQuantizer();
 
     private BinaryQuantizer quantizer() {
-        switch (optimizer) {
-            case RANDOM:
-                return randomQuantizer;
-            case ITQ:
-                return itqQuantizer;
-            default:
-                throw new IllegalStateException("Unknown optimizer " + optimizer);
+        if (optimizer != RANDOM && optimizer != ITQ) {
+            throw new IllegalStateException("Unknown optimizer " + optimizer);
         }
+        return quantizer;
     }
 
     /**
@@ -262,9 +261,7 @@ public class AsymmetricHashing implements VectorCompressor<AsymmetricHashing.Qua
                 + estimateArray2DBytes(landmarkProj)
                 + RamUsageEstimator.sizeOf(landmarkProjSum)
                 + stiefelTransform.heapBytes
-                + RamUsageEstimator.shallowSizeOf(randomQuantizer)
-                + RamUsageEstimator.shallowSizeOf(itqQuantizer)
-                + RamUsageEstimator.shallowSizeOf(((ItqBinaryQuantizer) itqQuantizer).delegate);
+                + RamUsageEstimator.shallowSizeOf(quantizer);
         for (VectorFloat<?> landmark : landmarks) bytes = Math.addExact(bytes, landmark.ramBytesUsed());
         this.heapBytes = bytes;
     }
@@ -540,6 +537,13 @@ public class AsymmetricHashing implements VectorCompressor<AsymmetricHashing.Qua
      * Loads an ASH instance from a RandomAccessReader.
      * This must mirror the ASH header writer exactly.
      */
+    private static void checkFormatVersion(int version) {
+        if (version < MIN_FORMAT_VERSION || version > OnDiskGraphIndex.CURRENT_VERSION) {
+            throw new IllegalArgumentException("ASH requires on-disk format version " + MIN_FORMAT_VERSION
+                    + " to " + OnDiskGraphIndex.CURRENT_VERSION + ", got " + version);
+        }
+    }
+
     public static AsymmetricHashing load(RandomAccessReader in) throws IOException {
 
         int magic = in.readInt();
@@ -549,10 +553,7 @@ public class AsymmetricHashing implements VectorCompressor<AsymmetricHashing.Qua
             );
         }
 
-        int version = in.readInt();
-        if (version > OnDiskGraphIndex.CURRENT_VERSION) {
-            throw new IllegalArgumentException("Unsupported ASH version " + version);
-        }
+        checkFormatVersion(in.readInt());
 
         int originalDimension = in.readInt();
         int encodedBits = in.readInt();
@@ -619,16 +620,18 @@ public class AsymmetricHashing implements VectorCompressor<AsymmetricHashing.Qua
 
 
     /**
-     * TODO confirm handling versioning correctly
-     * TODO confirm handling magic number correctly
-     * Writes the ASH index header to IndexWriter (used for on-disk indexing)
+     * Writes the ASH model: the ASH magic number ({@code 0x75EC4015}), the on-disk graph format
+     * version, the dimensions, bit widths and optimizer, the landmarks, and the Stiefel transform.
+     * {@link #load} checks the magic number and version before reading the rest.
+     *
      * @param out the IndexWriter into which to write the object
+     * @param version the on-disk graph format version, from {@link #MIN_FORMAT_VERSION} to
+     *        {@link OnDiskGraphIndex#CURRENT_VERSION}
+     * @throws IllegalArgumentException if the version cannot store ASH
      * @throws IOException if there is a problem writing to out.
      */
     public void write(IndexWriter out, int version) throws IOException {
-        if (version > OnDiskGraphIndex.CURRENT_VERSION) {
-            throw new IllegalArgumentException("Unsupported version " + version);
-        }
+        checkFormatVersion(version);
 
         out.writeInt(MAGIC);
         out.writeInt(version);
@@ -846,7 +849,8 @@ public class AsymmetricHashing implements VectorCompressor<AsymmetricHashing.Qua
                            byte[] outExtraBits);
     }
 
-    public static final class RandomBinaryQuantizer implements BinaryQuantizer {
+    /** Quantizes the projected residual body into sign words and extra magnitude bits. */
+    public static final class ProjectedBinaryQuantizer implements BinaryQuantizer {
         // ThreadLocal to hold the reusable buffers.
         // Using a simple container class to avoid multiple ThreadLocal lookups.
         private static final ThreadLocal<Workspace> WORKSPACE = ThreadLocal.withInitial(Workspace::new);
@@ -991,25 +995,6 @@ public class AsymmetricHashing implements VectorCompressor<AsymmetricHashing.Qua
             }
 
             return (float) Math.sqrt(Math.max(codeNorm2, 1e-20));
-        }
-    }
-
-    public static final class ItqBinaryQuantizer implements BinaryQuantizer {
-        // Same quantization math for all optimizers; only the learned transform differs.
-        // TODO consolidate quantizeBody across learners/random.
-        private final RandomBinaryQuantizer delegate = new RandomBinaryQuantizer();
-
-        @Override
-        public float quantizeBody(VectorFloat<?> vector,
-                                  VectorFloat<?> mu,
-                                  float residualNorm,
-                                  int quantizedDim,
-                                  int bitsPerDimension,
-                                  StiefelTransform stiefel,
-                                  long[] outSignWords,
-                                  byte[] outExtraBits) {
-            return delegate.quantizeBody(vector, mu, residualNorm, quantizedDim, bitsPerDimension,
-                    stiefel, outSignWords, outExtraBits);
         }
     }
 
@@ -1679,7 +1664,7 @@ public class AsymmetricHashing implements VectorCompressor<AsymmetricHashing.Qua
             // Quantizers OR bits and nibbles into place, so reused scratch starts from zero.
             Arrays.fill(dest.binaryVector, 0L);
             Arrays.fill(dest.extraBits, (byte) 0);
-            float codeNorm = RandomBinaryQuantizer.quantizeProjected(projected[i], bitsPerDimension,
+            float codeNorm = ProjectedBinaryQuantizer.quantizeProjected(projected[i], bitsPerDimension,
                     dest.binaryVector, dest.extraBits, absNorm);
             float correction = finishEncoding(dest, residualNorms[i], codeNorm);
             out.set(ordinals[i], dest);

@@ -2293,61 +2293,6 @@ class PanamaVectorUtilSupport implements VectorUtilSupport {
                 .reduceLanes(VectorOperators.ADD);
     }
 
-    // This version is optimized for dense masks and uses a masked load, plain add.
-    // It is branchless and fully unrolled.
-    // It only works for 64-bit aligned payloads and 16 lanes (AVX512).
-    public float ashMaskedAddFlat_dense(float[] tildeQ,
-                                        int qOffset,
-                                        long[] allPackedVectors,
-                                        int packedBase,
-                                        int d,
-                                        int words_not_used) { // TODO words is not used in this version
-        final VectorSpecies<Float> SPEC = FloatVector.SPECIES_PREFERRED;
-        final int LANES = SPEC.length();
-
-        // Typical case: d is 256/384 => multiple of 64
-        // If you can guarantee that, you can delete all tail handling.
-        final int words = d >>> 6;
-
-        Objects.checkFromIndexSize(qOffset, d, tildeQ.length);
-        Objects.checkFromIndexSize(packedBase, words, allPackedVectors.length);
-
-        // 4 accumulators is fine for AVX-512; keep it.
-        FloatVector acc0 = FloatVector.zero(SPEC);
-        FloatVector acc1 = FloatVector.zero(SPEC);
-        FloatVector acc2 = FloatVector.zero(SPEC);
-        FloatVector acc3 = FloatVector.zero(SPEC);
-
-        if (LANES == 16) {
-            for (int w = 0, qBase = qOffset; w < words; w++, qBase += 64) {
-                long bits = allPackedVectors[packedBase + w];
-
-                // Build masks from shifted bits (no laneMask needed)
-                VectorMask<Float> k0 = VectorMask.fromLong(SPEC, bits);
-                VectorMask<Float> k1 = VectorMask.fromLong(SPEC, bits >>> 16);
-                VectorMask<Float> k2 = VectorMask.fromLong(SPEC, bits >>> 32);
-                VectorMask<Float> k3 = VectorMask.fromLong(SPEC, bits >>> 48);
-
-                // Masked load (zeroing) + unmasked add: branchless
-                acc0 = acc0.add(FloatVector.fromArray(SPEC, tildeQ, qBase +  0, k0));
-                acc1 = acc1.add(FloatVector.fromArray(SPEC, tildeQ, qBase + 16, k1));
-                acc2 = acc2.add(FloatVector.fromArray(SPEC, tildeQ, qBase + 32, k2));
-                acc3 = acc3.add(FloatVector.fromArray(SPEC, tildeQ, qBase + 48, k3));
-            }
-        } else {
-            // Generic fallback (still branchless and no laneMask)
-            for (int w = 0, qBase = qOffset; w < words; w++, qBase += 64) {
-                long bits = allPackedVectors[packedBase + w];
-                for (int off = 0; off < 64; off += LANES) {
-                    VectorMask<Float> k = VectorMask.fromLong(SPEC, bits >>> off);
-                    acc0 = acc0.add(FloatVector.fromArray(SPEC, tildeQ, qBase + off, k));
-                }
-            }
-        }
-
-        return acc0.add(acc1).add(acc2).add(acc3).reduceLanes(VectorOperators.ADD);
-    }
-
     // This approach uses masked adds instead of masked loads, and two accumulators (since this is slow)
     @Override
     public float ashMaskedAddAllWords(float[] tildeQ,
