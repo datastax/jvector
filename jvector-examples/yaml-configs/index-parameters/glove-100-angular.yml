@@ -15,19 +15,6 @@ construction:
   fusedGraph: [No]
   compression:
     - type: None
-# To use ASH, comment out None in both sections.
-#    - type: ASH
-#      parameters:
-#        compressionRatio: 16
-#        optimizer: ITQ
-#        landmarkCount: 1
-#        bitsPerDimension: 2
-# To use PQ, comment out None in both sections.
-#    - type: PQ
-#      parameters:
-#        mFactor: 4
-#        k: 256
-#        anisotropicThreshold: -1.0
   reranking:
     type: NVQ
   useSavedIndexIfExists: No
@@ -39,16 +26,3 @@ search:
   useSearchPruning: [No]
   compression:
     - type: None
-# To use ASH, comment out None in both sections.
-#    - type: ASH
-#      parameters:
-#        compressionRatio: 16
-#        optimizer: ITQ
-#        landmarkCount: 1
-#        bitsPerDimension: 2
-# To use PQ, comment out None in both sections.
-#    - type: PQ
-#      parameters:
-#        mFactor: 4
-#        k: 256
-#        anisotropicThreshold: -1.0

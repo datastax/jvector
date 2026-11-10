@@ -83,8 +83,6 @@ the best tradeoffs between recall and throughput.
 This benchmark requires `fvecs' versions of datasets from [https://github.com/erikbern/ann-benchmarks](https://github.com/erikbern/ann-benchmarks/blob/main/README.md#data-sets) to be downloaded to `dataset_cache` 
 directory under the project root. 
 
-You can use [`plot_output.py`](./plot_output.py) to graph the [pareto-optimal points](https://en.wikipedia.org/wiki/Pareto_efficiency) found by `Bench`.
-
 > `mvn compile exec:exec@bench`
 
 Some sample KNN datasets for testing based on ada-002 embeddings generated on wikipedia data are available in ivec/fvec format for testing at:
