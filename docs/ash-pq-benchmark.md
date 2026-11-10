@@ -36,8 +36,7 @@ fallback does not reproduce native training throughput.
 ```bash
 export JAVA_HOME=/path/to/jdk-22
 export PATH="$JAVA_HOME/bin:$PATH"
-git submodule update --init --recursive
-mvn -B -pl jvector-examples -am -DskipTests package
+mvn -B -pl jvector-examples -am -DskipTests package -Dnative.onednn=true
 ```
 
 This writes `jvector-examples/target/jvector-examples-<version>-jar-with-dependencies.jar`.

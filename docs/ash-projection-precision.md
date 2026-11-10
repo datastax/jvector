@@ -100,4 +100,4 @@ A projection-throughput gain does not imply the same graph-query speedup.
 - [oneDNN INT8 arithmetic](https://uxlfoundation.github.io/oneDNN/dev_guide_int8_computations.html).
 
 The repository pins its oneDNN version in
-`jvector-native/src/main/native/subprojects/onednn.wrap`.
+`jvector-native/src/main/onednn/subprojects/onednn.wrap`.

@@ -18,10 +18,11 @@ project('jvector_simd_kernels', 'cpp',
   default_options: ['cpp_std=c++17']
 )
 
-# Highway headers are used as an include directory only.
-# HWY_COMPILE_ONLY_STATIC / HWY_COMPILE_ONLY_SCALAR bypass the
+# Highway is fetched at the revision pinned in subprojects/highway.wrap and used
+# header-only: HWY_COMPILE_ONLY_STATIC / HWY_COMPILE_ONLY_SCALAR bypass the
 # dynamic-dispatch runtime, so only headers are needed at compile time.
-hwy_inc = include_directories('third_party/highway')
+highway_proj = subproject('highway')
+hwy_dep = highway_proj.get_variable('highway_dep')
 
 # Each ISA variant: name, JV_ISA namespace, and extra compiler flags.
 # These all compile jvector_simd_kernels.cpp (the generic kernel file).
@@ -114,7 +115,7 @@ foreach isa : isa_variants
   lib = static_library(
     'simdKernels_' + isa['name'],
     sources            : 'src/jvector_simd_kernels.cpp',
-    include_directories: hwy_inc,
+    dependencies       : hwy_dep,
     cpp_args           : isa['args'] + ['-DJV_ISA=' + isa['namespace'], '-fvisibility=hidden']
   )
   isa_libs += lib
@@ -127,7 +128,7 @@ if cpu == 'x86_64'
   avx3_dl_lib = static_library(
     'simdKernels_avx3_dl',
     sources            : 'src/jvector_avx3_dl_kernels.cpp',
-    include_directories: hwy_inc,
+    dependencies       : hwy_dep,
     cpp_args           : [
       '-march=icelake-server',
       '-DHWY_COMPILE_ONLY_STATIC',
@@ -143,7 +144,7 @@ if cpu == 'x86_64'
   avx3_spr_lib = static_library(
     'simdKernels_avx3_spr',
     sources            : 'src/jvector_avx3_spr_kernels.cpp',
-    include_directories: hwy_inc,
+    dependencies       : hwy_dep,
     cpp_args           : [
       '-march=sapphirerapids',
       '-DHWY_COMPILE_ONLY_STATIC',
@@ -163,8 +164,9 @@ endif
 vectorutil_lib = shared_library(
   'jvector',
   sources            : ['src/jvector_simd.cpp',
-                        'third_party/highway/hwy/abort.cc'],
-  include_directories: [include_directories('src'), hwy_inc],
+                        highway_proj.get_variable('highway_abort_src')],
+  include_directories: include_directories('src'),
+  dependencies       : hwy_dep,
   cpp_args           : ['-DJVECTOR_BUILD', '-fvisibility=hidden'] + dispatch_defines,
   link_whole         : isa_libs,
   version            : meson.project_version(),
@@ -232,55 +234,4 @@ else
     command: ['echo',
       'ERROR: bench_simd_kernels is not available because the benchmark library was not found. ' +
       'Install libbenchmark-dev (apt) or google-benchmark (brew) and re-run: meson setup --wipe build'])
-endif
-# Optional and independent of libjvector: machines without oneDNN continue to
-# use Highway. Static linkage keeps the packaged add-on self-contained, while
-# oneDNN's runtime dispatcher selects instructions supported by the host CPU.
-if get_option('onednn').enabled()
-  cmake = import('cmake')
-  onednn_options = cmake.subproject_options()
-  onednn_options.add_cmake_defines({
-    'CMAKE_POSITION_INDEPENDENT_CODE': true,
-    'ONEDNN_LIBRARY_TYPE': 'STATIC',
-    'ONEDNN_CPU_RUNTIME': 'SEQ',
-    'ONEDNN_GPU_RUNTIME': 'NONE',
-    'ONEDNN_BUILD_GRAPH': false,
-    'ONEDNN_BUILD_TESTS': false,
-    'ONEDNN_BUILD_EXAMPLES': false,
-    'ONEDNN_ENABLE_PRIMITIVE': 'MATMUL;REORDER',
-    'ONEDNN_ENABLE_WORKLOAD': 'INFERENCE',
-    'ONEDNN_ARCH_OPT_FLAGS': '',
-  })
-  onednn_project = cmake.subproject('onednn', options: onednn_options)
-  # oneDNN's aggregate archive has no source files of its own. Meson's CMake
-  # converter marks that aggregate non-PIC, although all constituent object
-  # libraries are PIC. Re-archive those objects with the correct metadata.
-  onednn_archive_inputs = [onednn_project.target('dnnl').extract_all_objects(recursive: true)]
-  # The CMake build links KleidiAI as a separate static target on AArch64.
-  if 'kleidiai_ops' in onednn_project.target_list()
-    onednn_archive_inputs += [onednn_project.target('kleidiai_ops').extract_all_objects(recursive: true)]
-  endif
-  onednn_objects = static_library('ash_onednn',
-    objects: onednn_archive_inputs,
-    pic: true,
-  )
-  onednn_dependency = onednn_project.dependency('dnnl').partial_dependency(
-    compile_args: true, includes: true, link_args: true)
-  ash_fp16_lib = shared_library('jvector_ash_fp16',
-    sources: ['src/jvector_ash_fp16.cpp', 'src/jvector_ash_int8.cpp'],
-    dependencies: onednn_dependency,
-    link_with: onednn_objects,
-    cpp_args: ['-fvisibility=hidden'],
-    link_args: ['-Wl,--exclude-libs,ALL'],
-    install: true,
-  )
-  if gtest_dep.found()
-    ash_fp16_tests = executable('test_ash_fp16',
-      sources: 'tests/test_ash_fp16.cpp',
-      include_directories: include_directories('src'),
-      dependencies: gtest_dep,
-      link_with: ash_fp16_lib,
-    )
-    test('ash_fp16', ash_fp16_tests, protocol: 'gtest', suite: 'ash_fp16')
-  endif
 endif

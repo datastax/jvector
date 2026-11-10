@@ -14,5 +14,14 @@
 # limitations under the License.
 #
 
-option('onednn', type: 'feature', value: 'enabled',
-       description: 'Build ASH FP32 encoding and FP16/INT8 query projection with sequential oneDNN')
+# Overlay build file for the Highway wrap. Highway's own CMake build compiles its
+# dynamic-dispatch runtime, which jvector does not use: each ISA tier is compiled
+# with HWY_COMPILE_ONLY_STATIC, so only the headers and hwy::Abort are needed.
+project('highway', 'cpp')
+
+highway_dep = declare_dependency(
+  include_directories: include_directories('.'),
+)
+# abort.cc was split out of targets.cc for projects that do their own dispatch
+# (google/highway#1935).
+highway_abort_src = files('hwy/abort.cc')

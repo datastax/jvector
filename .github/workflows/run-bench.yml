@@ -131,6 +131,8 @@ jobs:
           ref: ${{ matrix.branch }}
           fetch-depth: 0
 
+      # Branches from before the Highway Meson wrap still use a submodule;
+      # this step is a no-op on newer ones.
       - name: Initialize Git Submodules
         run: git submodule update --init
 
@@ -154,7 +156,7 @@ jobs:
 
       # Build the branch
       - name: Build branch
-        run: mvn -B -Punix-amd64-profile package --file pom.xml
+        run: mvn -B -Punix-amd64-profile -Dnative.onednn=true package --file pom.xml
 
       # Run the benchmark if jvector-examples exists
       - name: Run benchmark
@@ -254,9 +256,6 @@ jobs:
           sudo apt update && sudo apt install -y meson ninja-build
       - name: Checkout repository
         uses: actions/checkout@v4
-
-      - name: Initialize Git Submodules
-        run: git submodule update --init
 
       - name: Download all benchmark results
         uses: actions/download-artifact@v4

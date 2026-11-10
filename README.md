@@ -68,8 +68,7 @@ The fastest way in is the hello-world programs in [jvector-examples](./jvector-e
 small public datasets on first use. Build them once from the repository root:
 
 ```bash
-git submodule update --init
-mvn -pl jvector-examples -am -DskipTests package
+mvn -pl jvector-examples -am -DskipTests package -Dnative.onednn=true
 JAR=$(ls jvector-examples/target/jvector-examples-*-jar-with-dependencies.jar)
 ```
 
@@ -197,18 +196,11 @@ that produces a multirelease JAR usable from Java 11:
 | [jvector-examples](./jvector-examples) | Examples, BenchYAML and benchmarks |
 | [jvector-tests](./jvector-tests) | Tests, runnable on Java 11 and newer |
 
-Build with JDK 22 or newer. The Highway sources are a Git submodule:
-
-```bash
-git clone --recurse-submodules https://github.com/datastax/jvector.git
-# or, in an existing clone:
-git submodule update --init
-```
-
-The native library is built with [Meson](https://mesonbuild.com/) and [Ninja](https://ninja-build.org/)
-and needs g++ 11 or newer; the oneDNN add-on also needs CMake 3.13 or newer, and Meson fetches its
-pinned source. Maven builds both and packages them in the native JAR; `-Dnative.onednn=false` builds
-without oneDNN. The [native library README](./jvector-native/src/main/native/README.md) covers build
+Build with JDK 22 or newer. The native library is built with [Meson](https://mesonbuild.com/) and
+[Ninja](https://ninja-build.org/) and needs g++ 11 or newer; Meson fetches the pinned Google Highway
+source on first build. The optional oneDNN add-on for ASH query projection is a separate Meson
+project; it also needs CMake 3.13 or newer and takes a few minutes to build, so Maven builds it only
+with `-Dnative.onednn=true` (the `release` profile and CI turn it on). The [native library README](./jvector-native/src/main/native/README.md) covers build
 options, ISA dispatch, adding kernels and
 [ABI compatibility](./jvector-native/src/main/native/README.md#native-abi-compatibility).
 On Ubuntu, `bash build_native_lib.sh --auto-install-deps` (in `jvector-native/src/main/native/src`)

@@ -16,8 +16,11 @@
         <native.jextract.skip>true</native.jextract.skip>
         <!-- Set to true via -Dnative.crossarch to also cross-compile for the other arch -->
         <native.crossarch>false</native.crossarch>
-        <!-- Preferred self-contained ASH FP32 encoding / FP16/INT8 query projection. -->
-        <native.onednn>true</native.onednn>
+        <!-- Set to true via -Dnative.onednn=true to also build the oneDNN add-on
+             (ASH FP32 encoding / FP16/INT8 query projection, src/main/onednn).
+             Off by default because building oneDNN takes minutes; CI and the
+             release profile turn it on. -->
+        <native.onednn>false</native.onednn>
     </properties>
     <build>
         <!-- Pick up the .so files from target/meson-build/ so that mvn clean
@@ -42,9 +45,11 @@
                 <artifactId>apache-rat-plugin</artifactId>
                 <configuration>
                     <excludes>
-                        <exclude>src/main/native/subprojects/onednn/**</exclude>
-                        <exclude>src/main/native/subprojects/packagecache/**</exclude>
-                        <exclude>src/main/native/subprojects/.wraplock</exclude>
+                        <!-- Sources Meson fetches from the pinned wraps, and its caches. -->
+                        <exclude>src/main/native/subprojects/highway/**</exclude>
+                        <exclude>src/main/onednn/subprojects/onednn/**</exclude>
+                        <exclude>src/main/*/subprojects/packagecache/**</exclude>
+                        <exclude>src/main/*/subprojects/.wraplock</exclude>
                     </excludes>
                 </configuration>
             </plugin>
@@ -137,6 +142,7 @@
             <id>release</id>
             <properties>
                 <native.crossarch>true</native.crossarch>
+                <native.onednn>true</native.onednn>
             </properties>
         </profile>
 

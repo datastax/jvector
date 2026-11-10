@@ -41,8 +41,12 @@ aarch64-cross.ini             - Meson cross-compile file: build aarch64 from an 
 x86_64-cross.ini              - Meson cross-compile file: build x86_64 from an aarch64 host
 jextract_generate_bindings.sh - Generate Java bindings from native headers using jextract
 build_native_lib.sh           - Build the native library (native arch + optional cross-compile)
-third_party/highway/          - Google Highway header-only library (git submodule)
+subprojects/highway.wrap      - Google Highway revision, fetched by Meson and used header-only
 ```
+
+The optional oneDNN add-on (`libjvector_ash_fp16`) is a separate Meson project in
+[`../onednn`](../onednn), with its own `meson.build` and `subprojects/onednn.wrap`.
+libjvector never depends on it.
 
 ---
 
@@ -58,9 +62,12 @@ third_party/highway/          - Google Highway header-only library (git submodul
 | clang++ (AArch64) | Clang any recent | NEON tier always built; SVE/SVE2 require **Clang ≥ 22** — older Clang produces a NEON-only build with a warning |
 | [Meson](https://mesonbuild.com/) | 0.55 | `pip install meson` |
 | [Ninja](https://ninja-build.org/) | any | `sudo apt install ninja-build` |
-| CMake (recommended ASH/oneDNN build) | 3.13+ | `sudo apt install cmake`; needed in addition to Meson and Ninja |
+| CMake (oneDNN add-on only) | 3.13+ | `sudo apt install cmake`; needed in addition to Meson and Ninja |
 | JDK (native ASH) | 22+ | Final FFM API; build and run the native provider with supported native-access settings |
-| Git submodules | — | `git submodule update --init` (needed once) |
+
+Meson fetches Google Highway at the revision pinned in `subprojects/highway.wrap`
+on the first `meson setup`; no Git submodule is needed. Offline builds can
+populate `subprojects/highway` with that revision beforehand.
 
 > **AArch64 compiler note:** On Clang < 22, the SVE and SVE2 tiers are
 > automatically skipped at configure time (`meson setup` prints a warning).
@@ -68,12 +75,14 @@ third_party/highway/          - Google Highway header-only library (git submodul
 > runtime even on SVE2-capable hardware (e.g. Graviton 4).  Upgrade to
 > Clang ≥ 22 or use GCC to get full SVE/SVE2 acceleration.
 
-For ASH, include oneDNN: it is the preferred projection implementation for FP32
+For ASH, the oneDNN add-on is the preferred projection implementation for FP32
 encoding batches and FP16/INT8 queries where supported. It is built from the pinned
-source and bundled; users do not need a separately installed `libdnnl`.
-A first online build needs access to the source URL in `subprojects/onednn.wrap`;
-offline builds can populate that exact revision beforehand. On Ubuntu, install
-the native build prerequisites with:
+source and bundled; users do not need a separately installed `libdnnl`. Building
+oneDNN takes a few minutes, so it is off by default and enabled with
+`-Dnative.onednn=true` (Maven) or `true` as the script's third argument; CI and
+the release profile enable it. A first online build needs access to the source URL
+in `../onednn/subprojects/onednn.wrap`; offline builds can populate that exact
+revision beforehand. On Ubuntu, install the native build prerequisites with:
 
 ```bash
 sudo apt-get install g++ meson ninja-build cmake
@@ -93,22 +102,24 @@ Parameters (all optional):
 |-----------|---------|-------------|
 | `buildtype` | `release` | `release`, `debug`, or `debugoptimized` |
 | `crossarch` | `false` | Set to `true` to also cross-compile for the other arch |
-| `onednn` | `true` | Bundle FP32 batch and FP16/INT8 query projection support; set to `false` for Highway-only builds |
+| `onednn` | `false` | Set to `true` to also build and bundle the oneDNN add-on (FP32 batch and FP16/INT8 query projection) |
 
-The default ASH build includes oneDNN:
+To include oneDNN:
 
 ```bash
-bash src/build_native_lib.sh release
+bash src/build_native_lib.sh release false true
 ```
 
 The script:
 1. Detects the host arch via `uname -m` (x86_64 or aarch64).
-2. Verifies prerequisites (g++, meson, ninja, Highway submodule).
+2. Verifies prerequisites (g++, meson, ninja; cmake when oneDNN is on).
 3. Always builds the **native arch** library into `target/meson-build-<arch>/`.
 4. If `crossarch=true`, also cross-compiles the **other arch** library into
    `target/meson-build-<other-arch>/` using the bundled cross-compile file.
 5. Copies each built `.so` to `jvector-native/target/meson-build/libjvector-<arch>.so`
    (relative to the repository root), which Maven includes as a resource.
+6. If `onednn=true`, builds the separate `../onednn` project into
+   `target/meson-build-onednn-<arch>/` and copies `libjvector_ash_fp16-<arch>.so` beside it.
    The script does not strip or split debug symbols.
 
 To install all required dependencies automatically and then build, pass `--auto-install-deps` as the first argument:
@@ -176,11 +187,12 @@ select the correct ISA variant list (x86 tiers vs AArch64 tiers) automatically.
 From the project root, the recommended ASH build includes oneDNN:
 
 ```bash
-mvn -pl jvector-native -am package
+mvn -pl jvector-native -am package -Dnative.onednn=true
 ```
 
-It requires the CMake prerequisite above. The commands below include oneDNN by
-default; append `-Dnative.onednn=false` for a Highway-only package.
+It requires the CMake prerequisite above. The commands below build only the
+Highway library; append `-Dnative.onednn=true` to include oneDNN. The `release`
+profile turns it on.
 
 **Native arch only — release (default):**
 ```bash
@@ -901,39 +913,41 @@ unexpected execution failures retain distinct error categories across FFM.
 
 ### Recommended oneDNN build and package
 
-Native Maven and direct-script builds include oneDNN by default on the supported
-Linux platforms. Use JDK 22 or newer. It is
+Native Maven and direct-script builds include oneDNN when asked to
+(`-Dnative.onednn=true`, or `true` as the script's third argument) on the supported
+Linux platforms; the `release` profile and CI turn it on. Use JDK 22 or newer. It is
 **automatically preferred** for FP32 encoding batches and supported FP16 queries;
 INT8 is available through explicit selection. Highway stays independent and supplies
 FP32 fallback when the add-on or the requested operation is unavailable:
 
 
 ```bash
-mvn -pl jvector-native -am package
+mvn -pl jvector-native -am package -Dnative.onednn=true
 ```
 
-For a direct native build, oneDNN is enabled without an additional argument:
+For a direct native build:
 
 ```bash
-bash src/build_native_lib.sh release
+bash src/build_native_lib.sh release false true
 ```
 
 The recommended oneDNN build requires CMake 3.13+ in addition to the native prerequisites. Meson
-fetches the exact oneDNN revision pinned in `subprojects/onednn.wrap`; an offline
-build can populate `subprojects/onednn` with that revision beforehand. oneDNN is
+fetches the exact oneDNN revision pinned in `../onednn/subprojects/onednn.wrap`; an offline
+build can populate `../onednn/subprojects/onednn` with that revision beforehand. oneDNN is
 built with the sequential CPU runtime, no GPU support, and only inference
 matrix-multiplication/reorder primitives. Its dispatcher selects supported CPU
 instructions at runtime; the build does not use `-march=native`.
 
-oneDNN is statically linked into `libjvector_ash_fp16-<arch>.so`. Maven packages
+oneDNN is statically linked into `libjvector_ash_fp16-<arch>.so`, so the jar
+carries one self-contained add-on and needs no system oneDNN. Maven packages
 this library and the upstream license/third-party notices beside the Highway
 resource. The existing architecture-aware loader first tries the system library
 path, then extracts the matching classpath resource. No external `libdnnl` or
 benchmark-specific path is required. The resource keeps its existing FP16 name
-for binary compatibility but supplies FP32 batch and FP16/INT8 query projection. Passing
-`-Dnative.onednn=false` (or `false` as the script's third argument) leaves oneDNN
-projection out of the package and removes
-stale add-on resources from previous builds; Highway FP32 is then used.
+for binary compatibility but supplies FP32 batch and FP16/INT8 query projection.
+Without `-Dnative.onednn=true` (the default) the build leaves oneDNN projection out
+of the package and removes stale add-on resources from previous builds; Highway FP32
+is then used.
 The optional component follows the native module's Linux platform support;
 cross-compilation still requires the corresponding target toolchain.
 

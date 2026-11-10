@@ -27,9 +27,9 @@ set -x
 # ---------------------------------------------------------------------------
 REPO_ROOT="$(git -C "$(dirname "$0")" rev-parse --show-toplevel)"
 NATIVE_DIR="${REPO_ROOT}/jvector-native/src/main/native"
+# Separate Meson project for the optional oneDNN add-on (libjvector_ash_fp16).
+ONEDNN_DIR="${REPO_ROOT}/jvector-native/src/main/onednn"
 MODULE_ROOT="${REPO_ROOT}/jvector-native"
-
-HIGHWAY_DIR="${NATIVE_DIR}/third_party/highway"
 # Drop the .so files into target/meson-build/ so that mvn clean removes them
 # along with every other build artefact, and Maven's resource plugin picks them
 # up from there instead of from src/main/resources/.
@@ -54,11 +54,12 @@ printf "BUILDTYPE=%s\n" "${BUILDTYPE}"
 CROSSARCH="${2:-false}"
 printf "CROSSARCH=%s\n" "${CROSSARCH}"
 
-# oneDNN add-on for FP32 encoding batches and FP16 queries; libjvector stays independent.
-ONEDNN="${3:-true}"
+# Optional oneDNN add-on for FP32 encoding batches and FP16/INT8 queries, built
+# from its own Meson project; libjvector stays independent. Off by default because
+# building oneDNN takes minutes; CI and release builds pass true.
+ONEDNN="${3:-false}"
 case "${ONEDNN}" in
-  true) ONEDNN_FEATURE=enabled ;;
-  false) ONEDNN_FEATURE=disabled ;;
+  true|false) ;;
   *) echo "ERROR: oneDNN flag must be true or false."; exit 1 ;;
 esac
 
@@ -66,15 +67,8 @@ mkdir -p "${RESOURCES_DIR}"
 # target/meson-build/ is under target/, which IS cleaned by mvn clean.
 # src/main/resources/ is intentionally NOT written to any more.
 
-# Check that the Google Highway submodule has been initialised
-if [ ! -f "${HIGHWAY_DIR}/hwy/highway.h" ]; then
-  echo "ERROR: Google Highway submodule not found at ${HIGHWAY_DIR}."
-  echo "       Run the following command from the repository root to fix this:"
-  echo ""
-  echo "         git submodule update --init"
-  echo ""
-  exit 1
-fi
+# Meson fetches Google Highway at the revision pinned in
+# ${NATIVE_DIR}/subprojects/highway.wrap on first setup.
 
 # Desired minimum GCC version
 MIN_GCC_VERSION=11
@@ -124,7 +118,7 @@ build_native() {
   rm -rf "${OUT_SO}"
 
   # Reuse configured builds so repeated Maven phases keep incremental native outputs.
-  local setup_options=()
+  local setup_options=() cross_options=()
   if [[ -f "${BUILD_DIR}/meson-private/coredata.dat" ]]; then
     setup_options+=(--reconfigure)
   fi
@@ -139,9 +133,6 @@ build_native() {
       exit 1
     fi
 
-    meson setup "${BUILD_DIR}" "${NATIVE_DIR}" \
-        "${setup_options[@]}" \
-        --buildtype="${BUILDTYPE}" -Donednn="${ONEDNN_FEATURE}"
   else
     # ---- Cross-compile build -----------------------------------------------
     # Only x86_64 <-> aarch64 is supported.
@@ -158,13 +149,11 @@ build_native() {
     fi
 
     require_cmd "${CROSS_TOOLCHAIN}" "${CROSS_INSTALL}"
-
-    meson setup "${BUILD_DIR}" "${NATIVE_DIR}" \
-        "${setup_options[@]}" \
-        --cross-file "${CROSS_FILE}" \
-        --buildtype="${BUILDTYPE}" -Donednn="${ONEDNN_FEATURE}"
+    cross_options=(--cross-file "${CROSS_FILE}")
   fi
 
+  meson setup "${BUILD_DIR}" "${NATIVE_DIR}" \
+      "${setup_options[@]}" "${cross_options[@]}" --buildtype="${BUILDTYPE}"
   meson compile -C "${BUILD_DIR}"
 
   # The versioned .so (e.g. libjvector.so.0.1.0) is the real file; symlinks point to it.
@@ -178,10 +167,18 @@ build_native() {
 
   local FP16_OUT="${RESOURCES_DIR}/libjvector_ash_fp16-${ARCH}.so"
   if [ "${ONEDNN}" == "true" ]; then
-    cp "${BUILD_DIR}/libjvector_ash_fp16.so" "${FP16_OUT}"
+    local ONEDNN_BUILD_DIR="${MODULE_ROOT}/target/meson-build-onednn-${ARCH}"
+    local onednn_setup_options=()
+    if [[ -f "${ONEDNN_BUILD_DIR}/meson-private/coredata.dat" ]]; then
+      onednn_setup_options+=(--reconfigure)
+    fi
+    meson setup "${ONEDNN_BUILD_DIR}" "${ONEDNN_DIR}" \
+        "${onednn_setup_options[@]}" "${cross_options[@]}" --buildtype="${BUILDTYPE}"
+    meson compile -C "${ONEDNN_BUILD_DIR}"
+    cp "${ONEDNN_BUILD_DIR}/libjvector_ash_fp16.so" "${FP16_OUT}"
     # License texts travel with the optional static dependency in either jar.
-    cp "${NATIVE_DIR}/subprojects/onednn/LICENSE" "${RESOURCES_DIR}/oneDNN-LICENSE.txt"
-    cp "${NATIVE_DIR}/subprojects/onednn/THIRD-PARTY-PROGRAMS" "${RESOURCES_DIR}/oneDNN-THIRD-PARTY.txt"
+    cp "${ONEDNN_DIR}/subprojects/onednn/LICENSE" "${RESOURCES_DIR}/oneDNN-LICENSE.txt"
+    cp "${ONEDNN_DIR}/subprojects/onednn/THIRD-PARTY-PROGRAMS" "${RESOURCES_DIR}/oneDNN-THIRD-PARTY.txt"
   else
     # A later build without the add-on must not package a stale enabled build.
     rm -f "${FP16_OUT}"
