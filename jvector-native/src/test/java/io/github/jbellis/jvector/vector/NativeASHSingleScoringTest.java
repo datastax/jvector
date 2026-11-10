@@ -18,11 +18,13 @@ package io.github.jbellis.jvector.vector;
 import io.github.jbellis.jvector.graph.*;
 import io.github.jbellis.jvector.graph.similarity.*;
 import io.github.jbellis.jvector.quantization.*;
+import io.github.jbellis.jvector.vector.cnative.LibraryLoader;
 import io.github.jbellis.jvector.vector.types.VectorFloat;
 import java.util.*;
 import java.util.concurrent.*;
 import org.junit.jupiter.api.Test;
 import static org.junit.jupiter.api.Assertions.*;
+import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 /** Native default dispatch must preserve independent, query-owned prepared state. */
 class NativeASHSingleScoringTest {
@@ -47,6 +49,10 @@ class NativeASHSingleScoringTest {
     }
 
     @Test void defaultSingleScorersUseNativeWithoutSilentFallback() throws Exception {
+        boolean available = LibraryLoader.loadJvector();
+        if (Boolean.getBoolean("jvector.test.requireNative")) assertTrue(available, "Native library required");
+        else assumeTrue(available, "Native library unavailable");
+
         var output = java.nio.file.Files.createTempFile("ash-default-native-", ".log");
         Process child = null;
         try {
