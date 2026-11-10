@@ -41,6 +41,10 @@ final class GpuPrune implements AutoCloseable {
 
     /** Nodes per batch. */
     static final int BATCH = 4096;
+    /** Nodes per slice of the parallel copies into and out of the kernels' arrays. */
+    private static final int COPY_NODES = 512;
+    /** Buffers for the kept flags of the batches still being applied. */
+    private static final int KEPT_RING = 4;
 
     private final IntArray candIds;
     private final FloatArray candScores;
@@ -122,10 +126,14 @@ final class GpuPrune implements AutoCloseable {
             return;
         }
         Staging[] staging = {new Staging(), new Staging()};
+        int[][] keptRing = new int[KEPT_RING][BATCH * PruneKernels.SLOTS];
         CompletableFuture<Staging> next = CompletableFuture.supplyAsync(() -> stage(staging[0], ids, scores, sizes, nodes, 0));
         List<CompletableFuture<Void>> applied = new ArrayList<>(batches);
+        long tWait = 0, tCopy = 0, tExec = 0, tRead = 0, t0 = System.nanoTime();
         for (int b = 0; b < batches; b++) {
+            long ta = System.nanoTime();
             Staging current = next.join();
+            tWait += System.nanoTime() - ta;
             if (b + 1 < batches) {
                 int from = (b + 1) * BATCH;
                 Staging other = staging[(b + 1) % 2];
@@ -133,22 +141,48 @@ final class GpuPrune implements AutoCloseable {
             }
             int size = current.size;
             int n = size * PruneKernels.SLOTS;
-            MemorySegment.copy(current.ids, 0, candIds.getSegment(), ValueLayout.JAVA_INT, 0, n);
-            MemorySegment.copy(current.scores, 0, candScores.getSegment(), ValueLayout.JAVA_FLOAT, 0, n);
-            if (squaredNorms != null) {
-                MemorySegment.copy(current.norms, 0, candNorms.getSegment(), ValueLayout.JAVA_FLOAT, 0, n);
-            }
+            long tb = System.nanoTime();
+            // the batch into the kernels' arrays, in parallel slices: one thread copies 5 MB a batch at a few GB/s,
+            // 1.3 s of a 10M-node prune on its own
+            IntStream.range(0, (size + COPY_NODES - 1) / COPY_NODES).parallel().forEach(c -> {
+                long at = (long) c * COPY_NODES * PruneKernels.SLOTS;
+                int len = (int) (Math.min((long) size * PruneKernels.SLOTS, at + (long) COPY_NODES * PruneKernels.SLOTS) - at);
+                MemorySegment.copy(current.ids, (int) at, candIds.getSegment(), ValueLayout.JAVA_INT, at * Integer.BYTES, len);
+                MemorySegment.copy(current.scores, (int) at, candScores.getSegment(), ValueLayout.JAVA_FLOAT, at * Float.BYTES, len);
+                if (squaredNorms != null) {
+                    MemorySegment.copy(current.norms, (int) at, candNorms.getSegment(), ValueLayout.JAVA_FLOAT, at * Float.BYTES, len);
+                }
+            });
             MemorySegment.copy(current.counts, 0, counts.getSegment(), ValueLayout.JAVA_INT, 0, size);
             params.set(PruneKernels.P_NODES, size);
             gramGrid.setGlobalWork((long) size * PruneKernels.MMA_WARPS * 32, 1, 1);
             pruneGrid.setGlobalWork((long) size * PruneKernels.SLOTS, 1, 1);
+            long tc = System.nanoTime();
             plan.withGridScheduler(scheduler).execute();
-            int[] kept = new int[n];
-            MemorySegment.copy(keep.getSegment(), ValueLayout.JAVA_INT, 0, kept, 0, n);
+            long td = System.nanoTime();
+            // the kept flags out in parallel slices, into a buffer of a small ring (its last reader joined first)
+            int slot = b % KEPT_RING;
+            if (b >= KEPT_RING) {
+                applied.get(b - KEPT_RING).join();
+            }
+            int[] kept = keptRing[slot];
+            IntStream.range(0, (n + COPY_NODES * PruneKernels.SLOTS - 1) / (COPY_NODES * PruneKernels.SLOTS)).parallel().forEach(c -> {
+                int at = c * COPY_NODES * PruneKernels.SLOTS;
+                int len = Math.min(n, at + COPY_NODES * PruneKernels.SLOTS) - at;
+                MemorySegment.copy(keep.getSegment(), ValueLayout.JAVA_INT, (long) at * Integer.BYTES, kept, at, len);
+            });
+            tCopy += tc - tb;
+            tExec += td - tc;
+            tRead += System.nanoTime() - td;
             int from = b * BATCH;
             applied.add(CompletableFuture.runAsync(() -> apply(kept, ids, scores, sizes, nodes, from, size)));
         }
+        long te = System.nanoTime();
         CompletableFuture.allOf(applied.toArray(CompletableFuture[]::new)).join();
+        if (Boolean.getBoolean("jvector.gpu.trace") && nodes.length > 1_000_000) {
+            System.err.printf("prune %d nodes, %d batches: wait staging %.2f s, copy in %.2f s, execute %.2f s, read keep %.2f s, wait apply %.2f s, total %.2f s%n",
+                    nodes.length, batches, tWait / 1e9, tCopy / 1e9, tExec / 1e9, tRead / 1e9, (System.nanoTime() - te) / 1e9, (System.nanoTime() - t0) / 1e9);
+        }
     }
 
     /** Lays out the lists of {@code nodes[from ..]} (one batch) in {@code s}. */
