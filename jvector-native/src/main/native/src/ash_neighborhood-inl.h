@@ -27,10 +27,14 @@ constexpr size_t kAshHeaderBytesPerLane = 5;
 
 template <class D, class I> HWY_INLINE auto AshLookup(D d, const float *lut, I indices) {
     const hn::Rebind<int32_t, D> di;
+#if !HWY_HAVE_SCALABLE
+    // On SVE, MaxLanes is only an upper bound on the runtime vector length.
     if constexpr (hn::MaxLanes(d) == 16) {
         return hn::TableLookupLanes(hn::LoadU(d, lut), hn::IndicesFromVec(d, hn::BitCast(di, indices)));
-    } else {
-        // AVX2/scalar do not have a register-wide 16-float permute.
+    } else
+#endif
+    {
+        // AVX2, NEON, SVE and scalar do not have a register-wide 16-float permute.
         return hn::GatherIndex(d, lut, hn::BitCast(di, indices));
     }
 }
@@ -166,6 +170,7 @@ int ash_score_neighborhood_c1_f32(const unsigned char *HWY_RESTRICT codes, const
     // Widen traversal arithmetic so the final base increment cannot overflow int.
     for (size_t base = 0; base < static_cast<size_t>(capacity); base += blockSize, codes += blockBytes) {
         const int count = std::min(blockSize, capacity - static_cast<int>(base));
+#if !HWY_HAVE_SCALABLE
         if constexpr (hn::MaxLanes(d) == 16) {
             if (blockSize == 32 && count == 32) {
                 int status = AshBlock32(d, codes, lut, groups, landmarkDot, out + base);
@@ -174,6 +179,7 @@ int ash_score_neighborhood_c1_f32(const unsigned char *HWY_RESTRICT codes, const
                 continue;
             }
         }
+#endif
         for (int lane = 0; lane < count; lane += lanes) {
             const int active = std::min(lanes, count - lane);
             auto lo = hn::Zero(d), hi = hn::Zero(d);
