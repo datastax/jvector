@@ -155,7 +155,8 @@ class NativeASHFP32BatchProjectionTest {
                 for (int i = 0; i <= count; i++) assertArrayEquals(saved[i], inputs[i]);
                 for (float value : outputs[count]) assertEquals(123f, value);
             }
-            assertEquals((long) shape[0] * shape[1] * Float.BYTES
+            // Batches of 4-32 rows ran on Highway, which packs one copy of the matrix.
+            assertEquals(2L * shape[0] * shape[1] * Float.BYTES
                     + RamUsageEstimator.shallowSizeOfInstance(NativeASHProjection.class), projection.ramBytesUsed());
         }
     }

@@ -69,6 +69,7 @@ final class NativeASHFP32BatchProjection implements VectorUtilSupport.AshProject
             RamUsageEstimator.shallowSizeOfInstance(NativeASHProjection.class);
 
     private final NativeASHProjection fallback;
+    static final int HIGHWAY_MIN_ROWS = 4, HIGHWAY_MAX_ROWS = 32;
 
     static VectorUtilSupport.AshProjection prepare(NativeASHProjection fallback) {
         return Bindings.BATCH == null ? fallback : new NativeASHFP32BatchProjection(fallback);
@@ -100,6 +101,13 @@ final class NativeASHFP32BatchProjection implements VectorUtilSupport.AshProject
     public void projectBatch(float[][] inputs, float[][] outputs, int count) {
         VectorUtilSupport.AshProjection.validateBatch(inputs, outputs, count);
         if (count == 0) return;
+        // Highway's register-tiled kernel beats SGEMM for query-sized batches
+        // (about 2x at 8 rows on Ice Lake and Granite Rapids); oneDNN wins for
+        // pairs and for encoding-sized batches. Both accumulate in FP32.
+        if (count >= HIGHWAY_MIN_ROWS && count <= HIGHWAY_MAX_ROWS && fallback.supportsBatchProjection()) {
+            fallback.projectBatch(inputs, outputs, count);
+            return;
+        }
         final int rows = fallback.rows(), columns = fallback.columns();
         if (inputs[0].length != columns || outputs[0].length != rows)
             throw new IllegalArgumentException("ASH projection batch shape mismatch");
