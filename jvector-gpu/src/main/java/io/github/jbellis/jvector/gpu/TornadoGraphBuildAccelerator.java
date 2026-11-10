@@ -164,8 +164,8 @@ public final class TornadoGraphBuildAccelerator implements GraphBuildAccelerator
                 GpuGraphBuilder.Adjacency adjacency;
                 try (GpuPrune pruner = preparedPruner != null ? preparedPruner.join() : preparePruner.get()) {
                     width = FIXED_WIDTH != null ? CandidateWidth.fixed(k) : CandidateWidth.choose(pruner, candidates, builder.getMaxDegree());
-                    candidates = candidates.first(width.width()); // and the wide lists can be freed
-                    adjacency = GpuGraphBuilder.build(pruner, n, candidates);
+                    // the graph builder reads the first width.width() candidates of every list in place
+                    adjacency = GpuGraphBuilder.build(pruner, n, candidates, width.width());
                 }
                 candidates = null; // free before the install
                 timer.lap("prune");

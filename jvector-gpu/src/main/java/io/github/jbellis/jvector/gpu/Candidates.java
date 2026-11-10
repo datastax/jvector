@@ -171,8 +171,9 @@ final class Candidates {
         int[] ids = new int[n * k];
         float[] scores = new float[n * k];
         try (Arena arena = Arena.ofShared()) {
-            MemorySegment neighbors = arena.allocate((long) n * kk * Long.BYTES, 64);
-            MemorySegment distances = arena.allocate((long) n * kk * Float.BYTES, 64);
+            // cuVS writes every element, so the buffers need no zero-filling (1.2 GB at 1M rows: 0.25 s)
+            MemorySegment neighbors = HostRows.allocate((long) n * kk * Long.BYTES, arena);
+            MemorySegment distances = HostRows.allocate((long) n * kk * Float.BYTES, arena);
             CuVS.allNeighborsOnHost(rows, n, dim, kk, algo, metric.distance, neighbors, distances, options);
             IntStream.range(0, n).parallel().forEach(i -> {
                 int c = 0;

@@ -52,25 +52,38 @@ final class GpuGraphBuilder {
 
     /** As {@link #build(PackedVectors, int, Candidates.TopK, int, float)}, with a pruner prepared by the caller. */
     static Adjacency build(GpuPrune pruner, int n, Candidates.TopK candidates) {
+        return build(pruner, n, candidates, candidates.k());
+    }
+
+    /** As {@link #build(GpuPrune, int, Candidates.TopK)}, from the first {@code width} candidates of every list. */
+    static Adjacency build(GpuPrune pruner, int n, Candidates.TopK candidates, int width) {
         int slots = PruneKernels.SLOTS;
         int[] ids = new int[n * slots];
         float[] scores = new float[n * slots];
         int[] sizes = new int[n];
-        fill(candidates, n, ids, scores, sizes);
+        long t0 = System.nanoTime();
+        fill(candidates, Math.min(width, candidates.k()), n, ids, scores, sizes);
+        long t1 = System.nanoTime();
         pruner.prune(ids, scores, sizes, IntStream.range(0, n).toArray());
+        long t2 = System.nanoTime();
         int[] grown = mergeReverseEdges(n, ids, scores, sizes, 0);
+        long t3 = System.nanoTime();
         pruner.prune(ids, scores, sizes, grown);
+        if (Boolean.getBoolean("jvector.gpu.trace")) {
+            System.err.printf("graph build of %d: fill %.3f s, prune %.3f s, reverse merge %.3f s, prune %d grown %.3f s%n", n, (t1 - t0) / 1e9,
+                    (t2 - t1) / 1e9, (t3 - t2) / 1e9, grown.length, (System.nanoTime() - t3) / 1e9);
+        }
         return new Adjacency(ids, scores, sizes);
     }
 
-    /** Copies the candidate lists into {@code SLOTS}-wide rows, {@code -1} padded. */
-    private static void fill(Candidates.TopK candidates, int n, int[] ids, float[] scores, int[] sizes) {
+    /** Copies the first {@code width} candidates of every list into {@code SLOTS}-wide rows, {@code -1} padded. */
+    private static void fill(Candidates.TopK candidates, int width, int n, int[] ids, float[] scores, int[] sizes) {
         int slots = PruneKernels.SLOTS;
         int k = candidates.k();
         Arrays.fill(ids, -1);
         IntStream.range(0, n).parallel().forEach(i -> {
             int c = 0;
-            for (int j = 0; j < k && c < slots; j++) {
+            for (int j = 0; j < width && c < slots; j++) {
                 int id = candidates.ids()[i * k + j];
                 if (id >= 0) {
                     ids[i * slots + c] = id;
