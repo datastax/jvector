@@ -316,7 +316,24 @@ public final class FusedASHLayout {
             throw new IllegalArgumentException("lut length is smaller than groups * 16");
         }
 
-        for (int group = 0; group < groups; group++) {
+        // Every entry is still 0 + q[d0]*c0 + q[d1]*c1 + ..., added in slot order,
+        // so the table is bit-identical to the per-entry definition. Each product
+        // is formed once per dimension instead of once per entry, and the field
+        // decode is a constant table rather than a branch per term.
+        int complete = quantizedDim / groupDims;
+        if (bitsPerDimension == 2) {
+            for (int group = 0; group < complete; group++) lut2(qProj, group << 1, lut, group << 4);
+        } else if (bitsPerDimension == 1) {
+            for (int group = 0; group < complete; group++) lut1(qProj, group << 2, lut, group << 4);
+        } else {
+            for (int group = 0; group < complete; group++) {
+                float q = qProj[group];
+                int base = group << 4;
+                for (int field = 0; field < 16; field++) lut[base + field] = 0f + q * DECODE_4BIT[field];
+            }
+        }
+        // A partial final group adds only the dimensions that exist.
+        for (int group = complete; group < groups; group++) {
             int dimBase = group * groupDims;
             int lutBase = group << 4;
             for (int nibble = 0; nibble < 16; nibble++) {
@@ -330,6 +347,38 @@ public final class FusedASHLayout {
                 }
                 lut[lutBase + nibble] = sum;
             }
+        }
+    }
+
+    private static final float[] DECODE_4BIT = new float[16];
+    static {
+        for (int field = 0; field < 16; field++) DECODE_4BIT[field] = decodeProjectionComponent(field, 4);
+    }
+
+    // Two 2-bit fields per nibble: entry = (0 + a[n & 3]) + b[n >>> 2].
+    // Field values -1.5, -0.5, 0.5, 1.5 (sign bit high, magnitude low).
+    private static void lut2(float[] qProj, int dim, float[] lut, int base) {
+        float q0 = qProj[dim], q1 = qProj[dim + 1];
+        float a0 = 0f + q0 * -0.5f, a1 = 0f + q0 * -1.5f, a2 = 0f + q0 * 0.5f, a3 = 0f + q0 * 1.5f;
+        float b0 = q1 * -0.5f, b1 = q1 * -1.5f, b2 = q1 * 0.5f, b3 = q1 * 1.5f;
+        lut[base] = a0 + b0; lut[base + 1] = a1 + b0; lut[base + 2] = a2 + b0; lut[base + 3] = a3 + b0;
+        lut[base + 4] = a0 + b1; lut[base + 5] = a1 + b1; lut[base + 6] = a2 + b1; lut[base + 7] = a3 + b1;
+        lut[base + 8] = a0 + b2; lut[base + 9] = a1 + b2; lut[base + 10] = a2 + b2; lut[base + 11] = a3 + b2;
+        lut[base + 12] = a0 + b3; lut[base + 13] = a1 + b3; lut[base + 14] = a2 + b3; lut[base + 15] = a3 + b3;
+    }
+
+    // Four sign bits per nibble: entry = (((0 + ±q0) + ±q1) + ±q2) + ±q3.
+    private static void lut1(float[] qProj, int dim, float[] lut, int base) {
+        float p0 = qProj[dim] * 1.0f, n0 = qProj[dim] * -1.0f;
+        float p1 = qProj[dim + 1] * 1.0f, n1 = qProj[dim + 1] * -1.0f;
+        float p2 = qProj[dim + 2] * 1.0f, n2 = qProj[dim + 2] * -1.0f;
+        float p3 = qProj[dim + 3] * 1.0f, n3 = qProj[dim + 3] * -1.0f;
+        for (int nibble = 0; nibble < 16; nibble++) {
+            float sum = 0f + ((nibble & 1) != 0 ? p0 : n0);
+            sum += (nibble & 2) != 0 ? p1 : n1;
+            sum += (nibble & 4) != 0 ? p2 : n2;
+            sum += (nibble & 8) != 0 ? p3 : n3;
+            lut[base + nibble] = sum;
         }
     }
 
