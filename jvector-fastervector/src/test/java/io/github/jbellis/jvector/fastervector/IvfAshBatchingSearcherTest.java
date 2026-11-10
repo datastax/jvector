@@ -27,10 +27,13 @@ import java.util.List;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
 import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
+import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 import java.util.function.Function;
 
 import static org.junit.jupiter.api.Assertions.*;
@@ -230,10 +233,167 @@ class IvfAshBatchingSearcherTest {
     }
 
     @Test
+    void aFullQueueRejectsAtOnce() throws Exception {
+        Gate gate = new Gate();
+        try (var batcher = new IvfAshBatchingSearcher(gate, DIM, 64, Duration.ZERO, 2, Duration.ZERO)) {
+            try {
+                var first = batcher.searchAsync(query(0));
+                gate.awaitEntered();
+                var a = batcher.searchAsync(query(1));
+                var b = batcher.searchAsync(query(2));
+                assertThrows(RejectedExecutionException.class, () -> batcher.searchAsync(query(3)));
+                assertEquals(1, batcher.rejectedCount());
+                assertEquals(2, batcher.queuedCount());
+                gate.release();
+                assertEquals(0, first.get(10, TimeUnit.SECONDS).get(0).label());
+                assertEquals(1, a.get(10, TimeUnit.SECONDS).get(0).label());
+                assertEquals(2, b.get(10, TimeUnit.SECONDS).get(0).label());
+                assertEquals(List.of(1, 2), gate.batchSizes);
+            } finally {
+                gate.release();
+            }
+        }
+    }
+
+    @Test
+    void anEnqueueTimeoutWaitsForSpace() throws Exception {
+        Gate gate = new Gate();
+        try (var batcher = new IvfAshBatchingSearcher(gate, DIM, 64, Duration.ZERO, 1, Duration.ofSeconds(10))) {
+            try {
+                batcher.searchAsync(query(0));
+                gate.awaitEntered();
+                batcher.searchAsync(query(1));
+                var waiting = CompletableFuture.supplyAsync(() -> batcher.searchAsync(query(2)).join());
+                Thread.sleep(100);
+                assertFalse(waiting.isDone(), "the caller waits while the queue is full");
+                gate.release();
+                assertEquals(2, waiting.get(10, TimeUnit.SECONDS).get(0).label());
+                assertEquals(0, batcher.rejectedCount());
+            } finally {
+                gate.release();
+            }
+        }
+    }
+
+    @Test
+    void theWaitForSpaceEndsInARejection() throws Exception {
+        Gate gate = new Gate();
+        try (var batcher = new IvfAshBatchingSearcher(gate, DIM, 64, Duration.ZERO, 1, Duration.ofMillis(50))) {
+            try {
+                batcher.searchAsync(query(0));
+                gate.awaitEntered();
+                batcher.searchAsync(query(1));
+                long start = System.nanoTime();
+                assertThrows(RejectedExecutionException.class, () -> batcher.searchAsync(query(2)));
+                assertTrue(System.nanoTime() - start >= TimeUnit.MILLISECONDS.toNanos(40));
+                assertEquals(1, batcher.rejectedCount());
+            } finally {
+                gate.release();
+            }
+        }
+    }
+
+    @Test
+    void aQueryTimeoutCapsTheWaitForSpace() throws Exception {
+        Gate gate = new Gate();
+        try (var batcher = new IvfAshBatchingSearcher(gate, DIM, 64, Duration.ZERO, 1, Duration.ofSeconds(10))) {
+            try {
+                batcher.searchAsync(query(0));
+                gate.awaitEntered();
+                batcher.searchAsync(query(1));
+                long start = System.nanoTime();
+                assertThrows(RejectedExecutionException.class,
+                             () -> batcher.searchAsync(query(2), Duration.ofMillis(50)));
+                assertTrue(System.nanoTime() - start < TimeUnit.SECONDS.toNanos(5));
+            } finally {
+                gate.release();
+            }
+        }
+    }
+
+    @Test
+    void queriesPastTheirDeadlineAreNotSearched() throws Exception {
+        Gate gate = new Gate();
+        try (var batcher = new IvfAshBatchingSearcher(gate, DIM, 64, Duration.ZERO)) {
+            try {
+                batcher.searchAsync(query(0));
+                gate.awaitEntered();
+                var late = batcher.searchAsync(query(1), Duration.ofMillis(50));
+                var patient = batcher.searchAsync(query(2));
+                // The future fails at the deadline, while the query is still queued
+                var e = assertThrows(ExecutionException.class, () -> late.get(10, TimeUnit.SECONDS));
+                assertInstanceOf(TimeoutException.class, e.getCause());
+                gate.release();
+                assertEquals(2, patient.get(10, TimeUnit.SECONDS).get(0).label());
+                assertEquals(List.of(1, 1), gate.batchSizes);
+                assertEquals(1, batcher.expiredCount());
+                assertEquals(2, batcher.queryCount());
+            } finally {
+                gate.release();
+            }
+        }
+    }
+
+    @Test
+    void droppedQueriesDontTakeUpRoomInTheBatch() throws Exception {
+        Gate gate = new Gate();
+        try (var batcher = new IvfAshBatchingSearcher(gate, DIM, 2, Duration.ZERO)) {
+            try {
+                batcher.searchAsync(query(0));
+                gate.awaitEntered();
+                var late = batcher.searchAsync(query(1), Duration.ofMillis(30));
+                var cancelled = batcher.searchAsync(query(2));
+                var a = batcher.searchAsync(query(3));
+                var b = batcher.searchAsync(query(4));
+                assertTrue(cancelled.cancel(false));
+                assertThrows(ExecutionException.class, () -> late.get(10, TimeUnit.SECONDS));
+                gate.release();
+                assertEquals(3, a.get(10, TimeUnit.SECONDS).get(0).label());
+                assertEquals(4, b.get(10, TimeUnit.SECONDS).get(0).label());
+                assertEquals(List.of(1, 2), gate.batchSizes, "the live queries fill the batch");
+                assertEquals(1, batcher.expiredCount());
+            } finally {
+                gate.release();
+            }
+        }
+    }
+
+    @Test
+    void theTimedSearchThrowsTimeoutException() throws Exception {
+        Gate gate = new Gate();
+        try (var batcher = new IvfAshBatchingSearcher(gate, DIM, 64, Duration.ZERO)) {
+            try {
+                batcher.searchAsync(query(0));
+                gate.awaitEntered();
+                assertThrows(TimeoutException.class, () -> batcher.search(query(1), Duration.ofMillis(50)));
+                gate.release();
+                assertEquals(2, batcher.search(query(2), Duration.ofSeconds(10)).get(0).label());
+            } finally {
+                gate.release();
+            }
+        }
+    }
+
+    @Test
     void invalidSettingsAreRejected() {
         assertThrows(IllegalArgumentException.class,
                      () -> new IvfAshBatchingSearcher(IvfAshBatchingSearcherTest::echo, DIM, 0, Duration.ZERO));
         assertThrows(IllegalArgumentException.class,
                      () -> new IvfAshBatchingSearcher(IvfAshBatchingSearcherTest::echo, DIM, 1, Duration.ofMillis(-1)));
+        assertThrows(IllegalArgumentException.class,
+                     () -> new IvfAshBatchingSearcher(IvfAshBatchingSearcherTest::echo, DIM, 1, Duration.ZERO, 0, Duration.ZERO));
+        assertThrows(IllegalArgumentException.class,
+                     () -> new IvfAshBatchingSearcher(IvfAshBatchingSearcherTest::echo, DIM, 1, Duration.ZERO, 1, Duration.ofMillis(-1)));
+    }
+
+    @Test
+    void invalidTimeoutsAreRejected() {
+        try (var batcher = new IvfAshBatchingSearcher(IvfAshBatchingSearcherTest::echo, DIM, 64, Duration.ZERO)) {
+            assertThrows(IllegalArgumentException.class, () -> batcher.searchAsync(query(1), Duration.ZERO));
+            assertThrows(IllegalArgumentException.class, () -> batcher.searchAsync(query(1), Duration.ofMillis(-1)));
+            assertThrows(NullPointerException.class, () -> batcher.searchAsync(query(1), null));
+            // A timeout too long for nanoseconds is the same as a very long one
+            assertEquals(1, batcher.searchAsync(query(1), Duration.ofSeconds(Long.MAX_VALUE)).join().get(0).label());
+        }
     }
 }

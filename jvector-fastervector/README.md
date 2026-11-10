@@ -199,18 +199,30 @@ try (IvfAshIndexSearcher searcher = index.searcherBuilder()
      IvfAshBatchingSearcher batcher = IvfAshBatchingSearcher.builder(searcher)
              .maxBatch(1024)                               // the default
              .maxDelay(Duration.ZERO)                      // the default: don't wait for more
+             .maxQueued(4096)                              // the default queue bound
+             .enqueueTimeout(Duration.ZERO)                // the default: reject at once when full
              .build()) {
-    List<NodeScore> top = batcher.search(query);           // from any thread; or searchAsync(query)
+    List<NodeScore> top = batcher.search(query, Duration.ofMillis(50));   // from any thread
 }
 ```
 
+- The queue is bounded. When it holds `maxQueued` queries, a new query fails with
+  `RejectedExecutionException`, at once by default or after waiting up to `enqueueTimeout` for
+  space. Size `maxQueued` from the latency you accept: a query joining a full queue waits about
+  `maxQueued / maxBatch` searches.
+- A query can carry a timeout: `search(query, timeout)` throws `TimeoutException`, and
+  `searchAsync(query, timeout)` fails its future with one. A query whose deadline passes while
+  queued is dropped without being searched, so it costs no search time; waiting for queue space
+  counts against the timeout. Cancelled futures are dropped the same way. `search(query)` and
+  `searchAsync(query)` have no deadline.
 - It doesn't own the searcher: close the batcher first, as above. Closing it finishes the batch
   in progress and fails queued queries with `IllegalStateException`.
 - `maxDelay` makes a batch wait for more queries before it searches, adding up to that much
   latency per query. Under load, batches fill without waiting.
 - Futures complete on the dispatcher thread, so keep stages chained onto them without an
   executor short.
-- `batchCount()` and `queryCount()` give the mean batch size.
+- `batchCount()` and `queryCount()` give the mean batch size; `rejectedCount()`,
+  `expiredCount()` and `queuedCount()` show overload.
 
 ## Regenerating the FFI bindings
 
