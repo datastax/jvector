@@ -53,7 +53,7 @@ import java.util.LinkedHashMap;
  */
 public class AutoBenchYAML {
     private static final Logger logger = LoggerFactory.getLogger(AutoBenchYAML.class);
-    private static final String REGRESSION_TEST_KEY = "regression-tests";
+    private static final String REGRESSION_TEST_KEY = DatasetCollection.REGRESSION_TESTS;
 
     public static void main(String[] args) throws IOException {
         try (var projectionSetting = new SearchParameters.AshQueryProjectionSetting()) {

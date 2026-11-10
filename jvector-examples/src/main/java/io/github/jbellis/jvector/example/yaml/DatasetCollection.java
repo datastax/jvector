@@ -28,6 +28,8 @@ import java.util.Map;
 
 public class DatasetCollection {
     private static final String defaultFile = "./jvector-examples/yaml-configs/datasets.yml";
+    /** The section CI benchmarks select from; its datasets need the protected catalog. */
+    public static final String REGRESSION_TESTS = "regression-tests";
 
     public final Map<String, List<String>> datasetNames;
 
@@ -54,6 +56,17 @@ public class DatasetCollection {
             }
         }
         return allDatasetNames;
+    }
+
+    /** All dataset names outside the given section. */
+    public List<String> getAllExcept(String section) {
+        List<String> names = new ArrayList<>();
+        for (var entry : datasetNames.entrySet()) {
+            if (!entry.getKey().equals(section) && entry.getValue() != null) {
+                names.addAll(entry.getValue());
+            }
+        }
+        return names;
     }
 
     public List<String> getSection(String section) {

@@ -69,6 +69,8 @@ public class BenchYAML {
 
         var datasetCollection = DatasetCollection.load();
         var datasetNames = regex.isEmpty() && !configNames.isEmpty() ? List.<String>of()
+                : regex.isEmpty()
+                ? datasetCollection.getAllExcept(DatasetCollection.REGRESSION_TESTS)
                 : datasetCollection.getAll().stream().filter(dn -> pattern.matcher(dn).find()).collect(Collectors.toList());
 
         List<MultiConfig> allConfigs = new ArrayList<>();
