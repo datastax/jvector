@@ -159,7 +159,7 @@ jobs:
         run: |
           sudo apt update && sudo apt install -y cmake meson ninja-build
       - name: Compile, run tests, and package (JDK 22)
-        run: mvn -B -Dnative.onednn=true verify
+        run: mvn -B "-Dnative.onednn=true" verify
         if: matrix.jdk == '22'
       - name: Compile, run tests, and package (JDK 20)
         run: mvn -B -Pjdk20 -am -pl jvector-tests test
