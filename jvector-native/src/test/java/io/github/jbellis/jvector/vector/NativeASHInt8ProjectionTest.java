@@ -157,6 +157,29 @@ class NativeASHInt8ProjectionTest {
     }
 
     @Test
+    void everyTileSizeMatchesSingletonsThroughAccumulatorDimensionBound() {
+        // Tiles of 2-8 rows may use a different integer kernel than single rows;
+        // exact int32 sums must make every tile size agree bit for bit.
+        for (int columns : new int[]{3, 1023, 65535}) {
+            float[][] matrix = matrix(47, columns, columns);
+            for (int column = 0; column < columns; column++) matrix[1][column] = column % 2 == 0 ? 1f : -1f;
+            var projection = prepare(matrix);
+            float[][] inputs = matrix(8, columns, columns + 1);
+            Arrays.fill(inputs[7], 1f); // Saturated codes against the alternating row.
+            for (int count = 1; count <= 8; count++) {
+                float[][] outputs = new float[count][47];
+                projection.projectBatch(inputs, outputs, count);
+                for (int i = 0; i < count; i++) {
+                    float[] singleton = new float[47];
+                    projection.project(inputs[i], singleton);
+                    assertArrayEquals(singleton, outputs[i], "columns=" + columns + " count=" + count + " row=" + i);
+                    if (columns < 65535) assertArrayEquals(oracle(matrix, inputs[i]), outputs[i], 1e-7f);
+                }
+            }
+        }
+    }
+
+    @Test
     void fp32ScalesMatchPrototypeAndUnderflowFailsBeforeConversion() {
         for (float weight : new float[]{0, Float.MIN_NORMAL, 1e-38f, 1f}) {
             float[][] weights = new float[32][64];

@@ -23,6 +23,7 @@
 #include <cmath>
 #include <cstddef>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <limits>
 #include <memory>
@@ -30,6 +31,9 @@
 #include <new>
 #include <stdexcept>
 #include <vector>
+#if defined(__x86_64__) || defined(_M_X64)
+#include <immintrin.h>
+#endif
 
 static_assert(DNNL_CPU_RUNTIME == DNNL_RUNTIME_SEQ, "Calling workers own parallelism");
 static_assert(offsetof(jvector_ash_fp16_result, message) == sizeof(int32_t));
@@ -136,6 +140,82 @@ struct Kernel {
     }
 };
 
+// On Ice Lake, dense 512-bit integer dot products (oneDNN's 4- and 8-row
+// avx512_core_vnni matmul, or an equivalent zmm kernel) slowed the graph search
+// that follows them by 9-15%, so batched INT8 queries lost to unbatched ones.
+// Load-bound 1- and 2-row zmm kernels did not, and neither does the same 8-row
+// kernel on 256-bit registers, which is also the fastest. The prepared values,
+// the visited nodes and the search thread's CPU time were otherwise unchanged.
+// Query tiles are at most 8 rows, so on AVX-512 VNNI CPUs without AMX this
+// exact-integer ymm kernel serves every tile of 2-8 rows: u8*s8 sums in int32
+// are exact, so outputs equal oneDNN's. AMX and AVX2-VNNI CPUs keep oneDNN, as does
+// JVECTOR_ASH_INT8_ONEDNN (a diagnostic override) when set.
+bool direct_vnni_available() {
+#if defined(__x86_64__) || defined(_M_X64)
+    if (std::getenv("JVECTOR_ASH_INT8_ONEDNN")) return false; // Diagnostic: force oneDNN.
+    switch (get_effective_cpu_isa()) {
+        case cpu_isa::avx512_core_vnni:
+        case cpu_isa::avx512_core_bf16: return true;
+        default: return false;
+    }
+#else
+    return false;
+#endif
+}
+
+#if defined(__x86_64__) || defined(_M_X64)
+// NB blocks of 16 output rows (two 8-lane halves each) for every query row of
+// the tile: 2*M*NB independent int32 accumulators hide the dot-product latency.
+// Missing final blocks recompute block 0 and are not stored.
+template <int M, int NB>
+__attribute__((target("avx512f,avx512vl,avx512vnni")))
+void vnni_tile(const uint8_t* query, int stride, const int8_t* packed, int groups, int blocks, int32_t* out, int out_stride) {
+    for (int block = 0; block < blocks; block += NB) {
+        const int8_t* w[NB];
+        for (int j = 0; j < NB; ++j)
+            w[j] = packed + size_t(block + j < blocks ? block + j : block) * groups * 64;
+        __m256i lo[M][NB], hi[M][NB];
+        for (int i = 0; i < M; ++i)
+            for (int j = 0; j < NB; ++j) lo[i][j] = hi[i][j] = _mm256_setzero_si256();
+        for (int g = 0; g < groups; ++g) {
+            __m256i b0[NB], b1[NB];
+            for (int j = 0; j < NB; ++j) {
+                b0[j] = _mm256_loadu_si256(reinterpret_cast<const __m256i*>(w[j] + size_t(g) * 64));
+                b1[j] = _mm256_loadu_si256(reinterpret_cast<const __m256i*>(w[j] + size_t(g) * 64 + 32));
+            }
+            for (int i = 0; i < M; ++i) {
+                int32_t four;
+                std::memcpy(&four, query + size_t(i) * stride + size_t(g) * 4, sizeof(four));
+                __m256i a = _mm256_set1_epi32(four);
+                for (int j = 0; j < NB; ++j) {
+                    lo[i][j] = _mm256_dpbusd_epi32(lo[i][j], a, b0[j]);
+                    hi[i][j] = _mm256_dpbusd_epi32(hi[i][j], a, b1[j]);
+                }
+            }
+        }
+        for (int i = 0; i < M; ++i)
+            for (int j = 0; j < NB && block + j < blocks; ++j) {
+                auto* row = out + size_t(i) * out_stride + size_t(block + j) * 16;
+                _mm256_storeu_si256(reinterpret_cast<__m256i*>(row), lo[i][j]);
+                _mm256_storeu_si256(reinterpret_cast<__m256i*>(row + 8), hi[i][j]);
+            }
+    }
+}
+
+void vnni_gemm(int count, const uint8_t* query, int stride, const int8_t* packed, int groups, int blocks,
+               int32_t* out, int out_stride) {
+    switch (count) {
+        case 2: vnni_tile<2, 2>(query, stride, packed, groups, blocks, out, out_stride); break;
+        case 3: vnni_tile<3, 2>(query, stride, packed, groups, blocks, out, out_stride); break;
+        case 4: vnni_tile<4, 2>(query, stride, packed, groups, blocks, out, out_stride); break;
+        case 5: vnni_tile<5, 1>(query, stride, packed, groups, blocks, out, out_stride); break;
+        case 6: vnni_tile<6, 1>(query, stride, packed, groups, blocks, out, out_stride); break;
+        case 7: vnni_tile<7, 1>(query, stride, packed, groups, blocks, out, out_stride); break;
+        default: vnni_tile<8, 1>(query, stride, packed, groups, blocks, out, out_stride); break;
+    }
+}
+#endif
+
 struct Context {
     const uint64_t id = next_id.fetch_add(1, std::memory_order_relaxed);
     const int rows, columns;
@@ -149,6 +229,10 @@ struct Context {
     std::array<std::atomic<Kernel*>, kBatchTile + 1> ready{};
     std::mutex mutex;
     std::atomic<uint64_t> retained_bytes{0};
+    // Set when the ymm VNNI kernel replaces oneDNN for tiles of 2-8 rows (see vnni_tile).
+    const bool direct = direct_vnni_available();
+    const int padded_columns = (columns + 3) & ~3, padded_rows = (rows + 15) & ~15;
+    std::unique_ptr<int8_t[]> packed;
 
     Context(const float* matrix, int r, int c) : rows(r), columns(c), scales(r), sums(r) {
         for (auto& entry : ready) entry.store(nullptr, std::memory_order_relaxed);
@@ -160,6 +244,18 @@ struct Context {
                     target + size_t(row) * columns, 0, &sums[row]);
         retained_bytes.store(descriptor.get_size() + sizeof(Context)
                 + size_t(rows) * (sizeof(float) + sizeof(int32_t)), std::memory_order_relaxed);
+        if (direct) {
+            // [row block of 16][column group of 4][16 rows][4 columns], zero padded.
+            size_t bytes = size_t(padded_rows) * padded_columns;
+            packed.reset(new int8_t[bytes]());
+            for (int row = 0; row < rows; ++row)
+                for (int column = 0; column < columns; ++column)
+                    packed[(size_t(row / 16) * (padded_columns / 4) + column / 4) * 64
+                            + (row % 16) * 4 + column % 4] = target[size_t(row) * columns + column];
+            retained_bytes.fetch_add(bytes, std::memory_order_relaxed);
+        }
+        // Single rows always use oneDNN: its 1-row kernel is load-bound, does not
+        // slow the following search, and is faster than vnni_tile<1>.
         kernel(1); // Check required hardware/primitive during model initialization.
     }
 
@@ -246,6 +342,30 @@ JV_ASH_INT8_TARGET int jvector_ash_int8_project_batch(void* pointer, const float
             throw std::invalid_argument("INT8 batch size overflow");
         for (int first = 0; first < count;) {
             int size = std::min(kBatchTile, count - first);
+#if defined(__x86_64__) || defined(_M_X64)
+            if (context.direct && size > 1) {
+                thread_local std::vector<uint8_t> quantized;
+                thread_local std::vector<int32_t> dots;
+                thread_local std::array<float, kBatchTile> scales;
+                size_t qbytes = size_t(kBatchTile) * context.padded_columns;
+                size_t dbytes = size_t(kBatchTile) * context.padded_rows;
+                // Padding columns meet zero weights, so stale bytes there add nothing.
+                if (quantized.size() < qbytes) quantized.assign(qbytes, 0);
+                if (dots.size() < dbytes) dots.resize(dbytes);
+                for (int i = 0; i < size; ++i)
+                    scales[i] = quantize(input + size_t(first + i) * context.columns, context.columns,
+                            quantized.data() + size_t(i) * context.padded_columns, 128);
+                vnni_gemm(size, quantized.data(), context.padded_columns, context.packed.get(),
+                        context.padded_columns / 4, context.padded_rows / 16, dots.data(), context.padded_rows);
+                for (int i = 0; i < size; ++i)
+                    for (int row = 0; row < context.rows; ++row) {
+                        int32_t dot = dots[size_t(i) * context.padded_rows + row] - 128 * context.sums[row];
+                        output[size_t(first + i) * context.rows + row] = float(dot) * scales[i] * context.scales[row];
+                    }
+                first += size;
+                continue;
+            }
+#endif
             const auto& kernel = context.kernel(size);
             auto& buffers = workspaces[size];
             if (buffers.context_id != context.id) buffers.initialize(context, kernel);
