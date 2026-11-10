@@ -151,21 +151,25 @@ class NativeVectorUtilSupportTest {
 
     @Test
     void addInPlaceRejectsMismatchedLengths() {
+        requireNativeProvider();
         assertRejectsMismatchedLengths(support::addInPlace);
     }
 
     @Test
     void subInPlaceRejectsMismatchedLengths() {
+        requireNativeProvider();
         assertRejectsMismatchedLengths(support::subInPlace);
     }
 
     @Test
     void minInPlaceRejectsMismatchedLengths() {
+        requireNativeProvider();
         assertRejectsMismatchedLengths(support::minInPlace);
     }
 
     @Test
     void inPlaceOpsKeepValidResults() {
+        requireNativeProvider();
         var a = filled(17, 5);
         support.addInPlace(a, filled(17, 2));
         assertEquals(7f, a.get(16));
