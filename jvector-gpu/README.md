@@ -112,13 +112,16 @@ The rebuilt graph is a fresh build rather than a stitched one, so at the same be
 at the same search latency.
 
 **The out-of-core compactor's wide code, probes and cell walk on the GPU.** For merges that do not fit in memory,
-`OnDiskGraphIndexCompactor` stays the compactor and `TornadoCompactionAccelerator` runs three of its phases on the GPU
+`OnDiskGraphIndexCompactor` stays the compactor and `TornadoCompactionAccelerator` runs four of its phases on the GPU
 (select it with `-Djvector.compaction.accelerator=tornadovm`):
 
 * **The wide code**, the PQ the finalize's diversity comparisons use, is trained by `GpuProductQuantization.compute`
   on the same 128,000-vector sample (`-Djvector.gpu.wideCode=false` keeps it on the CPU).
+* **The region keys**, every node's nearest level-1 node (its cell), which order the merged index: the same search
+  as the probes with one result a node, 6.7 s against 18.4 s on the CPU.
 * **Probes** choose the cells each node scans. The CPU ranks the merged hierarchy's level-1 nodes with a beam search;
-  the GPU scores every node against all of them with a tiled matrix product and keeps the best 1,024 per node
+  the GPU scores every node against all of them on tensor cores (FP16 in, FP32 accumulate; the probes only choose cells,
+  which the walk then scores exactly) and keeps the best 1,024 per node
   (`-Djvector.compaction.probes`), from which the compactor takes cells until each source's scan budget is spent, as
   before. `-Djvector.gpu.probe=false` leaves the probes on the CPU.
 * **The cell walk** scores each cell's vectors against the nodes that probe it and keeps each node's top 32. The
@@ -135,7 +138,8 @@ ada002-1M, the same 4 segments, same machine (`run.sh walk ada002-1M 4 <workDir>
 | nothing (CPU) | 37.3 s | 58.8 s | 70.7 s | 230.0 s | 0.914 / 0.958 / 0.982 / 0.993 |
 | walk | 37.3 s | 58.4 s | 23.9 s | 181.0 s | 0.915 / 0.958 / 0.981 / 0.992 |
 | probes and walk | 37.3 s | 13.4 s | 24.3 s | 134.8 s | 0.917 / 0.959 / 0.983 / 0.993 |
-| wide code, probes and walk | **2.8 s** | **12.9 s** | **24.8 s** | **99.9 s (2.3x)** | 0.917 / 0.959 / 0.983 / 0.993 |
+| wide code, probes and walk | 2.8 s | 12.9 s | 24.8 s | 99.9 s | 0.917 / 0.959 / 0.983 / 0.993 |
+| the same, with probes on tensor cores and the region keys on the GPU | **2.4 s** | **6.6 s** | **21.9 s** | **78.7 s (2.9x)** | 0.916 / 0.960 / 0.982 / 0.993 |
 
 Two CPU merges of the same segments agree on 0.94% of base-layer neighbour lists (mean overlap 0.865): the merge is
 parallel and not deterministic. A CPU merge and a merge with the GPU walk agree on 0.92% (mean overlap 0.865), so the
