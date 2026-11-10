@@ -297,12 +297,13 @@ class PanamaVectorUtilSupport implements VectorUtilSupport {
                         .convertShape(VectorOperators.I2F, ASH_FLOATS, 0)).add(0.5f);
                 var values = magnitude.blend(magnitude.neg(), fields.and(sign)
                         .compare(VectorOperators.EQ, 0).cast(ASH_FLOATS));
-                // A masked gather may bounds-check inactive indices. Point those lanes at
-                // the first valid query element for a partial final block.
+                // For a partial final block, inactive lanes gather the first valid query
+                // element, so the gather itself needs no mask; the mask applies to the sum.
+                // A masked AVX-512 gather is miscompiled by JDK 20's C2, so avoid it.
                 int[] gatherIndices = active == ASH_FLOATS.length() ? indices
                         : (bitsPerDimension == 2 ? ASH_TWO_BIT_TAIL_INDICES : ASH_FOUR_BIT_TAIL_INDICES)[active];
-                var q = FloatVector.fromArray(ASH_FLOATS, query, base * perByte + slot, gatherIndices, 0, mask);
-                sum = sum.add(q.mul(values));
+                var q = FloatVector.fromArray(ASH_FLOATS, query, base * perByte + slot, gatherIndices, 0);
+                sum = sum.add(q.mul(values), mask);
             }
         }
         return sum.reduceLanes(VectorOperators.ADD);
