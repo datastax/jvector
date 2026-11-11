@@ -28,6 +28,44 @@ For an exact payload, use `encodedBits = 40 + d*b`. For example, a 256-D
 input projected to 128 dimensions at four bits uses `encodedBits: 552`.
 Include the header when comparing memory budgets with other quantizers.
 
+### Choosing the projected dimension for speed
+
+For the fastest construction and search, use `b` = 1, 2 or 4 and make `d` a
+multiple of 64. The native kernels then process whole 64-bit words and whole
+SIMD vectors, with no leftover dimensions:
+
+- Construction compares stored codes with each other. At 1 bit, the kernel
+  works in words of 64 dimensions. At 2 bits, it works in words of 32
+  dimensions. At 4 bits, it works in vectors of up to 128 dimensions.
+- Search builds per-query lookup tables in 16-byte chunks of code and projects
+  queries 32 output dimensions at a time.
+
+Other values of `d` are correct and handled in one extra masked step, so the
+penalty is small. In the measurements below, a 2-bit code at `d = 380` costs
+about 20-30% more per construction comparison than at `d = 384`, and search
+QPS differs by about 1.5%. When a byte budget lands just short of an aligned
+`d`, prefer the aligned value. For example, with a 384-D input and a
+100-byte budget, `d = 384` at 2 bits (101 bytes, no dimension reduction) is a
+better choice than `d = 380` (100 bytes).
+
+The other widths, `b` = 3 and 5 through 9, are supported by core ASH but use
+a generic per-dimension Java path for scoring, and fused graphs do not
+support them. They are slower than 1, 2 or 4 bits at every `d`. Fast native
+kernels for these widths are left for future work.
+
+Construction comparison cost, in ns per code pair, on one pinned core with
+the native provider, on an Intel Xeon 6985P-C and on an AWS m6id.4xlarge
+(Ice Lake).
+
+| `b` | `d` | Xeon 6985P-C | m6id.4xlarge |
+| --- | --- | --- | --- |
+| 2 | 192 | 9.3 | 16.7 |
+| 2 | 380 | 16.6 | 30.0 |
+| 2 | 384 | 13.8 | 22.5 |
+| 4 | 190 | 15.2 | 24.0 |
+| 4 | 192 | 14.5 | 24.1 |
+| 4 | 384 | 18.4 | 28.5 |
+
 Training and base encoding retain their FP32 projection path; some training
 statistics and factorizations use FP64 internally. Query precision does not
 change the trained model, base encoding, stored-code layout or index format.

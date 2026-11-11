@@ -76,11 +76,51 @@ HWY_INLINE float AshTwoBitPair(const uint8_t *a, const uint8_t *b, int dimension
         deltas = hn::Add(deltas, hn::BitCast(di, delta));
     }
     int64_t total = static_cast<int64_t>(words) * 32 + hn::ReduceSum(di, deltas);
-    for (int j = static_cast<int>(words * 32); j < dimensions; ++j)
-        total += AshDoubledComponent(a, j, 2) * AshDoubledComponent(b, j, 2);
+    // The last partial word: copy only its code bytes and clear the padding fields, which then
+    // contribute nothing. One word of popcounts instead of one decode per leftover dimension.
+    const int tail = dimensions & 31;
+    if (tail) {
+        // A masked load of the code bytes only; it never reads past the code.
+        const hn::FixedTag<uint8_t, 8> d8;
+        const hn::FixedTag<uint64_t, 1> d64;
+        const size_t tailBytes = (static_cast<size_t>(tail) + 3) / 4;
+        uint64_t ta = hn::GetLane(hn::BitCast(d64, hn::LoadN(d8, a + words * 8, tailBytes)));
+        uint64_t tb = hn::GetLane(hn::BitCast(d64, hn::LoadN(d8, b + words * 8, tailBytes)));
+        const uint64_t fields = (uint64_t{1} << (2 * tail)) - 1, slot = uint64_t{0x5555555555555555};
+        ta &= fields;
+        tb &= fields;
+        const uint64_t neg = ((ta ^ tb) >> 1) & slot, ma = ta & slot, mb = tb & slot, both = ma & mb;
+        int64_t delta = 2 * (static_cast<int64_t>(hwy::PopCount(ma)) + hwy::PopCount(mb) - hwy::PopCount(neg));
+        delta -= 4 * (static_cast<int64_t>(hwy::PopCount(ma & neg)) + hwy::PopCount(mb & neg));
+        delta += 4 * static_cast<int64_t>(hwy::PopCount(both));
+        delta -= 8 * static_cast<int64_t>(hwy::PopCount(both & neg));
+        total += tail + delta;
+    }
     return static_cast<float>(total) * 0.25f;
 #endif
 }
+
+#if HWY_TARGET != HWY_SCALAR
+// The last partial vector of 4-bit codes, n bytes. Kept out of line so the full-vector loop
+// compiles as before. LoadN zero-fills the lanes past the code; a zero byte decodes to two
+// (+1)*(+1) products, which are subtracted.
+HWY_NOINLINE int64_t AshFourBitPartial(const uint8_t *a, const uint8_t *b, size_t n) {
+    const hn::ScalableTag<int32_t> di;
+    const hn::Repartition<uint8_t, decltype(di)> db;
+    const hn::RebindToSigned<decltype(db)> ds;
+    const auto av = hn::LoadN(db, a, n), bv = hn::LoadN(db, b, n);
+    auto sum = hn::Zero(di);
+    for (int shift = 0; shift < 8; shift += 4) {
+        const auto ax = hn::ShiftRightSame(av, shift), bx = hn::ShiftRightSame(bv, shift);
+        const auto am = hn::Add(hn::ShiftLeft<1>(hn::And(ax, hn::Set(db, 7))), hn::Set(db, 1));
+        const auto bm = hn::BitCast(ds, hn::Add(hn::ShiftLeft<1>(hn::And(bx, hn::Set(db, 7))), hn::Set(db, 1)));
+        const auto sameSign = hn::Eq(hn::And(hn::Xor(ax, bx), hn::Set(db, 8)), hn::Zero(db));
+        const auto signedB = hn::IfThenElse(hn::RebindMask(ds, sameSign), bm, hn::Neg(bm));
+        sum = hn::SumOfMulQuadAccumulate(di, am, signedB, sum);
+    }
+    return hn::ReduceSum(di, sum) - 2 * static_cast<int64_t>(hn::Lanes(db) - n);
+}
+#endif
 
 HWY_INLINE float AshFourBitPair(const uint8_t *a, const uint8_t *b, int dimensions) {
     int64_t total = 0;
@@ -104,6 +144,10 @@ HWY_INLINE float AshFourBitPair(const uint8_t *a, const uint8_t *b, int dimensio
             sum = hn::SumOfMulQuadAccumulate(di, am, signedB, sum);
         }
         total += hn::ReduceSum(di, sum);
+    }
+    if (offset < bytes) {
+        total += AshFourBitPartial(a + offset, b + offset, bytes - offset);
+        offset = bytes;
     }
     j = static_cast<int>(2 * offset);
 #endif

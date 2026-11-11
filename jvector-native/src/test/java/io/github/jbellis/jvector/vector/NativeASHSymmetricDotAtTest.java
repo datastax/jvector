@@ -58,6 +58,33 @@ class NativeASHSymmetricDotAtTest {
         }
     }
 
+    /** Every dimension count, including partial words and vectors, must equal a per-dimension decode. */
+    @Test
+    void codesMatchPerDimensionReference() {
+        Random random = new Random(20261111);
+        for (int bits : new int[]{2, 4}) {
+            for (int dimensions = 1; dimensions <= 400; dimensions++) {
+                int bytes = (dimensions * bits + 7) / 8;
+                byte[] a = new byte[bytes], b = new byte[bytes];
+                // Random padding bits as well: the kernels must ignore them.
+                random.nextBytes(a); random.nextBytes(b);
+                long doubled = 0;
+                for (int j = 0; j < dimensions; j++) doubled += (long) component(a, j, bits) * component(b, j, bits);
+                assertEquals(doubled * 0.25f, NativeASHSymmetricKernels.dot(null, a, null, b, dimensions, bits), 0f,
+                        "bits=" + bits + " d=" + dimensions);
+            }
+        }
+    }
+
+    /** Doubled signed-magnitude component j: the sign is the field's high bit, the magnitude its low bits. */
+    private static int component(byte[] code, int j, int bits) {
+        int perByte = 8 / bits;
+        int field = (code[j / perByte] & 0xFF) >>> ((j % perByte) * bits);
+        int sign = 1 << (bits - 1);
+        int magnitude = 2 * (field & (sign - 1)) + 1;
+        return (field & sign) != 0 ? magnitude : -magnitude;
+    }
+
     @Test
     void offsetSignWordsMatchStandaloneSignWords() {
         Random random = new Random(20261109);
