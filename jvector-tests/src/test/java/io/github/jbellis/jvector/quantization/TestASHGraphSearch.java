@@ -60,8 +60,12 @@ public class TestASHGraphSearch {
                 @Override public List<Integer> maxDegrees() { return List.of(16, 0); }
                 @Override public int getDimension() { return 64; }
             };
-            boolean simd = provider.getVectorUtilSupport().supportsAshLutScoring();
+            var backend = provider.getVectorUtilSupport();
             for (int bits : new int[]{1, 2, 3, 4, 9}) {
+                // Forced SIMD must be available for this code format: offset-binary codes (3 and 5-9 bits)
+                // also need canonical LUT scoring, which only some backends provide.
+                boolean simd = backend.supportsAshLutScoring()
+                        && (!AsymmetricHashing.usesOffsetBinaryCode(bits) || backend.supportsAshCanonicalLutScoring());
                 var ash = AsymmetricHashing.initialize(values, AsymmetricHashing.RANDOM,
                         AsymmetricHashing.HEADER_BITS + 33 * bits, 1, bits);
                 var encoded = ash.encodeAll(values, ForkJoinPool.commonPool());
