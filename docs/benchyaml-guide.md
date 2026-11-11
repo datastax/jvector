@@ -92,7 +92,7 @@ Place `queryExecution` and `maxBatchSize` in that map on an ASH **search** entry
 
 | Field | Values | Description |
 | --- | --- | --- |
-| `queryProjection` | `auto`, `fp32`, `fp16`, `int8` | Optional. `auto` is the default and selects FP16 where supported, with FP32 fallback. `fp32` selects FP32 projection. `fp16` and `int8` require their selected paths. The mode applies to ASH search and asymmetric construction scoring. Explicit ASH settings in one JVM must agree. Entries that omit it inherit the JVM mode, which defaults to `auto`. The `jvector.ash.queryProjection` JVM property overrides YAML. |
+| `queryProjection` | `auto`, `fp32`, `fp16`, `int8` | Optional. `auto` is the default and selects INT8 where an integer dot-product backend exists, then FP16 where supported, with FP32 fallback. `fp32` selects FP32 projection. `fp16` and `int8` require their selected paths. The mode applies to ASH search and asymmetric construction scoring. Explicit ASH settings in one JVM must agree. Entries that omit it inherit the JVM mode, which defaults to `auto`. The `jvector.ash.queryProjection` JVM property overrides YAML. |
 | `queryExecution` | `direct`, `queued` | `direct` runs searches on the calling threads. `queued` sends searches to workers and batches query preparation when supported. Defaults to `direct`. |
 | `maxBatchSize` | Positive integer | Caps the number of queries prepared together in queued mode. Defaults to 8. The value must fit the executor limits at the selected worker count. |
 

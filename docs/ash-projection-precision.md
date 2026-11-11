@@ -11,12 +11,12 @@ on your data before deploying FP16 or INT8.
 
 | Processor family | Setting | Why |
 |---|---|---|
-| Intel Xeon Cascade Lake, Cooper Lake, Ice Lake | `int8` | Fast integer projection; the required FP16 path is unavailable. |
-| Intel Xeon Sapphire Rapids, Emerald Rapids, Granite Rapids | `fp16` | Fast FP16 projection with less quantization than INT8. |
-| Intel Xeon Sierra Forest | `int8` | Integer acceleration is the useful low-precision path. |
-| AMD Zen 4 and Zen 5: EPYC, Ryzen, Threadripper | `int8` | VNNI integer acceleration; these CPUs lack the FP16 instructions required by this backend. |
-| Older Intel Xeon and AMD Zen 1–3 | `fp32` | Use the established FP32 path. |
-| Arm Neoverse / AWS Graviton and Apple Silicon | `fp32` | Use the established supported path for this release. |
+| Intel Xeon Cascade Lake, Cooper Lake, Ice Lake | `auto` (INT8) | Fast integer projection with 256-bit tiles; the required FP16 path is unavailable. |
+| Intel Xeon Sapphire Rapids, Emerald Rapids, Granite Rapids | `auto` (INT8) | INT8 with 512-bit tiles is faster than AMX FP16; use `fp16` where recall at low overquery matters more. |
+| Intel Xeon Sierra Forest | `auto` (INT8) | Integer acceleration (AVX-VNNI through oneDNN) is the useful low-precision path. |
+| AMD Zen 4 and Zen 5: EPYC, Ryzen, Threadripper | `auto` (INT8) | AVX-512 VNNI integer acceleration; these CPUs lack the FP16 instructions required by this backend. |
+| Older Intel Xeon and AMD Zen 1–3 | `auto` (FP32) | Without VNNI or FP16 support, `auto` keeps the established FP32 path. |
+| Arm Neoverse / AWS Graviton and Apple Silicon | `auto` (FP32) | The established supported path for this release. |
 
 For query throughput and latency on Intel Ice Lake:
 
@@ -30,15 +30,22 @@ Set `jvector.ash.queryProjection` before the model's first query use:
 
 | Setting | Behavior |
 |---|---|
-| `auto` (default) | Try optimized FP16; retain the existing FP32 fallback if FP16 is unavailable or outside its supported range. Never select INT8 automatically. |
+| `auto` (default) | Use INT8 where an integer dot-product backend is available (x86 VNNI or AMX); otherwise try optimized FP16, with the existing FP32 fallback if FP16 is unavailable or outside its supported range. |
 | `fp32` | Use the existing FP32 projection. |
 | `fp16` | Require optimized FP16 projection with FP32 accumulation and output. Report an error if unavailable or outside the supported range. |
 | `int8` | Require optimized INT8 projection with signed 32-bit integer accumulation and FP32 output. Report an error if unavailable; never silently substitute FP16 or FP32. |
 
-`auto` preserves the existing precision policy. It does not promise to select
-the fastest precision. INT8 remains an explicit accuracy/performance choice.
+`auto` selects INT8 first because it was the fastest projection on every CPU
+measured: 1.03-1.10x FP16 on an AMX CPU and 1.2-1.5x FP32 on Ice Lake class CPUs,
+across nine 1M datasets. The query is quantized to two INT8 digits with one scale:
+a coarse digit and its rounding remainder, times 254. Nearly all INT8 projection
+error came from rounding the query; with the second digit, exhaustive recall
+matches FP32 projection, while the matrix keeps one INT8 digit per row.
 
-oneDNN chooses the CPU implementation within the selected precision at runtime.
+On AVX-512 VNNI CPUs, INT8 uses JVector's exact-integer tile kernel for single queries
+and batches: 512-bit tiles on CPUs with AMX, and 256-bit tiles otherwise, where wide
+integer dot products slow the graph search that follows. oneDNN serves INT8 on other
+CPUs and chooses the CPU implementation within FP16 at runtime.
 Explicit FP16 and INT8 settings fail clearly if the required backend is unavailable, including
 when a virtual machine does not expose the needed hardware features.
 
@@ -56,7 +63,7 @@ The default is `auto`. Use one projection mode per JVM.
 
 - `ash_query_projection_requested`: the selected setting after JVM/YAML precedence.
 - `ash_query_projection_effective`: the prepared projection's actual precision.
-  `auto` can resolve to `fp16` or `fp32`; `fp16+fp32` means the automatic FP16
+  `auto` can resolve to `int8`, `fp16` or `fp32`; `fp16+fp32` means the automatic FP16
   view has used its FP32 range fallback.
 
 The columns are blank for non-ASH cases. Effective precision is blank if no

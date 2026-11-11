@@ -75,15 +75,23 @@ class NativeASHInt8ProjectionTest {
         return Math.max(-127, Math.min(127, (int) Math.rint(value / scale)));
     }
 
+    // The query is two INT8 digits: value / scale ~ coarse + fine / 254, with fine the coarse remainder.
+    private static int fine(float value, float scale) {
+        return Math.max(-127, Math.min(127, (int) Math.rint((value / scale - code(value, scale)) * 254f)));
+    }
+
     private static float[] oracle(float[][] matrix, float[] query) {
         float queryScale = scale(query);
         float[] out = new float[matrix.length];
         for (int row = 0; row < matrix.length; row++) {
             float weightScale = scale(matrix[row]);
-            long sum = 0;
-            for (int column = 0; column < query.length; column++)
-                sum += (long) code(query[column], queryScale) * code(matrix[row][column], weightScale);
-            out[row] = (float) sum * queryScale * weightScale;
+            long coarse = 0, fine = 0;
+            for (int column = 0; column < query.length; column++) {
+                int weight = code(matrix[row][column], weightScale);
+                coarse += (long) code(query[column], queryScale) * weight;
+                fine += (long) fine(query[column], queryScale) * weight;
+            }
+            out[row] = ((float) coarse + (float) fine * (1.0f / 254.0f)) * queryScale * weightScale;
         }
         return out;
     }
@@ -117,7 +125,7 @@ class NativeASHInt8ProjectionTest {
     }
 
     @Test
-    void halfStepsUseNearestEvenForQueriesAndWeights() {
+    void halfStepWeightsUseNearestEvenAndQueryHalfStepsAreExact() {
         float[] ties = {.5f, 1.5f, 2.5f, 3.5f, -.5f, -1.5f, -2.5f, -3.5f};
         float[] expected = {0, 2, 2, 4, 0, -2, -2, -4};
         float[][] weights = new float[32][64];
@@ -132,9 +140,11 @@ class NativeASHInt8ProjectionTest {
         var projection = prepare(weights);
         float[] output = new float[32];
         projection.project(query, output);
+        // The query's fine digit carries each half step (127 / 254), so queries are exact; weights still
+        // round half steps to the nearest even code.
         for (int row = 0; row < ties.length; row++) {
-            assertEquals(127f * expected[row], output[row]);
-            assertEquals(expected[row] * expected[row], output[row + 8]);
+            assertEquals(127f * ties[row], output[row], 1e-4f);
+            assertEquals(ties[row] * expected[row], output[row + 8], 1e-4f);
         }
         assertArrayEquals(oracle(weights, query), output);
     }
@@ -297,8 +307,9 @@ class NativeASHInt8ProjectionTest {
             assertArrayEquals(before, after);
             System.setProperty(PROPERTY, "fp32");
             assertSame(original, original.forQueryScoring());
+            // auto prefers INT8 wherever this backend is available.
             System.setProperty(PROPERTY, "auto");
-            assertFalse(original.forQueryScoring() instanceof NativeASHInt8Projection);
+            assertInstanceOf(NativeASHInt8Projection.class, original.forQueryScoring());
         } finally {
             if (saved == null) System.clearProperty(PROPERTY); else System.setProperty(PROPERTY, saved);
         }

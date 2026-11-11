@@ -130,7 +130,7 @@ not build them.
 
 | JVM property | Default | Optional values and definition |
 | --- | --- | --- |
-| `jvector.ash.queryProjection` | `auto` | `auto`: prefer optimized FP16, falling back to FP32. `fp32`: FP32. `fp16`: require optimized FP16 with FP32 accumulation/output. `int8`: require INT8 projection with integer accumulation and FP32 output. Explicit unsupported precisions fail; `auto` never selects INT8. |
+| `jvector.ash.queryProjection` | `auto` | `auto`: prefer INT8 where an integer dot-product backend exists, then optimized FP16, falling back to FP32. `fp32`: FP32. `fp16`: require optimized FP16 with FP32 accumulation/output. `int8`: require INT8 projection with integer accumulation and FP32 output. Explicit unsupported precisions fail; `auto` never selects INT8. |
 | `jvector.ash.singleKernel` | `auto` | `auto`, `scalar`, `simd`; single-vector ASH scoring kernels, subject to provider/format support. |
 | `jvector.ash.blockKernel` | `auto` | `auto`, `scalar`, `simd`; blocked/fused ASH scoring kernels, subject to provider/format support. |
 | `jvector.ash.queryBatchSize` | `8` | Positive integer below `Integer.MAX_VALUE`; maximum opportunistic batch for model-owned synchronous query preparation. Separate from the queued batch limit below. |

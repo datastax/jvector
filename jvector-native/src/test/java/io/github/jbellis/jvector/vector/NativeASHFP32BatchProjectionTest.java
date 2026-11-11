@@ -101,14 +101,21 @@ class NativeASHFP32BatchProjectionTest {
             assertSame(projection, projection.forQueryScoring());
             assertEquals(bytes, projection.ramBytesUsed());
             System.setProperty("jvector.ash.queryProjection", "auto");
-            // Finite FP32 weights outside FP16 range force the automatic FP32 fallback.
             var fullRange = prepared(new float[][]{{70000f}});
-            assertSame(fullRange, fullRange.forQueryScoring());
+            var automatic = fullRange.forQueryScoring();
             float[] out = new float[1];
-            fullRange.forQueryScoring().project(new float[]{2f}, out);
-            assertEquals(140000f, out[0]);
-            assertEquals(Float.BYTES + RamUsageEstimator.shallowSizeOfInstance(NativeASHProjection.class),
-                    fullRange.ramBytesUsed());
+            automatic.project(new float[]{2f}, out);
+            if (automatic instanceof NativeASHInt8Projection) {
+                // auto prefers INT8 where available; a one-column operand is exact in INT8.
+                assertEquals(140000f, out[0], 140000f * 1e-6f);
+            } else {
+                // Without INT8, finite FP32 weights outside FP16 range force the automatic FP32 fallback,
+                // which keeps the owning view's identity and charges the matrix once.
+                assertSame(fullRange, automatic);
+                assertEquals(140000f, out[0]);
+                assertEquals(Float.BYTES + RamUsageEstimator.shallowSizeOfInstance(NativeASHProjection.class),
+                        fullRange.ramBytesUsed());
+            }
         } finally {
             if (previous == null) System.clearProperty("jvector.ash.queryProjection");
             else System.setProperty("jvector.ash.queryProjection", previous);

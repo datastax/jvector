@@ -161,7 +161,8 @@ class NativeASHFP16ProjectionTest {
         assertThrows(IllegalArgumentException.class, () -> projection.projectBatch(inputs, outputs, 2));
         for (float[] out : outputs) assertArrayEquals(new float[]{42,42}, out);
         inputs[1][1] = 70000f;
-        var automatic = view(new NativeASHProjection(matrix), "auto");
+        // Automatic FP16 (auto's choice where INT8 is unavailable) falls back to FP32 out of range.
+        var automatic = new NativeASHProjection(matrix).fp16WithFallback();
         automatic.projectBatch(inputs, outputs, 2);
         checkOracle(matrix, inputs[0], outputs[0], true);
         checkOracle(matrix, inputs[1], outputs[1], false);
@@ -314,12 +315,13 @@ class NativeASHFP16ProjectionTest {
     }
 
     @Test
-    void defaultPrefersFp16ButFp32AndAutomaticRangeFallbackRemainAvailable() {
+    void automaticFp16PrefersFp16ButFp32AndRangeFallbackRemainAvailable() {
         var original = new NativeASHProjection(new float[][]{{.25f, -.5f}});
         assertSame(original, view(original, "fp32"));
         var explicit = required(original);
         assertInstanceOf(NativeASHFP16Projection.class, explicit);
-        var automatic = view(original, null);
+        // auto selects INT8 first where available; its FP16 choice keeps the FP32 range fallback.
+        var automatic = original.fp16WithFallback();
         assertInstanceOf(NativeASHFP16Projection.class, automatic);
         assertEquals("fp16", automatic.operandPrecision());
         float[] query = {70000, 2}, out = new float[1], expected = new float[1];
@@ -328,7 +330,7 @@ class NativeASHFP16ProjectionTest {
         assertArrayEquals(expected, out);
         assertEquals("fp16+fp32", automatic.operandPrecision());
         var largeMatrix = new NativeASHProjection(new float[][]{{70000}});
-        assertSame(largeMatrix, view(largeMatrix, "auto"));
+        assertSame(largeMatrix, largeMatrix.fp16WithFallback());
         assertThrows(IllegalArgumentException.class, () -> view(largeMatrix, "fp16"));
         assertThrows(IllegalArgumentException.class, () -> view(original, "typo"));
     }

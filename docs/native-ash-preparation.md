@@ -215,8 +215,8 @@ controls were introduced. The library's existing `encodeAll()` bound remains 32.
 The sequential-runtime build assertion prevents nested oneDNN thread pools.
 
 Single-vector `encode()` retains Highway FP32 projection. The wrapper delegates
-query precision selection to the same original projection: FP16 queries remain
-FP16 in automatic/required modes, with their existing FP32 fallback. Database
+query precision selection to the same original projection: automatic mode prefers
+INT8, then FP16 with its existing FP32 fallback. Database
 encoding never converts to FP16. Code selection and landmark correction stay in
 Java.
 
@@ -232,9 +232,9 @@ operations.
 
 BLAS kernels can use different FP32 reduction orders for different batch shapes.
 The 9-bit reconstruction check therefore uses its existing per-component code
-step error bound for worker/batch comparisons as well as singleton comparisons;
-sign bits, offsets and the full 1/2/3/4-bit code/header checks remain exact in
-those tests. Separate tests compare oneDNN output to a double-precision oracle,
+step error bound for worker/batch comparisons as well as singleton comparisons,
+and compares the code-independent centered offset within FP16 rounding; the full
+1/2/3/4-bit code/header checks remain exact in those tests. Separate tests compare oneDNN output to a double-precision oracle,
 cover FP32 values outside FP16 precision/range, caller aliasing and invalid
 shapes, batch tails/counts above 32, immutable model copies and concurrent model
 switching. A direct ABI test requires successful oneDNN SGEMM, preventing a

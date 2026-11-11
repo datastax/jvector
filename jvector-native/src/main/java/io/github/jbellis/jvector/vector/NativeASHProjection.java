@@ -201,11 +201,22 @@ final class NativeASHProjection implements VectorUtilSupport.AshProjection {
         switch (mode) {
             case "fp32": return this;
             case "int8": return NativeASHInt8Projection.prepare(matrix, rows, columns);
-            case "auto": return NativeASHFP16Projection.prepare(matrix, rows, columns, this, false);
+            case "auto":
+                // INT8 where an integer dot-product backend exists, else FP16, else this FP32 projection.
+                try {
+                    return NativeASHInt8Projection.prepare(matrix, rows, columns);
+                } catch (UnsupportedOperationException unavailable) {
+                    return fp16WithFallback();
+                }
             case "fp16": return NativeASHFP16Projection.prepare(matrix, rows, columns, this, true);
             default: throw new IllegalArgumentException(
                     "jvector.ash.queryProjection must be auto, fp32, fp16 or int8: " + mode);
         }
+    }
+
+    /** Optimized FP16 where available and in range, else this FP32 projection: automatic mode's second choice. */
+    VectorUtilSupport.AshProjection fp16WithFallback() {
+        return NativeASHFP16Projection.prepare(matrix, rows, columns, this, false);
     }
 
     private void invoke(MethodHandle handle, MemorySegment query, MemorySegment out) {
