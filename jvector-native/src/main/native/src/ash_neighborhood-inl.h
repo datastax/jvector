@@ -28,8 +28,8 @@ constexpr size_t kAshHeaderBytesPerLane = 5;
 template <class D>
 HWY_INLINE hn::VFromD<D> AshLookup(D d, const float *lut, hn::VFromD<hn::Rebind<uint32_t, D>> indices) {
     const hn::Rebind<int32_t, D> di;
-#if !HWY_HAVE_SCALABLE
-    // On SVE, MaxLanes is only an upper bound on the runtime vector length.
+#if HWY_TARGET <= HWY_AVX3
+    // A register-wide 16-float permute is an AVX-512 instruction.
     if constexpr (hn::MaxLanes(d) == 16) {
         return hn::TableLookupLanes(hn::LoadU(d, lut), hn::IndicesFromVec(d, hn::BitCast(di, indices)));
     } else
@@ -176,7 +176,7 @@ int ash_score_neighborhood_c1_f32(const unsigned char *HWY_RESTRICT codes, const
     // Widen traversal arithmetic so the final base increment cannot overflow int.
     for (size_t base = 0; base < static_cast<size_t>(capacity); base += blockSize, codes += blockBytes) {
         const int count = std::min(blockSize, capacity - static_cast<int>(base));
-#if !HWY_HAVE_SCALABLE
+#if HWY_TARGET <= HWY_AVX3
         if constexpr (hn::MaxLanes(d) == 16) {
             if (blockSize == 32 && count == 32) {
                 int status = AshBlock32(d, codes, lut, groups, landmarkDot, out + base);

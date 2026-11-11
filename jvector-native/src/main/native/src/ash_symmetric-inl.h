@@ -46,12 +46,6 @@ HWY_INLINE float AshBinaryPair(const uint64_t *a, const uint64_t *b, int dimensi
 }
 
 HWY_INLINE float AshTwoBitPair(const uint8_t *a, const uint8_t *b, int dimensions) {
-#if HWY_TARGET == HWY_SCALAR
-    int64_t total = 0;
-    for (int j = 0; j < dimensions; ++j)
-        total += AshDoubledComponent(a, j, 2) * AshDoubledComponent(b, j, 2);
-    return static_cast<float>(total) * 0.25f;
-#else
     const hn::ScalableTag<uint64_t> d;
     const auto slots = hn::Set(d, uint64_t{0x5555555555555555});
     const size_t lanes = hn::Lanes(d), words = static_cast<size_t>(dimensions) / 32;
@@ -97,10 +91,8 @@ HWY_INLINE float AshTwoBitPair(const uint8_t *a, const uint8_t *b, int dimension
         total += tail + delta;
     }
     return static_cast<float>(total) * 0.25f;
-#endif
 }
 
-#if HWY_TARGET != HWY_SCALAR
 // The last partial vector of 4-bit codes, n bytes. Kept out of line so the full-vector loop
 // compiles as before. LoadN zero-fills the lanes past the code; a zero byte decodes to two
 // (+1)*(+1) products, which are subtracted.
@@ -120,12 +112,9 @@ HWY_NOINLINE int64_t AshFourBitPartial(const uint8_t *a, const uint8_t *b, size_
     }
     return hn::ReduceSum(di, sum) - 2 * static_cast<int64_t>(hn::Lanes(db) - n);
 }
-#endif
 
 HWY_INLINE float AshFourBitPair(const uint8_t *a, const uint8_t *b, int dimensions) {
     int64_t total = 0;
-    int j = 0;
-#if HWY_TARGET != HWY_SCALAR
     const hn::ScalableTag<int32_t> di;
     const hn::Repartition<uint8_t, decltype(di)> db;
     const hn::RebindToSigned<decltype(db)> ds;
@@ -149,9 +138,7 @@ HWY_INLINE float AshFourBitPair(const uint8_t *a, const uint8_t *b, int dimensio
         total += AshFourBitPartial(a + offset, b + offset, bytes - offset);
         offset = bytes;
     }
-    j = static_cast<int>(2 * offset);
-#endif
-    for (; j < dimensions; ++j) total += AshDoubledComponent(a, j, 4) * AshDoubledComponent(b, j, 4);
+    for (int j = static_cast<int>(2 * offset); j < dimensions; ++j) total += AshDoubledComponent(a, j, 4) * AshDoubledComponent(b, j, 4);
     return static_cast<float>(total) * 0.25f;
 }
 } // namespace
@@ -181,7 +168,7 @@ void ash_symmetric_lut_i16(const uint8_t *HWY_RESTRICT codes, const int16_t *HWY
             for (int g = first; g < end; ++g) {
                 auto packed = hn::PromoteTo(d, hn::LoadN(db, codes + static_cast<size_t>(g / 2) * stride + lane + base, active));
                 const auto indices = hn::And(hn::ShiftRightSame(packed, 4 * (g & 1)), hn::Set(d, 15));
-#if !HWY_HAVE_SCALABLE
+#if HWY_TARGET <= HWY_AVX3
                 if constexpr (hn::MaxLanes(d) == 16) {
                     const auto table = hn::PromoteTo(d, hn::LoadU(ds, lut + static_cast<size_t>(g) * 32));
                     sum = hn::Add(sum, hn::TableLookupLanes(table, hn::IndicesFromVec(d, indices)));
