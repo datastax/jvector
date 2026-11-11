@@ -53,6 +53,32 @@ for (int i = 0; i < source.size(); i++) {
 }
 ```
 
+### Compacting into several outputs (sharding)
+
+A compaction that splits its output, such as one writing each token range to its own file, can run as N separate compactions, one per output, each over all the sources with only that output's nodes marked live. That repeats per output what does not depend on the output: every one of them trains the codebooks again, on its own slice. A sharded compaction session does it once: the compactor is built over everything that may be written, and each shard is merged by its own `compactShard` call, with that shard's nodes as the live set. The codebooks are trained by the first shard that needs them, on the live nodes of every shard together, and reused by the rest.
+
+```java
+// liveNodes: the live nodes of ALL the shards together
+var compactor = new OnDiskGraphIndexCompactor(sources, liveNodes, VectorSimilarityFunction.COSINE, null);
+var session = compactor.sharded();
+
+// shardNLiveNodes: per source, the nodes of shard N, a subset of liveNodes
+List<OrdinalMapper> shard0 = session.compactShard(shard0LiveNodes, output0);   // shard0.get(s).oldToNew(n): ordinal of source s's node n in output0, or OMITTED
+List<OrdinalMapper> shard1 = session.compactShard(shard1LiveNodes, output1);   // every shard has its own mapping
+```
+
+Shards may become known one at a time (each output is closed as its rows arrive); the session does nothing until the first call. Sources that ship a compressed sidecar use the `compactShard` overload that also takes the compressed path. Each shard is otherwise an ordinary merge of its own nodes: its upper layers, cells, ordinals and merge store are its own, and its cost follows its node count. Since a shard holds a small part of every source, each source is sparse in it; see "Sparse sources" below.
+
+Measured on two 1M-node sources (1024 dimensions, cosine, degree 32) split into M shards by a hash of the row, total wall time and recall@10 over all shards (8 cores):
+
+| M | one compaction per shard, retained same-source edges only | one session, same-source join off | one session | rebuild of every shard |
+|---|---|---|---|---|
+| 4 | 454 s, 0.781 | | 566 s, 0.825 | 876 s, 0.836 |
+| 16 | 981 s, 0.823 | 300 s, 0.821 | 567 s, 0.894 | 946 s, 0.903 |
+| 64 | 1203 s, 0.875 | 335 s, 0.875 | 627 s, 0.945 | 886 s, 0.947 |
+
+Training once removes the growth with M (the two codebooks take 43 s once instead of about 14 s per shard at M = 64); the same-source join costs about as much again as the rest of the merge and brings the recall to within a point of a rebuild.
+
 ## Algorithm
 
 ### Ordinal assignment
@@ -83,6 +109,9 @@ searchTopK  = max(2,  ceil(degree / numSources) * 4)
 - *Level 0* uses pair-asymmetric cross-linking. Sources are processed smallest first, one source at a time. A node gathers candidates only from the sources **larger** than its own, through the **cell join**. Every candidate is also *offered back* to the node it found, with its exact score: since similarity is symmetric, the offer is exactly the candidate that node's own scan of the smaller source would have produced. Each node holds up to 16 offer slots, kept in a banded, spill-to-disk buffer so peak memory is independent of node count. When a source's turn comes, its nodes union the offers they received with their retained same-source edges and their own candidates before diversity selection. The largest source gathers nothing itself; a node of it that received no offers keeps its retained edges unchanged and skips selection entirely.
 - *Level L > 0*: the compactor first descends greedily from the source's entry point through each level above L (one `searchOneLayer` call with topK=1 per level, feeding the result into the next via `setEntryPointsFromPreviousLayer()`), then performs the full beam search at level L. This mirrors standard HNSW construction and gives a much better starting point than jumping directly to level L from the global entry node.
 
+
+**Sparse sources: the same-source join**\
+Step 1 keeps only the live neighbours, and nothing replaces the dead ones. That is the right economy while most of a source is live, since the source's own graph already holds its same-source edges. It fails when a source's live nodes are a minority, which is every source of a shard (a shard of M keeps 1/M of each) and any heavily deleted source: a node then keeps `degree × live fraction` of its same-source edges, and the output is close to bipartite between the sources. So a source with fewer than half of its nodes live is also searched for the node's own neighbours, exactly as another source is: at level 0 it is one more target of the cell walk (the largest source, which otherwise scans nothing, scans itself), at the upper levels and in merges without cells one more graph search. The node itself and the neighbours it retained are dropped from the result, and no reverse offers are made within a source, since every node of it runs the same scan.
 
 **3. Diversity selection** (Vamana-style)\
 Candidates are sorted by exact score (descending). The compactor selects up to `maxDegree` diverse neighbors using an adaptive alpha. At level 0 the pairwise comparisons between a candidate and the already-selected neighbours run on vectors decoded from the wide code (below), and the candidate's pruning threshold is recomputed against the node from the same decoded vector, so both sides of the inequality carry the same quantization bias; the ordering itself always uses the exact scores.
@@ -118,9 +147,9 @@ Processing is batched per source and run in parallel across sources using a `For
 
 ### Entry Node
 
-The entry node of the compacted graph is:
-1. The designated entry node of the first source that reaches the graph's max level, if it is live.
-2. Otherwise, the first live node found at the max level, scanning those sources in order.
+The output's max level is the highest level that still has a live node: a merged level that came out empty (a shard, or a heavily deleted source, can miss every node of the sources' top levels) is dropped. The entry node of the compacted graph is:
+1. The designated entry node of the first source that reaches the output's max level, if it is live.
+2. Otherwise, the first live node found at that level, scanning those sources in order.
 
 ## Benchmarking
 

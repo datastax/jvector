@@ -46,6 +46,7 @@ import io.github.jbellis.jvector.graph.similarity.ScoreFunction;
 import io.github.jbellis.jvector.vector.types.VectorFloat;
 import io.github.jbellis.jvector.quantization.CompressedVectors;
 import io.github.jbellis.jvector.quantization.ProductQuantization;
+import io.github.jbellis.jvector.quantization.VectorCompressor;
 import io.github.jbellis.jvector.vector.VectorizationProvider;
 import io.github.jbellis.jvector.vector.types.VectorTypeSupport;
 import io.github.jbellis.jvector.vector.types.ByteSequence;
@@ -130,7 +131,7 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
      * of every target. Callers read the mapping back via {@link #ordinalMappers()}.
      */
     private List<OrdinalMapper> remappers;
-    private final List<Integer> maxDegrees;
+    private List<Integer> maxDegrees;
 
     private final int dimension;
     private int maxOrdinal = -1;
@@ -244,6 +245,25 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
     // Whether the cell walk reads the store with direct I/O: null = decided by size (see walkReadsDirect).
     private Boolean walkDirectSetting;
     private Boolean walkDirect;               // the decision, made once per compaction
+
+    // ---- Sparse sources: the same-source join ----
+    // A node keeps only its LIVE same-source edges. When most of a source is live that is nearly all
+    // of them; when a source's live nodes are a minority (a shard of a sharded compaction keeps 1/M
+    // of every source, a heavily deleted source keeps little) most of a node's edges point at dead
+    // nodes and nothing replaced them: measured on 2 x 1M vectors split into 64 shards, a node kept
+    // 0.5 of its 32 same-source edges and the output was nearly bipartite between the sources. Below
+    // this live fraction a source is therefore searched for its own nodes like any other source: at
+    // level 0 it is one more target of the cell walk, elsewhere one more graph search.
+    private static final float DEFAULT_SAME_SOURCE_JOIN_BELOW = 0.5f;
+    private float sameSourceJoinBelow = DEFAULT_SAME_SOURCE_JOIN_BELOW;
+
+    // Sharded compaction: what is trained once for every shard. Null for an ordinary compaction.
+    private SharedTraining shared;
+
+    /** Whether so few of source {@code s}'s nodes are live that its own nodes are joined like another source's. */
+    private boolean sparseSource(int s) {
+        return numLiveNodesPerSource.get(s) < (double) sameSourceJoinBelow * sources.get(s).size(0);
+    }
     /**
      * Constructs a new OnDiskGraphIndexCompactor for graphs without a non-fused compressed sidecar.
      * Equivalent to calling the 6-arg constructor with {@code sourceCompressed = null}.
@@ -392,6 +412,18 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
     }
 
     /**
+     * Sets the live fraction below which a source's own nodes are joined like another source's: a
+     * node of such a source gathers same-source candidates beyond the edges it retained, because
+     * most of those edges point at dead nodes. The default is one half; 0 never joins a source with
+     * itself, 1 always does (as long as any of its nodes is dead).
+     */
+    OnDiskGraphIndexCompactor withSameSourceJoinBelow(float liveFraction) {
+        if (!(liveFraction >= 0f && liveFraction <= 1f)) throw new IllegalArgumentException("liveFraction must be in [0, 1]");
+        this.sameSourceJoinBelow = liveFraction;
+        return this;
+    }
+
+    /**
      * Validates that all source indexes have compatible configurations and required features
      * before attempting compaction. Ensures consistent dimensions, max degrees, hierarchical
      * settings, and feature sets across all sources.
@@ -533,6 +565,149 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
         return remappers;
     }
 
+    // ---- Sharded compaction: N sources into M outputs ----
+
+    /**
+     * What a sharded compaction does once for all of its shards: the codebooks, trained on the live
+     * nodes of every shard together. It belongs to the compactor {@link #sharded()} was called on,
+     * whose live nodes are those of all the shards; each shard's merge adopts the results instead
+     * of training on its own slice. Training is deferred to the first shard that needs it.
+     */
+    private final class SharedTraining {
+        final Once<VectorCompressor<?>> inline = new Once<>("inline compressor", () -> trainedCompressor(detectInlineStrategy()));
+        final Once<VectorCompressor<?>> sidecar = new Once<>("sidecar compressor", () -> trainedCompressor(detectSidecarStrategy()));
+        final Once<ProductQuantization> wide = new Once<>("wide code", OnDiskGraphIndexCompactor.this::trainWide);
+
+        private VectorCompressor<?> trainedCompressor(QuantizationCompactionStrategy strategy) {
+            strategy.retrain(similarityFunction);
+            return strategy.compressor();
+        }
+    }
+
+    /** A value computed by the first {@link #get} and shared by the rest. */
+    private static final class Once<T> {
+        private final String what;
+        private final java.util.function.Supplier<T> compute;
+        private boolean done;
+        private T value;
+
+        Once(String what, java.util.function.Supplier<T> compute) {
+            this.what = what;
+            this.compute = compute;
+        }
+
+        synchronized T get() {
+            if (!done) {
+                long t0 = System.nanoTime();
+                value = compute.get();
+                done = true;
+                if (value != null) {
+                    log.info("Sharded compaction: {} trained once for every shard in {} ms", what, (System.nanoTime() - t0) / 1_000_000);
+                }
+            }
+            return value;
+        }
+    }
+
+    /** Trains the strategy's compressor, or hands it the one a sharded compaction already trained. */
+    private void train(QuantizationCompactionStrategy strategy, boolean sidecar) {
+        if (shared == null) {
+            strategy.retrain(similarityFunction);
+        } else {
+            strategy.adoptCompressor((sidecar ? shared.sidecar : shared.inline).get());
+        }
+    }
+
+    /** The wide diversity code (see {@link #wideSubspaces}), trained on the live nodes. */
+    private ProductQuantization trainWide() {
+        return new PQRetrainer(sources, liveNodes, dimension).train(wideSubspaces());
+    }
+
+    /**
+     * A compaction of this compactor's sources into several outputs, one {@link #compactShard} call
+     * per output. What does not depend on the shard is done once and shared: the codebooks are
+     * trained on the live nodes this compactor was built with (those of every shard) and each
+     * shard's merge adopts them. A shard's merge is otherwise an ordinary compaction whose live
+     * nodes are the shard's, and it finds a node's same-source neighbours again, since most of
+     * the edges a node had in its source lead to nodes of other shards
+     * (see {@link #withSameSourceJoinBelow}).
+     * <p>
+     * Shards may become known one at a time, as when each output is written as its rows arrive:
+     * nothing is done until the first {@link #compactShard}. Shards are compacted one at a time;
+     * a session is not thread-safe.
+     */
+    @Experimental
+    public final class ShardedCompaction {
+        private final SharedTraining training = new SharedTraining();
+        private int shardsCompacted;
+
+        private ShardedCompaction() {
+        }
+
+        /**
+         * Merges one shard into {@code graphPath}.
+         *
+         * @param shardLiveNodes per source, the nodes of this shard: a subset of the live nodes the
+         *                       compactor was built with, in bitsets of the same lengths
+         * @return the output ordinal of every source node in this shard, one mapper per source:
+         *         {@code oldToNew} of a node of the shard is its ordinal in {@code graphPath}, of
+         *         any other node {@link OrdinalMapper#OMITTED}. Every shard has its own mapping.
+         */
+        public List<OrdinalMapper> compactShard(List<FixedBitSet> shardLiveNodes, Path graphPath) throws FileNotFoundException {
+            return compactShard(shardLiveNodes, graphPath, null);
+        }
+
+        /**
+         * Merges one shard of sources that ship a compressed sidecar: the graph into
+         * {@code graphPath}, the merged compressed vectors into {@code compressedPath}.
+         */
+        public List<OrdinalMapper> compactShard(List<FixedBitSet> shardLiveNodes, Path graphPath, Path compressedPath) throws FileNotFoundException {
+            OnDiskGraphIndexCompactor shard = shardCompactor(shardLiveNodes);
+            if (compressedPath == null) {
+                shard.compact(graphPath);
+            } else {
+                shard.compact(graphPath, compressedPath);
+            }
+            return shard.ordinalMappers();
+        }
+
+        private OnDiskGraphIndexCompactor shardCompactor(List<FixedBitSet> shardLiveNodes) {
+            Objects.requireNonNull(shardLiveNodes, "shardLiveNodes");
+            if (shardLiveNodes.size() != sources.size()) {
+                throw new IllegalArgumentException("shardLiveNodes must have one bitset per source");
+            }
+            for (int s = 0; s < sources.size(); s++) {
+                FixedBitSet all = liveNodes.get(s), mine = shardLiveNodes.get(s);
+                if (mine.length() != all.length()) {
+                    throw new IllegalArgumentException("source " + s + ": shard bitset length " + mine.length() + " != " + all.length());
+                }
+                for (int n = mine.nextSetBit(0); n != DocIdSetIterator.NO_MORE_DOCS; n = n + 1 < mine.length() ? mine.nextSetBit(n + 1) : DocIdSetIterator.NO_MORE_DOCS) {
+                    if (!all.get(n)) {
+                        throw new IllegalArgumentException("source " + s + " node " + n + " is in the shard but not live in the compaction");
+                    }
+                }
+            }
+            OnDiskGraphIndexCompactor shard = new OnDiskGraphIndexCompactor(sources, sourceCompressed, shardLiveNodes, similarityFunction, executor);
+            shard.shared = training;
+            shard.walkPairBytes = walkPairBytes;
+            shard.walkQueryBytes = walkQueryBytes;
+            shard.recordAnnounceAhead = recordAnnounceAhead;
+            shard.walkDirectSetting = walkDirectSetting;
+            shard.sameSourceJoinBelow = sameSourceJoinBelow;
+            log.info("Sharded compaction: shard {} with {} live nodes", shardsCompacted++, shard.numTotalNodes);
+            return shard;
+        }
+    }
+
+    /**
+     * Opens a sharded compaction of this compactor's sources; see {@link ShardedCompaction}. The
+     * live nodes this compactor was built with must be those of every shard together.
+     */
+    @Experimental
+    public ShardedCompaction sharded() {
+        return new ShardedCompaction();
+    }
+
     /**
      * Main compaction entry point. Merges all source indexes into a single output index at the
      * specified path, handling PQ retraining if needed, and writing header, all layers, and footer.
@@ -584,7 +759,7 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
         QuantizationCompactionStrategy sidecarStrategy = detectSidecarStrategy();
         QuantizationCompactionStrategy scratch = SidecarCompactionStrategy.scratchVectors(buildContext());
         try {
-            sidecarStrategy.retrain(similarityFunction);
+            train(sidecarStrategy, true);
             scratch.retrain(similarityFunction);
             activeSidecarStrategy = sidecarStrategy;
             vectorStore = scratch;
@@ -693,7 +868,7 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
      */
     private void compactGraphImpl(Path outputPath, QuantizationCompactionStrategy strategy) throws FileNotFoundException {
         this.spillParent = outputPath.toAbsolutePath().getParent();
-        strategy.retrain(similarityFunction);
+        train(strategy, false);
 
         boolean fusedPQEnabled = strategy.writesCodesInline();
         ProductQuantization pq = strategy.compressorAsPQ();
@@ -719,7 +894,7 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
         if (cellMap != null) {
             log.info("Level-0 candidates are scanned and scored on the vectors themselves ({} B per node in scratch)",
                      4 * dimension);
-            pqWide = new PQRetrainer(sources, liveNodes, dimension).train(wideSubspaces());
+            pqWide = shared != null ? shared.wide.get() : trainWide();
             if (pqWide != null) {
                 vectorStore.setSecondaryCompressor(pqWide);
                 log.info("Diversity comparisons use a {}-subspace wide code ({} B per node); every candidate score stays exact",
@@ -781,14 +956,14 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
      * across all sources.
      */
     private int[] resolveEntryNodeSource() {
-        int maxLevel = sources.stream().mapToInt(OnDiskGraphIndex::getMaxLevel).max().orElse(0);
+        int maxLevel = maxDegrees.size() - 1;
 
         // The on-disk format sets entryNode.level = layerInfo.size() - 1 (i.e. maxLevel).
         // So the chosen node must actually have neighbors written at maxLevel — meaning it
         // must exist at maxLevel in its source.  Prefer the designated entry node of a
         // maxLevel source; fall back to any live node that is at maxLevel.
         for (int s = 0; s < sources.size(); s++) {
-            if (sources.get(s).getMaxLevel() == maxLevel) {
+            if (sources.get(s).getMaxLevel() >= maxLevel) {
                 int originalEntry = sources.get(s).getView().entryNode().node;
                 if (liveNodes.get(s).get(originalEntry)) {
                     return new int[]{s, originalEntry};
@@ -823,17 +998,8 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
                                  ProductQuantization pq)
             throws IOException, ExecutionException, InterruptedException {
 
-        int maxUpperDegree = 0;
-        for (int level = 1; level < maxDegrees.size(); level++) {
-            maxUpperDegree = Math.max(maxUpperDegree, maxDegrees.get(level));
-        }
-
-        int baseSearchTopK = Math.max(MIN_SEARCH_TOP_K, ((maxDegrees.get(0) + sources.size() - 1) / sources.size()) * SEARCH_TOP_K_MULTIPLIER);
-        int baseMaxCandidateSize = baseSearchTopK * (sources.size() - 1) + maxDegrees.get(0) + REVERSE_CANDIDATE_SLOTS;
-        int upperMaxPerSourceTopK = maxUpperDegree == 0 ? 0 : Math.max(MIN_SEARCH_TOP_K, ((maxUpperDegree + sources.size() - 1) / sources.size()) * SEARCH_TOP_K_MULTIPLIER);
-        int upperMaxCandidateSize = upperMaxPerSourceTopK * sources.size();
-        int maxCandidateSize = Math.max(baseMaxCandidateSize, upperMaxCandidateSize);
-        int scratchDegree = Math.max(maxDegrees.get(0), Math.max(1, maxUpperDegree));
+        int maxCandidateSize = maxCandidateSize();
+        int scratchDegree = scratchDegree();
         // every worker's scratch is recorded so all of them, not only the calling thread's, are closed at the end
         final List<Scratch> openedScratch = Collections.synchronizedList(new ArrayList<>());
         final ThreadLocal<Scratch> threadLocalScratch = ThreadLocal.withInitial(() -> {
@@ -855,7 +1021,7 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
         }
 
         for (int level = 0; level < maxDegrees.size(); level++) {
-            int searchTopK = Math.max(MIN_SEARCH_TOP_K, ((maxDegrees.get(level) + sources.size() - 1) / sources.size()) * SEARCH_TOP_K_MULTIPLIER);
+            int searchTopK = searchTopK(maxDegrees.get(level));
             if (level == 0) log.info("Cross-link search budget: searchTopK={} per target", searchTopK);
 
             CompactionParams params = new CompactionParams(fusedPQEnabled, compressedPrecision, searchTopK, pq);
@@ -914,8 +1080,9 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
                     // completed before that source's own nodes read them.
                     for (int s : l0ProcessOrder) {
                         List<BatchSpec> batches = buildBatchesForSource(s, 0);
+                        // the largest source scans no other source, but a sparse one still scans itself
                         boolean walk = exactMode && cellMap != null && candidateStore != null
-                                && sizeRank[s] < sources.size() - 1 && !batches.isEmpty();
+                                && (sizeRank[s] < sources.size() - 1 || sparseSource(s)) && !batches.isEmpty();
                         if (!walk) {
                             runBatchesWithBackpressure(batches, ecs, submitOne, writeResults);
                             continue;
@@ -1141,14 +1308,35 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
     }
 
     private ThreadLocal<Scratch> newScratchLocal(ProductQuantization pq) {
+        int maxCandidateSize = maxCandidateSize(), scratchDegree = scratchDegree();
+        return ThreadLocal.withInitial(() -> new Scratch(maxCandidateSize, scratchDegree, dimension, sources, pq));
+    }
+
+    private int maxUpperDegree() {
         int maxUpperDegree = 0;
         for (int level = 1; level < maxDegrees.size(); level++) maxUpperDegree = Math.max(maxUpperDegree, maxDegrees.get(level));
-        int baseSearchTopK = Math.max(MIN_SEARCH_TOP_K, ((maxDegrees.get(0) + sources.size() - 1) / sources.size()) * SEARCH_TOP_K_MULTIPLIER);
-        int baseMaxCandidateSize = baseSearchTopK * (sources.size() - 1) + maxDegrees.get(0) + REVERSE_CANDIDATE_SLOTS;
-        int upperMaxPerSourceTopK = maxUpperDegree == 0 ? 0 : Math.max(MIN_SEARCH_TOP_K, ((maxUpperDegree + sources.size() - 1) / sources.size()) * SEARCH_TOP_K_MULTIPLIER);
-        int maxCandidateSize = Math.max(baseMaxCandidateSize, upperMaxPerSourceTopK * sources.size());
-        int scratchDegree = Math.max(maxDegrees.get(0), Math.max(1, maxUpperDegree));
-        return ThreadLocal.withInitial(() -> new Scratch(maxCandidateSize, scratchDegree, dimension, sources, pq));
+        return maxUpperDegree;
+    }
+
+    /** The search's top-K per source for a level of the given degree. */
+    private int searchTopK(int degree) {
+        return Math.max(MIN_SEARCH_TOP_K, ((degree + sources.size() - 1) / sources.size()) * SEARCH_TOP_K_MULTIPLIER);
+    }
+
+    /**
+     * The most candidates a node gathers at any level: every source can contribute a search's
+     * worth, the node's own included (the same-source join of a sparse source), on top of the edges
+     * it retained and, at level 0, the reverse candidates.
+     */
+    private int maxCandidateSize() {
+        int maxUpperDegree = maxUpperDegree();
+        int base = searchTopK(maxDegrees.get(0)) * sources.size() + maxDegrees.get(0) + REVERSE_CANDIDATE_SLOTS;
+        int upper = maxUpperDegree == 0 ? 0 : searchTopK(maxUpperDegree) * sources.size() + maxUpperDegree;
+        return Math.max(base, upper);
+    }
+
+    private int scratchDegree() {
+        return Math.max(maxDegrees.get(0), Math.max(1, maxUpperDegree()));
     }
 
     /**
@@ -1168,7 +1356,7 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
         List<Scratch> opened = Collections.synchronizedList(new ArrayList<>());
         for (int level = 1; level <= maxLevel; level++) {
             final int lvl = level;
-            int searchTopK = Math.max(MIN_SEARCH_TOP_K, ((maxDegrees.get(level) + sources.size() - 1) / sources.size()) * SEARCH_TOP_K_MULTIPLIER);
+            int searchTopK = searchTopK(maxDegrees.get(level));
             CompactionParams params = new CompactionParams(fusedPQEnabled, fusedPQEnabled, searchTopK, pq);
             List<RawUpper> all = Collections.synchronizedList(new ArrayList<>());
             ExecutorCompletionService<List<RawUpper>> ecs = new ExecutorCompletionService<>(executor);
@@ -1209,6 +1397,19 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
         }
         for (Scratch sc : opened) sc.close();
         log.info("Upper layers merged in {} ms", (System.nanoTime() - t0) / 1_000_000);
+        // A sharded merge keeps a slice of the sources' nodes, and the slice may hold none of the
+        // nodes of the top levels: drop every merged level that came out empty, so the output's
+        // hierarchy ends at the highest level that still has a live node.
+        int top = maxLevel;
+        while (top > 0 && mergedSrc[top].length == 0) top--;
+        if (top < maxLevel) {
+            log.info("Levels {}..{} have no live node; the merged graph tops out at level {}", top + 1, maxLevel, top);
+            maxDegrees = new ArrayList<>(maxDegrees.subList(0, top + 1));
+            mergedSrc = Arrays.copyOf(mergedSrc, top + 1);
+            mergedNode = Arrays.copyOf(mergedNode, top + 1);
+            mergedNbrSrc = Arrays.copyOf(mergedNbrSrc, top + 1);
+            mergedNbrNode = Arrays.copyOf(mergedNbrNode, top + 1);
+        }
     }
 
     /**
@@ -1363,7 +1564,9 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
         // it also received no reverse candidates its candidate set is exactly its retained
         // same-source edges — and re-running diversity over an already-diversity-selected edge
         // set is a fixed point. Skip selection entirely: filter dead neighbors, remap, write.
-        if (reverseCandidates != null && sizeRank[sourceIdx] == sources.size() - 1) {
+        // A sparse source is exempt: its retained edges are a remnant, and it gathers same-source
+        // candidates of its own.
+        if (reverseCandidates != null && sizeRank[sourceIdx] == sources.size() - 1 && !sparseSource(sourceIdx)) {
             int newOrdinal = remappers.get(sourceIdx).oldToNew(node);
             if (reverseCandidates.countAt(sourceIdx, newOrdinal) == 0) {
                 return writeRetainedOnlyRecord(node, sourceIdx, newOrdinal, scratch, writer);
@@ -1514,8 +1717,13 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
             var indexAlive = liveNodes.get(ss);
 
             if (ss == sourceIdx) {
+                int retainedStart = candSize;
                 candSize = gatherFromSameSource(node, level, ss, searchView, indexAlive,
                                                  baseVec, scratch, candSize);
+                if (sparseSource(ss)) {
+                    candSize = gatherSameSourceReplacements(node, level, ss, searchView, indexAlive,
+                                                            baseVec, scratch, retainedStart, candSize, params);
+                }
             } else {
                 // Cross-link: at L0 only search LARGER sources; candidates from smaller sources
                 // arrive via reverse propagation (consumed below), offered when those sources'
@@ -1577,6 +1785,54 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
         return candSize;
     }
 
+
+    /**
+     * Same-source candidates beyond the retained edges, for a source whose live nodes are a
+     * minority (see {@link #sparseSource}): most of the node's own edges point at dead nodes, so its
+     * source is searched like any other one - the cell walk's results for the source as its own
+     * target at level 0, a graph search elsewhere. The node itself and the neighbours it already
+     * retained are dropped from what the search returns.
+     */
+    private int gatherSameSourceReplacements(int node, int level, int sourceIdx,
+                                             OnDiskGraphIndex.View searchView, FixedBitSet indexAlive,
+                                             VectorFloat<?> baseVec, Scratch scratch,
+                                             int retainedStart, int candSize, CompactionParams params) {
+        final int from = candSize;
+        if (level == 0 && cellMap != null) {
+            ExactJoin j = exactJoin;
+            if (j == null || j.targetIndex[sourceIdx] < 0) {
+                return candSize;
+            }
+            candSize = gatherFromCellWalk(node, sourceIdx, sourceIdx, scratch, candSize);
+        } else {
+            candSize = gatherFromOtherSource(node, sourceIdx, level, sourceIdx, searchView, indexAlive,
+                                             baseVec, scratch, candSize, params);
+        }
+        int kept = from;
+        for (int i = from; i < candSize; i++) {
+            int cand = scratch.candNode[i];
+            boolean drop = cand == node;
+            for (int r = retainedStart; r < from && !drop; r++) {
+                drop = scratch.candNode[r] == cand;
+            }
+            if (drop) continue;
+            if (kept != i) {
+                scratch.candSrc[kept] = scratch.candSrc[i];
+                scratch.candNode[kept] = cand;
+                scratch.candScore[kept] = scratch.candScore[i];
+                // the decoded vectors are per-slot buffers: swap them, never alias two slots
+                VectorFloat<?> v = scratch.candVec[kept];
+                scratch.candVec[kept] = scratch.candVec[i];
+                scratch.candVec[i] = v;
+                scratch.candHasVec[kept] = scratch.candHasVec[i];
+            }
+            kept++;
+        }
+        for (int i = kept; i < candSize; i++) {
+            scratch.candHasVec[i] = false;   // the slots past the kept candidates are free again
+        }
+        return kept;
+    }
 
     /**
      * Level 0: hands a node the cell walk's results for one target - the best {@code searchTopK}
@@ -1920,7 +2176,7 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
      * across all source indexes.
      */
     private List<CommonHeader.LayerInfo> computeLayerInfoFromSources() {
-        int maxLevel = sources.stream().mapToInt(OnDiskGraphIndex::getMaxLevel).max().orElse(0);
+        int maxLevel = maxDegrees.size() - 1;
         List<CommonHeader.LayerInfo> layerInfo = new ArrayList<>(maxLevel + 1);
         for (int level = 0; level <= maxLevel; level++) {
             int count = 0;
@@ -2115,17 +2371,8 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
         int OH = RamUsageEstimator.NUM_BYTES_OBJECT_HEADER;
         int REF = RamUsageEstimator.NUM_BYTES_OBJECT_REF;
 
-        // Calculate maxCandidateSize and maxDegree (same logic as in compactLevels)
-        int maxUpperDegree = 0;
-        for (int level = 1; level < maxDegrees.size(); level++) {
-            maxUpperDegree = Math.max(maxUpperDegree, maxDegrees.get(level));
-        }
-        int baseSearchTopK = Math.max(MIN_SEARCH_TOP_K, ((maxDegrees.get(0) + sources.size() - 1) / sources.size()) * SEARCH_TOP_K_MULTIPLIER);
-        int baseMaxCandidateSize = baseSearchTopK * (sources.size() - 1) + maxDegrees.get(0) + REVERSE_CANDIDATE_SLOTS;
-        int upperMaxPerSourceTopK = maxUpperDegree == 0 ? 0 : Math.max(MIN_SEARCH_TOP_K, ((maxUpperDegree + sources.size() - 1) / sources.size()) * SEARCH_TOP_K_MULTIPLIER);
-        int upperMaxCandidateSize = upperMaxPerSourceTopK * sources.size();
-        int maxCandidateSize = Math.max(baseMaxCandidateSize, upperMaxCandidateSize);
-        int scratchDegree = Math.max(maxDegrees.get(0), Math.max(1, maxUpperDegree));
+        int maxCandidateSize = maxCandidateSize();
+        int scratchDegree = scratchDegree();
 
         long scratchSize = OH + 6L * REF;
 
@@ -2375,12 +2622,16 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
             AtomicInteger fill = new AtomicInteger();
             // enough windows to keep every worker busy on small sources, at most 256K nodes each
             int window = Math.max(4096, Math.min(1 << 18, size / (4 * taskWindowSize) + 1));
+            // Streaming a whole window into the page cache pays when most of it is read. A shard of a
+            // sharded compaction reads 1/M of every source, and prefetching each window for it would
+            // read the whole source once per shard.
+            final boolean streamWindows = liveCount >= size / 8;
             List<Callable<Void>> tasks = new ArrayList<>();
             for (int from = 0; from < size; from += window) {
                 final int lo = from;
                 final int hi = Math.min(size, from + window);
                 tasks.add(() -> {
-                    source.prefetchL0Records(lo, hi - 1);
+                    if (streamWindows) source.prefetchL0Records(lo, hi - 1);
                     VectorFloat<?> vec = vectorTypeSupport.createFloatVector(dimension);
                     ByteSequence<?> code = pq == null ? null : vectorTypeSupport.createByteSequence(pq.getSubspaceCount());
                     HubMap.Scorer scorer = regionMode ? hubMapRef.scorer() : null;
@@ -2571,7 +2822,8 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
             maxTargetPerNode = 0;
             int maxProbes = beamScoredCapacity(CELL_PROBE_EF, cellMap.degree[1]);
             for (int t = 0; t < sources.size(); t++) {
-                if (sizeRank[t] <= sizeRank[src]) continue;                       // only larger sources are scanned
+                // only larger sources are scanned, and a sparse source itself
+                if (t == src ? !sparseSource(src) : sizeRank[t] <= sizeRank[src]) continue;
                 long membersPerCell = Math.max(1, numLiveNodesPerSource.get(t) / Math.max(1, cellCount));
                 long perTarget = Math.min(maxProbes, (CELL_BUDGET + membersPerCell - 1) / membersPerCell);
                 pairsPerNode += perTarget;
@@ -2593,7 +2845,7 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
      */
     private ExactJoin cellWalk(int src, int lo, int hi, int k) {
         final long t0 = System.nanoTime();
-        final ExactJoin j = new ExactJoin(src, lo, hi, k, sources.size(), sizeRank);
+        final ExactJoin j = new ExactJoin(src, lo, hi, k, sources.size(), sizeRank, sparseSource(src));
         final int n = j.n;
         final boolean needNorms = similarityFunction != VectorSimilarityFunction.DOT_PRODUCT;
         final VectorFloat<?>[] queries = new VectorFloat<?>[n];
@@ -2692,6 +2944,7 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
             maxTargetPairs = Math.max(maxTargetPairs, total);
             final int[] starts = cellStart[target];
             final int rowBytes = candidateStore.codeSize();
+            final boolean self = target == src;   // the source as its own target: a node is not its own candidate
             // split the sorted pairs into contiguous cell ranges for the workers
             int tasks2 = Math.max(1, Math.min(taskWindowSize * 8, total / 4096));
             List<Callable<Void>> phase2 = new ArrayList<>();
@@ -2759,6 +3012,7 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
                                 float vNorm2 = needNorms ? VectorUtil.dotProduct(tmp, tmp) : 0f;
                                 for (int r = 0; r < cn; r++) {
                                     int i = probers[c0 + r];
+                                    if (self && lo + i == newOrd) continue;
                                     float dot = chunkScores[r];
                                     float score;
                                     if (!needNorms) {
