@@ -253,7 +253,7 @@ public class ASHVectors implements CompressedVectors {
         private final VectorUtilSupport vecUtil;
 
         // Query state and the stored sign pages, read in place
-        private final float[] tildeQPool;
+        private final float[] qProj;
         private final ASHCodes codes;
 
         private final int d;
@@ -269,8 +269,7 @@ public class ASHVectors implements CompressedVectors {
             this.d = qp.d;
             this.words = ASHVectors.this.words; // access outer class field
 
-            // 1. Grab direct reference to the pool
-            this.tildeQPool = qp.tildeQPool;
+            this.qProj = qp.qProj;
 
             this.codes = ASHVectors.this.codes;
         }
@@ -279,19 +278,18 @@ public class ASHVectors implements CompressedVectors {
         public float similarityTo(int node2) {
 
             final int c = landmarks[node2] & 0xFF;
-            final int qOffset = c * d;
 
             // Run existing optimized 1-bit kernel on the node's sign words in its page.
             final float maskedAdd = vecUtil.ashMaskedAdd_512(
-                    tildeQPool,
-                    qOffset,
+                    qProj,
+                    0,
                     codes.signPage(node2),
                     codes.signOffset(node2),
                     d,
                     words
             );
 
-            return ASHScorer.toSimilarity(scales[node2] * (2f * maskedAdd - qp.sumTildeQ[c])
+            return ASHScorer.toSimilarity(scales[node2] * (2f * maskedAdd - qp.sumQProj)
                     + qp.dotQMu[c] + offsets[node2]);
         }
 
@@ -405,17 +403,10 @@ public class ASHVectors implements CompressedVectors {
             throw new IllegalArgumentException("blockSize must be > 0");
         }
 
-        if (ash.bitsPerDimension == 2 || ash.bitsPerDimension == 4) {
+        // Every multibit width scores 4-bit groups of its canonical code through the query LUT.
+        if (ash.bitsPerDimension != 1) {
             FusedASHLayout.validateBlockSize(blockSize);
             return new LutASHBlockScorer(query, blockSize);
-        }
-
-        // Other bit widths retain their canonical scalar reconstruction.
-        if (ash.bitsPerDimension != 1) {
-            if (AshBlockKernel.fromProperty() == AshBlockKernel.SIMD) {
-                throw new UnsupportedOperationException("SIMD ASH block scoring supports bitsPerDimension 1, 2 and 4");
-            }
-            return blockScorerFor(query, similarityFunction);
         }
 
         final AshBlockKernel kernel = AshBlockKernel.fromProperty();
@@ -459,23 +450,20 @@ public class ASHVectors implements CompressedVectors {
     // Package-private prepared-state entry points shared by symmetric scoring.
     ScoreFunction.ApproximateScoreFunction scoreFunctionFor(ASHScorer.QueryPrecompute qp, boolean simd) {
         if (ash.bitsPerDimension == 1 && simd) {
-            return new SimdASHScoreFunction(new QueryPrecompute(qp.d, qp.C, qp.tildeQPool,
-                    qp.sumTildeQByLandmark, qp.dotQMuByLandmark));
+            return new SimdASHScoreFunction(new QueryPrecompute(qp.d, qp.C, qp.qProj,
+                    qp.sumQProj, qp.dotQMuByLandmark));
         }
         return nodeScoreFunction(scorer.codeScorerFor(qp, simd));
     }
 
     ASHBlockScorer blockScorerFor(ASHScorer.QueryPrecompute prepared, int blockSize, boolean simd) {
         if (blockSize <= 0) throw new IllegalArgumentException("blockSize must be > 0");
-        if (ash.bitsPerDimension == 2 || ash.bitsPerDimension == 4) {
+        if (ash.bitsPerDimension != 1) {
             FusedASHLayout.validateBlockSize(blockSize);
             return new LutASHBlockScorer(prepared, blockSize, simd);
         }
-        if (ash.bitsPerDimension != 1) {
-            return new LegacyASHBlockScorer(nodeScoreFunction(scorer.codeScorerFor(prepared, simd)), codes.size);
-        }
-        var qp = new QueryPrecompute(prepared.d, prepared.C, prepared.tildeQPool,
-                prepared.sumTildeQByLandmark, prepared.dotQMuByLandmark);
+        var qp = new QueryPrecompute(prepared.d, prepared.C, prepared.qProj,
+                prepared.sumQProj, prepared.dotQMuByLandmark);
         if (!simd) return new ScalarASHBlockScorer(codes, scales, offsets, landmarks, qp);
         ensurePackedBits(blockSize);
         return new SimdASHBlockScorer(codes.size, scales, offsets, landmarks, packedBits, blockSize, qp);
@@ -613,8 +601,8 @@ public class ASHVectors implements CompressedVectors {
         private final float[] offsets;
         private final byte[] landmarks;
 
-        private final float[] tildeQPool;   // [C * d]
-        private final float[] sumTildeQ;    // [C]
+        private final float[] qProj;        // [d]
+        private final float sumQProj;
         private final float[] dotQMu;       // [C]
         private final int d;
         private final int words;
@@ -635,8 +623,8 @@ public class ASHVectors implements CompressedVectors {
             this.d = qp.d;
             this.words = AsymmetricHashing.QuantizedVector.wordsForDims(d);
 
-            this.tildeQPool = qp.tildeQPool;
-            this.sumTildeQ = qp.sumTildeQ;
+            this.qProj = qp.qProj;
+            this.sumQProj = qp.sumQProj;
             this.dotQMu = qp.dotQMu;
         }
 
@@ -653,11 +641,10 @@ public class ASHVectors implements CompressedVectors {
                 final int idx = start + i;
 
                 final int c = landmarks[idx] & 0xFF; // unsigned [0,C)
-                final int base = c * d;
 
                 float maskedAdd = 0f;
 
-                // bit-walk against landmark-specific q̃
+                // bit-walk against Aq; the landmark term is folded into the offset
                 final long[] bits = codes.signPage(idx);
                 final int bitsOffset = codes.signOffset(idx);
                 int baseDim = 0;
@@ -666,13 +653,13 @@ public class ASHVectors implements CompressedVectors {
                     while (word != 0L) {
                         int bit = Long.numberOfTrailingZeros(word);
                         int j = baseDim + bit;
-                        if (j < d) maskedAdd += tildeQPool[base + j];
+                        if (j < d) maskedAdd += qProj[j];
                         word &= (word - 1);
                     }
                 }
 
                 out[i] = ASHScorer.toSimilarity(
-                        scales[idx] * (2f * maskedAdd - sumTildeQ[c])
+                        scales[idx] * (2f * maskedAdd - sumQProj)
                                 + dotQMu[c]
                                 + offsets[idx]);
             }
@@ -715,13 +702,9 @@ public class ASHVectors implements CompressedVectors {
 
         private final float[] maskedAdds;     // [blockSize]
 
-        private final float[] tildeQPool;     // qp.tildeQPool [C*d]
-        private final float[] tildeQScratch;  // [d]
-        private final float[] sumTildeQ;      // qp.sumTildeQ [C]
+        private final float[] qProj;          // qp.qProj [d]
+        private final float sumQProj;
         private final float[] dotQMu;         // qp.dotQMu [C]
-
-        // Cache which landmark's q̃ is currently loaded into tildeQScratch
-        private int lastC = -1;
 
         private final VectorUtilSupport vecUtil;
 
@@ -749,13 +732,13 @@ public class ASHVectors implements CompressedVectors {
 
             this.maskedAdds = new float[blockSize];
 
-            this.tildeQPool = qp.tildeQPool;
-            this.tildeQScratch = new float[d];
-            this.sumTildeQ = qp.sumTildeQ;
+            this.qProj = qp.qProj;
+            this.sumQProj = qp.sumQProj;
             this.dotQMu = qp.dotQMu;
         }
 
-        // SIMD kernel is invoked on homogeneous landmark runs; this method splits mixed ranges into runs.
+        // The masked add reads only Aq, so one kernel call covers each packed block's lanes in the range,
+        // whatever their landmarks; each lane adds its own landmark's <q, mu_c>.
         @Override
         public void scoreRange(int start, int count, float[] out) {
             if (count < 0) throw new IllegalArgumentException("count must be >= 0");
@@ -769,39 +752,13 @@ public class ASHVectors implements CompressedVectors {
             final int end = start + count;
 
             while (ord < end) {
-                // Identify landmark for this run
-                final int c = landmarks[ord] & 0xFF;
-                final int base = c * d;
-
-                // Compute packed-block boundary info
                 final int blockId = ord / blockSize;
-                final int blockBase = blockId * blockSize;
-                final int laneStart = ord - blockBase;
-
-                // Max we can do without crossing packed-block boundary or request end
-                final int maxLen = Math.min(blockSize - laneStart, end - ord);
-
-                // Clamp further so we do NOT cross a landmark boundary inside this packed block
-                int runLen = 1;
-                while (runLen < maxLen && ((landmarks[ord + runLen] & 0xFF) == c)) {
-                    runLen++;
-                }
-
-                assert runLen >= 1 && runLen <= maxLen;
-                assert laneStart >= 0 && laneStart + runLen <= blockSize;
-
-                final float runSumTildeQ = sumTildeQ[c];
-                final float runDotQMu = dotQMu[c];
+                final int laneStart = ord - blockId * blockSize;
+                final int runLen = Math.min(blockSize - laneStart, end - ord);
                 final int blockWordBase = blockId * words * blockSize;
 
-                // Load q̃_c into contiguous scratch for the unpooled kernel
-                if (c != lastC) {
-                    System.arraycopy(tildeQPool, base, tildeQScratch, 0, d);
-                    lastC = c;
-                }
-
                 vecUtil.ashMaskedAddBlockAllWords(
-                        tildeQScratch,
+                        qProj,
                         d,
                         packedBits,
                         blockWordBase,
@@ -814,11 +771,10 @@ public class ASHVectors implements CompressedVectors {
 
                 for (int lane = 0; lane < runLen; lane++) {
                     int idx = ord + lane;
-                    float m = maskedAdds[lane];
                     out[idx - start] = ASHScorer.toSimilarity(
                             // scale the 0/1 stored bits to +/-1 for processing.
-                            scales[idx] * (2f * m - runSumTildeQ)
-                                    + runDotQMu
+                            scales[idx] * (2f * maskedAdds[lane] - sumQProj)
+                                    + dotQMu[landmarks[idx] & 0xFF]
                                     + offsets[idx]);
                 }
 
@@ -845,42 +801,29 @@ public class ASHVectors implements CompressedVectors {
         // Aq
         final float[] qProj = new float[d];
         ash.stiefelTransform.projectQuery(qArr, qProj);
-        float sumQProj = 0f;
-        for (float value : qProj) sumQProj += value;
-
-        final float[] tildeQPool = new float[C * d];
-        final float[] sumTildeQ = new float[C];
         final float[] dotQMu = new float[C];
-
         for (int c = 0; c < C; c++) {
             dotQMu[c] = VectorUtil.dotProduct(query, ash.landmarks[c]);
-            sumTildeQ[c] = sumQProj - ash.landmarkProjSum[c];
-
-            final float[] muProj = ash.landmarkProj[c];
-            final int base = c * d;
-            for (int j = 0; j < d; j++) {
-                tildeQPool[base + j] = qProj[j] - muProj[j];
-            }
         }
 
-        return new QueryPrecompute(d, C, tildeQPool, sumTildeQ, dotQMu);
+        return new QueryPrecompute(d, C, qProj, ASHScorer.sum(qProj), dotQMu);
     }
 
     static final class QueryPrecompute {
         final int d;
         final int C;
-        final float[] tildeQPool;          // [C * d]
-        final float[] sumTildeQ;           // [C]
+        final float[] qProj;               // [d], Aq
+        final float sumQProj;              // <Aq, 1>
         final float[] dotQMu;              // [C]
 
         QueryPrecompute(int d, int C,
-                        float[] tildeQPool,
-                        float[] sumTildeQ,
+                        float[] qProj,
+                        float sumQProj,
                         float[] dotQMu) {
             this.d = d;
             this.C = C;
-            this.tildeQPool = tildeQPool;
-            this.sumTildeQ = sumTildeQ;
+            this.qProj = qProj;
+            this.sumQProj = sumQProj;
             this.dotQMu = dotQMu;
         }
     }

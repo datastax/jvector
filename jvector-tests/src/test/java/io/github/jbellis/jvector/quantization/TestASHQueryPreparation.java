@@ -70,8 +70,9 @@ public class TestASHQueryPreparation {
             var scorer = new ASHScorer(ash);
             var first = scorer.precomputeQuery(vectors[0]);
             boolean fastScan = bits == 2 || bits == 4;
-            assertEquals(fastScan ? 0 : 66, first.tildeQPool.length);
-            assertEquals(fastScan ? 0 : 2, first.sumTildeQByLandmark.length);
+            // Every width folds the landmark term into its offsets, so only Aq and its sum are prepared.
+            assertEquals(ash.quantizedDim, first.qProj.length);
+            assertEquals(ash.landmarkCount, first.dotQMuByLandmark.length);
             float[] projection = first.qProj.clone();
             float[] landmarkDots = first.dotQMuByLandmark.clone();
             // Publicly retained prepared state must never borrow another query's arrays.
@@ -97,7 +98,7 @@ public class TestASHQueryPreparation {
     @Test
     public void fusedScratchReusesArraysAndRejectsStaleDecoders() throws Exception {
         var vectors = inputs();
-        for (int bits : new int[]{1, 2, 4}) {
+        for (int bits : new int[]{1, 2, 3, 4, 9}) {
             var ash = model(vectors, bits);
             var encoded = ash.encodeAll(MockVectorValues.fromValues(vectors), ForkJoinPool.commonPool());
             int degree = 8, block = 8;
@@ -168,7 +169,7 @@ public class TestASHQueryPreparation {
     @Test
     public void onDiskViewsOwnIndependentScratchOnSameThread() throws Exception {
         var vectors = inputs();
-        for (int bits : new int[]{1, 2, 4}) {
+        for (int bits : new int[]{1, 2, 3, 4, 9}) {
             var ash = model(vectors, bits);
             var encoded = ash.encodeAll(MockVectorValues.fromValues(vectors), ForkJoinPool.commonPool());
             var graph = new TestUtil.RandomlyConnectedGraphIndex(vectors.length, 8, new Random(9182));

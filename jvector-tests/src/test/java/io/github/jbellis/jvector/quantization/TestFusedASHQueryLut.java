@@ -67,4 +67,40 @@ public class TestFusedASHQueryLut {
             }
         }
     }
+
+    /** Offset-binary widths: summing each 4-bit group's entry reproduces the decoded dot product. */
+    @Test
+    public void offsetBinaryLutSumsMatchDecodedDots() {
+        Random random = new Random(11);
+        for (int bits : new int[] {3, 5, 6, 7, 8, 9}) {
+            for (int dim : new int[] {1, 2, 3, 5, 7, 8, 9, 63, 64, 65, 191, 192, 383}) {
+                float[] q = new float[dim + 3];
+                for (int i = 0; i < q.length; i++) q[i] = (float) random.nextGaussian();
+                int groups = FusedASHLayout.codeGroups(dim, bits);
+                float[] lut = new float[groups * 16];
+                FusedASHLayout.buildQueryLut(q, dim, bits, lut);
+                for (int trial = 0; trial < 20; trial++) {
+                    // Random fields, plus random padding bits past the last field that must be ignored.
+                    byte[] code = new byte[(groups + 1) / 2];
+                    random.nextBytes(code);
+                    int used = dim * bits;
+                    for (int bit = used; bit < code.length * 8; bit++) code[bit >>> 3] &= (byte) ~(1 << (bit & 7));
+                    double expected = 0, scale = 0;
+                    for (int j = 0; j < dim; j++) {
+                        int field = AsymmetricHashing.offsetBinaryField(code, 0, j, bits);
+                        double value = field - ((1 << bits) - 1) / 2.0;
+                        expected += q[j] * value;
+                        scale += Math.abs(q[j]) * ((1 << bits) - 1);
+                    }
+                    float actual = 0f;
+                    for (int g = 0; g < groups; g++) {
+                        int nibble = ((code[g >>> 1] & 0xFF) >>> ((g & 1) * 4)) & 15;
+                        actual += lut[(g << 4) + nibble];
+                    }
+                    assertEquals("bits=" + bits + " dim=" + dim, expected, actual, 1e-5 * Math.max(1, scale));
+                    assertEquals(expected, AsymmetricHashing.dotOffsetBinaryCode(q, code, 0, dim, bits), 1e-5 * Math.max(1, scale));
+                }
+            }
+        }
+    }
 }

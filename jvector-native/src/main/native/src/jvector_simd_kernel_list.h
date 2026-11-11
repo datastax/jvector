@@ -90,6 +90,8 @@
     KERNEL_ENTRY(float, ash_projection_dot_4bit_f32, (const float *query, const unsigned char *code, int dimensions), (query, code, dimensions)) \
     /* Whole-neighborhood C=1 ASH, one downcall including headers and similarity. */ \
     KERNEL_ENTRY(int, ash_score_neighborhood_c1_f32, (const unsigned char *codes, const float *lut, float landmarkDot, int groups, int blockSize, int capacity, float *out), (codes, lut, landmarkDot, groups, blockSize, capacity, out)) \
+    /* Whole-neighborhood C=1 ASH for offset-binary codes (3, 5-9 bits) with an INT8 query. */ \
+    KERNEL_ENTRY(int, ash_score_neighborhood_i8_c1, (const unsigned char *codes, const int8_t *q, float invScale, float center, float landmarkDot, int bits, int units, int blockSize, int capacity, float *out), (codes, q, invScale, center, landmarkDot, bits, units, blockSize, capacity, out)) \
     /* NVQ kernels */ \
     KERNEL_ENTRY(void, nvq_quantize_8bit, (const float *vector, size_t length, float alpha, float x0, float minValue, float maxValue, unsigned char *destination), (vector, length, alpha, x0, minValue, maxValue, destination)) \
     KERNEL_ENTRY(float, nvq_loss, (const float *vector, size_t length, float alpha, float x0, float minValue, float maxValue, int nBits), (vector, length, alpha, x0, minValue, maxValue, nBits)) \

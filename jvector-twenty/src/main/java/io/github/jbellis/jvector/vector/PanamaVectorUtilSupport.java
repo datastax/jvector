@@ -1950,8 +1950,11 @@ class PanamaVectorUtilSupport implements VectorUtilSupport {
         return ASH_SIMD;
     }
 
-    @Override
-    public float ashMaskedAddFlat(float[] tildeQ,
+    private static final int ASH_512_ACCUMULATORS =
+            Integer.getInteger("jvector.ash.512.accumulators", 8);
+
+    /** Species-width-independent masked add; the fallback for machines without 16 float lanes. */
+    private float ashMaskedAddFlat(float[] tildeQ,
                                   int qOffset,
                                   long[] allPackedVectors,
                                   int packedBase,
@@ -2038,9 +2041,6 @@ class PanamaVectorUtilSupport implements VectorUtilSupport {
         // Reduce all accumulators
         return acc0.add(acc1).add(acc2).add(acc3).reduceLanes(VectorOperators.ADD);
     }
-
-    private static final int ASH_512_ACCUMULATORS =
-            Integer.getInteger("jvector.ash.512.accumulators", 8);
 
     public float ashMaskedAdd_512(
             float[] tildeQ,
@@ -2325,81 +2325,6 @@ class PanamaVectorUtilSupport implements VectorUtilSupport {
                 .reduceLanes(VectorOperators.ADD);
     }
 
-    // This approach uses masked adds instead of masked loads, and two accumulators (since this is slow)
-    @Override
-    public float ashMaskedAddAllWords(float[] tildeQ,
-                                      int d,
-                                      long[] packedBits,
-                                      int packedBase,
-                                      int words) {
-        final VectorSpecies<Float> SPEC = FloatVector.SPECIES_PREFERRED;
-        final int LANES = SPEC.length();
-        final int upperBoundSafe = d - LANES;
-
-        // Two accumulators to hide floating-point addition latency (4 cycles)
-        FloatVector acc1 = FloatVector.zero(SPEC);
-        FloatVector acc2 = FloatVector.zero(SPEC);
-        float scalarAcc = 0f;
-
-        for (int w = 0; w < words; w++) {
-            long wordBits = packedBits[packedBase + w];
-            // REMOVED: if (wordBits == 0) continue; (useless for dense data)
-
-            int baseDim = w * 64;
-
-            // Toggle to alternate between acc1 and acc2
-            boolean toggle = false;
-
-            for (int off = 0; off < 64; off += LANES) {
-                int qBase = baseDim + off;
-
-                // Keep the fast integer check!
-                if (qBase >= d) break;
-
-                long maskBits;
-                if (LANES == 16)      maskBits = (wordBits >>> off) & 0xFFFFL;
-                else if (LANES == 8)  maskBits = (wordBits >>> off) & 0xFFL;
-                else if (LANES == 4)  maskBits = (wordBits >>> off) & 0xFL;
-                else {
-                    // Fallback for unusual widths
-                    long m = wordBits >>> off;
-                    for (int b = 0; b < LANES; b++) {
-                        if (((m >>> b) & 1L) != 0L) {
-                            int idx = qBase + b;
-                            if (idx < d) scalarAcc += tildeQ[idx];
-                        }
-                    }
-                    continue;
-                }
-
-                // Still worth checking if the local chunk is 0 to skip the ADD
-                if (maskBits == 0L) continue;
-
-                VectorMask<Float> bitMask = VectorMask.fromLong(SPEC, maskBits);
-                FloatVector loaded;
-
-                // Fast Unmasked Load (Still critical for dense data)
-                if (qBase <= upperBoundSafe) {
-                    loaded = FloatVector.fromArray(SPEC, tildeQ, qBase);
-                } else {
-                    VectorMask<Float> rangeMask = SPEC.indexInRange(qBase, d);
-                    loaded = FloatVector.fromArray(SPEC, tildeQ, qBase, bitMask.and(rangeMask));
-                }
-
-                // Alternate accumulators to parallelize the ADDs
-                if (!toggle) {
-                    acc1 = acc1.add(loaded, bitMask);
-                } else {
-                    acc2 = acc2.add(loaded, bitMask);
-                }
-                toggle = !toggle;
-            }
-        }
-
-        // Merge the two pipelines
-        return acc1.add(acc2).reduceLanes(VectorOperators.ADD) + scalarAcc;
-    }
-
     @Override
     public void ashMaskedAddBlockAllWords(float[] tildeQ,
                                           int d,
@@ -2478,73 +2403,6 @@ class PanamaVectorUtilSupport implements VectorUtilSupport {
             float maskedAdd = accVec.reduceLanes(VectorOperators.ADD) + scalarAcc;
 
             outMaskedAdd[lane] = maskedAdd;
-        }
-    }
-
-    @Override
-    public void ashMaskedAddBlockAllWordsPooled(float[] tildeQPool,
-                                                int tildeBase,
-                                                int d,
-                                                long[] packedBits,
-                                                int blockWordBase,
-                                                int words,
-                                                int blockSize,
-                                                int laneStart,
-                                                int blockLen,
-                                                float[] outMaskedAdd) {
-
-        final VectorSpecies<Float> SPEC = FloatVector.SPECIES_PREFERRED;
-        final int LANES = SPEC.length();
-
-        for (int lane = 0; lane < blockLen; lane++) {
-            FloatVector accVec = FloatVector.zero(SPEC);
-            float scalarAcc = 0f;
-
-            int laneIndex = laneStart + lane;
-
-            for (int w = 0; w < words; w++) {
-                long wordBits = packedBits[blockWordBase + (w * blockSize) + laneIndex];
-                int baseDim = w * 64;
-
-                for (int off = 0; off < 64 && (baseDim + off) < d; off += LANES) {
-                    int qBase = baseDim + off;
-
-                    VectorMask<Float> inRange = SPEC.indexInRange(qBase, d);
-
-                    long maskBits;
-                    if (LANES == 16) {
-                        maskBits = (wordBits >>> off) & 0xFFFFL;
-                    } else if (LANES == 8) {
-                        maskBits = (wordBits >>> off) & 0xFFL;
-                    } else if (LANES == 4) {
-                        maskBits = (wordBits >>> off) & 0xFL;
-                    } else {
-                        long m = wordBits >>> off;
-                        float s = 0f;
-                        for (int b = 0; b < LANES; b++) {
-                            if (((m >>> b) & 1L) != 0L) {
-                                int idx = qBase + b;
-                                if (idx < d) s += tildeQPool[tildeBase + idx];
-                            }
-                        }
-                        scalarAcc += s;
-                        continue;
-                    }
-
-                    if (maskBits == 0L) continue;
-
-                    VectorMask<Float> bitMask =
-                            VectorMask.fromLong(SPEC, maskBits).and(inRange);
-
-                    // pooled masked load: note tildeBase + qBase
-                    FloatVector masked =
-                            FloatVector.fromArray(SPEC, tildeQPool, tildeBase + qBase, bitMask);
-
-                    accVec = accVec.add(masked);
-                }
-            }
-
-            outMaskedAdd[lane] = accVec.reduceLanes(VectorOperators.ADD) + scalarAcc;
         }
     }
 

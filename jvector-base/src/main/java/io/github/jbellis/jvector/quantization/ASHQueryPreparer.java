@@ -176,9 +176,6 @@ public final class ASHQueryPreparer implements QueryPreparer {
                     + RamUsageEstimator.sizeOf(prepared.qProj) + RamUsageEstimator.sizeOf(lut)
                     + RamUsageEstimator.sizeOf(prepared.dotQMuByLandmark);
             if (backing != input) sum += RamUsageEstimator.shallowSizeOf(backing);
-            // Empty generic arrays are shared by fast-scan states.
-            if (prepared.tildeQPool.length != 0) sum += RamUsageEstimator.sizeOf(prepared.tildeQPool);
-            if (prepared.sumTildeQByLandmark.length != 0) sum += RamUsageEstimator.sizeOf(prepared.sumTildeQByLandmark);
             this.bytes = sum;
         }
 

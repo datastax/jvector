@@ -234,20 +234,8 @@ public class FusedASH extends AbstractFeature implements FusedFeature {
                 ash.bitsPerDimension,
                 blockSize);
 
-        if (ash.bitsPerDimension == 1) {
-            FusedASHLayout.packForFused(dest, blockOffset, lane, vector, ash, blockSize);
-        } else {
-            // For 2-bit and 4-bit ASH, the canonical vector already stores the
-            // C++ projection-mode adjusted offset used by FusedASH scoring.
-            FusedASHLayout.packQuantizedVector(
-                    dest,
-                    blockOffset,
-                    lane,
-                    vector,
-                    ash.quantizedDim,
-                    ash.bitsPerDimension,
-                    blockSize);
-        }
+        // The canonical vector already stores the projection-mode offset used by FusedASH scoring.
+        FusedASHLayout.packForFused(dest, blockOffset, lane, vector, ash, blockSize);
     }
 
     private static void writeBytes(IndexWriter out, byte[] bytes, int length) throws IOException {

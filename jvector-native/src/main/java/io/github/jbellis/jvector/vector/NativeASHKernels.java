@@ -238,6 +238,78 @@ final class NativeASHKernels {
         }
     }
 
+    private static final String INT8_SYMBOL = "ash_score_neighborhood_i8_c1";
+    private static final MemorySegment ADDRESS_OF_INT8 = SymbolLookup.loaderLookup().find(INT8_SYMBOL).orElse(null);
+    private static final FunctionDescriptor INT8_DESCRIPTOR = FunctionDescriptor.of(JAVA_INT, ADDRESS, ADDRESS,
+            JAVA_FLOAT, JAVA_FLOAT, JAVA_FLOAT, JAVA_INT, JAVA_INT, JAVA_INT, JAVA_INT, ADDRESS);
+    private static final MethodHandle CRITICAL_INT8 = ADDRESS_OF_INT8 == null ? null
+            : Linker.nativeLinker().downcallHandle(ADDRESS_OF_INT8, INT8_DESCRIPTOR, Linker.Option.critical(true));
+    private static final MethodHandle ORDINARY_INT8 = ADDRESS_OF_INT8 == null ? null
+            : Linker.nativeLinker().downcallHandle(ADDRESS_OF_INT8, INT8_DESCRIPTOR);
+
+    /** Whether the library scores offset-binary neighborhoods with an INT8 query. */
+    static boolean isInt8NeighborhoodAvailable() { return ADDRESS_OF_INT8 != null; }
+
+    /**
+     * Scores an offset-binary neighborhood ({@code [unit][lane][bits bytes]} body per block, then the
+     * headers) with an INT8 query of {@code units * 8} entries.
+     */
+    static void scoreNeighborhoodInt8(byte[] codes, int bits, int units, int blockSize, int capacity,
+                                      byte[] q, float invScale, float center, float landmarkDot, float[] out) {
+        if (!isInt8NeighborhoodAvailable()) {
+            throw new UnsupportedOperationException("Native library does not provide " + INT8_SYMBOL);
+        }
+        Objects.requireNonNull(codes, "codes");
+        Objects.requireNonNull(q, "q");
+        Objects.requireNonNull(out, "out");
+        if (units <= 0 || capacity <= 0 || bits < 3 || bits > 9 || bits == 4
+                || (blockSize != 8 && blockSize != 16 && blockSize != 32)) {
+            throw new IllegalArgumentException("Expected offset-binary bits, positive units/capacity and blockSize in {8,16,32}");
+        }
+        long blockCount = (capacity - 1L) / blockSize + 1;
+        long packedBytes = blockCount * (((long) units * bits + HEADER_BYTES_PER_LANE) * blockSize);
+        long queryBytes = (long) units * 8;
+        if (packedBytes > codes.length || queryBytes > q.length || capacity > out.length) {
+            throw new IndexOutOfBoundsException("ASH arrays are smaller than the configured neighborhood");
+        }
+        int status;
+        if ((long) units * blockCount * blockSize <= MAX_CRITICAL_LANE_GROUPS) {
+            // These heap segments are valid only for this synchronous, short leaf call.
+            status = invokeInt8(CRITICAL_INT8, MemorySegment.ofArray(codes), MemorySegment.ofArray(q),
+                    invScale, center, landmarkDot, bits, units, blockSize, capacity, MemorySegment.ofArray(out));
+        } else {
+            try (Arena arena = Arena.ofConfined()) {
+                MemorySegment nativeCodes = arena.allocate(packedBytes);
+                MemorySegment nativeQuery = arena.allocate(queryBytes);
+                MemorySegment nativeOut = arena.allocate((long) capacity * Float.BYTES, Float.BYTES);
+                MemorySegment.copy(MemorySegment.ofArray(codes), 0, nativeCodes, 0, packedBytes);
+                MemorySegment.copy(MemorySegment.ofArray(q), 0, nativeQuery, 0, queryBytes);
+                status = invokeInt8(ORDINARY_INT8, nativeCodes, nativeQuery, invScale, center, landmarkDot,
+                        bits, units, blockSize, capacity, nativeOut);
+                if (status == 0) {
+                    MemorySegment.copy(nativeOut, 0, MemorySegment.ofArray(out), 0, (long) capacity * Float.BYTES);
+                }
+            }
+        }
+        checkStatus(status);
+    }
+
+    private static int invokeInt8(MethodHandle handle, MemorySegment codes, MemorySegment q,
+            float invScale, float center, float landmarkDot, int bits, int units, int blockSize, int capacity,
+            MemorySegment out) {
+        if (TRACE_DOWNCALLS) {
+            System.out.printf("%s(%d, %d, %d, %d)%n", INT8_SYMBOL, bits, units, blockSize, capacity);
+        }
+        try {
+            return (int) handle.invokeExact(codes, q, invScale, center, landmarkDot, bits, units, blockSize,
+                    capacity, out);
+        } catch (RuntimeException | Error error) {
+            throw error;
+        } catch (Throwable error) {
+            throw new AssertionError("Unexpected checked exception from " + INT8_SYMBOL, error);
+        }
+    }
+
     private static void checkStatus(int status) {
         // These values are the C ABI contract documented in jvector_simd_kernel_list.h.
         switch (status) {

@@ -46,8 +46,8 @@ import java.util.concurrent.ForkJoinTask;
  * <p>The compressor is set by {@code jvector.ash.bitsPerDimension} (1 to 9, default 4),
  * {@code jvector.ash.quantizedDimensions} (default half the input dimension),
  * {@code jvector.ash.landmarkCount} (default 1) and {@code jvector.ash.optimizer} ({@code random} or
- * {@code itq}). Every width uses the production scorers: 1, 2 and 4 bits have SIMD kernels, and the
- * other widths use the portable scalar scorers. Measurements are selected with {@code jvector.bench.}
+ * {@code itq}). Every width uses the production scorers: 1-bit codes use masked adds, and the other
+ * widths sum 4-bit groups of their codes through a query table. Measurements are selected with {@code jvector.bench.}
  * properties: {@code recall} (exhaustive recall against the ground truth; add
  * {@code recall.block-scoring} to rank with block scoring), {@code single-scoring} and
  * {@code block-scoring} (throughput), {@code symmetric-scoring} (code-to-code scoring),
@@ -212,13 +212,13 @@ public class DistancesASH {
     private static double symmetricComponent(AsymmetricHashing.QuantizedVector v, int j, int bits) {
         if (bits == 1) return ((v.binaryVector[j / 64] >>> (j % 64)) & 1L) == 0 ? -1 : 1;
         if (bits != 2 && bits != 4) {
-            int code = 0;
-            for (int k = 0; k < bits - 1; k++) {
-                int pos = j * (bits - 1) + k;
-                code |= ((v.extraBits[pos / 8] >>> (pos % 8)) & 1) << k;
+            // Offset-binary fields: bits [j*b, (j+1)*b) little-endian, value field - (2^b - 1) / 2.
+            int field = 0;
+            for (int k = 0; k < bits; k++) {
+                int pos = j * bits + k;
+                field |= ((v.extraBits[pos / 8] >>> (pos % 8)) & 1) << k;
             }
-            code |= ((v.binaryVector[j / 64] >>> (j % 64)) & 1L) << (bits - 1);
-            return code - ((1 << (bits - 1)) - 0.5);
+            return field - ((1 << bits) - 1) / 2.0;
         }
         int field = (v.extraBits[j * bits / 8] >>> (j * bits % 8)) & ((1 << bits) - 1);
         double magnitude = (field & ((1 << (bits - 1)) - 1)) + 0.5;
@@ -229,20 +229,16 @@ public class DistancesASH {
                                            AsymmetricHashing.QuantizedVector a,
                                            AsymmetricHashing.QuantizedVector b) {
         int ca = a.landmark & 255, cb = b.landmark & 255;
-        double dot = 0, ownA = 0, ownB = 0, crossA = 0, crossB = 0;
+        double dot = 0, crossA = 0, crossB = 0;
         for (int j = 0; j < ash.quantizedDim; j++) {
             double x = symmetricComponent(a, j, ash.bitsPerDimension);
             double y = symmetricComponent(b, j, ash.bitsPerDimension);
             dot += x * y;
-            ownA += x * ash.landmarkProj[ca][j];
-            ownB += y * ash.landmarkProj[cb][j];
             crossA += x * ash.landmarkProj[cb][j];
             crossB += y * ash.landmarkProj[ca][j];
         }
+        // Stored offsets already include each code's own landmark term.
         double correctionA = a.offset, correctionB = b.offset;
-        if (ash.bitsPerDimension != 2 && ash.bitsPerDimension != 4) {
-            correctionA -= a.scale * ownA; correctionB -= b.scale * ownB;
-        }
         double centroidDot = 0;
         for (int j = 0; j < ash.originalDimension; j++) {
             centroidDot += (double) ash.landmarks[ca].get(j) * ash.landmarks[cb].get(j);
@@ -300,7 +296,7 @@ public class DistancesASH {
                 && (ash.landmarkCount == 1 || (ash.bitsPerDimension == 1
                     ? backend.supportsAshMaskedLoad() : backend.supportsAshProjectionScoring()));
         boolean hasBlockSimd = ash.bitsPerDimension == 1 ? backend.supportsAshMaskedLoad()
-                : (ash.bitsPerDimension == 2 || ash.bitsPerDimension == 4) && backend.supportsAshLutScoring();
+                : backend.supportsAshLutScoring();
         List<String> names = new ArrayList<>();
         List<java.util.function.IntFunction<ScanScorer>> factories = new ArrayList<>();
         names.add("symmetric-single-scalar");

@@ -38,13 +38,13 @@ public class TestASHSymmetricScorer {
             float magnitude = (field & ((1 << (bits - 1)) - 1)) + 0.5f;
             return (field & (1 << (bits - 1))) == 0 ? -magnitude : magnitude;
         }
-        int code = 0;
-        for (int k = 0; k < bits - 1; k++) {
-            int pos = j * (bits - 1) + k;
-            code |= ((v.extraBits[pos / 8] >>> (pos % 8)) & 1) << k;
+        // Offset-binary fields: bits [j*b, (j+1)*b) little-endian, value field - (2^b - 1) / 2.
+        int field = 0;
+        for (int k = 0; k < bits; k++) {
+            int pos = j * bits + k;
+            field |= ((v.extraBits[pos / 8] >>> (pos % 8)) & 1) << k;
         }
-        code |= ((v.binaryVector[j / 64] >>> (j % 64)) & 1) << (bits - 1);
-        return code - ((1 << (bits - 1)) - 0.5f);
+        return field - ((1 << bits) - 1) * 0.5f;
     }
 
     @Test public void packedDotMatchesIndependentDecoderAndSimdIncludingTails() {
@@ -165,15 +165,14 @@ public class TestASHSymmetricScorer {
                         ma += x * ash.landmarks[0].get(k);
                         mb += y * ash.landmarks[0].get(k);
                     }
-                    double oa = a.offset, ob = b.offset;
-                    if (bits == 2 || bits == 4) { oa += a.scale * ma; ob += b.scale * mb; }
+                    // Stored offsets include -scale * <A mu, code> at every width.
+                    double oa = a.offset + a.scale * ma, ob = b.offset + b.scale * mb;
                     double expected = a.scale * b.scale * dot + oa + ob
                             + VectorUtil.dotProduct(ash.landmarks[0], ash.landmarks[0]);
                     assertEquals(expected, scorer.dotProduct(i,j), 2e-5);
                     // ASH preserves the original landmark dot via the header, rather than
                     // substituting the reconstructed source's landmark dot.
                     double sourceCorrection = a.offset;
-                    if (bits != 2 && bits != 4) sourceCorrection -= a.scale * ma;
                     float decodedAsymmetric = new ASHScorer(ash)
                             .scoreFunctionFor(decodedX, VectorSimilarityFunction.DOT_PRODUCT).similarityTo(b);
                     assertEquals(decodedAsymmetric + sourceCorrection, scorer.dotProduct(i,j), 2e-5);
@@ -203,7 +202,7 @@ public class TestASHSymmetricScorer {
             try (var out = io.github.jbellis.jvector.disk.ByteBufferIndexWriter.create(1024*1024,false)) {
                 encoded.write(out, io.github.jbellis.jvector.graph.disk.OnDiskGraphIndex.CURRENT_VERSION);
                 var reloaded = ASHVectors.load(new io.github.jbellis.jvector.disk.ByteBufferReader(out.getWrittenData()));
-                assertEquals(scorer.dotProduct(2,7), new ASHSymmetricScorer(reloaded).dotProduct(2,7), 0f);
+                assertEquals("reloaded bits=" + bits, scorer.dotProduct(2,7), new ASHSymmetricScorer(reloaded).dotProduct(2,7), 0f);
             }
         }
     }
@@ -234,7 +233,7 @@ public class TestASHSymmetricScorer {
         var input = inputs(80,40);
         for (int d = 0; d < 40; d++) input[1].set(d, -input[0].get(d));
         var values = MockVectorValues.fromValues(input);
-        for (int bits : new int[]{1,2,4}) {
+        for (int bits : new int[]{1,2,3,4,9}) {
             var ash = AsymmetricHashing.initialize(values,AsymmetricHashing.RANDOM,
                     AsymmetricHashing.HEADER_BITS+31*bits,1,bits);
             var encoded = ash.encodeAll(values, java.util.concurrent.ForkJoinPool.commonPool());
@@ -282,9 +281,6 @@ public class TestASHSymmetricScorer {
                                 * (ash.landmarks[cb].get(k) + b.scale*y);
                     }
                     double correctionA = a.offset, correctionB = b.offset;
-                    if (bits != 2 && bits != 4) {
-                        correctionA -= a.scale*pa; correctionB -= b.scale*pb;
-                    }
                     expected += correctionA + correctionB;
                     assertEquals(expected, scalar.dotProduct(i,j), 2e-5);
                     assertEquals(scalar.dotProduct(i,j), scalar.dotProduct(j,i), 0f);

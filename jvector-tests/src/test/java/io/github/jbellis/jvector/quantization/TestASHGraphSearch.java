@@ -61,7 +61,7 @@ public class TestASHGraphSearch {
                 @Override public int getDimension() { return 64; }
             };
             boolean simd = provider.getVectorUtilSupport().supportsAshLutScoring();
-            for (int bits : new int[]{1, 2, 4}) {
+            for (int bits : new int[]{1, 2, 3, 4, 9}) {
                 var ash = AsymmetricHashing.initialize(values, AsymmetricHashing.RANDOM,
                         AsymmetricHashing.HEADER_BITS + 33 * bits, 1, bits);
                 var encoded = ash.encodeAll(values, ForkJoinPool.commonPool());

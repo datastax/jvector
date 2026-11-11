@@ -57,23 +57,21 @@ public class TestASHBatchEncoding {
         assertArrayEquals(expected.extraBits, actual.extraBits);
     }
 
-    private static void assertHighPrecisionCodeCompatible(AsymmetricHashing.QuantizedVector expected,
-                                                           AsymmetricHashing.QuantizedVector actual,
-                                                           int dimensions) {
+    private static void assertHighPrecisionCodeCompatible(AsymmetricHashing ash,
+                                                           AsymmetricHashing.QuantizedVector expected,
+                                                           AsymmetricHashing.QuantizedVector actual) {
         assertEquals(expected.landmark, actual.landmark);
-        assertEquals(expected.offset, actual.offset, 0f);
-        assertArrayEquals(expected.binaryVector, actual.binaryVector);
-        // Different FP32 reduction orders can cross a 9-bit code boundary.
-        // Check the reconstructed component within one step from each code,
-        // rather than requiring bit equality of that discontinuous quantizer.
-        for (int d = 0; d < dimensions; d++) {
-            boolean positive = AsymmetricHashing.QuantizedVector.getBit(expected.binaryVector, d);
-            int e = AsymmetricHashing.QuantizedVector.readExtraCode(expected.extraBits, d, 8);
-            int a = AsymmetricHashing.QuantizedVector.readExtraCode(actual.extraBits, d, 8);
-            if (!positive) { e = (~e) & 255; a = (~a) & 255; }
-            assertEquals(expected.scale * (e + .5), actual.scale * (a + .5),
-                    expected.scale + actual.scale + 1e-7);
+        // Different FP32 reduction orders can cross a 9-bit code boundary. Check each reconstructed
+        // component within one step, rather than requiring bit equality of that discontinuous quantizer.
+        // The stored offset folds in -scale * <A mu, code>, so compare the code-independent centered offset.
+        int bits = ash.bitsPerDimension;
+        for (int d = 0; d < ash.quantizedDim; d++) {
+            float e = AsymmetricHashing.decodeOffsetBinary(AsymmetricHashing.offsetBinaryField(expected.extraBits, 0, d, bits), bits);
+            float a = AsymmetricHashing.decodeOffsetBinary(AsymmetricHashing.offsetBinaryField(actual.extraBits, 0, d, bits), bits);
+            assertEquals(expected.scale * e, actual.scale * a, expected.scale + actual.scale + 1e-7);
         }
+        float e = ash.centeredOffset(expected), a = ash.centeredOffset(actual);
+        assertEquals(e, a, 2e-3f * Math.max(1f, Math.abs(e)));
     }
 
     private static final class Values implements RandomAccessVectorValues {
@@ -132,10 +130,10 @@ public class TestASHBatchEncoding {
                                     // 1/2/3/4-bit checks; use the existing reconstruction
                                     // error bound for discontinuous 9-bit codes/half scales.
                                     if (bits == 9 && input[i] != null)
-                                        assertHighPrecisionCodeCompatible(firstBulkResult.get(i), actual.get(i), ash.quantizedDim);
+                                        assertHighPrecisionCodeCompatible(ash, firstBulkResult.get(i), actual.get(i));
                                     else assertCode(firstBulkResult.get(i), actual.get(i));
                                     if (bits == 9 && input[i] != null)
-                                        assertHighPrecisionCodeCompatible(expected, actual.get(i), ash.quantizedDim);
+                                        assertHighPrecisionCodeCompatible(ash, expected, actual.get(i));
                                     else assertCode(expected, actual.get(i));
                                 }
                                 catch (AssertionError failure) {
@@ -153,7 +151,7 @@ public class TestASHBatchEncoding {
 
     @Test
     public void correctionsAreComputedInTheEncodingPassAndSharedWithoutChangingCodesOrScores() throws Exception {
-        for (int bits : new int[]{2,4}) for (int landmarks : new int[]{1,3}) {
+        for (int bits : new int[]{1,2,3,4,9}) for (int landmarks : new int[]{1,3}) {
             var ash = model(bits, landmarks);
             var input = vectors(97);
             input[31] = null;
@@ -168,9 +166,14 @@ public class TestASHBatchEncoding {
                 AsymmetricHashing.QuantizedVector[] codes = new AsymmetricHashing.QuantizedVector[input.length];
                 for (int i = 0; i < codes.length; i++) {
                     codes[i] = input[i] == null ? AsymmetricHashing.QuantizedVector.createEmpty(ash.quantizedDim, bits) : ash.encode(input[i]);
-                    assertCode(codes[i], bulk.get(i));
-                    float expected = bulk.get(i).offset + bulk.get(i).scale * AsymmetricHashing.dotProjectionCode(
-                            ash.landmarkProj[bulk.get(i).landmark & 255], bulk.get(i).extraBits, ash.quantizedDim, bits);
+                    if (bits == 9 && input[i] != null) {
+                        // Singleton and batch FP32 reductions can cross a 9-bit code boundary; score the batch codes.
+                        assertHighPrecisionCodeCompatible(ash, codes[i], bulk.get(i));
+                        codes[i] = bulk.get(i);
+                    } else {
+                        assertCode(codes[i], bulk.get(i));
+                    }
+                    float expected = ash.centeredOffset(bulk.get(i));
                     assertEquals(Float.floatToRawIntBits(expected), Float.floatToRawIntBits(bulk.symmetricOffsets[i]));
                 }
                 var uncached = new ASHVectors(ash, codes);

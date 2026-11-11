@@ -27,16 +27,16 @@ so each decoder belongs to one graph view/search thread. Upper-layer scoring and
 L0 neighborhoods share one query projection. A failed neighborhood read or score
 invalidates the decoder's cached origin before any output can be reused.
 
-For one-bit ASH, canonical scoring uses `A(q - mu)` while fused scoring uses `Aq`.
-`FusedASHLayout.packForFused` adjusts the one-bit offset accordingly. Two/four-bit
-canonical offsets already contain that correction. The writer and fixture builder
-use the shared helper rather than maintaining separate scoring formulas.
+Canonical and fused scoring both use `Aq`: every stored offset already includes
+the landmark term `-scale * <A mu_c, code>`, so `FusedASHLayout.packForFused`
+copies the header as stored. The writer and fixture builder use that shared
+helper rather than maintaining separate scoring formulas.
 
 ## Native C=1 execution
 
 With `jvector.vectorization_provider=native` and
 `jvector.ash.blockKernel=auto` or `simd`, C=1 neighborhoods use Highway. The native
-path supports 1/2/4 bits per projected dimension, block widths 8/16/32, partial
+path supports every bit width (see below for 3 and 5 to 9 bits), block widths 8/16/32, partial
 blocks, and neighborhoods containing multiple blocks. C>1 retains the existing
 scorer. Selecting the Panama provider retains the Panama kernel; selecting
 `blockKernel=scalar` disables acceleration for the LUT scoring path.
@@ -53,6 +53,16 @@ big-endian binary16 arrays and decoded with vector byte swaps and half-to-float
 conversion. AVX2 uses indexed float LUT loads; the SSE software conversion includes
 explicit handling for NaN and infinity. AVX3_DL and AVX3_SPR inherit the AVX3 ASH
 slot, so an `avx3_spr` dispatch report currently executes that AVX-512 implementation.
+
+Offset-binary widths (3 and 5 to 9 bits) use a second entry,
+`ash_score_neighborhood_i8_c1`, over field blocks (`[unit][lane][b bytes]`, eight
+dimensions per unit). The projected query is rounded to INT8 once per query. Each
+lane's eight fields are gathered into one 64-bit word, rotated into separate bytes
+(`vpmultishiftqb` on AVX-512 VBMI) and multiplied with the query by integer
+quad-dot instructions (`vpdpbusd` with VNNI); Highway supplies the equivalent
+operations on other targets. Sums are exact integers; only the query rounding
+differs from FP32 scoring, which moved exhaustive recall@10 on 1M datasets by at
+most 0.0003. The header finish is shared with the LUT entry.
 
 ### FFM safety and lifetime
 

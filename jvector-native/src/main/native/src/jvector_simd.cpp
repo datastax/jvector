@@ -113,6 +113,7 @@ static const KernelVTable AVX3_vtable = {
 static const KernelVTable AVX3_DL_vtable = []() {
     KernelVTable t = AVX3_vtable;
     t.ash_symmetric_dot = AVX3_DL::ash_symmetric_dot;
+    t.ash_score_neighborhood_i8_c1 = AVX3_DL::ash_score_neighborhood_i8_c1;
     return t;
 }();
 

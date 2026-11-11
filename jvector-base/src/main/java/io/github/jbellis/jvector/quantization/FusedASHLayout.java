@@ -43,6 +43,16 @@ package io.github.jbellis.jvector.quantization;
  * {@code 8}, {@code 16}, and {@code 32} without copying the IVF-specific B32
  * addressing scheme.</p>
  *
+ * <p>Offset-binary codes (3 and 5 to 9 bits per dimension) use field blocks instead, scored with an
+ * INT8 query: each unit of eight dimensions holds every lane's {@code b} code bytes contiguously,</p>
+ *
+ * <pre>
+ *   byteIndex = blockOffset + (unit * blockSize + lane) * b + k,   k in [0, b)
+ * </pre>
+ *
+ * <p>so one 64-bit word per lane holds that unit's eight fields. Both layouts are followed by the
+ * same per-lane headers.</p>
+ *
  * <p>Block and neighborhood byte-size calculations use checked arithmetic. Shapes whose
  * serialized storage cannot fit a Java array fail with {@link ArithmeticException}.</p>
  */
@@ -54,14 +64,20 @@ public final class FusedASHLayout {
     public static final int LANDMARK_BYTES = Byte.BYTES;
     public static final int HEADER_BYTES_PER_LANE = AsymmetricHashing.HEADER_BYTES;
 
+    /**
+     * Every ASH width is supported. Each lane's canonical code is a bit stream scanned in 4-bit
+     * groups: 1-bit signs and 2/4-bit sign-magnitude fields fill whole groups, and the offset-binary
+     * fields of the other widths are linear in their bits, so any group of 4 bits has a 16-entry
+     * query table.
+     */
     public static boolean supportsBitsPerDimension(int bitsPerDimension) {
-        return bitsPerDimension == 1 || bitsPerDimension == 2 || bitsPerDimension == 4;
+        return bitsPerDimension >= 1 && bitsPerDimension <= 9;
     }
 
     public static void validateBitsPerDimension(int bitsPerDimension) {
         if (!supportsBitsPerDimension(bitsPerDimension)) {
             throw new IllegalArgumentException(
-                    "FusedASH supports bitsPerDimension in {1,2,4}; got " + bitsPerDimension);
+                    "FusedASH supports bitsPerDimension 1 through 9; got " + bitsPerDimension);
         }
     }
 
@@ -81,26 +97,76 @@ public final class FusedASHLayout {
         return 32;
     }
 
+    /** Dimensions per 4-bit group for the widths whose fields fill whole groups: 1, 2 and 4 bits. */
     public static int projectionDimsPerNibble(int bitsPerDimension) {
-        validateBitsPerDimension(bitsPerDimension);
+        if (bitsPerDimension != 1 && bitsPerDimension != 2 && bitsPerDimension != 4) {
+            throw new IllegalArgumentException("Whole-nibble fields require 1, 2 or 4 bits; got " + bitsPerDimension);
+        }
         return 4 / bitsPerDimension;
     }
 
+    /** 4-bit groups in one canonical code: {@code ceil(quantizedDim * bits / 4)}. */
     public static int codeGroups(int quantizedDim, int bitsPerDimension) {
         if (quantizedDim <= 0) {
             throw new IllegalArgumentException("quantizedDim must be > 0");
         }
-        int groupDims = projectionDimsPerNibble(bitsPerDimension);
-        return (quantizedDim - 1) / groupDims + 1;
+        validateBitsPerDimension(bitsPerDimension);
+        return Math.toIntExact(((long) quantizedDim * bitsPerDimension + 3) / 4);
     }
 
     public static int canonicalCodeBytes(int quantizedDim, int bitsPerDimension) {
         return (codeGroups(quantizedDim, bitsPerDimension) - 1) / 2 + 1;
     }
 
+    /**
+     * Whether the graph neighborhood body uses field blocks: offset-binary codes (3 and 5 to 9 bits) are stored
+     * as {@code [unit][lane][bits bytes]}, where a unit is eight dimensions, so each lane's eight fields are
+     * contiguous for INT8 dot products. Other widths store byte {@code p} of every lane's code in row {@code p}.
+     */
+    public static boolean usesFieldBlocks(int bitsPerDimension) {
+        return AsymmetricHashing.usesOffsetBinaryCode(bitsPerDimension);
+    }
+
+    /** Eight-dimension units in a field-block code. */
+    public static int fieldUnits(int quantizedDim) {
+        if (quantizedDim <= 0) {
+            throw new IllegalArgumentException("quantizedDim must be > 0");
+        }
+        return (quantizedDim - 1) / 8 + 1;
+    }
+
+    /** Body bytes of one graph neighborhood block, in this width's layout. */
     public static int blockBodyBytes(int quantizedDim, int bitsPerDimension, int blockSize) {
         validateBlockSize(blockSize);
+        if (usesFieldBlocks(bitsPerDimension)) {
+            return Math.multiplyExact(Math.multiplyExact(fieldUnits(quantizedDim), bitsPerDimension), blockSize);
+        }
+        return nibbleBlockBodyBytes(quantizedDim, bitsPerDimension, blockSize);
+    }
+
+    /** Body bytes of one block whose rows hold byte {@code p} of every lane's code (the LUT layout). */
+    public static int nibbleBlockBodyBytes(int quantizedDim, int bitsPerDimension, int blockSize) {
+        validateBlockSize(blockSize);
         return Math.multiplyExact(canonicalCodeBytes(quantizedDim, bitsPerDimension), blockSize);
+    }
+
+    /**
+     * Copies one lane's canonical code out of a graph neighborhood block into {@code dest}, which must hold
+     * {@link #canonicalCodeBytes} bytes. For 1-bit codes these are the packed sign nibbles.
+     */
+    public static void readLaneCode(byte[] block, int blockOffset, int lane, int quantizedDim, int bitsPerDimension,
+                                    int blockSize, byte[] dest) {
+        validateLane(lane, blockSize);
+        int bytes = canonicalCodeBytes(quantizedDim, bitsPerDimension);
+        if (usesFieldBlocks(bitsPerDimension)) {
+            int b = bitsPerDimension;
+            for (int i = 0; i < bytes; i++) {
+                int unit = i / b;
+                dest[i] = block[blockOffset + (unit * blockSize + lane) * b + i % b];
+            }
+            return;
+        }
+        for (int i = 0; i < bytes; i++) dest[i] = block[blockOffset + i * blockSize + lane];
     }
 
     public static int blockHeaderBytes(int blockSize) {
@@ -174,8 +240,9 @@ public final class FusedASHLayout {
                 : ((old & 0x0F) | (n << 4)));
     }
 
+    /** Value of a 1-bit sign or a 2/4-bit sign-magnitude field. */
     public static float decodeProjectionComponent(int field, int bitsPerDimension) {
-        validateBitsPerDimension(bitsPerDimension);
+        projectionDimsPerNibble(bitsPerDimension);
         if (bitsPerDimension == 1) {
             return field != 0 ? 1.0f : -1.0f;
         }
@@ -217,6 +284,21 @@ public final class FusedASHLayout {
                 setPackedNibble(block, blockOffset, lane, group, blockSize,
                         signNibbleFromWords(vector.binaryVector, group, quantizedDim));
             }
+        } else if (usesFieldBlocks(bitsPerDimension)) {
+            byte[] code = vector.extraBits;
+            int bytes = canonicalCodeBytes(quantizedDim, bitsPerDimension);
+            if (code == null || code.length < bytes) {
+                throw new IllegalArgumentException("ASH projection code is missing or too short");
+            }
+            // Bytes past the canonical code, in the last unit, are zero padding.
+            int b = bitsPerDimension, units = fieldUnits(quantizedDim);
+            for (int unit = 0; unit < units; unit++) {
+                int destination = blockOffset + (unit * blockSize + lane) * b;
+                for (int k = 0; k < b; k++) {
+                    int i = unit * b + k;
+                    block[destination + k] = i < bytes ? code[i] : 0;
+                }
+            }
         } else {
             byte[] code = vector.extraBits;
             int bytes = canonicalCodeBytes(quantizedDim, bitsPerDimension);
@@ -240,10 +322,9 @@ public final class FusedASHLayout {
     /**
      * Packs one canonical ASH vector into the graph's fused neighborhood representation.
      *
-     * <p>The one-bit canonical scorer uses {@code A(q - mu)}, whereas fused scoring uses
-     * {@code Aq} for every bit width. Only one-bit offsets therefore need the adjustment
-     * {@code offset - scale * dot(A(mu), code)}. Two/four-bit offsets already contain it.
-     * Keeping this conversion here makes benchmark fixtures use the graph writer's exact bytes.</p>
+     * <p>Fused scoring uses {@code Aq} for every bit width. Canonical 1/2/4-bit offsets already
+     * contain the landmark adjustment {@code -scale * dot(A(mu), code)}, so the header is copied as
+     * stored. Benchmark fixtures call this to use the graph writer's exact bytes.</p>
      *
      * @param block destination containing a complete serialized block
      * @param blockOffset byte offset of that block
@@ -262,16 +343,6 @@ public final class FusedASHLayout {
         }
         packQuantizedVector(block, blockOffset, lane, vector,
                 ash.quantizedDim, ash.bitsPerDimension, blockSize);
-        if (ash.bitsPerDimension == 1) {
-            float landmarkDot = 0f;
-            for (int d = 0; d < ash.quantizedDim; d++) {
-                float projected = ash.landmarkProj[landmark][d];
-                boolean positive = ((vector.binaryVector[d >>> 6] >>> (d & 63)) & 1L) != 0;
-                landmarkDot += positive ? projected : -projected;
-            }
-            writeLaneHeader(block, blockOffset, lane, ash.quantizedDim, 1, blockSize,
-                    vector.scale, vector.offset - vector.scale * landmarkDot, vector.landmark);
-        }
     }
 
     public static void writeLaneHeader(
@@ -306,6 +377,10 @@ public final class FusedASHLayout {
     }
 
     public static void buildQueryLut(float[] qProj, int quantizedDim, int bitsPerDimension, float[] lut) {
+        if (AsymmetricHashing.usesOffsetBinaryCode(bitsPerDimension)) {
+            buildOffsetBinaryLut(qProj, quantizedDim, bitsPerDimension, lut);
+            return;
+        }
         validateBitsPerDimension(bitsPerDimension);
         int groupDims = projectionDimsPerNibble(bitsPerDimension);
         int groups = codeGroups(quantizedDim, bitsPerDimension);
@@ -347,6 +422,35 @@ public final class FusedASHLayout {
                 }
                 lut[lutBase + nibble] = sum;
             }
+        }
+    }
+
+    /**
+     * Table for offset-binary codes. Group {@code k} covers code bits {@code 4k..4k+3}; bit {@code i} is
+     * bit {@code i % b} of dimension {@code i / b} and adds {@code 2^(i % b) * q[i / b]}. Each dimension's
+     * centering term {@code -(2^b - 1)/2 * q[j]} is added to every entry of the group holding its bit 0,
+     * so each lookup sum includes it exactly once.
+     */
+    private static void buildOffsetBinaryLut(float[] qProj, int quantizedDim, int bits, float[] lut) {
+        int groups = codeGroups(quantizedDim, bits);
+        if (qProj.length < quantizedDim) {
+            throw new IllegalArgumentException("qProj length is smaller than quantizedDim");
+        }
+        if (lut.length < groups * 16) {
+            throw new IllegalArgumentException("lut length is smaller than groups * 16");
+        }
+        float center = ((1 << bits) - 1) * 0.5f;
+        float[] weight = new float[4];
+        for (int group = 0; group < groups; group++) {
+            float base = 0f;
+            for (int slot = 0; slot < 4; slot++) {
+                int bit = 4 * group + slot, dim = bit / bits, power = bit % bits;
+                weight[slot] = dim < quantizedDim ? qProj[dim] * (float) (1 << power) : 0f;
+                if (dim < quantizedDim && power == 0) base -= center * qProj[dim];
+            }
+            int at = group << 4;
+            lut[at] = base;
+            for (int n = 1; n < 16; n++) lut[at + n] = lut[at + (n & (n - 1))] + weight[Integer.numberOfTrailingZeros(n)];
         }
     }
 

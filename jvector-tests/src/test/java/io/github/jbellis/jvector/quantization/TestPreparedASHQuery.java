@@ -65,7 +65,7 @@ public class TestPreparedASHQuery {
     @Test
     public void batchMatchesSinglePreparationForEveryFusedBitCountAndOwnsInputs() throws Exception {
         var values = inputs(97);
-        for (int bits : new int[]{1, 2, 4}) {
+        for (int bits : new int[]{1, 2, 3, 4, 9}) {
             var ash = model(values, bits);
             var preparer = new ASHQueryPreparer(ash);
             var states = new PreparedQuery[17];
@@ -79,7 +79,12 @@ public class TestPreparedASHQuery {
                     var actual = ASHQueryPreparer.state(ash, states[i], true);
                     assertArrayEquals(expected.prepared.qProj, actual.prepared.qProj, 2e-6f);
                     assertArrayEquals(expected.prepared.dotQMuByLandmark, actual.prepared.dotQMuByLandmark, 0f);
-                    assertArrayEquals(expected.lut, actual.lut, 5e-6f);
+                    // Offset-binary entries weight Aq by up to 2^(b-1), amplifying batch/single projection
+                    // differences of up to 2e-6 by the same factor.
+                    float lutTolerance = bits == 1 || bits == 2 || bits == 4 ? 5e-6f : 2e-6f * (1 << bits);
+                    for (int e = 0; e < expected.lut.length; e++) {
+                        assertEquals(expected.lut[e], actual.lut[e], lutTolerance * Math.max(1f, Math.abs(expected.lut[e])));
+                    }
                 }
             }
             var mutable = values[0].copy();
@@ -201,7 +206,7 @@ public class TestPreparedASHQuery {
             @Override public List<Integer> maxDegrees() { return List.of(16, 0); }
             @Override public int getDimension() { return 64; }
         };
-        for (int bits : new int[]{1, 2, 4}) {
+        for (int bits : new int[]{1, 2, 3, 4, 9}) {
             var ash = model(values, bits);
             var encoded = ash.encodeAll(ravv, ForkJoinPool.commonPool());
             var path = Files.createTempFile("ash-prepared-query-", ".index");

@@ -188,13 +188,26 @@ class NativeVectorUtilSupport extends PanamaVectorUtilSupport
         return super.ashKernelDescription() + "; C=1 whole-neighborhood=" + neighborhood
                 + "; dense projection=" + (NativeASHProjection.isAvailable() ? "Highway" : "Java")
                 + "; symmetric pair=" + (NativeASHSymmetricKernels.hasPairKernel() ? "Highway" : "Java")
-                + "; symmetric LUT=" + (NativeASHSymmetricKernels.hasLutKernel() ? "Highway" : "Java");
+                + "; symmetric LUT=" + (NativeASHSymmetricKernels.hasLutKernel() ? "Highway" : "Java")
+                + "; INT8 offset-binary neighborhood=" + (supportsAshInt8NeighborhoodScoring() ? "Highway" : "Java");
     }
 
     @Override
     public void ashScoreNeighborhood(byte[] codes, int groups, int blockSize, int capacity,
                                      float[] lut, float landmarkDot, float[] out) {
         NativeASHKernels.scoreNeighborhood(codes, groups, blockSize, capacity, lut, landmarkDot, out);
+    }
+
+    @Override
+    public boolean supportsAshInt8NeighborhoodScoring() {
+        return NativeASHKernels.isInt8NeighborhoodAvailable();
+    }
+
+    @Override
+    public void ashScoreNeighborhoodInt8(byte[] codes, int bits, int units, int blockSize, int capacity,
+                                         byte[] q, float invScale, float center, float landmarkDot, float[] out) {
+        NativeASHKernels.scoreNeighborhoodInt8(codes, bits, units, blockSize, capacity, q, invScale, center,
+                landmarkDot, out);
     }
 
     @Override

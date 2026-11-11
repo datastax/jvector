@@ -186,6 +186,36 @@ public interface VectorUtilSupport {
     throw new UnsupportedOperationException("Native ASH neighborhood scoring is unavailable");
   }
 
+  /** Whether {@link #ashScoreNeighborhoodInt8} is implemented. */
+  default boolean supportsAshInt8NeighborhoodScoring() { return false; }
+
+  /**
+   * Scores one complete C=1 FusedASH neighborhood of offset-binary codes (3 and 5 to 9 bits) with an
+   * INT8 query. Each block's body is {@code [unit][lane][bits bytes]} for {@code units} units of
+   * eight dimensions, followed by the usual headers. Per lane,
+   * {@code dot = (<q, field> - center) * invScale}, and the result is
+   * {@code max(0, (1 + scale * dot + landmarkDot + offset) / 2)}.
+   *
+   * @param codes complete packed neighborhood, with full serialized storage for its final block
+   * @param bits bits per dimension: 3, 5, 6, 7, 8 or 9
+   * @param units positive number of eight-dimension units
+   * @param blockSize serialized block width: 8, 16, or 32
+   * @param capacity positive number of lanes to score, including graph padding
+   * @param q INT8 query, {@code units * 8} entries
+   * @param invScale reciprocal of the query quantization scale
+   * @param center {@code (2^bits - 1)/2 * sum(q)}
+   * @param landmarkDot query dot product with the single landmark
+   * @param out receives {@code capacity} similarities; later elements are left unchanged
+   * @throws UnsupportedOperationException if this provider has no implementation
+   * @throws IllegalArgumentException for an invalid shape
+   * @throws IndexOutOfBoundsException if an array is too small
+   * @throws IllegalStateException if a scored lane contains a nonzero landmark ID
+   */
+  default void ashScoreNeighborhoodInt8(byte[] codes, int bits, int units, int blockSize, int capacity,
+                                        byte[] q, float invScale, float center, float landmarkDot, float[] out) {
+    throw new UnsupportedOperationException("Native INT8 ASH neighborhood scoring is unavailable");
+  }
+
   /** Calculates the dot product of the given float arrays. */
   float dotProduct(VectorFloat<?> a, VectorFloat<?> b);
 
@@ -622,45 +652,6 @@ public interface VectorUtilSupport {
     return acc;
   }
 
-  /**
-   * Computes maskedAdd for a single vector stored in packed *by-vector* form.
-   * Returns:
-   *   {@code maskedAdd = <tildeQ, b>}
-   *
-   * packedBits layout:
-   *   packedBits[packedBase + w] is 64-bit word w for this vector.
-   *
-   * Default implementation is scalar bit-walk with a register accumulator.
-   * SIMD backends may override.
-   */
-  default float ashMaskedAddAllWords(
-          float[] tildeQ,
-          int d,
-          long[] packedBits,
-          int packedBase,  // ord * nWords (by-vector contiguous)
-          int nWords
-  ) {
-    float maskedAdd = 0f; // register accumulator (critical!)
-
-    for (int w = 0; w < nWords; w++) {
-      long word = packedBits[packedBase + w];
-      int baseDim = w * 64;
-
-      // Walk set bits (fast when sparse; matches your block fallback style)
-      while (word != 0L) {
-        int bit = Long.numberOfTrailingZeros(word);
-        int idx = baseDim + bit;
-        if (idx < d) maskedAdd += tildeQ[idx];
-        word &= (word - 1);
-      }
-    }
-
-    return maskedAdd;
-  }
-
-  // In VectorUtilSupport interface
-  float ashMaskedAddFlat(float[] tildeQ, int qOffset, long[] allPackedVectors, int packedBase, int d, int words);
-
   // In VectorUtilSupport interface
   float ashMaskedAdd_512(float[] tildeQ, int qOffset, long[] allPackedVectors, int packedBase, int d, int words);
 
@@ -709,56 +700,6 @@ public interface VectorUtilSupport {
     }
   }
 
-  /**
-   * Computes maskedAdd for a block slice using a pooled landmark-specific query buffer.
-   *
-   * <p>This is identical to {@link #ashMaskedAddBlockAllWords(float[], int, long[], int, int, int, int, int, float[])}
-   * except that the query vector is read from {@code tildeQPool} at offsets {@code tildeBase + j}.</p>
-   *
-   * <p>tildeQPool layout:
-   * <ul>
-   *   <li>{@code tildeQPool[tildeBase + j]} is q̃_c[j] for the caller-selected landmark c</li>
-   * </ul>
-   *
-   * <p>Default implementation is scalar bit-walk with register accumulation, reading from the pool.</p>
-   */
-  default void ashMaskedAddBlockAllWordsPooled(
-          float[] tildeQPool,
-          int tildeBase,   // base offset into tildeQPool for this landmark (e.g., c * d)
-          int d,
-          long[] packedBits,
-          int packedBase,  // blockId * nWords * blockSize
-          int nWords,
-          int blockSize,
-          int laneStart,
-          int blockLen,
-          float[] outMaskedAdd
-  ) {
-    assert tildeBase >= 0;
-    assert laneStart >= 0;
-    assert blockLen >= 0;
-    assert laneStart + blockLen <= blockSize;
-    assert outMaskedAdd.length >= blockLen : "outMaskedAdd too small";
-
-    for (int lane = 0; lane < blockLen; lane++) {
-      float maskedAdd = 0f; // register accumulator
-      int laneIndex = laneStart + lane;
-
-      for (int w = 0; w < nWords; w++) {
-        long word = packedBits[packedBase + (w * blockSize) + laneIndex];
-        int baseDim = w * 64;
-
-        while (word != 0L) {
-          int bit = Long.numberOfTrailingZeros(word);
-          int j = baseDim + bit;
-          if (j < d) maskedAdd += tildeQPool[tildeBase + j];
-          word &= (word - 1);
-        }
-      }
-
-      outMaskedAdd[lane] = maskedAdd;
-    }
-  }
   /**
    * Optionally performs the existing coarse/fine NVQ growth-rate search in one
    * call. Returns NaN when unsupported; the caller then uses its Java search.

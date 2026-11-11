@@ -706,8 +706,68 @@ public class AsymmetricHashing implements VectorCompressor<AsymmetricHashing.Qua
         return bitsPerDimension == 2 || bitsPerDimension == 4;
     }
 
-    static boolean supportsFusedAshBits(int bitsPerDimension) {
-        return bitsPerDimension == 1 || bitsPerDimension == 2 || bitsPerDimension == 4;
+    /**
+     * Whether codes are offset-binary fields: dimension {@code j} is the unsigned {@code b}-bit field at bits
+     * {@code [j*b, (j+1)*b)} of the little-endian body, with value {@code field - (2^b - 1) / 2}. Every width
+     * except 1 bit (sign words) and the 2/4-bit sign-magnitude projection codes uses this layout.
+     */
+    static boolean usesOffsetBinaryCode(int bitsPerDimension) {
+        return bitsPerDimension != 1 && !usesFastScanProjectionCode(bitsPerDimension);
+    }
+
+    /** Field {@code j} of an offset-binary code whose body starts at {@code codeOffset}. */
+    static int offsetBinaryField(byte[] code, int codeOffset, int j, int bitsPerDimension) {
+        int bit = j * bitsPerDimension, at = codeOffset + (bit >>> 3), shift = bit & 7;
+        int window = code[at] & 0xFF;
+        if (shift + bitsPerDimension > 8) window |= (code[at + 1] & 0xFF) << 8;
+        if (shift + bitsPerDimension > 16) window |= (code[at + 2] & 0xFF) << 16;
+        return (window >>> shift) & ((1 << bitsPerDimension) - 1);
+    }
+
+    /** ORs {@code field} into dimension {@code j} of a zeroed offset-binary code. */
+    static void setOffsetBinaryField(byte[] code, int j, int bitsPerDimension, int field) {
+        int bit = j * bitsPerDimension;
+        for (int t = 0; t < bitsPerDimension; t++, bit++) {
+            if ((field & (1 << t)) != 0) code[bit >>> 3] |= (byte) (1 << (bit & 7));
+        }
+    }
+
+    /** The value of an offset-binary field: an odd multiple of one half, centered on zero. */
+    static float decodeOffsetBinary(int field, int bitsPerDimension) {
+        return field - ((1 << bitsPerDimension) - 1) * 0.5f;
+    }
+
+    /** {@code <v, code>} for an offset-binary code starting at {@code codeOffset}. */
+    static float dotOffsetBinaryCode(float[] v, byte[] code, int codeOffset, int quantizedDim, int bitsPerDimension) {
+        float sum = 0f;
+        for (int j = 0; j < quantizedDim; j++) {
+            sum += v[j] * decodeOffsetBinary(offsetBinaryField(code, codeOffset, j, bitsPerDimension), bitsPerDimension);
+        }
+        return sum;
+    }
+
+    /**
+     * {@code <A mu_c, code>}, the landmark term that every stored offset includes as
+     * {@code -scale * <A mu_c, code>}, so that asymmetric scoring needs only {@code Aq}.
+     */
+    float landmarkCodeDot(int landmark, long[] signs, int signOffset, byte[] body, int bodyOffset) {
+        float[] projected = landmarkProj[landmark];
+        if (usesFastScanProjectionCode(bitsPerDimension)) {
+            return dotProjectionCode(projected, body, bodyOffset, quantizedDim, bitsPerDimension);
+        }
+        if (bitsPerDimension != 1) return dotOffsetBinaryCode(projected, body, bodyOffset, quantizedDim, bitsPerDimension);
+        // Signs s = 2b - 1, so <A mu, s> = 2 * (sum of A mu over set bits) - sum(A mu).
+        float positive = 0f;
+        int words = QuantizedVector.wordsForDims(quantizedDim);
+        for (int w = 0, base = 0; w < words; w++, base += 64) {
+            long word = signs[signOffset + w];
+            while (word != 0L) {
+                int j = base + Long.numberOfTrailingZeros(word);
+                if (j < quantizedDim) positive += projected[j];
+                word &= word - 1;
+            }
+        }
+        return 2f * positive - landmarkProjSum[landmark];
     }
 
     static int projectionDimsPerNibble(int bitsPerDimension) {
@@ -825,15 +885,18 @@ public class AsymmetricHashing implements VectorCompressor<AsymmetricHashing.Qua
 
     /** Header-calibrated correction for symmetric scoring, using the stored code/header. */
     float centeredOffset(QuantizedVector vector) {
-        return centeredOffset(vector.scale, vector.offset, vector.landmark, vector.extraBits, 0);
+        return centeredOffset(vector.scale, vector.offset, vector.landmark, vector.binaryVector, 0, vector.extraBits, 0);
     }
 
-    /** As {@link #centeredOffset(QuantizedVector)} for a header and a body stored at {@code bodyOffset}. */
-    float centeredOffset(float scale, float offset, byte landmark, byte[] body, int bodyOffset) {
+    /**
+     * As {@link #centeredOffset(QuantizedVector)} for a header with sign words at {@code signOffset}
+     * and a body at {@code bodyOffset}; only the array the bit width stores is read.
+     */
+    float centeredOffset(float scale, float offset, byte landmark, long[] signs, int signOffset,
+                         byte[] body, int bodyOffset) {
         int c = landmark & 255;
         if (c >= landmarkCount) throw new IllegalArgumentException("Invalid landmark " + c);
-        if (!usesFastScanProjectionCode(bitsPerDimension)) return offset;
-        return offset + scale * dotProjectionCode(landmarkProj[c], body, bodyOffset, quantizedDim, bitsPerDimension);
+        return offset + scale * landmarkCodeDot(c, signs, signOffset, body, bodyOffset);
     }
 
     // ---------------------------------------------------------------------
@@ -925,9 +988,6 @@ public class AsymmetricHashing implements VectorCompressor<AsymmetricHashing.Qua
             for (int j = 0; j < quantizedDim; j++) {
                 float acc = proj[j];
                 projNorm2 += (double) acc * (double) acc;
-                if (!usesFastScanProjectionCode(bitsPerDimension) && acc >= 0.0f) {
-                    QuantizedVector.setBit(outSignWords, j);
-                }
             }
 
             final double invProjNorm = 1.0 / Math.max(Math.sqrt(projNorm2), 1e-20);
@@ -947,14 +1007,14 @@ public class AsymmetricHashing implements VectorCompressor<AsymmetricHashing.Qua
                         outExtraBits);
             }
 
+            // Offset-binary: magnitude index q is field 2^(b-1) + q when positive, 2^(b-1) - 1 - q otherwise.
+            final int half = 1 << exBits;
             double codeNorm2 = 0.0;
             for (int j = 0; j < quantizedDim; j++) {
                 int q = Math.min((int) (t * absNorm[j] + K_EPS), maxCode);
                 double mag = q + 0.5;
                 codeNorm2 += mag * mag;
-
-                int extraCode = (proj[j] < 0.0f) ? ((~q) & maxCode) : q;
-                QuantizedVector.writeExtraCode(outExtraBits, j, exBits, extraCode);
+                setOffsetBinaryField(outExtraBits, j, bitsPerDimension, proj[j] >= 0.0f ? half + q : half - 1 - q);
             }
 
             return (float) Math.sqrt(Math.max(codeNorm2, 1e-20));
@@ -1018,8 +1078,8 @@ public class AsymmetricHashing implements VectorCompressor<AsymmetricHashing.Qua
         public float scale; // ||x_i - μ_i*||_2 / ||encoded body||_2
         public float offset; // offset_i = <x_i, μ_i*> - ||μ_i*||^2
         public byte landmark; // c_i*, unsigned [0, C)
-        public long[] binaryVector; // sign bits; bit=1 means positive code value
-        public byte[] extraBits; // packed extra magnitude/sign-complement bits for multibit ASH
+        public long[] binaryVector; // 1-bit codes only: sign bits; bit=1 means positive code value
+        public byte[] extraBits; // multibit codes only: packed fields (see usesOffsetBinaryCode)
 
         private QuantizedVector(float scale,
                                 float offset,
@@ -1037,23 +1097,18 @@ public class AsymmetricHashing implements VectorCompressor<AsymmetricHashing.Qua
             return (quantizedDim + 63) >>> 6;
         }
 
+        /** Sign words: only 1-bit codes store them. */
         public static int signWordsForDims(int quantizedDim, int bitsPerDimension) {
-            return usesFastScanProjectionCode(bitsPerDimension) ? 0 : wordsForDims(quantizedDim);
+            return bitsPerDimension == 1 ? wordsForDims(quantizedDim) : 0;
         }
 
-        public static int extraBytesForDims(int quantizedDim, int bitsPerDimension) {
-            int exBits = bitsPerDimension - 1;
-            if (exBits <= 0) {
-                return 0;
-            }
-            return (quantizedDim * exBits + 7) >>> 3;
-        }
-
+        /** Body bytes: the packed fields of every multibit code, none for 1-bit codes. */
         public static int bodyBytesForDims(int quantizedDim, int bitsPerDimension) {
+            if (bitsPerDimension == 1) return 0;
             if (usesFastScanProjectionCode(bitsPerDimension)) {
                 return projectionCodeBytesForDims(quantizedDim, bitsPerDimension);
             }
-            return extraBytesForDims(quantizedDim, bitsPerDimension);
+            return Math.toIntExact(((long) quantizedDim * bitsPerDimension + 7) >>> 3);
         }
 
         public static QuantizedVector createEmpty(int quantizedDim) {
@@ -1230,29 +1285,6 @@ public class AsymmetricHashing implements VectorCompressor<AsymmetricHashing.Qua
         /** Bit {@code bitIndex} of the sign words starting at {@code wordOffset}. */
         static boolean getBit(long[] words, int wordOffset, int bitIndex) {
             return ((words[wordOffset + (bitIndex >>> 6)] >>> (bitIndex & 63)) & 1L) != 0L;
-        }
-
-        static void writeExtraCode(byte[] extraBits, int dim, int exBits, int code) {
-            int bitPos = dim * exBits;
-            for (int bit = 0; bit < exBits; bit++, bitPos++) {
-                if ((code & (1 << bit)) != 0) {
-                    extraBits[bitPos >>> 3] |= (byte) (1 << (bitPos & 7));
-                }
-            }
-        }
-
-        static int readExtraCode(byte[] extraBits, int dim, int exBits) {
-            return readExtraCode(extraBits, 0, dim, exBits);
-        }
-
-        /** As {@link #readExtraCode(byte[], int, int)} for extra bits starting at {@code byteOffset}. */
-        static int readExtraCode(byte[] extraBits, int byteOffset, int dim, int exBits) {
-            int code = 0;
-            int bitPos = dim * exBits;
-            for (int bit = 0; bit < exBits; bit++, bitPos++) {
-                code |= ((extraBits[byteOffset + (bitPos >>> 3)] >>> (bitPos & 7)) & 1) << bit;
-            }
-            return code;
         }
 
         /**
@@ -1483,13 +1515,14 @@ public class AsymmetricHashing implements VectorCompressor<AsymmetricHashing.Qua
             this.rows = quantizedDim;
             this.cols = originalDim;
 
-            // Explicitly materialize A = Wᵀ into row-major arrays.
+            // Explicitly materialize A = Wᵀ into row-major arrays. Models persist A in FP32, so AData holds
+            // those FP32 values: a trained model and its reloaded copy then derive identical landmark terms.
             this.AData = new double[quantizedDim][originalDim];
             for (int i = 0; i < quantizedDim; i++) {
                 final double[] row = this.AData[i];
                 for (int j = 0; j < originalDim; j++) {
                     // A[i][j] = W[j][i]
-                    row[j] = W.getEntry(j, i);
+                    row[j] = (float) W.getEntry(j, i);
                 }
             }
 
@@ -1589,7 +1622,7 @@ public class AsymmetricHashing implements VectorCompressor<AsymmetricHashing.Qua
         // Encoded straight into the compact store; no per-vector objects are retained.
         final ASHCodes out = ASHCodes.allocate(n, quantizedDim, bitsPerDimension);
         // Fill while each encoded vector is hot; never reread the raw input for setup.
-        final float[] symmetricOffsets = usesFastScanProjectionCode(bitsPerDimension) ? new float[n] : null;
+        final float[] symmetricOffsets = new float[n];
         final var ravvSupplier = ravv.threadLocalSupplier();
         var tasks = new java.util.ArrayList<java.util.concurrent.ForkJoinTask<?>>(parallelism);
         Throwable failure = null;
@@ -1761,24 +1794,12 @@ public class AsymmetricHashing implements VectorCompressor<AsymmetricHashing.Qua
         final float rawOffset = dest.offset;
         final float scale = codeNorm > 0f ? residualNorm / codeNorm : 0f;
 
-        float finalOffset = rawOffset;
-        float landmarkDot = 0f;
-        if (usesFastScanProjectionCode(bitsPerDimension)) {
-            // C++ projection-mode optimization:
-            //   offset = <x, μ> - ||μ||² - scale * <Aμ, code>
-            // so query-time scoring can use Aq instead of A(q - μ).
-            landmarkDot = dotProjectionCode(
-                    landmarkProj[c],
-                    dest.extraBits,
-                    quantizedDim,
-                    bitsPerDimension);
-            finalOffset -= scale * landmarkDot;
-        }
-
+        // Projection-mode offset: offset = <x, μ> - ||μ||² - scale * <Aμ, code>, so query-time
+        // scoring can use Aq instead of A(q - μ). A 1-bit code is its ±1 signs.
+        final float landmarkDot = landmarkCodeDot(c, dest.binaryVector, 0, dest.extraBits, 0);
         dest.scale = roundToFloat16(scale);
-        dest.offset = roundToFloat16(finalOffset);
-        return usesFastScanProjectionCode(bitsPerDimension)
-                ? dest.offset + dest.scale * landmarkDot : dest.offset;
+        dest.offset = roundToFloat16(rawOffset - scale * landmarkDot);
+        return dest.offset + dest.scale * landmarkDot;
     }
 
     // ---------------------------------------------------------------------

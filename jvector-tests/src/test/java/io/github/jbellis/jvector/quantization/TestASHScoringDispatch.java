@@ -172,13 +172,6 @@ public class TestASHScoringDispatch {
             int offset = FusedASHLayout.blockOffset(i / size, ash.quantizedDim, ash.bitsPerDimension, size);
             var v = vectors.get(i);
             FusedASHLayout.packQuantizedVector(bytes, offset, i % size, v, ash.quantizedDim, ash.bitsPerDimension, size);
-            if (ash.bitsPerDimension == 1) {
-                float landmarkDot = 0;
-                for (int d = 0; d < ash.quantizedDim; d++) landmarkDot += ash.landmarkProj[v.landmark & 255][d]
-                        * (((v.binaryVector[d >>> 6] >>> (d & 63)) & 1) == 0 ? -1 : 1);
-                FusedASHLayout.writeLaneHeader(bytes, offset, i % size, ash.quantizedDim, 1, size,
-                        v.scale, v.offset - v.scale * landmarkDot, v.landmark);
-            }
         }
         int[] reads = {0};
         var source = new FusedASHDecoder.PackedNeighborhoods() {

@@ -36,7 +36,7 @@ public final class FusedASHBlockPacker {
     public static void pack(byte[] destination, int offset,
                             AsymmetricHashing.QuantizedVector[] vectors, int first, int count,
                             int dimension, int bits, int blockSize) {
-        if (bits == 1) {
+        if (bits == 1 || FusedASHLayout.usesFieldBlocks(bits)) {
             for (int lane = 0; lane < count; lane++) {
                 FusedASHLayout.packQuantizedVector(destination, offset, lane,
                         vectors[first + lane], dimension, bits, blockSize);

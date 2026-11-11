@@ -20,7 +20,7 @@ the codes stored with a fused ASH graph.
 | `optimizer` | Required | `ITQ` (`1`): iterative-quantization transform. `RANDOM` (`2`): random transform. |
 | `encodedBits` | Exactly one of this and `compressionRatio` | Total stored bits including the 40-bit / five-byte header. The positive payload `encodedBits - 40` must be divisible by `bitsPerDimension`. |
 | `compressionRatio` | Alternative to `encodedBits` | BenchYAML accepts `8`, `16`, `32`, `64`, `128`, `256`. Resolves a payload near the requested FP32-to-code ratio, with a minimum 64-bit payload and whole projected dimensions; inspect the printed resolved size. |
-| `bitsPerDimension` (`b`) | `1` | Integer `1` through `9` in core ASH. Fused ASH supports `1`, `2`, `4`; optimized multibit formats use `2` or `4`. Stored-code precision is independent of query-projection arithmetic. |
+| `bitsPerDimension` (`b`) | `1` | Integer `1` through `9`, all supported by fused ASH. `1`, `2` and `4` have the most optimized kernels (see below). Stored-code precision is independent of query-projection arithmetic. |
 | `landmarkCount` (`C`) | `1` | Integer `1` through `256` for the quantizer. Symmetric graph-construction scoring currently requires `C=1` and dot-product similarity. |
 | Projected dimension (`d`) | Derived, not a separate YAML field | `d = (encodedBits - 40) / b`, with `1 <= d <= D` for input dimension `D`. Increasing `d` or `b` increases code size. |
 
@@ -48,10 +48,13 @@ QPS differs by about 1.5%. When a byte budget lands just short of an aligned
 100-byte budget, `d = 384` at 2 bits (101 bytes, no dimension reduction) is a
 better choice than `d = 380` (100 bytes).
 
-The other widths, `b` = 3 and 5 through 9, are supported by core ASH but use
-a generic per-dimension Java path for scoring, and fused graphs do not
-support them. They are slower than 1, 2 or 4 bits at every `d`. Fast native
-kernels for these widths are left for future work.
+The other widths, `b` = 3 and 5 through 9, store each dimension as an unsigned
+`b`-bit field. Search scores their graph neighborhoods with the projected query
+rounded to INT8 and integer dot products (VNNI on x86 processors that have it),
+so make `d` a multiple of 8. Their other asymmetric scoring uses the same
+4-bit query tables as 2 and 4 bits. Construction still compares their codes
+with a portable per-dimension path, so building is slower than at 1, 2 or 4
+bits; native code-to-code kernels for these widths are left for future work.
 
 Construction comparison cost, in ns per code pair, on one pinned core with
 the native provider, on an Intel Xeon 6985P-C and on an AWS m6id.4xlarge
@@ -103,9 +106,13 @@ so changing it does not invalidate an existing cached graph.
 ### In-memory code layout
 
 `ASHVectors` keeps one copy of the codes, in compact pages. Each vector's code
-body (sign words, projection code or extra bits) sits back to back with the
-others, with no per-vector object, array or padding. Scale, offset and landmark
-are decoded once into three parallel arrays. Every scorer, symmetric and
+body sits back to back with the others: sign words at 1 bit, sign-magnitude
+projection codes at 2 and 4 bits, and offset-binary fields at the other widths
+(dimension `j` is the unsigned field at bits `[j*b, (j+1)*b)`, with value
+`field - (2^b - 1)/2`). Every stored offset includes the landmark term
+`-scale * <A mu_c, code>`, so asymmetric scoring needs only `Aq`. Bodies have
+no per-vector object, array or padding. Scale, offset and landmark are decoded
+once into three parallel arrays. Every scorer, symmetric and
 asymmetric, reads the codes in place, and the encoder writes straight into the
 pages.
 

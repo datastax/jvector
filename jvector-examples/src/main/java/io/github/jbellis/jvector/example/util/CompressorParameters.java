@@ -182,9 +182,6 @@ public abstract class CompressorParameters {
             if (landmarkCount < 1 || landmarkCount > 256 || landmarkCount > ds.getBaseRavv().size()) {
                 throw new IllegalArgumentException("ASH landmarkCount must be between 1 and 256 and fit the training set");
             }
-            if (fused && bitsPerDimension != 1 && bitsPerDimension != 2 && bitsPerDimension != 4) {
-                throw new IllegalArgumentException("Fused ASH requires 1, 2, or 4 bits per dimension");
-            }
             if (ashConstructionMode != null) {
                 switch (ashConstructionMode) {
                     case "symmetric":

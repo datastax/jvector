@@ -66,7 +66,10 @@ public class TestASHLutScoring {
             assertTrue(backend.supportsAshProjectionScoring());
         }
         Random random = new Random(87342);
-        for (int bits : new int[]{1, 2, 4}) {
+        for (int bits : new int[]{1, 2, 3, 4, 5, 8, 9}) {
+            boolean offsetBinary = bits != 1 && bits != 2 && bits != 4;
+            // Offset-binary entries carry weights up to 2^(b-1); scale the FP32 tolerance with them.
+            float widthScale = offsetBinary ? (1 << bits) : 1;
             for (int d : new int[]{1, 2, 3, 4, 7, 15, 16, 17, 31, 32, 33, 63, 64, 65, 127, 129, 384, 768, 769}) {
                 int groups = FusedASHLayout.codeGroups(d, bits);
                 float[] q = new float[d];
@@ -75,7 +78,7 @@ public class TestASHLutScoring {
                 FusedASHLayout.buildQueryLut(q, d, bits, lut);
                 for (int size : new int[]{8, 16, 32}) {
                     int offset = 7;
-                    byte[] packed = new byte[offset + FusedASHLayout.blockBodyBytes(d, bits, size)];
+                    byte[] packed = new byte[offset + FusedASHLayout.nibbleBlockBodyBytes(d, bits, size)];
                     random.nextBytes(packed); // Padding is deliberately nonzero.
                     float[] expected = new float[size];
                     for (int lane = 0; lane < size; lane++) {
@@ -86,12 +89,25 @@ public class TestASHLutScoring {
                             FusedASHLayout.setFlatNibble(canonical, g, nibble);
                         }
                         for (int i = 0; i < d; i++) {
+                            if (offsetBinary) {
+                                // Offset-binary: field i is bits [i*b, (i+1)*b), value field - (2^b - 1)/2.
+                                int field = 0;
+                                for (int k = 0; k < bits; k++) {
+                                    int bit = i * bits + k;
+                                    field |= ((canonical[bit >>> 3] >>> (bit & 7)) & 1) << k;
+                                }
+                                expected[lane] += q[i] * (field - ((1 << bits) - 1) / 2f);
+                                continue;
+                            }
                             int field = (canonical[i * bits / 8] & 255) >>> (i * bits % 8);
                             int sign = 1 << (bits - 1);
                             float magnitude = bits == 1 ? 1 : (field & (sign - 1)) + 0.5f;
                             expected[lane] += q[i] * ((field & sign) == 0 ? -magnitude : magnitude);
                         }
-                        if (bits != 1) {
+                        if (offsetBinary) {
+                            assertEquals("canonical LUT bits=" + bits + " d=" + d, expected[lane],
+                                    backend.ashCanonicalLutDot(canonical, groups, lut), tolerance(expected[lane]) * widthScale);
+                        } else if (bits != 1) {
                             assertEquals("single bits=" + bits + " d=" + d, expected[lane],
                                     backend.usesAshProjectionTuning()
                                             ? backend.ashProjectionDotTuned(q, canonical, d, bits)
@@ -109,8 +125,8 @@ public class TestASHLutScoring {
                             assertTrue(Float.isNaN(actual[count + 2]));
                             for (int i = 0; i < count; i++) {
                                 String label = "bits=" + bits + " d=" + d + " size=" + size + " lane=" + (start + i);
-                                assertEquals(label, expected[start + i], actual[2 + i], tolerance(expected[start + i]));
-                                assertEquals(label, expected[start + i], scalar[2 + i], tolerance(expected[start + i]));
+                                assertEquals(label, expected[start + i], actual[2 + i], tolerance(expected[start + i]) * widthScale);
+                                assertEquals(label, expected[start + i], scalar[2 + i], tolerance(expected[start + i]) * widthScale);
                             }
                         }
                     }

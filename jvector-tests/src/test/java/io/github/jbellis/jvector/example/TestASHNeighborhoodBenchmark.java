@@ -43,7 +43,7 @@ public class TestASHNeighborhoodBenchmark {
             vectors.add(vector);
         }
         var values = new ListRandomAccessVectorValues(vectors, 64);
-        for (int bits : new int[] {1, 2, 4}) {
+        for (int bits : new int[] {1, 2, 3, 4}) {
             var ash = AsymmetricHashing.initialize(
                     values, AsymmetricHashing.RANDOM, AsymmetricHashing.HEADER_BITS + 33 * bits, 1, bits);
             ASHVectors encoded = (ASHVectors) ash.encodeAll(values);

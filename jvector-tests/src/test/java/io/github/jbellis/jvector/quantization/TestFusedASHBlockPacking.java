@@ -27,6 +27,19 @@ public class TestFusedASHBlockPacking {
     private static void reference(byte[] destination, int offset, int lane,
                                   AsymmetricHashing.QuantizedVector vector,
                                   int dimension, int bits, int blockSize) {
+        if (bits != 1 && bits != 2 && bits != 4) {
+            // Field blocks: unit u holds each lane's code bytes [u*b, (u+1)*b), zero past the code.
+            int units = (dimension + 7) / 8, bytes = FusedASHLayout.canonicalCodeBytes(dimension, bits);
+            for (int u = 0; u < units; u++) {
+                for (int k = 0; k < bits; k++) {
+                    int i = u * bits + k;
+                    destination[offset + (u * blockSize + lane) * bits + k] = i < bytes ? vector.extraBits[i] : 0;
+                }
+            }
+            FusedASHLayout.writeLaneHeader(destination, offset, lane, dimension, bits, blockSize,
+                    vector.scale, vector.offset, vector.landmark);
+            return;
+        }
         int groups = FusedASHLayout.codeGroups(dimension, bits);
         for (int group = 0; group < groups; group++) {
             int nibble = bits == 1
@@ -51,7 +64,7 @@ public class TestFusedASHBlockPacking {
         int[] large = {383, 384, 385, 767, 768, 769, 1536, 3072, 3073};
         System.arraycopy(large, 0, dimensions, 257, large.length);
         int cases = 0;
-        for (int bits : new int[]{1, 2, 4}) {
+        for (int bits : new int[]{1, 2, 3, 4, 9}) {
             for (int dimension : dimensions) {
                 for (int blockSize : new int[]{8, 16, 32}) {
                     var vectors = new AsymmetricHashing.QuantizedVector[blockSize + 3];
@@ -95,6 +108,6 @@ public class TestFusedASHBlockPacking {
                 }
             }
         }
-        assertEquals(49_476, cases);
+        assertEquals(82_460, cases);
     }
 }

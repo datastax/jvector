@@ -25,6 +25,7 @@ import java.util.Locale;
  * Untimed decoded-component oracle, independent of the scoring LUT and block-scoring implementation.
  * It uses the model's selected query precision and checks the serialized graph headers.
  * Projection arithmetic is covered separately by the provider's FP32 and FP16 oracle tests.
+ * Offset-binary (3 and 5 to 9 bit) neighborhoods score an INT8-rounded query, which the oracle applies too.
  * The tolerance permits FP32 reduction-order differences, without introducing LUT quantization.
  */
 final class ASHNeighborhoodValidator {
@@ -46,6 +47,16 @@ final class ASHNeighborhoodValidator {
             }
             float[] projected = new float[fixture.ash.quantizedDim];
             fixture.ash.stiefelTransform.projectQuery(input, projected);
+            if (FusedASHLayout.usesFieldBlocks(fixture.ash.bitsPerDimension)) {
+                // Offset-binary neighborhoods score an INT8 query: round to 127 / max|Aq| steps, as the format does.
+                float max = 0f;
+                for (float v : projected) max = Math.max(max, Math.abs(v));
+                if (max > 0f) {
+                    for (int d = 0; d < projected.length; d++) {
+                        projected[d] = Math.max(-127, Math.min(127, Math.round(projected[d] * (127f / max)))) * (max / 127f);
+                    }
+                }
+            }
             float[] scores = new float[fixture.capacity];
             for (int n = 0; n < neighborhoods; n++) {
                 int index = (int) ((long) n * fixture.neighborhoods.length / neighborhoods);
@@ -56,12 +67,18 @@ final class ASHNeighborhoodValidator {
                             i / fixture.blockSize, projected.length, fixture.ash.bitsPerDimension, fixture.blockSize);
                     int lane = i % fixture.blockSize, bits = fixture.ash.bitsPerDimension;
                     double dot = 0;
+                    byte[] code = new byte[FusedASHLayout.canonicalCodeBytes(projected.length, bits)];
+                    FusedASHLayout.readLaneCode(packed, offset, lane, projected.length, bits, fixture.blockSize, code);
                     for (int d = 0; d < projected.length; d++) {
-                        int perNibble = 4 / bits;
-                        int nibble =
-                                FusedASHLayout.getPackedNibble(packed, offset, lane, d / perNibble, fixture.blockSize);
-                        int field = nibble >>> ((d % perNibble) * bits) & ((1 << bits) - 1);
-                        dot += (double) projected[d] * FusedASHLayout.decodeProjectionComponent(field, bits);
+                        // Field d is bits [d*b, (d+1)*b) of the lane's canonical code.
+                        int field = 0;
+                        for (int k = 0; k < bits; k++) {
+                            int bit = d * bits + k;
+                            field |= ((code[bit >>> 3] >>> (bit & 7)) & 1) << k;
+                        }
+                        dot += (double) projected[d] * (bits == 1 || bits == 2 || bits == 4
+                                ? FusedASHLayout.decodeProjectionComponent(field, bits)
+                                : field - ((1 << bits) - 1) / 2.0);
                     }
                     float expected = ASHScorer.toSimilarity((float) (FusedASHLayout.readScale(packed, offset, lane,
                                                                              projected.length, bits, fixture.blockSize)

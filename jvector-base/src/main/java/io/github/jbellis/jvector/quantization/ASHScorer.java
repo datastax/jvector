@@ -117,11 +117,14 @@ public final class ASHScorer {
         if (AsymmetricHashing.usesFastScanProjectionCode(ash.bitsPerDimension)) {
             return fastScanProjectionDotProductScorer(qp);
         }
-
-        if (ASHVectors.AshSingleKernel.fromProperty() == ASHVectors.AshSingleKernel.SIMD) {
-            throw new UnsupportedOperationException("SIMD ASH projection scoring supports 2 and 4 bits per dimension");
+        var mode = ASHVectors.AshSingleKernel.fromProperty();
+        var backend = VectorizationProvider.getInstance().getVectorUtilSupport();
+        if (mode == ASHVectors.AshSingleKernel.SIMD && !backend.supportsAshCanonicalLutScoring()) {
+            throw new IllegalStateException("ASH single-vector SIMD requested, but backend "
+                    + backend.getClass().getName() + " does not support canonical LUT scoring");
         }
-        return genericMultibitDotProductScorer(qp);
+        return genericMultibitDotProductScorer(qp,
+                mode != ASHVectors.AshSingleKernel.SCALAR && backend.supportsAshCanonicalLutScoring());
     }
 
     /** Reuses a fused scorer's table for direct nodes when the backend supports it. */
@@ -130,7 +133,7 @@ public final class ASHScorer {
         var backend = VectorizationProvider.getInstance().getVectorUtilSupport();
         // Two coordinates share each 2-bit LUT entry. Four-bit codes instead
         // use the backend's contiguous projection dot, avoiding a 16x larger table.
-        if (ash.bitsPerDimension == 2
+        if ((ash.bitsPerDimension == 2 || AsymmetricHashing.usesOffsetBinaryCode(ash.bitsPerDimension))
                 && mode != ASHVectors.AshSingleKernel.SCALAR
                 && backend.supportsAshCanonicalLutScoring()) {
             int groups = FusedASHLayout.codeGroups(qp.d, ash.bitsPerDimension);
@@ -151,8 +154,7 @@ public final class ASHScorer {
         if (AsymmetricHashing.usesFastScanProjectionCode(ash.bitsPerDimension)) {
             return fastScanProjectionDotProductScorer(qp, simd);
         }
-        if (simd) throw new UnsupportedOperationException("SIMD ASH requires bits 1, 2, or 4");
-        return genericMultibitDotProductScorer(qp);
+        return genericMultibitDotProductScorer(qp, simd);
     }
 
     /** Adapts a code scorer to standalone vectors, whose arrays start at offset zero. */
@@ -168,10 +170,9 @@ public final class ASHScorer {
         return (bits, bitsOffset, body, bodyOffset, scale, offset, c) -> {
             assert c < C : "Invalid landmark id " + c + " for landmarkCount=" + C;
 
-            // maskedAdd = <q̃_c, b>, where b ∈ {0,1}^d is stored as packed longs.
+            // maskedAdd = <Aq, b>, where b ∈ {0,1}^d is stored as packed longs.
             float maskedAdd = 0f;
 
-            final int tildeBase = c * d;
             int dimBase = 0;
             for (int w = 0; w < words && dimBase < d; w++, dimBase += 64) {
                 long word = bits[bitsOffset + w];
@@ -179,15 +180,15 @@ public final class ASHScorer {
                     int bit = Long.numberOfTrailingZeros(word);
                     int idx = dimBase + bit;
                     if (idx < d) {
-                        maskedAdd += qp.tildeQPool[tildeBase + idx];
+                        maskedAdd += qp.qProj[idx];
                     }
                     word &= (word - 1);
                 }
             }
 
-            // 1-bit ASH dot-product approximation:
-            //   scale * (2<q̃_c,b> - <q̃_c,1>) + <q,μ_c> + offset
-            return scale * (2f * maskedAdd - qp.sumTildeQByLandmark[c])
+            // 1-bit ASH dot-product approximation, with <Aμ_c, s> folded into the offset:
+            //   scale * <Aq, s> + <q,μ_c> + offset, where <Aq, s> = 2<Aq,b> - <Aq,1>
+            return scale * (2f * maskedAdd - qp.sumQProj)
                     + qp.dotQMuByLandmark[c]
                     + offset;
         };
@@ -205,7 +206,7 @@ public final class ASHScorer {
         if (AsymmetricHashing.usesFastScanProjectionCode(ash.bitsPerDimension)) {
             return fastScanProjectionDotProductScorer(qp, false);
         }
-        return genericMultibitDotProductScorer(qp);
+        return genericMultibitDotProductScorer(qp, false);
     }
 
     private CodeScorer fastScanProjectionDotProductScorer(QueryPrecompute qp) {
@@ -261,44 +262,35 @@ public final class ASHScorer {
         };
     }
 
-    private CodeScorer genericMultibitDotProductScorer(QueryPrecompute qp) {
+    /**
+     * Offset-binary codes (3 and 5 to 9 bits): {@code scale * <Aq, code> + <q, mu_c> + offset}. The SIMD
+     * path sums the code's 4-bit groups through a query LUT prepared once per scorer; the scalar path
+     * decodes each field and is the independent reference.
+     */
+    private CodeScorer genericMultibitDotProductScorer(QueryPrecompute qp, boolean simd) {
         final int d = qp.d;
         final int C = qp.C;
         final int bitsPerDimension = ash.bitsPerDimension;
-        final int exBits = bitsPerDimension - 1;
-        final int signMagnitudeOffset = 1 << exBits;
-        final float centerBias = -(signMagnitudeOffset - 0.5f);
-
-        return (signBits, signOffset, extraBits, extraOffset, scale, offset, c) -> {
+        if (simd) {
+            final var backend = VectorizationProvider.getInstance().getVectorUtilSupport();
+            final int groups = FusedASHLayout.codeGroups(d, bitsPerDimension);
+            // Query-owned: prepared scorers may outlive this thread or run concurrently.
+            final float[] lut = new float[Math.multiplyExact(groups, 16)];
+            FusedASHLayout.buildQueryLut(qp.qProj, d, bitsPerDimension, lut);
+            return (signBits, signOffset, code, codeOffset, scale, offset, c) ->
+                    scale * backend.ashCanonicalLutDot(code, codeOffset, groups, lut) + qp.dotQMuByLandmark[c] + offset;
+        }
+        return (signBits, signOffset, code, codeOffset, scale, offset, c) -> {
             assert c < C : "Invalid landmark id " + c + " for landmarkCount=" + C;
-
-            final int tildeBase = c * d;
-
-            float ip = 0f;
-            for (int j = 0; j < d; j++) {
-                int sign = AsymmetricHashing.QuantizedVector.getBit(signBits, signOffset, j) ? 1 : 0;
-                int extra = AsymmetricHashing.QuantizedVector.readExtraCode(extraBits, extraOffset, j, exBits);
-
-                // Matches the C++ generic scalar reconstruction formula:
-                //   (sign << exBits) + extra - (2^exBits - 0.5)
-                float code = (float) ((sign << exBits) + extra) + centerBias;
-                ip += qp.tildeQPool[tildeBase + j] * code;
-            }
-
-            return scale * ip + qp.dotQMuByLandmark[c] + offset;
+            return scale * AsymmetricHashing.dotOffsetBinaryCode(qp.qProj, code, codeOffset, d, bitsPerDimension)
+                    + qp.dotQMuByLandmark[c] + offset;
         };
     }
 
-    private static final float[] EMPTY = new float[0];
-
-    /** Allocates only the preparation terms used by this model's scoring formula. */
+    /** Allocates the preparation terms of one query: {@code Aq} and the landmark dots. */
     QueryPrecompute newQueryPrecompute() {
-        int d = ash.quantizedDim;
-        int c = ash.landmarkCount;
-        boolean generic = !AsymmetricHashing.usesFastScanProjectionCode(ash.bitsPerDimension);
-        return new QueryPrecompute(d, c, new float[d],
-                generic ? new float[Math.multiplyExact(c, d)] : EMPTY,
-                generic ? new float[c] : EMPTY, new float[c]);
+        return new QueryPrecompute(ash.quantizedDim, ash.landmarkCount, new float[ash.quantizedDim],
+                new float[ash.landmarkCount]);
     }
 
     /** Independently owned preparation for retained standalone scorers. */
@@ -330,40 +322,29 @@ public final class ASHScorer {
         for (int c = 0; c < ash.landmarkCount; c++) {
             prepared.dotQMuByLandmark[c] = VectorUtil.dotProduct(query, ash.landmarks[c]);
         }
-        // Projection codes already include landmark adjustment in their stored offset.
-        // Neither their direct scorer nor their LUT needs the generic centered vectors.
-        if (AsymmetricHashing.usesFastScanProjectionCode(ash.bitsPerDimension)) return;
-        float sumQProj = 0f;
-        for (float value : prepared.qProj) sumQProj += value;
-        for (int c = 0; c < ash.landmarkCount; c++) {
-            prepared.sumTildeQByLandmark[c] = sumQProj - ash.landmarkProjSum[c];
-            int base = c * ash.quantizedDim;
-            for (int j = 0; j < ash.quantizedDim; j++) {
-                prepared.tildeQPool[base + j] = prepared.qProj[j] - ash.landmarkProj[c][j];
-            }
-        }
+        // Stored offsets include the landmark term, so every scorer needs only Aq and, for 1-bit
+        // codes, its sum.
+        prepared.sumQProj = sum(prepared.qProj);
+    }
+
+    /** Left-to-right FP32 sum, the order every 1-bit scorer uses for {@code <Aq, 1>}. */
+    static float sum(float[] values) {
+        float total = 0f;
+        for (float value : values) total += value;
+        return total;
     }
 
     static final class QueryPrecompute {
         final int d;
         final int C;
         final float[] qProj;                   // [d], Aq
-        final float[] tildeQPool;              // [C * d], Aq - Aμ_c
-        final float[] sumTildeQByLandmark;     // [C]
         final float[] dotQMuByLandmark;        // [C]
+        float sumQProj;                        // <Aq, 1>, set with qProj
 
-        QueryPrecompute(
-                int d,
-                int C,
-                float[] qProj,
-                float[] tildeQPool,
-                float[] sumTildeQByLandmark,
-                float[] dotQMuByLandmark) {
+        QueryPrecompute(int d, int C, float[] qProj, float[] dotQMuByLandmark) {
             this.d = d;
             this.C = C;
             this.qProj = qProj;
-            this.tildeQPool = tildeQPool;
-            this.sumTildeQByLandmark = sumTildeQByLandmark;
             this.dotQMuByLandmark = dotQMuByLandmark;
         }
     }

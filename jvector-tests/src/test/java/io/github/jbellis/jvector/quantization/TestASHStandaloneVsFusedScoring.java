@@ -226,13 +226,7 @@ public class TestASHStandaloneVsFusedScoring {
                 maximumDeltaFused);
     }
 
-    /**
-     * Mirrors FusedASH.packForFused().
-     *
-     * Multibit vectors already contain the projection-mode adjusted offset.
-     * One-bit vectors require the same adjustment performed by
-     * FusedASH.packOneBitForFused().
-     */
+    /** Mirrors FusedASH.packForFused(): canonical 1/2/4-bit offsets already contain the landmark term. */
     private static void packForFused(
             byte[] destination,
             int blockOffset,
@@ -240,80 +234,8 @@ public class TestASHStandaloneVsFusedScoring {
             AsymmetricHashing.QuantizedVector vector,
             AsymmetricHashing ash,
             int blockSize) {
-        if (ash.bitsPerDimension == 1) {
-            packOneBitForFused(
-                    destination,
-                    blockOffset,
-                    lane,
-                    vector,
-                    ash,
-                    blockSize);
-        } else {
-            FusedASHLayout.packQuantizedVector(
-                    destination,
-                    blockOffset,
-                    lane,
-                    vector,
-                    ash.quantizedDim,
-                    ash.bitsPerDimension,
-                    blockSize);
-        }
-    }
-
-    /**
-     * Mirrors FusedASH.packOneBitForFused().
-     */
-    private static void packOneBitForFused(
-            byte[] destination,
-            int blockOffset,
-            int lane,
-            AsymmetricHashing.QuantizedVector vector,
-            AsymmetricHashing ash,
-            int blockSize) {
-        int groups = FusedASHLayout.codeGroups(
-                ash.quantizedDim,
-                ash.bitsPerDimension);
-
-        for (int group = 0; group < groups; group++) {
-            int nibble = FusedASHLayout.signNibbleFromWords(
-                    vector.binaryVector,
-                    group,
-                    ash.quantizedDim);
-
-            FusedASHLayout.setPackedNibble(
-                    destination,
-                    blockOffset,
-                    lane,
-                    group,
-                    blockSize,
-                    nibble);
-        }
-
-        int landmark = vector.landmark & 0xFF;
-
-        assertTrue(
-                "Invalid landmark " + landmark
-                        + " for landmarkCount=" + ash.landmarkCount,
-                landmark < ash.landmarkCount);
-
-        float landmarkDot = dotOneBitProjectionCode(
-                ash.landmarkProj[landmark],
-                vector.binaryVector,
-                ash.quantizedDim);
-
-        float adjustedOffset =
-                vector.offset - vector.scale * landmarkDot;
-
-        FusedASHLayout.writeLaneHeader(
-                destination,
-                blockOffset,
-                lane,
-                ash.quantizedDim,
-                ash.bitsPerDimension,
-                blockSize,
-                vector.scale,
-                adjustedOffset,
-                vector.landmark);
+        FusedASHLayout.packQuantizedVector(destination, blockOffset, lane, vector,
+                ash.quantizedDim, ash.bitsPerDimension, blockSize);
     }
 
     private static float dotOneBitProjectionCode(

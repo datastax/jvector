@@ -45,6 +45,9 @@ public final class ASHNeighborhoodScorer {
     private final float[] lut;
     private final float[] dotQMu;
     private final VectorUtilSupport neighborhoodBackend;
+    /** Offset-binary widths: the query as two INT8 digits for field-block neighborhoods; otherwise null. */
+    private final ASHInt8Query int8Query;
+    private final VectorUtilSupport int8Backend;
     private final ASHLutKernel kernel = new ASHLutKernel();
 
     /**
@@ -103,8 +106,19 @@ public final class ASHNeighborhoodScorer {
         this.lut = reusableLut == null ? new float[lutSize] : reusableLut;
         if (!alreadyPrepared) FusedASHLayout.buildQueryLut(query.qProj, dimensions, bits, lut);
         var backend = VectorizationProvider.getInstance().getVectorUtilSupport();
-        this.neighborhoodBackend =
-                kernel.isSimd() && dotQMu.length == 1 && backend.supportsAshNeighborhoodScoring() ? backend : null;
+        if (FusedASHLayout.usesFieldBlocks(bits)) {
+            // The LUT above still serves canonical scoring of upper-layer nodes.
+            this.int8Query = new ASHInt8Query(dimensions, bits);
+            this.int8Query.prepare(query.qProj);
+            this.int8Backend = kernel.isSimd() && dotQMu.length == 1 && backend.supportsAshInt8NeighborhoodScoring()
+                    ? backend : null;
+            this.neighborhoodBackend = null;
+        } else {
+            this.int8Query = null;
+            this.int8Backend = null;
+            this.neighborhoodBackend =
+                    kernel.isSimd() && dotQMu.length == 1 && backend.supportsAshNeighborhoodScoring() ? backend : null;
+        }
     }
 
     /**
@@ -125,11 +139,20 @@ public final class ASHNeighborhoodScorer {
             neighborhoodBackend.ashScoreNeighborhood(packed, groups, blockSize, maxDegree, lut, dotQMu[0], out);
             return;
         }
+        if (int8Backend != null) {
+            int8Backend.ashScoreNeighborhoodInt8(packed, bits, int8Query.units, blockSize, maxDegree, int8Query.digits,
+                    int8Query.invScale, int8Query.center, dotQMu[0], out);
+            return;
+        }
         for (int block = 0; block < blocks; block++) {
             int offset = FusedASHLayout.blockOffset(block, dimensions, bits, blockSize);
             int base = block * blockSize;
             int count = Math.min(blockSize, maxDegree - base);
-            kernel.score(packed, offset, groups, blockSize, 0, count, lut, out, base);
+            if (int8Query != null) {
+                for (int lane = 0; lane < count; lane++) out[base + lane] = int8Query.laneDot(packed, offset, lane, blockSize);
+            } else {
+                kernel.score(packed, offset, groups, blockSize, 0, count, lut, out, base);
+            }
             for (int lane = 0; lane < count; lane++) {
                 int landmark = FusedASHLayout.readLandmark(packed, offset, lane, dimensions, bits, blockSize);
                 if (landmark >= dotQMu.length) {
@@ -145,7 +168,9 @@ public final class ASHNeighborhoodScorer {
 
     @Override
     public String toString() {
-        Object implementation = neighborhoodBackend == null ? kernel : "native Highway whole-neighborhood FFM";
+        Object implementation = neighborhoodBackend != null ? "native Highway whole-neighborhood FFM"
+                : int8Backend != null ? "native Highway whole-neighborhood FFM, INT8 field blocks"
+                : int8Query != null ? "Java INT8 field blocks" : kernel;
         return "ASHNeighborhoodScorer[" + implementation + ", blockSize=" + blockSize + ", capacity=" + maxDegree + "]";
     }
 

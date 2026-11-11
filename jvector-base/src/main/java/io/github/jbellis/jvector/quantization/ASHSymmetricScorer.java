@@ -67,18 +67,15 @@ public final class ASHSymmetricScorer {
                 landmarkDots[a][b] = landmarkDots[b][a] = VectorUtil.dotProduct(ash.landmarks[a], ash.landmarks[b]);
             }
         }
-        if (AsymmetricHashing.usesFastScanProjectionCode(bits)) {
-            if (vectors.symmetricOffsets != null) {
-                centeredOffsets = vectors.symmetricOffsets;
-            } else {
-                centeredOffsets = new float[codes.size];
-                for (int i = 0; i < centeredOffsets.length; i++) {
-                    centeredOffsets[i] = ash.centeredOffset(codes.scales[i], codes.offsets[i], codes.landmarks[i],
-                            codes.bodyPage(i), codes.bodyOffset(i));
-                }
-            }
+        // Stored offsets include -scale * <A mu_c, code>; symmetric scoring adds it back.
+        if (vectors.symmetricOffsets != null) {
+            centeredOffsets = vectors.symmetricOffsets;
         } else {
-            centeredOffsets = null;
+            centeredOffsets = new float[codes.size];
+            for (int i = 0; i < centeredOffsets.length; i++) {
+                centeredOffsets[i] = ash.centeredOffset(codes.scales[i], codes.offsets[i], codes.landmarks[i],
+                        signs(i), codes.signOffset(i), body(i), codes.bodyOffset(i));
+            }
         }
         retainedBytes = RamUsageEstimator.shallowSizeOfInstance(ASHSymmetricScorer.class)
                 + AsymmetricHashing.estimateArray2DBytes(landmarkDots)
@@ -103,7 +100,7 @@ public final class ASHSymmetricScorer {
         return ash.centeredOffset(vector);
     }
 
-    private float offset(int node) { return centeredOffsets == null ? codes.offsets[node] : centeredOffsets[node]; }
+    private float offset(int node) { return centeredOffsets[node]; }
 
     private long[] signs(int node) { return codes.signWords == 0 ? null : codes.signPage(node); }
 
@@ -262,8 +259,7 @@ public final class ASHSymmetricScorer {
                 }
             };
         }
-        boolean supported = bits == 1 ? backend.supportsAshMaskedLoad()
-                : (bits == 2 || bits == 4) && backend.supportsAshLutScoring();
+        boolean supported = bits == 1 ? backend.supportsAshMaskedLoad() : backend.supportsAshLutScoring();
         if (kernel == Kernel.SIMD && !supported) throw new UnsupportedOperationException("Symmetric block SIMD is unavailable for this backend/bit width");
         return vectors.blockScorerFor(preparedState(query), blockSize, kernel != Kernel.SCALAR && supported);
     }
@@ -275,29 +271,21 @@ public final class ASHSymmetricScorer {
         if (cq >= landmarks) throw new IllegalArgumentException("Invalid query landmark " + cq);
         float[] code = new float[dimensions];
         float[] qProj = new float[dimensions];
-        float ownProjection = 0;
         for (int j = 0; j < dimensions; j++) {
             code[j] = component(query, j, bits);
             qProj[j] = ash.landmarkProj[cq][j] + query.scale * code[j];
-            ownProjection += code[j] * ash.landmarkProj[cq][j];
         }
-        float correction = AsymmetricHashing.usesFastScanProjectionCode(bits)
-                ? query.offset : query.offset - query.scale * ownProjection;
-        float[] tilde = new float[Math.multiplyExact(landmarks, dimensions)];
-        float[] sums = new float[landmarks];
+        // The query's stored offset already includes its own landmark term.
+        float correction = query.offset;
         float[] dots = new float[landmarks];
         for (int c = 0; c < landmarks; c++) {
-            float dot = 0, sum = 0;
-            for (int j = 0; j < dimensions; j++) {
-                dot += code[j] * ash.landmarkProj[c][j];
-                float value = qProj[j] - ash.landmarkProj[c][j];
-                tilde[c * dimensions + j] = value;
-                sum += value;
-            }
-            sums[c] = sum;
+            float dot = 0;
+            for (int j = 0; j < dimensions; j++) dot += code[j] * ash.landmarkProj[c][j];
             dots[c] = landmarkDots[cq][c] + query.scale * dot + correction;
         }
-        return new ASHScorer.QueryPrecompute(dimensions, landmarks, qProj, tilde, sums, dots);
+        var prepared = new ASHScorer.QueryPrecompute(dimensions, landmarks, qProj, dots);
+        prepared.sumQProj = ASHScorer.sum(qProj);
+        return prepared;
     }
 
     private static float component(AsymmetricHashing.QuantizedVector v, int j, int bits) {
@@ -308,10 +296,7 @@ public final class ASHSymmetricScorer {
     private static float component(long[] signs, int signOffset, byte[] body, int bodyOffset, int j, int bits) {
         if (bits == 1) return AsymmetricHashing.QuantizedVector.getBit(signs, signOffset, j) ? 1f : -1f;
         if (bits == 2 || bits == 4) return AsymmetricHashing.projectionComponent(body, bodyOffset, j, bits);
-        int ex = bits - 1;
-        int code = ((AsymmetricHashing.QuantizedVector.getBit(signs, signOffset, j) ? 1 : 0) << ex)
-                + AsymmetricHashing.QuantizedVector.readExtraCode(body, bodyOffset, j, ex);
-        return code - ((1 << ex) - 0.5f);
+        return AsymmetricHashing.decodeOffsetBinary(AsymmetricHashing.offsetBinaryField(body, bodyOffset, j, bits), bits);
     }
 
     private static float symmetric2ScalarWords(byte[] ac, int aOffset, byte[] bc, int bOffset, int d) {
@@ -380,15 +365,12 @@ public final class ASHSymmetricScorer {
             }
             return sum * 0.25f;
         }
-        // Generic sign+extra representation supports the remaining widths through 9 bits.
-        int extra = bits - 1;
+        // Offset-binary fields (3 and 5 to 9 bits): products of doubled values are exact integers.
         int bias = (1 << bits) - 1;
         long sum = 0;
         for (int j = 0; j < d; j++) {
-            int x = ((AsymmetricHashing.QuantizedVector.getBit(aSigns, aSignOffset, j) ? 1 : 0) << extra)
-                    + AsymmetricHashing.QuantizedVector.readExtraCode(aBody, aBodyOffset, j, extra);
-            int y = ((AsymmetricHashing.QuantizedVector.getBit(bSigns, bSignOffset, j) ? 1 : 0) << extra)
-                    + AsymmetricHashing.QuantizedVector.readExtraCode(bBody, bBodyOffset, j, extra);
+            int x = AsymmetricHashing.offsetBinaryField(aBody, aBodyOffset, j, bits);
+            int y = AsymmetricHashing.offsetBinaryField(bBody, bBodyOffset, j, bits);
             sum += (long) (2 * x - bias) * (2 * y - bias);
         }
         return sum * 0.25f;
