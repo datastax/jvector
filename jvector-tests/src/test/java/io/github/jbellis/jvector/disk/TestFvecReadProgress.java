@@ -24,7 +24,9 @@ import java.nio.channels.*;
 import static org.junit.Assert.*;
 
 public class TestFvecReadProgress {
-    @Test(timeout = 1000) public void repeatedZeroReadsFailInsteadOfSpinning() {
+    // The timeouts only catch a read loop that never ends; they include one-time class loading,
+    // which can take over a second on a busy CI runner.
+    @Test(timeout = 10_000) public void repeatedZeroReadsFailInsteadOfSpinning() {
         var channel = new TestChannel(-1);
         var failure = assertThrows(IOException.class, () ->
                 FvecFileVectorValues.readFully(channel, ByteBuffer.allocate(1), 123));
@@ -32,7 +34,7 @@ public class TestFvecReadProgress {
         assertEquals(16, channel.calls);
     }
 
-    @Test(timeout = 1000) public void progressResetsTheZeroReadLimitAndPreservesOffsets() throws Exception {
+    @Test(timeout = 10_000) public void progressResetsTheZeroReadLimitAndPreservesOffsets() throws Exception {
         var channel = new TestChannel(15);
         var buffer = ByteBuffer.allocate(4);
         buffer.position(2);
@@ -43,7 +45,7 @@ public class TestFvecReadProgress {
         assertEquals((byte) 124, buffer.get(3));
     }
 
-    @Test(timeout = 1000) public void eofStillFailsImmediately() {
+    @Test(timeout = 10_000) public void eofStillFailsImmediately() {
         var channel = new TestChannel(0) {
             @Override public int read(ByteBuffer buffer, long offset) { return -1; }
         };
