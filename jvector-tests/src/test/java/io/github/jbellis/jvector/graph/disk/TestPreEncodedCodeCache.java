@@ -79,7 +79,6 @@ public class TestPreEncodedCodeCache extends RandomizedTest {
         return p;
     }
 
-
     /** Round-trips every ordinal with chunks small enough that most ordinals land in a different one. */
     @Test
     public void testRoundTripAcrossChunkBoundaries() throws IOException {
@@ -100,6 +99,43 @@ public class TestPreEncodedCodeCache extends RandomizedTest {
             for (int i = 0; i < count; i++) {
                 cache.get(i, dst);
                 assertCodeMatches(i, codeSize, dst);
+            }
+        }
+    }
+
+    /**
+     * Direct reads of row runs return the same bytes as the mapping, across chunk boundaries and from
+     * an unaligned section offset, with the rows landing at the returned buffer offset.
+     */
+    @Test
+    public void testReadRowsDirectMatchesMapping() throws IOException {
+        int codeSize = 40, count = 300, offset = 4096 + 13;
+        int maxChunkBytes = codeSize * 11;   // 11 codes per chunk
+        Path p = Files.createTempFile("code-cache-", ".bin");
+        p.toFile().deleteOnExit();
+        try (FileChannel fc = FileChannel.open(p, StandardOpenOption.WRITE)) {
+            fc.write(ByteBuffer.wrap(new byte[]{0}), offset + PreEncodedCodeCache.sectionBytes(count, codeSize) - 1);
+        }
+        try (FileChannel fc = FileChannel.open(p, StandardOpenOption.READ, StandardOpenOption.WRITE);
+             PreEncodedCodeCache cache = PreEncodedCodeCache.map(fc, p, offset, count, codeSize, maxChunkBytes)) {
+            for (int i = 0; i < count; i++) {
+                cache.put(i, codeFor(i, codeSize));
+            }
+            if (!cache.supportsDirect()) {
+                return;   // a file system without direct I/O (tmpfs): the mapped path is the only one
+            }
+            byte[] dst = new byte[codeSize];
+            int[][] runs = {{0, 1}, {7, 50}, {290, count - 290}, {0, count}};
+            for (int[] run : runs) {
+                int first = run[0], rows = run[1];
+                ByteBuffer buf = PreEncodedCodeCache.allocateAligned(cache.directBufferBytes(rows));
+                int at = cache.readRowsDirect(first, rows, buf);
+                assertTrue("rows start inside the aligned head", at >= 0 && at < PreEncodedCodeCache.DIRECT_ALIGN);
+                for (int r = 0; r < rows; r++) {
+                    buf.position(at + r * codeSize);
+                    buf.get(dst, 0, codeSize);
+                    assertCodeMatches(first + r, codeSize, dst);
+                }
             }
         }
     }

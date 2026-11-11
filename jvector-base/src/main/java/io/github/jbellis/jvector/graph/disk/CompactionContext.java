@@ -44,6 +44,8 @@ public final class CompactionContext {
     public final int maxOrdinal;
     public final ForkJoinPool executor;
     public final int taskWindowSize;
+    /** Records announced to the page cache this many nodes ahead of their read (0 = none); see OnDiskGraphIndexCompactor#withRecordAnnounceAhead. */
+    public final int recordAnnounceAhead;
 
     public CompactionContext(
             List<OnDiskGraphIndex> sources,
@@ -53,7 +55,8 @@ public final class CompactionContext {
             int dimension,
             int maxOrdinal,
             ForkJoinPool executor,
-            int taskWindowSize) {
+            int taskWindowSize,
+            int recordAnnounceAhead) {
         this.sources = Collections.unmodifiableList(sources);
         this.sourceCompressed = sourceCompressed == null ? null : Collections.unmodifiableList(sourceCompressed);
         this.liveNodes = Collections.unmodifiableList(liveNodes);
@@ -62,5 +65,6 @@ public final class CompactionContext {
         this.maxOrdinal = maxOrdinal;
         this.executor = executor;
         this.taskWindowSize = taskWindowSize;
+        this.recordAnnounceAhead = recordAnnounceAhead;
     }
 }

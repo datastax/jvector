@@ -1205,7 +1205,22 @@ public class TestOnDiskGraphIndexCompactor extends RandomizedTest {
         cellJoinMergeRecall(VectorSimilarityFunction.COSINE, true);
     }
 
+    /**
+     * The walk's direct reads, the record announce-ahead and fixed budgets: the options change how
+     * the store and the sources are read, never what is scored, so the merge must come out the same.
+     */
+    @Test
+    public void testCellJoinMergeDirectReadsAndFixedBudgets() throws Exception {
+        cellJoinMergeRecall(VectorSimilarityFunction.DOT_PRODUCT, false,
+                            c -> c.withWalkDirectReads(true).withRecordAnnounceAhead(8).withCellWalkBudgets(64L << 20, 64L << 20));
+    }
+
     private void cellJoinMergeRecall(VectorSimilarityFunction vsf, boolean fusedSources) throws Exception {
+        cellJoinMergeRecall(vsf, fusedSources, c -> c);
+    }
+
+    private void cellJoinMergeRecall(VectorSimilarityFunction vsf, boolean fusedSources,
+                                     java.util.function.UnaryOperator<OnDiskGraphIndexCompactor> configure) throws Exception {
         int perSource = 3000;
         int nSrc = 3;
         final java.util.Random rnd = new java.util.Random(20260916);              // fixed: the two merges are compared
@@ -1247,7 +1262,7 @@ public class TestOnDiskGraphIndexCompactor extends RandomizedTest {
         }
 
         String joinName = "celljoin_" + (fusedSources ? "" : "plain_") + vsf + "_join";
-        double joinRecall = mergeAndRecall(graphs, live, perSource, vsf, all, queries, gt, topK, joinName);
+        double joinRecall = mergeAndRecall(graphs, live, perSource, vsf, all, queries, gt, topK, joinName, configure);
         System.out.printf("Cell-join merge recall (%s, %s sources): %.4f%n",
                           vsf, fusedSources ? "fused" : "full-precision", joinRecall);
         try (ReaderSupplier rs = ReaderSupplierFactory.open(testDirectory.resolve(joinName))) {
@@ -1290,9 +1305,16 @@ public class TestOnDiskGraphIndexCompactor extends RandomizedTest {
                                   VectorSimilarityFunction vsf, List<VectorFloat<?>> all,
                                   List<VectorFloat<?>> queries, List<List<Integer>> gt, int topK,
                                   String name) throws Exception {
+        return mergeAndRecall(graphs, live, perSource, vsf, all, queries, gt, topK, name, c -> c);
+    }
+
+    private double mergeAndRecall(List<OnDiskGraphIndex> graphs, List<FixedBitSet> live, int perSource,
+                                  VectorSimilarityFunction vsf, List<VectorFloat<?>> all,
+                                  List<VectorFloat<?>> queries, List<List<Integer>> gt, int topK,
+                                  String name, java.util.function.UnaryOperator<OnDiskGraphIndexCompactor> configure) throws Exception {
         int nSrc = graphs.size();
         int total = nSrc * perSource;
-        var compactor = new OnDiskGraphIndexCompactor(graphs, live, vsf, null);
+        var compactor = configure.apply(new OnDiskGraphIndexCompactor(graphs, live, vsf, null));
         var outputPath = testDirectory.resolve(name);
         compactor.compact(outputPath);
         assertTrue("level-0 candidates should come from cell scans", compactor.cellScanCount() > 0);
