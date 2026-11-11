@@ -1216,6 +1216,113 @@ public class TestOnDiskGraphIndexCompactor extends RandomizedTest {
     }
 
     /**
+     * {@code withVersion}: the output is written at the requested on-disk format version, whatever
+     * the sources' version, and reads back through the versioned loader with its vectors, its
+     * hierarchy and a working search. Versions that cannot hold the output are rejected up front:
+     * upper layers need 4 or above, fused PQ needs 6.
+     */
+    @Test
+    public void testCompactWithVersion() throws Exception {
+        VectorSimilarityFunction vsf = VectorSimilarityFunction.COSINE;
+        int perSource = 2000, nSrc = 2;
+        java.util.Random rnd = new java.util.Random(20261111);
+        for (boolean hierarchy : new boolean[]{true, false}) {
+            List<VectorFloat<?>> all = new ArrayList<>();
+            List<Path> paths = new ArrayList<>();
+            for (int sIdx = 0; sIdx < nSrc; sIdx++) {
+                List<VectorFloat<?>> vecs = seededVectors(rnd, perSource, dimension);
+                paths.add(buildPlainSourceGraph(vecs, vsf, hierarchy, "version_" + (hierarchy ? "h" : "flat") + "_src_" + sIdx));
+                all.addAll(vecs);
+            }
+            int[] versions = hierarchy ? new int[]{4, 5, 6} : new int[]{2, 3, 4, 5, 6};
+            for (int version : versions) {
+                compactAtVersion(paths, all, vsf, version, hierarchy, "version_" + (hierarchy ? "h" : "flat") + "_v" + version);
+            }
+            if (hierarchy) {
+                assertRejectedVersion(paths, vsf, 3, "upper layers need version 4 or above");
+            }
+        }
+        // fused PQ sources: the output carries fused PQ, which only version 6 holds
+        List<Path> fused = new ArrayList<>();
+        for (int sIdx = 0; sIdx < nSrc; sIdx++) {
+            fused.add(buildFusedSourceGraph(seededVectors(rnd, perSource, dimension), vsf, true, "version_fused_src_" + sIdx));
+        }
+        assertRejectedVersion(fused, vsf, 5, "fused PQ needs version 6");
+        try {
+            openCompactor(fused, vsf).withVersion(OnDiskGraphIndex.CURRENT_VERSION + 1);
+            org.junit.Assert.fail("an unknown version must be rejected");
+        } catch (IllegalArgumentException expected) {
+            // expected
+        }
+    }
+
+    private OnDiskGraphIndexCompactor openCompactor(List<Path> paths, VectorSimilarityFunction vsf) throws IOException {
+        List<OnDiskGraphIndex> graphs = new ArrayList<>();
+        List<FixedBitSet> live = new ArrayList<>();
+        for (Path path : paths) {
+            var g = OnDiskGraphIndex.load(ReaderSupplierFactory.open(path));
+            graphs.add(g);
+            var lv = new FixedBitSet(g.getIdUpperBound());
+            lv.set(0, g.getIdUpperBound());
+            live.add(lv);
+        }
+        return new OnDiskGraphIndexCompactor(graphs, live, vsf, null);
+    }
+
+    private void compactAtVersion(List<Path> paths, List<VectorFloat<?>> all, VectorSimilarityFunction vsf,
+                                  int version, boolean hierarchy, String name) throws Exception {
+        var compactor = openCompactor(paths, vsf).withVersion(version);
+        Path out = testDirectory.resolve(name);
+        compactor.compact(out);
+        var mappers = compactor.ordinalMappers();
+        int total = all.size(), perSource = total / paths.size();
+        try (ReaderSupplier rs = ReaderSupplierFactory.open(out)) {
+            var merged = OnDiskGraphIndex.load(rs);
+            assertEquals("version of " + name, version, merged.version);
+            assertEquals("nodes of " + name, total, merged.size(0));
+            assertEquals("hierarchy of " + name, hierarchy, merged.getMaxLevel() >= 1);
+            assertFalse("fused PQ in " + name, merged.getFeatures().containsKey(FeatureId.FUSED_PQ));
+            List<VectorFloat<?>> expected = new ArrayList<>(java.util.Collections.nCopies(total, (VectorFloat<?>) null));
+            for (int sIdx = 0; sIdx < paths.size(); sIdx++) {
+                for (int i = 0; i < perSource; i++) {
+                    expected.set(mappers.get(sIdx).oldToNew(i), all.get(sIdx * perSource + i));
+                }
+            }
+            try (var view = merged.getView()) {
+                var v = vectorTypeSupport.createFloatVector(dimension);
+                for (int n = 0; n < total; n++) {
+                    view.getVectorInto(n, v, 0);
+                    assertVecEquals(expected.get(n), v, n);
+                }
+            }
+            var ravv = new ListRandomAccessVectorValues(expected, dimension);
+            try (GraphSearcher searcher = new GraphSearcher(merged)) {
+                int selfHits = 0, nq = 100;
+                java.util.Random rnd = new java.util.Random(version);
+                for (int qi = 0; qi < nq; qi++) {
+                    int target = rnd.nextInt(total);
+                    SearchScoreProvider ssp = DefaultSearchScoreProvider.exact(expected.get(target), vsf, ravv);
+                    SearchResult sr = searcher.search(ssp, 10, Bits.ALL);
+                    for (var ns : sr.getNodes()) if (ns.node == target) selfHits++;
+                }
+                assertTrue("self-hits " + selfHits + "/" + nq + " in " + name, selfHits >= nq * 9 / 10);
+            }
+        }
+    }
+
+    private void assertRejectedVersion(List<Path> paths, VectorSimilarityFunction vsf, int version, String why) throws Exception {
+        var compactor = openCompactor(paths, vsf).withVersion(version);
+        try {
+            compactor.compact(testDirectory.resolve("version_rejected_" + version));
+            org.junit.Assert.fail(why);
+        } catch (IllegalArgumentException expected) {
+            // expected
+        } catch (RuntimeException e) {
+            assertTrue(why + ": " + e, e.getCause() instanceof IllegalArgumentException);
+        }
+    }
+
+    /**
      * A sharded merge keeps a slice of every source's nodes, and the slice can miss every node of
      * the sources' top levels. The output's hierarchy then ends at the highest level that still has
      * a live node, with the entry node on it; dropping the top level only, and dropping every upper

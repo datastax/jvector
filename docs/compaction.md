@@ -39,6 +39,10 @@ List<OrdinalMapper> mapping = compactor.ordinalMappers();
 
 The compactor assigns the output ordinals; the caller does not choose them. Live nodes are numbered `0 .. live - 1`, sources in ascending-size order, and within a source by the region of the merged hierarchy each node descends to, so nodes that are close in vector space get adjacent ordinals: records are written sequentially, every cell's members are contiguous (the cell join below relies on this), and consecutive nodes explore the same neighbourhood of every target. Callers that keep external references to nodes (a row id to ordinal table, for instance) translate them through `ordinalMappers()` after `compact` returns.
 
+### Output format version
+
+The sources may be of any on-disk format version the reader supports (2 to 6); the compactor detects each source's version from its file. The output is written at `OnDiskGraphIndex.CURRENT_VERSION` unless `withVersion(int)` asks for another one, so by default a compaction also upgrades old sources. An output that carries fused PQ needs version 6, and one with upper layers version 4 or above; a version that cannot hold the output is rejected when `compact` starts. A sharded compaction writes every shard at the version of the compactor the session was opened on.
+
 ### Handling Deleted Nodes
 
 Deleted nodes are excluded from the output by marking them as `false` in the corresponding `FixedBitSet`; they get no output ordinal (`ordinalMappers()` reports `OrdinalMapper.OMITTED` for them).

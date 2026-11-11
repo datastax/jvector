@@ -260,6 +260,9 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
     // Sharded compaction: what is trained once for every shard. Null for an ordinary compaction.
     private SharedTraining shared;
 
+    // The on-disk format version of the output.
+    private int version = OnDiskGraphIndex.CURRENT_VERSION;
+
     /** Whether so few of source {@code s}'s nodes are live that its own nodes are joined like another source's. */
     private boolean sparseSource(int s) {
         return numLiveNodesPerSource.get(s) < (double) sameSourceJoinBelow * sources.get(s).size(0);
@@ -329,6 +332,24 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
         // 0..live-1), so the extent is known before the mapping itself exists.
         maxOrdinal = numTotalNodes - 1;
         this.similarityFunction = similarityFunction;
+    }
+
+    /**
+     * Sets the on-disk format version of the output; the default is {@link OnDiskGraphIndex#CURRENT_VERSION}.
+     * The sources may be of any version the reader supports, and the output is written at this one.
+     * An output that carries fused PQ needs version 6; one with upper layers needs version 4 or above.
+     *
+     * @throws IllegalArgumentException if the version is not one the writer supports
+     */
+    @Experimental
+    public OnDiskGraphIndexCompactor withVersion(int version) {
+        try {
+            GraphIndexFormatFactory.forVersion(version);
+        } catch (GraphIndexFormatFactory.UnsupportedVersionException e) {
+            throw new IllegalArgumentException(e.getMessage(), e);
+        }
+        this.version = version;
+        return this;
     }
 
     // The settings below are the compactor's own: every one has a default it derives from the
@@ -689,6 +710,7 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
             }
             OnDiskGraphIndexCompactor shard = new OnDiskGraphIndexCompactor(sources, sourceCompressed, shardLiveNodes, similarityFunction, executor);
             shard.shared = training;
+            shard.version = version;
             shard.walkPairBytes = walkPairBytes;
             shard.walkQueryBytes = walkQueryBytes;
             shard.recordAnnounceAhead = recordAnnounceAhead;
@@ -917,7 +939,7 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
 
         log.info("Writing compacted graph : {} total nodes, maxOrdinal={}, dimension={}, degree={}",
                 numTotalNodes, maxOrdinal, dimension, maxDegrees.get(0));
-        try (CompactWriter writer = new CompactWriter(outputPath, maxOrdinal, numTotalNodes, 0, layerInfo, entryNode, dimension, maxDegrees, outputFusedFeature)) {
+        try (CompactWriter writer = new CompactWriter(outputPath, version, maxOrdinal, numTotalNodes, 0, layerInfo, entryNode, dimension, maxDegrees, outputFusedFeature)) {
             // Header has to be written first so the writer's position is past the header
             // before any strategy that mmaps past the projected end of the output runs.
             writer.writeHeader();
