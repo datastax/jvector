@@ -34,10 +34,14 @@ HWY_INLINE float AshBinaryPair(const uint64_t *a, const uint64_t *b, int dimensi
     const size_t lanes = hn::Lanes(d), words = static_cast<size_t>(dimensions) / 64;
     auto counts = hn::Zero(d);
     // Integer lanes can hold all mismatches even at the maximum Java dimension.
-    for (size_t word = 0; word < words; word += lanes) {
-        const size_t n = std::min(lanes, words - word);
-        const auto diff = hn::Xor(hn::LoadN(d, a + word, n), hn::LoadN(d, b + word, n));
-        counts = hn::Add(counts, hn::PopulationCount(diff));
+    // Full vectors use plain loads; only the last partial vector is masked.
+    size_t word = 0;
+    for (; word + lanes <= words; word += lanes) {
+        counts = hn::Add(counts, hn::PopulationCount(hn::Xor(hn::LoadU(d, a + word), hn::LoadU(d, b + word))));
+    }
+    if (word < words) {
+        const size_t n = words - word;
+        counts = hn::Add(counts, hn::PopulationCount(hn::Xor(hn::LoadN(d, a + word, n), hn::LoadN(d, b + word, n))));
     }
     uint64_t mismatches = hn::ReduceSum(d, counts);
     const int tail = dimensions & 63;
@@ -45,30 +49,40 @@ HWY_INLINE float AshBinaryPair(const uint64_t *a, const uint64_t *b, int dimensi
     return static_cast<float>(dimensions) - 2.0f * static_cast<float>(mismatches);
 }
 
+// sign*(1+2*ma)*(1+2*mb) for each 2-bit field pair in av and bv, less one per field, evaluated
+// with weighted popcounts and summed per 64-bit lane.
+template <class D>
+HWY_INLINE hn::VFromD<hn::RebindToSigned<D>> AshTwoBitDelta(D d, hn::VFromD<D> av, hn::VFromD<D> bv) {
+    const auto slots = hn::Set(d, uint64_t{0x5555555555555555});
+    const auto neg = hn::And(hn::ShiftRight<1>(hn::Xor(av, bv)), slots);
+    const auto ma = hn::And(av, slots), mb = hn::And(bv, slots), both = hn::And(ma, mb);
+    auto delta = hn::ShiftLeft<1>(hn::Sub(
+            hn::Add(hn::PopulationCount(ma), hn::PopulationCount(mb)), hn::PopulationCount(neg)));
+    delta = hn::Sub(delta, hn::ShiftLeft<2>(hn::Add(
+            hn::PopulationCount(hn::And(ma, neg)), hn::PopulationCount(hn::And(mb, neg)))));
+    delta = hn::Add(delta, hn::ShiftLeft<2>(hn::PopulationCount(both)));
+    delta = hn::Sub(delta, hn::ShiftLeft<3>(hn::PopulationCount(hn::And(both, neg))));
+    return hn::BitCast(hn::RebindToSigned<D>(), delta);
+}
+
 HWY_INLINE float AshTwoBitPair(const uint8_t *a, const uint8_t *b, int dimensions) {
     const hn::ScalableTag<uint64_t> d;
-    const auto slots = hn::Set(d, uint64_t{0x5555555555555555});
     const size_t lanes = hn::Lanes(d), words = static_cast<size_t>(dimensions) / 32;
-    const hn::RebindToSigned<decltype(d)> di;
-    auto deltas = hn::Zero(di);
-    for (size_t word = 0; word < words; word += lanes) {
-        const size_t n = std::min(lanes, words - word);
-        // Canonical codes are little-endian packed fields. LoadU/LoadN permit
-        // byte alignment on all supported little-endian production targets.
-        const auto av = hn::LoadN(d, reinterpret_cast<const uint64_t *>(a) + word, n);
-        const auto bv = hn::LoadN(d, reinterpret_cast<const uint64_t *>(b) + word, n);
-        const auto neg = hn::And(hn::ShiftRight<1>(hn::Xor(av, bv)), slots);
-        const auto ma = hn::And(av, slots), mb = hn::And(bv, slots), both = hn::And(ma, mb);
-        // sign*(1+2*ma)*(1+2*mb), evaluated with weighted popcounts.
-        // Keep partial sums in registers; one horizontal reduction per pair.
-        auto delta = hn::ShiftLeft<1>(hn::Sub(
-                hn::Add(hn::PopulationCount(ma), hn::PopulationCount(mb)), hn::PopulationCount(neg)));
-        delta = hn::Sub(delta, hn::ShiftLeft<2>(hn::Add(
-                hn::PopulationCount(hn::And(ma, neg)), hn::PopulationCount(hn::And(mb, neg)))));
-        delta = hn::Add(delta, hn::ShiftLeft<2>(hn::PopulationCount(both)));
-        delta = hn::Sub(delta, hn::ShiftLeft<3>(hn::PopulationCount(hn::And(both, neg))));
-        deltas = hn::Add(deltas, hn::BitCast(di, delta));
+    // Canonical codes are little-endian packed fields. LoadU/LoadN permit
+    // byte alignment on all supported little-endian production targets.
+    const auto *wa = reinterpret_cast<const uint64_t *>(a), *wb = reinterpret_cast<const uint64_t *>(b);
+    // Keep partial sums in registers; one horizontal reduction per pair. Full vectors use
+    // plain loads; only the last partial vector is masked.
+    auto deltas = hn::Zero(hn::RebindToSigned<decltype(d)>());
+    size_t word = 0;
+    for (; word + lanes <= words; word += lanes) {
+        deltas = hn::Add(deltas, AshTwoBitDelta(d, hn::LoadU(d, wa + word), hn::LoadU(d, wb + word)));
     }
+    if (word < words) {
+        const size_t n = words - word;
+        deltas = hn::Add(deltas, AshTwoBitDelta(d, hn::LoadN(d, wa + word, n), hn::LoadN(d, wb + word, n)));
+    }
+    const hn::RebindToSigned<decltype(d)> di;
     int64_t total = static_cast<int64_t>(words) * 32 + hn::ReduceSum(di, deltas);
     // The last partial word: copy only its code bytes and clear the padding fields, which then
     // contribute nothing. One word of popcounts instead of one decode per leftover dimension.
@@ -119,10 +133,12 @@ HWY_INLINE float AshFourBitPair(const uint8_t *a, const uint8_t *b, int dimensio
     const hn::Repartition<uint8_t, decltype(di)> db;
     const hn::RebindToSigned<decltype(db)> ds;
     const size_t bytes = static_cast<size_t>(dimensions) / 2, lanes = hn::Lanes(db);
+    // One accumulator for the whole pair. Each pass adds at most 8 * 15 * 15 = 1800 per int32
+    // lane, so a lane overflows only past about a million vectors, far beyond any Java code.
+    auto sum = hn::Zero(di);
     size_t offset = 0;
     for (; offset + lanes <= bytes; offset += lanes) {
         const auto av = hn::LoadU(db, a + offset), bv = hn::LoadU(db, b + offset);
-        auto sum = hn::Zero(di);
         for (int shift = 0; shift < 8; shift += 4) {
             const auto ax = hn::ShiftRightSame(av, shift), bx = hn::ShiftRightSame(bv, shift);
             const auto am = hn::Add(hn::ShiftLeft<1>(hn::And(ax, hn::Set(db, 7))), hn::Set(db, 1));
@@ -132,8 +148,8 @@ HWY_INLINE float AshFourBitPair(const uint8_t *a, const uint8_t *b, int dimensio
             // VNNI when supported; Highway supplies widening multiply otherwise.
             sum = hn::SumOfMulQuadAccumulate(di, am, signedB, sum);
         }
-        total += hn::ReduceSum(di, sum);
     }
+    total += hn::ReduceSum(di, sum);
     if (offset < bytes) {
         total += AshFourBitPartial(a + offset, b + offset, bytes - offset);
         offset = bytes;
