@@ -16,6 +16,8 @@
 
 package io.github.jbellis.jvector.example;
 
+import io.github.jbellis.jvector.example.benchmarks.datasets.DataSet;
+import io.github.jbellis.jvector.example.benchmarks.datasets.DataSets;
 import io.github.jbellis.jvector.example.util.SiftLoader;
 import io.github.jbellis.jvector.graph.ListRandomAccessVectorValues;
 import io.github.jbellis.jvector.graph.similarity.ScoreFunction;
@@ -35,7 +37,25 @@ import java.util.ArrayList;
 import java.util.concurrent.ForkJoinPool;
 import java.util.concurrent.ForkJoinTask;
 
+/**
+ * ASH scoring benchmark. Pass a dataset name from the public dataset catalog (default
+ * {@value #DEFAULT_DATASET}; it is downloaded and cached on first use), or base, query and
+ * ground-truth files ({@code .fvecs}, {@code .fvecs}, {@code .ivecs}). ASH scores inner products, so the
+ * dataset should use dot-product similarity, or cosine similarity with normalized vectors.
+ *
+ * <p>The compressor is set by {@code jvector.ash.bitsPerDimension} (1 to 9, default 4),
+ * {@code jvector.ash.quantizedDimensions} (default half the input dimension),
+ * {@code jvector.ash.landmarkCount} (default 1) and {@code jvector.ash.optimizer} ({@code random} or
+ * {@code itq}). Every width uses the production scorers: 1, 2 and 4 bits have SIMD kernels, and the
+ * other widths use the portable scalar scorers. Measurements are selected with {@code jvector.bench.}
+ * properties: {@code recall} (exhaustive recall against the ground truth; add
+ * {@code recall.block-scoring} to rank with block scoring), {@code single-scoring} and
+ * {@code block-scoring} (throughput), {@code symmetric-scoring} (code-to-code scoring),
+ * {@code maxQueries}, {@code recall.k} and {@code scoringThreads}.</p>
+ */
 public class DistancesASH {
+
+    static final String DEFAULT_DATASET = "e5-small-v2-100k";
 
     static final String blockMode = System.getProperty("jvector.ash.blockKernel", "auto").toLowerCase();
     static final String singleMode = System.getProperty("jvector.ash.singleKernel", "auto").toLowerCase();
@@ -257,7 +277,7 @@ public class DistancesASH {
 
     /** Only query encoding is excluded. Every timed query creates its actual scoring state. */
     private static void benchmarkSymmetric(ASHVectors vectors, List<VectorFloat<?>> queries,
-                                            List<List<Integer>> groundTruth, int[] newToOld,
+                                            List<? extends List<Integer>> groundTruth, int[] newToOld,
                                             int recallK, boolean recall, ForkJoinPool executor) {
         var ash = vectors.getCompressor();
         int passes = Integer.getInteger("jvector.bench.scoringPasses", 5);
@@ -423,7 +443,7 @@ public class DistancesASH {
 
     /** Paired projection comparison; optional recall uses the normal full-scan scorers. */
     private static void benchmarkInt8Projection(ASHVectors encoded, List<VectorFloat<?>> queries,
-            List<List<Integer>> truth, int[] newToOld, ForkJoinPool executor) throws IOException {
+            List<? extends List<Integer>> truth, int[] newToOld, ForkJoinPool executor) throws IOException {
         var outputDir=java.nio.file.Path.of(System.getProperty("jvector.bench.outputDir", "."));
         java.nio.file.Files.createDirectories(outputDir);
         var model=outputDir.resolve("model-b"+encoded.getCompressor().bitsPerDimension+".ash");
@@ -546,7 +566,7 @@ public class DistancesASH {
     }
 
     private static double[] scanProjectionRecall(ASHVectors vectors,List<VectorFloat<?>> queries,
-            List<List<Integer>> truth,int[] newToOld,int count,ForkJoinPool executor) {
+            List<? extends List<Integer>> truth,int[] newToOld,int count,ForkJoinPool executor) {
         var tasks=new ArrayList<ForkJoinTask<double[]>>();
         for(int worker=0;worker<executor.getParallelism();worker++) {
             final int first=worker;
@@ -571,7 +591,19 @@ public class DistancesASH {
         return totals;
     }
 
+    /** Runs the benchmark on vectors read from files; the ground truth may be empty when recall is off. */
     public static void testASHEncodings(String filenameBase, String filenameQueries, String filenameGT) throws IOException {
+        boolean recall = Boolean.parseBoolean(System.getProperty("jvector.bench.recall", "false"));
+        if (recall && (filenameGT == null || filenameGT.isBlank())) {
+            throw new IllegalArgumentException("Recall requires a ground-truth filename");
+        }
+        testASHEncodings(SiftLoader.readFvecs(filenameBase), SiftLoader.readFvecs(filenameQueries),
+                recall ? SiftLoader.readIvecs(filenameGT) : List.of());
+    }
+
+    /** Runs the benchmark; {@code groundTruth} lists each query's nearest base ordinals, best first. */
+    public static void testASHEncodings(List<VectorFloat<?>> vectors, List<VectorFloat<?>> allQueries,
+                                        List<? extends List<Integer>> groundTruth) throws IOException {
         // ------------------------------------------------------------
         // Benchmark configuration (runtime flags)
         // ------------------------------------------------------------
@@ -619,20 +651,11 @@ public class DistancesASH {
         // How many ASH landmarks to use, C = [1, 256]
         final int landmarkCount = Integer.getInteger("jvector.ash.landmarkCount", 1);
 
-        List<VectorFloat<?>> vectors = SiftLoader.readFvecs(filenameBase);
-        List<VectorFloat<?>> allQueries = SiftLoader.readFvecs(filenameQueries);
         int maxQueries = Integer.getInteger("jvector.bench.maxQueries", allQueries.size());
         if (maxQueries <= 0) throw new IllegalArgumentException("maxQueries must be positive");
         List<VectorFloat<?>> queries = allQueries.subList(0, Math.min(maxQueries, allQueries.size()));
-        final List<List<Integer>> groundTruth;
-        if (RUN_RECALL_CHECK) {
-            if (filenameGT == null || filenameGT.isBlank()) {
-                throw new IllegalArgumentException(
-                        "Recall requires a ground-truth filename");
-            }
-            groundTruth = SiftLoader.readIvecs(filenameGT);
-        } else {
-            groundTruth = List.of();
+        if (RUN_RECALL_CHECK && groundTruth.size() < queries.size()) {
+            throw new IllegalArgumentException("Recall requires ground truth for every query");
         }
 
         // ASH normalization policy:
@@ -656,11 +679,8 @@ public class DistancesASH {
         final int quantizedDimensions =
                 Integer.getInteger("jvector.ash.quantizedDimensions", dimension / 2);
 
-        if (bitsPerDimension < 1 || bitsPerDimension > 9
-                || (!Boolean.getBoolean("jvector.bench.symmetric-scoring")
-                    && bitsPerDimension != 1 && bitsPerDimension != 2 && bitsPerDimension != 4)) {
-            throw new IllegalArgumentException(
-                    "bitsPerDimension must be 1, 2, or 4 (symmetric comparison also supports widths 3 through 9): " + bitsPerDimension);
+        if (bitsPerDimension < 1 || bitsPerDimension > 9) {
+            throw new IllegalArgumentException("bitsPerDimension must be 1 through 9: " + bitsPerDimension);
         }
 
         if (quantizedDimensions <= 0 || quantizedDimensions > dimension) {
@@ -906,8 +926,8 @@ public class DistancesASH {
             }
 
             logProgress("\t[stage] Computing " + RECALL_K + "-Recall@K with "
-                    + (COMPARE_ALL_RECALL ? "ASH LUT block, single-vector and scalar"
-                    : RUN_BLOCK_RECALL ? "ASH LUT block" : "ASH single-vector") + " scoring...");
+                    + (COMPARE_ALL_RECALL ? "ASH block, single-vector and scalar"
+                    : RUN_BLOCK_RECALL ? "ASH block" : "ASH single-vector") + " scoring...");
             for (int start = 0; start < queries.size(); start += chunkSize) {
                 final int s = start;
                 final int e = Math.min(start + chunkSize, queries.size());
@@ -970,8 +990,8 @@ public class DistancesASH {
                 for (int aIdx = 0; aIdx < totalRecall.length; aIdx++) totalRecall[aIdx] += local[aIdx];
             }
 
-            String[] scorerNames = COMPARE_ALL_RECALL ? new String[]{"LUT-block", "single", "scalar"}
-                    : new String[]{RUN_BLOCK_RECALL ? "LUT-block" : "single"};
+            String[] scorerNames = COMPARE_ALL_RECALL ? new String[]{"block", "single", "scalar"}
+                    : new String[]{RUN_BLOCK_RECALL ? "block" : "single"};
             for (int scorer = 0; scorer < scorerNames.length; scorer++) {
                 for (int aIdx = 0; aIdx < atValues.length; aIdx++) {
                     System.out.format(java.util.Locale.ROOT, "\tASH %s %d-recall@%d = %.6f%n",
@@ -1172,98 +1192,8 @@ public class DistancesASH {
         }
     }
 
-    public static void runSIFT() throws IOException {
-        System.out.println("Running siftsmall");
-
-        var baseVectors = "siftsmall/siftsmall_base.fvecs";
-        var queryVectors = "siftsmall/siftsmall_query.fvecs";
-        var gtVectors = "";
-        testASHEncodings(baseVectors, queryVectors, gtVectors);
-    }
-
-    public static void runGIST() throws IOException {
-        System.out.println("Running GIST");
-
-        var baseVectors = "./fvec/gist/gist_base.fvecs";
-        var queryVectors = "./fvec/gist/gist_query.fvecs";
-        var gtVectors = "";
-        testASHEncodings(baseVectors, queryVectors, gtVectors);
-    }
-
-    public static void runCohere100k() throws IOException {
-        System.out.println("Running Cohere-100k");
-
-        var baseVectors = "dataset_cache/public/cohere_english_v3_100k_base_99685.fvecs";
-        var queryVectors = "dataset_cache/public/cohere_english_v3_100k_query_10000.fvecs";
-        var gtVectors = "dataset_cache/public/cohere_english_v3_100k_gt_ip_100.ivecs";
-        testASHEncodings(baseVectors, queryVectors, gtVectors);
-    }
-
-    public static void runADA() throws IOException {
-        System.out.println("Running ada-002");
-
-        var baseVectors = "./fvec/ada-002/ada_002_100000_base_vectors.fvec";
-        var queryVectors = "./fvec/ada-002/ada_002_100000_query_vectors_10000.fvec";
-        var gtVectors = "./fvec/ada-002/ada_002_100000_indices_query_10000.ivec";
-        testASHEncodings(baseVectors, queryVectors, gtVectors);
-    }
-
-    public static void runADANoZeros() throws IOException {
-        System.out.println("Running ada-002-no-zeros");
-
-        var baseVectors = "./fvec/ada-002-no-zeros/ada_002_100000_base_vectors_no_zeros.fvec";
-        var queryVectors = "./fvec/ada-002-no-zeros/ada_002_100000_query_vectors_10000_no_zeros.fvec";
-        var gtVectors = "./fvec/ada-002-no-zeros/ada-002_gt_no_zeros.ivec";
-        testASHEncodings(baseVectors, queryVectors, gtVectors);
-    }
-
-    public static void runColbert() throws IOException {
-        System.out.println("Running colbertv2");
-
-        var baseVectors = "./fvec/wikipedia_squad/1M/colbertv2.0_128_base_vectors_1000000.fvec";
-        var queryVectors = "./fvec/wikipedia_squad/1M/colbertv2.0_128_query_vectors_100000.fvec";
-        var gtVectors = "";
-        testASHEncodings(baseVectors, queryVectors, gtVectors);
-    }
-
-    public static void runOpenai1536() throws IOException {
-        System.out.println("Running text-embedding-3-large_1536");
-
-        var baseVectors = "./fvec/openai-v3-large-1536-100k/openai_v3_large_1536_100k_base_98716.fvecs";
-        var queryVectors = "./fvec/openai-v3-large-1536-100k/openai_v3_large_1536_100k_query_10000.fvecs";
-        var gtVectors = "./fvec/openai-v3-large-1536-100k/openai_v3_large_1536_100k_gt_ip_100.ivecs";
-        testASHEncodings(baseVectors, queryVectors, gtVectors);
-    }
-
-    public static void runOpenai3072() throws IOException {
-        System.out.println("Running text-embedding-3-large_3072");
-
-        var baseVectors = "./fvec/openai-v3-large-3072-100k/text-embedding-3-large_3072_100000_base_vectors.fvec";
-        var queryVectors = "./fvec/openai-v3-large-3072-100k/text-embedding-3-large_3072_100000_query_vectors_10000.fvec";
-        var gtVectors = "./fvec/openai-v3-large-3072-100k/text-embedding-3-large_3072_100000_indices_query_10000.ivec";
-        testASHEncodings(baseVectors, queryVectors, gtVectors);
-    }
-
-    public static void runCap6m() throws IOException {
-        System.out.println("Running cap-6m");
-
-        var baseVectors = "./fvec/cap-6m/Caselaw_gte-Qwen2-1.5B_embeddings_base_6m_norm_shuffle.fvecs";
-        var queryVectors = "./fvec/cap-6m/Caselaw_gte-Qwen2-1.5B_embeddings_query_10k_norm_shuffle.fvecs";
-        var gtVectors = "./fvec/cap-6m/cap_6m_gt_norm_shuffle_ip_k100.ivecs";
-        testASHEncodings(baseVectors, queryVectors, gtVectors);
-    }
-
-    public static void runCohere10m() throws IOException {
-        System.out.println("Running cohere-10m");
-
-        var baseVectors = "./fvec/cohere-10m/cohere_wiki_en_flat_base_10m_norm.fvecs";
-        var queryVectors = "./fvec/cohere-10m/cohere_wiki_en_flat_query_10k_norm.fvecs";
-        var gtVectors = "./fvec/cohere-10m/cohere_wiki_en_flat_gt_10m_ip_k100.ivecs";
-        testASHEncodings(baseVectors, queryVectors, gtVectors);
-    }
-
     public static void main(String[] args) throws IOException {
-        // Dispatch before the legacy argument modes: saved fixtures need no positional inputs.
+        // Dispatch before the dataset modes: saved fixtures need no positional inputs.
         if (Boolean.getBoolean("jvector.bench.neighborhood-scoring")) {
             ASHNeighborhoodBenchmark.run(args);
             return;
@@ -1272,18 +1202,19 @@ public class DistancesASH {
             testASHEncodings(args[0], args[1], args[2]);
             return;
         }
-        if (args.length != 0) {
-            throw new IllegalArgumentException("Expected base.fvecs query.fvecs ground-truth.ivecs");
+        if (args.length > 1) {
+            throw new IllegalArgumentException(
+                    "Usage: DistancesASH [dataset-name] | <base.fvecs> <query.fvecs> <ground-truth.ivecs>");
         }
-//        runSIFT();
-//        runGIST();
-//        runColbert();
-//        runCohere100k();
-//        runADA();
-//        runADANoZeros();
-        runOpenai1536();
-//        runOpenai3072();
-//        runCap6m();
-//        runCohere10m();
+        String name = args.length == 0 ? DEFAULT_DATASET : args[0];
+        try (DataSet dataset = DataSets.loadDataSet(name)
+                .orElseThrow(() -> new IllegalArgumentException("Unknown dataset: " + name)).getDataSet()) {
+            var similarity = dataset.getSimilarityFunction();
+            if (similarity != VectorSimilarityFunction.DOT_PRODUCT && similarity != VectorSimilarityFunction.COSINE) {
+                throw new IllegalArgumentException("ASH scores inner products; dataset " + name + " uses " + similarity);
+            }
+            System.out.println("Running " + dataset.getName() + ", similarity " + similarity);
+            testASHEncodings(dataset.getBaseVectors(), dataset.getQueryVectors(), dataset.getGroundTruth());
+        }
     }
 }
