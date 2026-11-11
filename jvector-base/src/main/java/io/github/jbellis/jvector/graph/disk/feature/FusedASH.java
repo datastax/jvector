@@ -158,9 +158,15 @@ public class FusedASH extends AbstractFeature implements FusedFeature {
         }
     }
 
+    @Deprecated
     @Override
     public void writeHeader(IndexWriter out) throws IOException {
-        ash.write(out, OnDiskGraphIndex.CURRENT_VERSION);
+        writeHeader(out, OnDiskGraphIndex.CURRENT_VERSION);
+    }
+
+    @Override
+    public void writeHeader(IndexWriter out, int version) throws IOException {
+        ash.write(out, version);
         out.writeInt(blockSize);
     }
 
