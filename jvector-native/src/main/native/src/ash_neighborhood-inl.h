@@ -25,7 +25,8 @@ constexpr int kAshInvalidLandmark = 1;
 constexpr int kAshInvalidShape = 2;
 constexpr size_t kAshHeaderBytesPerLane = 5;
 
-template <class D, class I> HWY_INLINE auto AshLookup(D d, const float *lut, I indices) {
+template <class D>
+HWY_INLINE hn::VFromD<D> AshLookup(D d, const float *lut, hn::VFromD<hn::Rebind<uint32_t, D>> indices) {
     const hn::Rebind<int32_t, D> di;
 #if !HWY_HAVE_SCALABLE
     // On SVE, MaxLanes is only an upper bound on the runtime vector length.
@@ -39,12 +40,15 @@ template <class D, class I> HWY_INLINE auto AshLookup(D d, const float *lut, I i
     }
 }
 
-template <class D, class V> HWY_INLINE auto AshPromoteHalf(D d, V bits) {
+template <class D>
+HWY_INLINE hn::VFromD<D> AshPromoteHalf(D d, hn::VFromD<hn::Rebind<uint16_t, D>> bits) {
     const hn::Rebind<hwy::float16_t, D> df16;
     auto value = hn::PromoteTo(d, hn::BitCast(df16, bits));
+#if HWY_TARGET <= HWY_SSE4
     if constexpr (hn::MaxLanes(d) < 8) {
         // Highway's SSE software conversion assumes finite half values. Repair
-        // exponent 31 explicitly; AVX2/AVX-512 use hardware F16 conversion.
+        // exponent 31 explicitly; AVX2/AVX-512 use hardware F16 conversion and
+        // NEON converts infinities and NaNs correctly.
         const hn::Rebind<uint32_t, D> du;
         const auto wide = hn::PromoteTo(du, bits);
         const auto exponent = hn::And(wide, hn::Set(du, 0x7c00));
@@ -54,6 +58,7 @@ template <class D, class V> HWY_INLINE auto AshPromoteHalf(D d, V bits) {
         const auto ieee = hn::BitCast(d, hn::Or(hn::Or(sign, mantissa), hn::Set(du, 0x7f800000)));
         value = hn::IfThenElse(hn::RebindMask(d, special), ieee, value);
     }
+#endif
     return value;
 }
 
@@ -70,12 +75,13 @@ HWY_INLINE int AshFinish(D d, const unsigned char *header, int blockSize, int la
     // Disk f16 values are big-endian; Highway's x86 loads interpret native byte order.
     auto scaleBits = hn::LoadN(dh, reinterpret_cast<const uint16_t *>(header) + lane, count);
     auto offsetBits = hn::LoadN(dh, reinterpret_cast<const uint16_t *>(header + 2 * blockSize) + lane, count);
-    scaleBits = hn::Or(hn::ShiftLeft<8>(scaleBits), hn::ShiftRight<8>(scaleBits));
-    offsetBits = hn::Or(hn::ShiftLeft<8>(offsetBits), hn::ShiftRight<8>(offsetBits));
+    scaleBits = hn::ReverseLaneBytes(scaleBits);
+    offsetBits = hn::ReverseLaneBytes(offsetBits);
     const auto scale = AshPromoteHalf(d, scaleBits);
     const auto offset = AshPromoteHalf(d, offsetBits);
-    const auto raw = hn::Add(hn::Add(hn::Mul(scale, dot), hn::Set(d, landmarkDot)), offset);
-    const auto similarity = hn::Mul(hn::Add(hn::Set(d, 1.0f), raw), hn::Set(d, 0.5f));
+    const auto raw = hn::Add(hn::MulAdd(scale, dot, hn::Set(d, landmarkDot)), offset);
+    const auto half = hn::Set(d, 0.5f);
+    const auto similarity = hn::MulAdd(raw, half, half);
     const auto result = hn::IfThenElse(hn::IsNaN(similarity), similarity, hn::Max(hn::Zero(d), similarity));
     hn::StoreN(result, d, out, count);
     return kAshSuccess;
@@ -215,7 +221,7 @@ float ash_projection_dot_4bit_f32(const float *HWY_RESTRICT query,
     const hn::Rebind<uint32_t, decltype(d)> du;
     const size_t lanes = hn::Lanes(d);
     const size_t count = static_cast<size_t>(dimensions);
-#if HWY_TARGET == HWY_AVX3 || HWY_TARGET == HWY_AVX3_DL || HWY_TARGET == HWY_AVX3_SPR
+#if HWY_TARGET <= HWY_AVX3
     // Exact signed-magnitude levels: keep them in one register instead of
     // converting magnitudes and constructing sign masks for every vector.
     alignas(64) static constexpr float levels[16] = {
@@ -232,7 +238,7 @@ float ash_projection_dot_4bit_f32(const float *HWY_RESTRICT query,
     for (; i + 2 * lanes <= count; i += 2 * lanes) {
         const auto packed = hn::PromoteTo(du, hn::LoadU(db, code + i / 2));
         const auto hiCode = hn::ShiftRight<4>(packed);
-#if HWY_TARGET == HWY_AVX3 || HWY_TARGET == HWY_AVX3_DL || HWY_TARGET == HWY_AVX3_SPR
+#if HWY_TARGET <= HWY_AVX3
         // VPERMPS uses only the low four index bits. Use the intrinsic to avoid
         // a redundant mask and Highway IndicesFromVec debug checks on upper bits.
         const auto loValue = hn::VFromD<decltype(d)>{_mm512_permutexvar_ps(packed.raw, table.raw)};
