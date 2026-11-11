@@ -2,8 +2,29 @@
 
 # fail on error
 set -e
-# print commands as they are executed
-set -x
+# Quiet by default: Meson and Ninja output goes to a log in the build directory and is shown
+# only if a step fails. JVECTOR_NATIVE_BUILD_VERBOSE=1 prints everything, including each command.
+VERBOSE="${JVECTOR_NATIVE_BUILD_VERBOSE:-}"
+if [ -n "${VERBOSE}" ]; then set -x; fi
+
+# Prints a status line only in verbose mode.
+info() {
+  if [ -n "${VERBOSE}" ]; then printf "$@"; fi
+}
+
+# Runs a build step. Quiet mode keeps its output in <log> and prints the log's end on failure.
+# Usage: run_step <log> <command...>
+run_step() {
+  local log="$1"; shift
+  if [ -n "${VERBOSE}" ]; then "$@"; return; fi
+  mkdir -p "$(dirname "${log}")"
+  if ! "$@" > "${log}" 2>&1; then
+    echo "ERROR: native build step failed: $*" >&2
+    tail -n 60 "${log}" >&2
+    echo "Full log: ${log} (rerun with JVECTOR_NATIVE_BUILD_VERBOSE=1 to print everything)" >&2
+    exit 1
+  fi
+}
 
 # Copyright DataStax, Inc.
 #
@@ -36,7 +57,7 @@ MODULE_ROOT="${REPO_ROOT}/jvector-native"
 RESOURCES_DIR="${MODULE_ROOT}/target/meson-build"
 
 if [ "$1" == "--auto-install-deps" ] ; then AUTO_INSTALL_DEPS=true ; shift ; fi
-printf "AUTO_INSTALL_DEPS=%s\n" "${AUTO_INSTALL_DEPS}"
+info "AUTO_INSTALL_DEPS=%s\n" "${AUTO_INSTALL_DEPS}"
 
 # Accept buildtype parameter (default: release)
 BUILDTYPE="${1:-release}"
@@ -45,14 +66,14 @@ if [ "$BUILDTYPE" != "release" ] && [ "$BUILDTYPE" != "debug" ] && [ "$BUILDTYPE
   echo "         Valid values: release, debug, debugoptimized"
   BUILDTYPE="release"
 fi
-printf "BUILDTYPE=%s\n" "${BUILDTYPE}"
+info "BUILDTYPE=%s\n" "${BUILDTYPE}"
 
 # Accept crossarch flag (default: false).
 # When true, builds both the native arch library AND cross-compiles for the other arch.
 #   On x86_64: builds libjvector-x86_64.so  + cross-compiles libjvector-aarch64.so
 #   On aarch64: builds libjvector-aarch64.so + cross-compiles libjvector-x86_64.so
 CROSSARCH="${2:-false}"
-printf "CROSSARCH=%s\n" "${CROSSARCH}"
+info "CROSSARCH=%s\n" "${CROSSARCH}"
 
 # Optional oneDNN add-on for FP32 encoding batches and FP16/INT8 queries, built
 # from its own Meson project; libjvector stays independent. Off by default because
@@ -102,7 +123,7 @@ fi
 # Detect the host CPU architecture.
 # ---------------------------------------------------------------------------
 HOST_ARCH="$(uname -m)"   # e.g. x86_64 or aarch64
-printf "HOST_ARCH=%s\n" "${HOST_ARCH}"
+info "HOST_ARCH=%s\n" "${HOST_ARCH}"
 
 # ---------------------------------------------------------------------------
 # build_native <arch>
@@ -152,9 +173,11 @@ build_native() {
     cross_options=(--cross-file "${CROSS_FILE}")
   fi
 
-  meson setup "${BUILD_DIR}" "${NATIVE_DIR}" \
+  echo "jvector-native: building the native library for ${ARCH} (the first build can take a few minutes)"
+  local started=${SECONDS}
+  run_step "${BUILD_DIR}.setup.log" meson setup "${BUILD_DIR}" "${NATIVE_DIR}" \
       "${setup_options[@]}" "${cross_options[@]}" --buildtype="${BUILDTYPE}"
-  meson compile -C "${BUILD_DIR}"
+  run_step "${BUILD_DIR}.compile.log" meson compile -C "${BUILD_DIR}"
 
   # The versioned .so (e.g. libjvector.so.0.1.0) is the real file; symlinks point to it.
   SOFILE=$(find "${BUILD_DIR}" -maxdepth 1 -name 'libjvector.so.*' -type f | head -1)
@@ -163,7 +186,7 @@ build_native() {
     exit 1
   fi
   cp "${SOFILE}" "${OUT_SO}"
-  printf "Built: %s\n" "${OUT_SO}"
+  echo "jvector-native: built $(basename "${OUT_SO}") in $((SECONDS - started)) s"
 
   local FP16_OUT="${RESOURCES_DIR}/libjvector_ash_fp16-${ARCH}.so"
   if [ "${ONEDNN}" == "true" ]; then
@@ -172,10 +195,13 @@ build_native() {
     if [[ -f "${ONEDNN_BUILD_DIR}/meson-private/coredata.dat" ]]; then
       onednn_setup_options+=(--reconfigure)
     fi
-    meson setup "${ONEDNN_BUILD_DIR}" "${ONEDNN_DIR}" \
+    echo "jvector-native: building the oneDNN add-on for ${ARCH} (the first build can take several minutes)"
+    started=${SECONDS}
+    run_step "${ONEDNN_BUILD_DIR}.setup.log" meson setup "${ONEDNN_BUILD_DIR}" "${ONEDNN_DIR}" \
         "${onednn_setup_options[@]}" "${cross_options[@]}" --buildtype="${BUILDTYPE}"
-    meson compile -C "${ONEDNN_BUILD_DIR}"
+    run_step "${ONEDNN_BUILD_DIR}.compile.log" meson compile -C "${ONEDNN_BUILD_DIR}"
     cp "${ONEDNN_BUILD_DIR}/libjvector_ash_fp16.so" "${FP16_OUT}"
+    echo "jvector-native: built $(basename "${FP16_OUT}") in $((SECONDS - started)) s"
     # License texts travel with the optional static dependency in either jar.
     cp "${ONEDNN_DIR}/subprojects/onednn/LICENSE" "${RESOURCES_DIR}/oneDNN-LICENSE.txt"
     cp "${ONEDNN_DIR}/subprojects/onednn/THIRD-PARTY-PROGRAMS" "${RESOURCES_DIR}/oneDNN-THIRD-PARTY.txt"

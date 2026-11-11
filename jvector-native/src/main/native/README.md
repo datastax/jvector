@@ -132,6 +132,11 @@ This is the easiest way to get started on a fresh Ubuntu machine. For other
 distributions the script will print an error indicating which install commands
 need to be added.
 
+The build is quiet by default: it prints one line when each library starts and finishes, while
+Meson and Ninja output goes to `target/meson-build-<arch>.setup.log` and `.compile.log` and is
+printed only if a step fails. Set `JVECTOR_NATIVE_BUILD_VERBOSE=1` to
+print everything, including each command the script runs.
+
 ### Cross-compilation
 
 Both `.so` files can be produced on a single machine without access to the
