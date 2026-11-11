@@ -118,7 +118,7 @@ class GraphIndexFormatV6 extends GraphIndexFormatV5 {
         for (var featureId : features.keySet()) {
             out.writeInt(featureId.ordinal());
             Feature feature = features.get(featureId);
-            feature.writeHeader(out);
+            feature.writeHeader(out, getVersion());
         }
     }
 
