@@ -23,7 +23,6 @@ import io.github.jbellis.jvector.graph.ImmutableGraphIndex;
 import io.github.jbellis.jvector.graph.disk.OnDiskGraphIndex;
 import io.github.jbellis.jvector.graph.disk.feature.Feature;
 import io.github.jbellis.jvector.graph.disk.feature.FeatureId;
-import io.github.jbellis.jvector.graph.disk.feature.InlineByteVectors;
 
 import java.io.IOException;
 import java.nio.file.Path;
@@ -87,10 +86,7 @@ final class InMemoryBuild implements IndexBuildStrategy {
         return new BuiltIndexes(indexes, new LinkedHashMap<>(), buildTimeS);
     }
 
-    /**
-     * Builds an int8 index in memory and writes it with the INLINE_BYTE_VECTORS feature, the only
-     * feature int8 datasets support. Every requested feature set maps to such an index.
-     */
+    /** Builds an int8 index in memory and writes each requested feature set; int8 supports INLINE_BYTE_VECTORS. */
     BuiltIndexes buildInt8(List<? extends Set<FeatureId>> featureSets, BuildConfig build, ByteDataSet ds) throws IOException {
         var byteVectors = ds.getBaseRavv();
         Map<Set<FeatureId>, ImmutableGraphIndex> indexes = new LinkedHashMap<>();
@@ -106,17 +102,15 @@ final class InMemoryBuild implements IndexBuildStrategy {
         }
         int n = 0;
         for (var features : featureSets) {
-            if (features.contains(FeatureId.FUSED_PQ)) {
-                System.out.println("Skipping Fused ADC feature when building in memory");
+            if (FeatureProviders.anyMatch(features, p -> !p.supportsInMemoryBuild())) {
+                System.out.println("Skipping " + features + " when building in memory: it needs a compressed build");
                 continue;
             }
             var graphPath = workDirectory.resolve("graph" + n++);
-            var writerBuilder = GraphBuilderFactory.writerBuilder(onHeapGraph, graphPath, byteVectors.size())
-                    .with(new InlineByteVectors(byteVectors.dimension()));
-            try (var writer = writerBuilder.build()) {
+            var ctx = FeatureProviders.configureWriter(features, onHeapGraph, graphPath, byteVectors);
+            try (var writer = ctx.buildWriter()) {
                 start = System.nanoTime();
-                writer.write(Map.of(FeatureId.INLINE_BYTE_VECTORS,
-                                    ordinal -> new InlineByteVectors.State(byteVectors.getVector(ordinal))));
+                writer.write(ctx.ordinalSuppliers());
                 System.out.format("Wrote %s in %.2fs%n", features, (System.nanoTime() - start) / 1_000_000_000.0);
             }
             indexes.put(features, OnDiskGraphIndex.load(ReaderSupplierFactory.open(graphPath)));
