@@ -441,7 +441,7 @@ public class GraphSearcher implements Closeable {
             boolean adaptive = adaptiveTerminationEnabled
                     && scoreProvider.supportsAdaptiveDotProductTermination()
                     && level == 0 && threshold == 0.0f && rerankK > 0;
-            if (adaptive) resetAdaptiveTermination(rerankK, acceptOrdsThisLayer);
+            if (adaptive) resetAdaptiveTermination(scoreProvider, rerankK, acceptOrdsThisLayer);
 
             // TopK and filtered pruning are disabled. Threshold searches retain their
             // legacy threshold early-termination path inside ScoreTrackerFactory.
@@ -544,7 +544,7 @@ public class GraphSearcher implements Closeable {
         return reranking(topK, rerankK, rerankFloor);
     }
 
-    private void resetAdaptiveTermination(int rerankK, Bits accepted) {
+    private void resetAdaptiveTermination(SearchScoreProvider scoreProvider, int rerankK, Bits accepted) {
         adaptiveTermination.reset(rerankK, adaptiveTerminationGamma, scoreProvider.adaptiveScoresAreRawDotProducts());
         adaptiveResults.clear();
         adaptiveResults.setMaxSize(rerankK);

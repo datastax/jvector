@@ -37,6 +37,8 @@ import static java.lang.Math.max;
  * A KMeans++ implementation for float vectors.  Optimizes to use SIMD vector instructions if available.
  */
 public class KMeansPlusPlusClusterer {
+    private static final org.slf4j.Logger LOG = org.slf4j.LoggerFactory.getLogger(KMeansPlusPlusClusterer.class);
+
     private static final VectorTypeSupport vectorTypeSupport = VectorizationProvider.getInstance().getVectorTypeSupport();
 
     // Observability flags (disabled by default)
@@ -151,25 +153,23 @@ public class KMeansPlusPlusClusterer {
             long t1 = VERBOSE_KMEANS_TIMING ? System.nanoTime() : 0L;
 
             if (VERBOSE_KMEANS) {
-                System.out.printf(
-                        "KMeans unweighted iter %d: %d/%d reassigned (%.3f%%)%n",
+                LOG.info(String.format("KMeans unweighted iter %d: %d/%d reassigned (%.3f%%)",
                         i,
                         changedCount,
                         n,
-                        100.0 * changedCount / n
+                        100.0 * changedCount / n)
                 );
             }
 
             if (VERBOSE_KMEANS_TIMING) {
-                System.out.printf(
-                        "  time = %.3f ms%n",
-                        (t1 - t0) * 1e-6
+                LOG.info(String.format("  time = %.3f ms",
+                        (t1 - t0) * 1e-6)
                 );
             }
 
             if (changedCount <= threshold) {
                 if (VERBOSE_KMEANS) {
-                    System.out.println("KMeans unweighted converged early");
+                    LOG.info("KMeans unweighted converged early");
                 }
                 break;
             }
@@ -185,25 +185,23 @@ public class KMeansPlusPlusClusterer {
             long t1 = VERBOSE_KMEANS_TIMING ? System.nanoTime() : 0L;
 
             if (VERBOSE_KMEANS) {
-                System.out.printf(
-                        "KMeans anisotropic iter %d: %d/%d reassigned (%.3f%%)%n",
+                LOG.info(String.format("KMeans anisotropic iter %d: %d/%d reassigned (%.3f%%)",
                         i,
                         changedCount,
                         n,
-                        100.0 * changedCount / n
+                        100.0 * changedCount / n)
                 );
             }
 
             if (VERBOSE_KMEANS_TIMING) {
-                System.out.printf(
-                        "  time = %.3f ms%n",
-                        (t1 - t0) * 1e-6
+                LOG.info(String.format("  time = %.3f ms",
+                        (t1 - t0) * 1e-6)
                 );
             }
 
             if (changedCount <= threshold) {
                 if (VERBOSE_KMEANS) {
-                    System.out.println("KMeans anisotropic converged early");
+                    LOG.info("KMeans anisotropic converged early");
                 }
                 break;
             }

@@ -290,7 +290,7 @@ public class TestASHMemoryAccounting {
         var query = ash.landmarks[0];
         for (int block : new int[]{8,16,8}) {
             vectors.blockScorerFor(query, VectorSimilarityFunction.DOT_PRODUCT, block);
-            long[] packed = (long[])field(vectors, "packedBits");
+            long[] packed = (long[])field(field(vectors, "packedBits"), "words");
             // Query preparation may initialize provider weights; subtract model growth.
             long own = vectors.ramBytesUsed()-ash.ramBytesUsed();
             assertTrue(packed != null);

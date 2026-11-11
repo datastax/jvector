@@ -94,6 +94,11 @@ public class MemorySegmentReader implements RandomAccessReader {
     }
 
     @Override
+    public byte readByte() {
+        return memory.get(ValueLayout.JAVA_BYTE, position++);
+    }
+
+    @Override
     public int readInt() {
         var k = memory.get(intLayout, position);
         position += 4;

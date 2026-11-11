@@ -110,10 +110,20 @@ public class ASHVectors implements CompressedVectors {
     private final int d;
     private final int words;
 
-    // Packed block-column-major sign bits (built lazily per blockSize, 1-bit path only)
-    private int packedBlockSize = -1;
-    private volatile long[] packedBits = null;
-    private int packedBlockCount = 0;
+    // Packed block-column-major sign bits (built lazily per blockSize, 1-bit path only). Published
+    // whole, after it is filled, so concurrent queries never see a partial array or another size.
+    private static final class PackedBits {
+        final int blockSize;
+        final long[] words;
+
+        PackedBits(int blockSize, long[] words) {
+            this.blockSize = blockSize;
+            this.words = words;
+        }
+    }
+
+    private volatile PackedBits packedBits;
+    private final Object packedBitsLock = new Object();
 
     // Immutable, body-only nibble blocks shared by queries. Header arrays contain
     // decoded binary16 values; the serialized header remains 40 bits per vector.
@@ -434,14 +444,12 @@ public class ASHVectors implements CompressedVectors {
         // ------------------------------------------------------------
         // SIMD path
         // ------------------------------------------------------------
-        ensurePackedBits(blockSize);
-
         return new SimdASHBlockScorer(
                 codes.size,
                 scales,
                 offsets,
                 landmarks,
-                packedBits,
+                packedBitsFor(blockSize),
                 blockSize,
                 qp
         );
@@ -465,8 +473,7 @@ public class ASHVectors implements CompressedVectors {
         var qp = new QueryPrecompute(prepared.d, prepared.C, prepared.qProj,
                 prepared.sumQProj, prepared.dotQMuByLandmark);
         if (!simd) return new ScalarASHBlockScorer(codes, scales, offsets, landmarks, qp);
-        ensurePackedBits(blockSize);
-        return new SimdASHBlockScorer(codes.size, scales, offsets, landmarks, packedBits, blockSize, qp);
+        return new SimdASHBlockScorer(codes.size, scales, offsets, landmarks, packedBitsFor(blockSize), blockSize, qp);
     }
 
     private byte[][] packProjectionBlocks(int blockSize) {
@@ -554,21 +561,32 @@ public class ASHVectors implements CompressedVectors {
         public String description() { return toString(); }
     }
 
-    private void ensurePackedBits(int blockSize) {
+    /** The packed sign words for {@code blockSize}; callers score with exactly the array returned. */
+    private long[] packedBitsFor(int blockSize) {
         if (ash.bitsPerDimension != 1) {
             throw new IllegalStateException("Packed sign-bit block cache supports only 1-bit ASH");
         }
         if (blockSize <= 0) {
             throw new IllegalArgumentException("blockSize must be > 0");
         }
-        if (packedBits != null && packedBlockSize == blockSize) {
-            return;
+        PackedBits current = packedBits;
+        if (current != null && current.blockSize == blockSize) {
+            return current.words;
         }
+        synchronized (packedBitsLock) {
+            current = packedBits;
+            if (current == null || current.blockSize != blockSize) {
+                current = new PackedBits(blockSize, packBits(blockSize));
+                packedBits = current;
+            }
+            return current.words;
+        }
+    }
 
+    private long[] packBits(int blockSize) {
         final int n = codes.size;
-        packedBlockSize = blockSize;
-        packedBlockCount = (n + blockSize - 1) / blockSize;
-        packedBits = new long[packedBlockCount * words * blockSize];
+        final int packedBlockCount = (n + blockSize - 1) / blockSize;
+        final long[] packedBits = new long[packedBlockCount * words * blockSize];
 
         for (int b = 0; b < packedBlockCount; b++) {
             int baseOrd = b * blockSize;
@@ -583,6 +601,7 @@ public class ASHVectors implements CompressedVectors {
                 // remaining lanes default to 0
             }
         }
+        return packedBits;
     }
 
     /**
@@ -1030,8 +1049,9 @@ public class ASHVectors implements CompressedVectors {
     @Override
     public long ramBytesUsed() {
         ASHSymmetricScorer symmetric = diversityScorer;
+        PackedBits packed = packedBits;
         return ash.ramBytesUsed() + containerBytes + codes.ramBytesUsed() + projectionCacheBytes.get()
-                + RamUsageEstimator.shallowSizeOf(packedBits)
+                + (packed == null ? 0 : RamUsageEstimator.shallowSizeOf(packed.words))
                 + (symmetric == null ? 0 : symmetric.ramBytesUsed());
     }
 

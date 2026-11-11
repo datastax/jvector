@@ -33,6 +33,47 @@ import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 /** The native provider sets BLAS threads, and ASH training bounds them by its executor. */
 class NativeBlasThreadsTest {
+    // A fake process-wide library: one count shared by every thread, like openblas_set_num_threads.
+    private static int processCount;
+    private static void fakeSet(int threads) { processCount = threads; }
+    private static int fakeGet() { return processCount; }
+
+    private static NativeBlasThreads.Control processWide() throws Exception {
+        var lookup = java.lang.invoke.MethodHandles.lookup();
+        var set = lookup.findStatic(NativeBlasThreadsTest.class, "fakeSet",
+                java.lang.invoke.MethodType.methodType(void.class, int.class));
+        var get = lookup.findStatic(NativeBlasThreadsTest.class, "fakeGet",
+                java.lang.invoke.MethodType.methodType(int.class));
+        return new NativeBlasThreads.Control("fake process-wide", set, get, true);
+    }
+
+    @Test
+    void overlappingProcessWideScopesHoldTheCountUntilTheLastCloses() throws Exception {
+        var control = processWide();
+        processCount = 48;
+        int a = control.set(1);                 // scope A opens on one thread
+        int b = control.set(1);                 // scope B opens on another before A closes
+        assertEquals(1, processCount);
+        control.set(a);                         // A closes while B is still open
+        assertEquals(1, processCount, "B must keep its single thread");
+        control.set(b);                         // B closes last
+        assertEquals(48, processCount, "The process count must be restored");
+        control.set(b);                         // a repeated restore changes nothing
+        assertEquals(48, processCount);
+    }
+
+    @Test
+    void aConflictingProcessWideScopeDoesNotChangeTheHeldCount() throws Exception {
+        var control = processWide();
+        processCount = 48;
+        int a = control.set(1);
+        int b = control.set(4);                 // cannot change a count another thread is using
+        assertEquals(1, processCount);
+        control.set(b);
+        control.set(a);
+        assertEquals(48, processCount);
+    }
+
     private static boolean supported() {
         return !"none".equals(NativeBlasThreads.description());
     }

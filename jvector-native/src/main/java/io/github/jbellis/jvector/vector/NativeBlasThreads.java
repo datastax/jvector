@@ -46,11 +46,23 @@ final class NativeBlasThreads {
         return CONTROL == null ? "none" : CONTROL.name;
     }
 
-    private static final class Control {
+    /**
+     * Thread-local setters apply and restore per thread. A process-wide setter is shared by every
+     * thread, so its scopes are reference counted: the first open scope saves the process count and
+     * applies its own, later scopes join without changing it, and the saved count returns when the
+     * last scope closes. A scope's restore value is then {@link #RELEASE}, which closes that scope.
+     */
+    static final class Control {
+        /** Returned to process-wide scopes; passing it back releases the scope. Never a real count. */
+        static final int RELEASE = Integer.MAX_VALUE;
+
         final String name;
         final MethodHandle setter;   // int f(int) returning the previous value, or void f(int)
         final MethodHandle getter;   // int f(void), only for process-wide setters
         final boolean global;
+        private int openScopes;      // process-wide only, guarded by this
+        private int savedCount;      // process count before the first open scope
+        private int appliedCount;    // count applied by the first open scope
 
         Control(String name, MethodHandle setter, MethodHandle getter, boolean global) {
             this.name = name;
@@ -62,9 +74,19 @@ final class NativeBlasThreads {
         int set(int threads) {
             try {
                 if (!global) return (int) setter.invokeExact(threads);
-                int previous = (int) getter.invokeExact();
-                if (previous != threads) setter.invokeExact(threads);
-                return previous;
+                synchronized (this) {
+                    if (threads == RELEASE) {
+                        if (openScopes == 0) return appliedCount;
+                        if (--openScopes == 0 && savedCount != appliedCount) setter.invokeExact(savedCount);
+                        return appliedCount;
+                    }
+                    if (openScopes++ == 0) {
+                        savedCount = (int) getter.invokeExact();
+                        appliedCount = threads;
+                        if (savedCount != threads) setter.invokeExact(threads);
+                    }
+                    return RELEASE;
+                }
             } catch (Throwable t) {
                 throw new IllegalStateException("Setting " + name + " to " + threads + " failed", t);
             }
