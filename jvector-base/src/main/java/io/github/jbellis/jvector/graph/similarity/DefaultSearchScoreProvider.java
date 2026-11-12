@@ -16,6 +16,7 @@
 
 package io.github.jbellis.jvector.graph.similarity;
 
+import io.github.jbellis.jvector.graph.FlatVectorValues;
 import io.github.jbellis.jvector.graph.RandomAccessVectorValues;
 import io.github.jbellis.jvector.vector.VectorSimilarityFunction;
 import io.github.jbellis.jvector.vector.types.VectorFloat;
@@ -121,6 +122,10 @@ public final class DefaultSearchScoreProvider implements SearchScoreProvider {
     /** Exact scores of {@code v} against {@code ravv}, safe for concurrent use. */
     static ScoreFunction.ExactScoreFunction exactScoreFunction(VectorFloat<?> v, VectorSimilarityFunction vsf,
                                                                RandomAccessVectorValues ravv) {
+        if (ravv instanceof FlatVectorValues) {
+            // rows are read in place; the score function holds no mutable state, so it is thread safe
+            return ((FlatVectorValues) ravv).scoreFunctionFor(v, vsf);
+        }
         // don't use ESF.reranker, we need thread safety here
         return new ScoreFunction.ExactScoreFunction() {
             @Override

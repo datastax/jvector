@@ -76,6 +76,13 @@ public final class VectorUtil {
     return r;
   }
 
+  /** Returns the cosine similarity of {@code length} values of {@code a} and {@code b} starting at the given offsets. */
+  public static float cosine(VectorFloat<?> a, int aoffset, VectorFloat<?> b, int boffset, int length) {
+    float r = impl.cosine(a, aoffset, b, boffset, length);
+    assert Float.isFinite(r) : String.format("cosine(%s, %d, %s, %d, %d) = %s", a, aoffset, b, boffset, length, r);
+    return r;
+  }
+
   /**
    * Returns the sum of squared differences of the two vectors.
    *
