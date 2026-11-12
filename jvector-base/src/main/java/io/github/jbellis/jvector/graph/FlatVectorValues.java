@@ -81,7 +81,7 @@ public final class FlatVectorValues implements BatchedVectorValues {
     private final boolean appendable;
     /** Every page up to the highest ordinal added; replaced, never mutated in place, when it grows. */
     private volatile VectorFloat<?>[] pages;
-    /** The pages with the backend's handle for scoring rows across them in one call; published after pages. */
+    /** The pages with the backend's handle for scoring rows across them in one call; published before pages. */
     private volatile PagedRows pagedRows;
 
     /** A set of pages and the {@link VectorUtilSupport#pagedRowTable} handle for exactly those pages. */
@@ -189,9 +189,11 @@ public final class FlatVectorValues implements BatchedVectorValues {
             floats += (long) rows * stride;
         }
         allocatedFloats += floats;
-        pages = grown;
+        // Publish the table before the pages: a writer that sees the new pages adds rows to them without allocating,
+        // and anything that later reaches those rows through that writer must find a table that covers them.
         Object table = grown.length > 1 ? vus.pagedRowTable(grown) : null;
         pagedRows = table == null ? null : new PagedRows(grown, table);
+        pages = grown;
         return floats * Float.BYTES;
     }
 
