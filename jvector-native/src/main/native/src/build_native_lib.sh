@@ -12,6 +12,19 @@ info() {
   if [ -n "${VERBOSE}" ]; then printf "$@"; fi
 }
 
+# A library's progress lines: the start line only for a first (unconfigured) build, which is the slow
+# case, and the finish line only when Ninja rebuilt something, so an up-to-date build prints nothing.
+# Usage: announce_start <build-dir> <what> <how-long>; report_built <compile-log> <file> <start-seconds>
+announce_start() {
+  if [[ ! -f "$1/meson-private/coredata.dat" ]]; then
+    echo "jvector-native: building $2 (the first build can take $3)"
+  fi
+}
+report_built() {
+  if [ -z "${VERBOSE}" ] && grep -q "ninja: no work to do" "$1" 2>/dev/null; then return; fi
+  echo "jvector-native: built $2 in $((SECONDS - $3)) s"
+}
+
 # Runs a build step. Quiet mode keeps its output in <log> and prints the log's end on failure.
 # Usage: run_step <log> <command...>
 run_step() {
@@ -173,7 +186,7 @@ build_native() {
     cross_options=(--cross-file "${CROSS_FILE}")
   fi
 
-  echo "jvector-native: building the native library for ${ARCH} (the first build can take a few minutes)"
+  announce_start "${BUILD_DIR}" "the native library for ${ARCH}" "a few minutes"
   local started=${SECONDS}
   run_step "${BUILD_DIR}.setup.log" meson setup "${BUILD_DIR}" "${NATIVE_DIR}" \
       "${setup_options[@]}" "${cross_options[@]}" --buildtype="${BUILDTYPE}"
@@ -186,7 +199,7 @@ build_native() {
     exit 1
   fi
   cp "${SOFILE}" "${OUT_SO}"
-  echo "jvector-native: built $(basename "${OUT_SO}") in $((SECONDS - started)) s"
+  report_built "${BUILD_DIR}.compile.log" "$(basename "${OUT_SO}")" "${started}"
 
   local FP16_OUT="${RESOURCES_DIR}/libjvector_ash_fp16-${ARCH}.so"
   if [ "${ONEDNN}" == "true" ]; then
@@ -195,13 +208,13 @@ build_native() {
     if [[ -f "${ONEDNN_BUILD_DIR}/meson-private/coredata.dat" ]]; then
       onednn_setup_options+=(--reconfigure)
     fi
-    echo "jvector-native: building the oneDNN add-on for ${ARCH} (the first build can take several minutes)"
+    announce_start "${ONEDNN_BUILD_DIR}" "the oneDNN add-on for ${ARCH}" "several minutes"
     started=${SECONDS}
     run_step "${ONEDNN_BUILD_DIR}.setup.log" meson setup "${ONEDNN_BUILD_DIR}" "${ONEDNN_DIR}" \
         "${onednn_setup_options[@]}" "${cross_options[@]}" --buildtype="${BUILDTYPE}"
     run_step "${ONEDNN_BUILD_DIR}.compile.log" meson compile -C "${ONEDNN_BUILD_DIR}"
     cp "${ONEDNN_BUILD_DIR}/libjvector_ash_fp16.so" "${FP16_OUT}"
-    echo "jvector-native: built $(basename "${FP16_OUT}") in $((SECONDS - started)) s"
+    report_built "${ONEDNN_BUILD_DIR}.compile.log" "$(basename "${FP16_OUT}")" "${started}"
     # License texts travel with the optional static dependency in either jar.
     cp "${ONEDNN_DIR}/subprojects/onednn/LICENSE" "${RESOURCES_DIR}/oneDNN-LICENSE.txt"
     cp "${ONEDNN_DIR}/subprojects/onednn/THIRD-PARTY-PROGRAMS" "${RESOURCES_DIR}/oneDNN-THIRD-PARTY.txt"
