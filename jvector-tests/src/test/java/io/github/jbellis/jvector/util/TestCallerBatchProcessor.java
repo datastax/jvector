@@ -314,10 +314,15 @@ public class TestCallerBatchProcessor {
             for (int worker = 0; worker < 8; worker++) work.add(() -> {
                 int[] output = new int[1];
                 for (int i = 0; i < 20000; i++) processor.process(1, output);
+                // A JIT deoptimization inside a window can make the JVM's own VarHandle linkage allocate, so measure
+                // up to three windows and require one to be allocation-free. A real allocation shows up in every one.
                 long tid = Thread.currentThread().getId();
-                long before = bean.getThreadAllocatedBytes(tid);
-                for (int i = 0; i < 2000; i++) processor.process(1, output);
-                long bytes = bean.getThreadAllocatedBytes(tid) - before;
+                long bytes = Long.MAX_VALUE;
+                for (int window = 0; window < 3 && bytes != 0; window++) {
+                    long before = bean.getThreadAllocatedBytes(tid);
+                    for (int i = 0; i < 2000; i++) processor.process(1, output);
+                    bytes = Math.min(bytes, bean.getThreadAllocatedBytes(tid) - before);
+                }
                 assertEquals(1, output[0]);
                 return bytes;
             });

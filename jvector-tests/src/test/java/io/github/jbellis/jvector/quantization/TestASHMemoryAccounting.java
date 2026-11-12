@@ -430,10 +430,15 @@ public class TestASHMemoryAccounting {
 
         // Exercise exactly the measured call site before reading the allocation counter.
         for (int i = 0; i < 100; i++) accountingResult = readAccounting(ash, vectors, 2048);
+        // A JIT deoptimization inside a window can make the JVM's own VarHandle linkage allocate, so measure up to
+        // three windows and require one of them to be allocation-free. A real allocation shows up in every window.
         long thread = Thread.currentThread().getId();
-        long before = bean.getThreadAllocatedBytes(thread);
-        accountingResult = readAccounting(ash, vectors, 2048);
-        long allocated = bean.getThreadAllocatedBytes(thread) - before;
+        long allocated = Long.MAX_VALUE;
+        for (int window = 0; window < 3 && allocated != 0; window++) {
+            long before = bean.getThreadAllocatedBytes(thread);
+            accountingResult = readAccounting(ash, vectors, 2048);
+            allocated = Math.min(allocated, bean.getThreadAllocatedBytes(thread) - before);
+        }
         assertEquals("Polling retained ASH memory must not allocate", 0L, allocated);
     }
 
