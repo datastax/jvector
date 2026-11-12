@@ -15,6 +15,7 @@
  */
 package io.github.jbellis.jvector.disk;
 
+import org.junit.BeforeClass;
 import org.junit.Test;
 import java.io.EOFException;
 import java.io.IOException;
@@ -24,6 +25,14 @@ import java.nio.channels.*;
 import static org.junit.Assert.*;
 
 public class TestFvecReadProgress {
+    /**
+     * Initialize FvecFileVectorValues, which loads the vectorization provider (possibly a native library), before
+     * any timed test, so each timeout covers only the read loop it guards against spinning.
+     */
+    @BeforeClass public static void initializeOutsideTheTimeouts() throws ClassNotFoundException {
+        Class.forName(FvecFileVectorValues.class.getName(), true, TestFvecReadProgress.class.getClassLoader());
+    }
+
     @Test(timeout = 1000) public void repeatedZeroReadsFailInsteadOfSpinning() {
         var channel = new TestChannel(-1);
         var failure = assertThrows(IOException.class, () ->
