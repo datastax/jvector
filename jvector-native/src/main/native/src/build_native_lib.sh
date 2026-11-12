@@ -25,6 +25,21 @@ report_built() {
   echo "jvector-native: built $2 in $((SECONDS - $3)) s"
 }
 
+# Configures <build-dir> only when it is new or its setup arguments changed. Reconfiguring an
+# unchanged build regenerates the oneDNN CMake subproject and forces a relink on every build;
+# meson compile still regenerates by itself when a meson.build file changes.
+# Usage: setup_if_needed <build-dir> <source-dir> <meson setup options...>
+setup_if_needed() {
+  local build_dir="$1" source_dir="$2"; shift 2
+  local stamp="${build_dir}.setup-args" wanted="${source_dir} $*"
+  if [[ -f "${build_dir}/meson-private/coredata.dat" ]]; then
+    if [[ -f "${stamp}" && "$(cat "${stamp}")" == "${wanted}" ]]; then return; fi
+    set -- --reconfigure "$@"
+  fi
+  run_step "${build_dir}.setup.log" meson setup "${build_dir}" "${source_dir}" "$@"
+  printf '%s' "${wanted}" > "${stamp}"
+}
+
 # Runs a build step. Quiet mode keeps its output in <log> and prints the log's end on failure.
 # Usage: run_step <log> <command...>
 run_step() {
@@ -151,11 +166,8 @@ build_native() {
 
   rm -rf "${OUT_SO}"
 
-  # Reuse configured builds so repeated Maven phases keep incremental native outputs.
-  local setup_options=() cross_options=()
-  if [[ -f "${BUILD_DIR}/meson-private/coredata.dat" ]]; then
-    setup_options+=(--reconfigure)
-  fi
+  # Configured builds are reused, so repeated Maven phases keep incremental native outputs.
+  local cross_options=()
 
   if [ "${ARCH}" == "${HOST_ARCH}" ]; then
     # ---- Native build ------------------------------------------------------
@@ -188,8 +200,7 @@ build_native() {
 
   announce_start "${BUILD_DIR}" "the native library for ${ARCH}" "a few minutes"
   local started=${SECONDS}
-  run_step "${BUILD_DIR}.setup.log" meson setup "${BUILD_DIR}" "${NATIVE_DIR}" \
-      "${setup_options[@]}" "${cross_options[@]}" --buildtype="${BUILDTYPE}"
+  setup_if_needed "${BUILD_DIR}" "${NATIVE_DIR}" "${cross_options[@]}" --buildtype="${BUILDTYPE}"
   run_step "${BUILD_DIR}.compile.log" meson compile -C "${BUILD_DIR}"
 
   # The versioned .so (e.g. libjvector.so.0.1.0) is the real file; symlinks point to it.
@@ -204,14 +215,9 @@ build_native() {
   local FP16_OUT="${RESOURCES_DIR}/libjvector_ash_fp16-${ARCH}.so"
   if [ "${ONEDNN}" == "true" ]; then
     local ONEDNN_BUILD_DIR="${MODULE_ROOT}/target/meson-build-onednn-${ARCH}"
-    local onednn_setup_options=()
-    if [[ -f "${ONEDNN_BUILD_DIR}/meson-private/coredata.dat" ]]; then
-      onednn_setup_options+=(--reconfigure)
-    fi
     announce_start "${ONEDNN_BUILD_DIR}" "the oneDNN add-on for ${ARCH}" "several minutes"
     started=${SECONDS}
-    run_step "${ONEDNN_BUILD_DIR}.setup.log" meson setup "${ONEDNN_BUILD_DIR}" "${ONEDNN_DIR}" \
-        "${onednn_setup_options[@]}" "${cross_options[@]}" --buildtype="${BUILDTYPE}"
+    setup_if_needed "${ONEDNN_BUILD_DIR}" "${ONEDNN_DIR}" "${cross_options[@]}" --buildtype="${BUILDTYPE}"
     run_step "${ONEDNN_BUILD_DIR}.compile.log" meson compile -C "${ONEDNN_BUILD_DIR}"
     cp "${ONEDNN_BUILD_DIR}/libjvector_ash_fp16.so" "${FP16_OUT}"
     report_built "${ONEDNN_BUILD_DIR}.compile.log" "$(basename "${FP16_OUT}")" "${started}"
