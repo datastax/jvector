@@ -54,6 +54,33 @@ class NativeASHInt8ProjectionTest {
         else assumeTrue(available, "Native library unavailable");
     }
 
+    private static final String[] PATH_FLAGS = {"fma", "avx2", "avx_vnni", "avx512f", "avx512vl", "avx512_vnni",
+            "avx512_bf16", "avx512_fp16", "amx_tile", "amx_int8"};
+
+    /** The CPU and settings that select the INT8 path, for failure messages; built only when an assertion fails. */
+    private static String cpuContext() {
+        String vendor = "?", model = "?", flags = "";
+        try {
+            for (String line : Files.readAllLines(Path.of("/proc/cpuinfo"))) {
+                int colon = line.indexOf(':');
+                if (colon < 0) continue;
+                String key = line.substring(0, colon).trim(), value = line.substring(colon + 1).trim();
+                if (key.equals("vendor_id") && vendor.equals("?")) vendor = value;
+                else if (key.equals("model name") && model.equals("?")) model = value;
+                else if (key.equals("flags") && flags.isEmpty()) {
+                    var present = new java.util.HashSet<>(Arrays.asList(value.split("\\s+")));
+                    var kept = new ArrayList<String>();
+                    for (String flag : PATH_FLAGS) if (present.contains(flag)) kept.add(flag);
+                    flags = String.join(" ", kept);
+                }
+            }
+        } catch (java.io.IOException | RuntimeException e) {
+            model = "unreadable /proc/cpuinfo (" + e + ")";
+        }
+        return " [cpu: " + vendor + ", " + model + "; flags: " + flags + "; JVECTOR_ASH_INT8_ONEDNN="
+                + System.getenv("JVECTOR_ASH_INT8_ONEDNN") + "; os.arch=" + System.getProperty("os.arch") + "]";
+    }
+
     private static VectorUtilSupport.AshProjection prepare(float[][] weights) {
         var base = new NativeASHProjection(weights);
         try {
@@ -182,8 +209,10 @@ class NativeASHInt8ProjectionTest {
                 for (int i = 0; i < count; i++) {
                     float[] singleton = new float[47];
                     projection.project(inputs[i], singleton);
-                    assertArrayEquals(singleton, outputs[i], "columns=" + columns + " count=" + count + " row=" + i);
-                    if (columns < 65535) assertArrayEquals(oracle(matrix, inputs[i]), outputs[i], 1e-7f);
+                    final int c = count, r = i;
+                    assertArrayEquals(singleton, outputs[i], () -> "columns=" + columns + " count=" + c + " row=" + r + cpuContext());
+                    if (columns < 65535) assertArrayEquals(oracle(matrix, inputs[i]), outputs[i], 1e-7f,
+                            () -> "oracle, columns=" + columns + " count=" + c + " row=" + r + cpuContext());
                 }
             }
         }
@@ -265,8 +294,11 @@ class NativeASHInt8ProjectionTest {
                         float[][] inputs = matrix(count, weights[model][0].length, seed * 100L + trial);
                         float[][] outputs = new float[count][weights[model].length];
                         projections[model].projectBatch(inputs, outputs, count);
-                        for (int i = 0; i < count; i++)
-                            assertArrayEquals(oracle(weights[model], inputs[i]), outputs[i], 1e-7f);
+                        for (int i = 0; i < count; i++) {
+                            final int m = model, c = count, r = i;
+                            assertArrayEquals(oracle(weights[model], inputs[i]), outputs[i], 1e-7f,
+                                    () -> "oracle, model=" + m + " count=" + c + " row=" + r + cpuContext());
+                        }
                     }
                     return null;
                 });
