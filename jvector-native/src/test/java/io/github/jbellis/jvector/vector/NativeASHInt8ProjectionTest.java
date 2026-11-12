@@ -118,7 +118,8 @@ class NativeASHInt8ProjectionTest {
                 coarse += (long) code(query[column], queryScale) * weight;
                 fine += (long) fine(query[column], queryScale) * weight;
             }
-            out[row] = ((float) coarse + (float) fine * (1.0f / 254.0f)) * queryScale * weightScale;
+            // As the native kernels: combine the digits exactly, then one conversion and multiplications only.
+            out[row] = (float) (coarse * 254 + fine) * (1.0f / 254.0f) * queryScale * weightScale;
         }
         return out;
     }

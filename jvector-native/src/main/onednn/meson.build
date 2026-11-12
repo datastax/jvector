@@ -61,9 +61,7 @@ ash_fp16_lib = shared_library('jvector_ash_fp16',
   sources: ['src/jvector_ash_fp16.cpp', 'src/jvector_ash_int8.cpp'],
   dependencies: onednn_dependency,
   link_with: onednn_objects,
-  # No contraction: a compiler may otherwise fuse the INT8 final step, c + f / 254, into one FMA
-  # on some builds, which rounds differently from the unfused FP32 arithmetic of the Java path.
-  cpp_args: ['-fvisibility=hidden', '-ffp-contract=off'],
+  cpp_args: ['-fvisibility=hidden'],
   link_args: ['-Wl,--exclude-libs,ALL'],
   install: true,
 )

@@ -189,6 +189,15 @@ JV_ASH_INT8_TARGET float quantize_two_digits(const float* input, int count, uint
     return scale;
 }
 
+// One projected value from the coarse and fine digit dot products: (coarse + fine / 254) * scales. The digits are
+// combined exactly in integers first, coarse * 254 + fine, so the floating-point steps are one conversion and
+// multiplications only. No product is added to anything, so no compiler can fuse a step into an FMA, and every
+// build rounds exactly as the Java test oracle does. 64 bits hold the sum: |coarse| < 65536 * 127 * 127.
+inline float combine_digits(int32_t coarse, int32_t fine, float query_scale, float row_scale) {
+    constexpr float kInv254 = 1.0f / 254.0f;
+    return float(int64_t(coarse) * 254 + fine) * kInv254 * query_scale * row_scale;
+}
+
 #if defined(__x86_64__) || defined(_M_X64)
 // NB blocks of 16 output rows (two 8-lane halves each) for every query row of
 // the tile: 2*M*NB independent int32 accumulators hide the dot-product latency.
@@ -430,14 +439,12 @@ JV_ASH_INT8_TARGET int jvector_ash_int8_project_batch(void* pointer, const float
                         context.padded_rows / 16, coarseDots.data(), context.padded_rows);
                 gemm(size, fine.data(), context.padded_columns, context.packed.get(), context.padded_columns / 4,
                         context.padded_rows / 16, fineDots.data(), context.padded_rows);
-                constexpr float kInv254 = 1.0f / 254.0f;
                 for (int i = 0; i < size; ++i)
                     for (int row = 0; row < context.rows; ++row) {
                         size_t at = size_t(i) * context.padded_rows + row;
                         int32_t c = coarseDots[at] - 128 * context.sums[row];
                         int32_t f = fineDots[at] - 128 * context.sums[row];
-                        output[size_t(first + i) * context.rows + row] =
-                                (float(c) + float(f) * kInv254) * scales[i] * context.scales[row];
+                        output[size_t(first + i) * context.rows + row] = combine_digits(c, f, scales[i], context.scales[row]);
                     }
                 first += size;
                 continue;
@@ -468,14 +475,13 @@ JV_ASH_INT8_TARGET int jvector_ash_int8_project_batch(void* pointer, const float
                 buffers.execution->wait();
                 if (pass == 0) std::memcpy(coarseSums.data(), sums, sbytes * sizeof(int32_t));
             }
-            constexpr float kInv254 = 1.0f / 254.0f;
             for (int i = 0; i < size; ++i)
                 for (int row = 0; row < context.rows; ++row) {
                     size_t at = size_t(i) * context.rows + row;
                     int32_t c = coarseSums[at] - 128 * context.sums[row];
                     int32_t f = sums[at] - 128 * context.sums[row];
                     output[size_t(first + i) * context.rows + row] =
-                            (float(c) + float(f) * kInv254) * buffers.scales[i] * context.scales[row];
+                            combine_digits(c, f, buffers.scales[i], context.scales[row]);
                 }
             first += size; // Cannot overflow even when count approaches INT_MAX.
         }
