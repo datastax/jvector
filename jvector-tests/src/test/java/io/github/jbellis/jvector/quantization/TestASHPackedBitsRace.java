@@ -39,6 +39,7 @@ import static org.junit.Assume.assumeTrue;
 /** Concurrent first queries on a fresh 1-bit collection must score exactly like a single query. */
 public class TestASHPackedBitsRace {
     private static final String BLOCK = "jvector.ash.blockKernel";
+    private static final float TOLERANCE = 1e-5f;
 
     @Test
     public void concurrentFirstBlockScorersSeeFullyPackedBits() throws Exception {
@@ -82,8 +83,11 @@ public class TestASHPackedBitsRace {
                     });
                 }
                 List<Future<float[]>> results = pool.invokeAll(tasks);
-                assertArrayEquals("round " + round, expected[a], results.get(0).get(), 0f);
-                assertArrayEquals("round " + round, expected[b], results.get(1).get(), 0f);
+                // Vector API lane reductions do not fix their summation order, so an early (interpreted) and a later
+                // (compiled) scoring of the same data can differ by an ULP. A partial or wrong-size array is off by
+                // about 0.1, so this tolerance still catches the race by four orders of magnitude.
+                assertArrayEquals("round " + round, expected[a], results.get(0).get(), TOLERANCE);
+                assertArrayEquals("round " + round, expected[b], results.get(1).get(), TOLERANCE);
             }
         } finally {
             pool.shutdownNow();
