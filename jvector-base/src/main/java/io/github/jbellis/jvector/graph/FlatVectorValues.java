@@ -44,7 +44,7 @@ import java.util.concurrent.atomic.AtomicInteger;
  * to a concurrent graph does, so a graph can be built and searched while rows arrive. {@link #getVector} returns a
  * fresh copy and is meant for occasional access; hot paths should use {@link #scoreFunctionFor}.
  */
-public final class FlatVectorValues implements RandomAccessVectorValues {
+public final class FlatVectorValues implements BatchedVectorValues {
     private static final VectorTypeSupport vts = VectorizationProvider.getInstance().getVectorTypeSupport();
     /**
      * Floats per page of a fixed copy by default: 4 GiB, so most copies are one page and a batch of rows is one
@@ -229,6 +229,72 @@ public final class FlatVectorValues implements RandomAccessVectorValues {
     @Override
     public void getVectorInto(int node, VectorFloat<?> destinationVector, int offset) {
         destinationVector.copyFrom(page(node), offset(node), offset, dimension);
+    }
+
+    /** Reads the rows in order into one vector that each step lends to the caller, so a scan allocates nothing. */
+    @Override
+    public VectorCursor openRange(int startInclusive, int endExclusive) {
+        java.util.Objects.checkFromToIndex(startInclusive, endExclusive, size());
+        return new RowCursor(null, startInclusive, endExclusive - startInclusive);
+    }
+
+    /** As {@link #openRange}, in request order and keeping duplicates. */
+    @Override
+    public VectorCursor openSelection(int[] ordinals, int offset, int count) {
+        java.util.Objects.checkFromIndexSize(offset, count, ordinals.length);
+        for (int i = offset; i < offset + count; i++) java.util.Objects.checkIndex(ordinals[i], size());
+        return new RowCursor(ordinals, offset, count);
+    }
+
+    /** Lends each requested row in one reused vector, valid until the next step or close. */
+    private final class RowCursor implements VectorCursor {
+        private final int[] ordinals;
+        private final int start;
+        private final int count;
+        private final VectorFloat<?> row = vts.createFloatVector(dimension);
+        private int position = -1;
+        private boolean closed;
+
+        RowCursor(int[] ordinals, int start, int count) {
+            this.ordinals = ordinals;
+            this.start = start;
+            this.count = count;
+        }
+
+        @Override
+        public boolean next() {
+            if (closed) throw new IllegalStateException("Cursor is closed");
+            if (position == count) return false;
+            if (++position == count) return false;
+            getVectorInto(ordinal(), row, 0);
+            return true;
+        }
+
+        @Override
+        public int ordinal() {
+            checkPosition();
+            return ordinals == null ? start + position : ordinals[start + position];
+        }
+
+        @Override
+        public VectorFloat<?> vector() {
+            checkPosition();
+            return row;
+        }
+
+        @Override
+        public boolean isValueShared() {
+            return true;
+        }
+
+        @Override
+        public void close() {
+            closed = true;
+        }
+
+        private void checkPosition() {
+            if (closed || position < 0 || position >= count) throw new IllegalStateException("No current vector");
+        }
     }
 
     @Override

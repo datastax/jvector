@@ -149,6 +149,47 @@ public class TestFlatVectorValues {
         }
     }
 
+    /** Cursors and VectorAccess lend the stored rows, in request order with duplicates, for every page layout. */
+    @Test
+    public void cursorsLendStoredRows() {
+        var random = new Random(9);
+        int dimension = 33;
+        var source = new ListRandomAccessVectorValues(vectors(random, 300, dimension), dimension);
+        for (var flat : new FlatVectorValues[] {FlatVectorValues.copyOf(source, 1 << 10), FlatVectorValues.copyOf(source)}) {
+            try (var cursor = flat.openRange(10, 250)) {
+                int expected = 10;
+                while (cursor.next()) {
+                    assertTrue(cursor.isValueShared());
+                    assertEquals(expected, cursor.ordinal());
+                    assertArrayEquals(values(source.getVector(expected)), values(cursor.vector()), 0f);
+                    expected++;
+                }
+                assertEquals(250, expected);
+            }
+            int[] ordinals = {5, 299, 5, 0, 120};
+            try (var cursor = flat.openSelection(ordinals, 1, 3)) {
+                for (int i = 1; i < 4; i++) {
+                    assertTrue(cursor.next());
+                    assertEquals(ordinals[i], cursor.ordinal());
+                    assertArrayEquals(values(source.getVector(ordinals[i])), values(cursor.vector()), 0f);
+                }
+                assertTrue(!cursor.next());
+            }
+            assertThrows(IndexOutOfBoundsException.class, () -> flat.openRange(0, 301));
+            assertThrows(IndexOutOfBoundsException.class, () -> flat.openSelection(new int[] {300}, 0, 1));
+            var copies = VectorAccess.copySelected(flat, new int[] {7, 3, 7}, java.util.concurrent.ForkJoinPool.commonPool());
+            assertArrayEquals(values(source.getVector(7)), values(copies.get(0)), 0f);
+            assertArrayEquals(values(source.getVector(3)), values(copies.get(1)), 0f);
+            assertTrue(copies.get(0) != copies.get(2)); // retained values are copies, not the cursor's vector
+            var seen = new float[source.size()][];
+            VectorAccess.forEach(flat, java.util.concurrent.ForkJoinPool.commonPool(),
+                    (ordinal, vector) -> seen[ordinal] = values(vector));
+            for (int node = 0; node < source.size(); node++) {
+                assertArrayEquals(values(source.getVector(node)), seen[node], 0f);
+            }
+        }
+    }
+
     @Test
     public void flatBuildMatchesListBuild() {
         var random = new Random(6);
@@ -164,7 +205,7 @@ public class TestFlatVectorValues {
                      var actual = new GraphIndexBuilder(BuildScoreProvider.randomAccessScoreProvider(flat, similarity),
                              dimension, 12, 40, 1.2f, 1.2f, hierarchy, true, pool, pool)) {
                     var g1 = expected.build(source);
-                    var g2 = actual.build(source);
+                    var g2 = actual.build(flat); // reads the flat rows through per-thread vectors
                     assertEquals(g1.size(), g2.size());
                     var v1 = g1.getView();
                     var v2 = g2.getView();

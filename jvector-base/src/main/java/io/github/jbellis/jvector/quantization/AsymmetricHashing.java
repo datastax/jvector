@@ -396,11 +396,13 @@ public class AsymmetricHashing implements VectorCompressor<AsymmetricHashing.Qua
         } else {
             // Multi-landmark clustering still needs its materialized input.
             VectorFloat<?>[] points = new VectorFloat<?>[ravvCopy.size()];
-            for (int i = 0; i < points.length; i++) {
-                VectorFloat<?> v = ravvCopy.getVector(i).copy();
-                float norm = (float) Math.sqrt(VectorUtil.dotProduct(v, v));
-                if (norm > 1e-10f) VectorUtil.scale(v, 1.0f / norm);
-                points[i] = v;
+            try (var cursor = VectorAccess.openRange(ravvCopy, 0, points.length)) {
+                for (int i = 0; cursor.next(); i++) {
+                    VectorFloat<?> v = cursor.vector().copy(); // normalized in place below, so always owned
+                    float norm = (float) Math.sqrt(VectorUtil.dotProduct(v, v));
+                    if (norm > 1e-10f) VectorUtil.scale(v, 1.0f / norm);
+                    points[i] = v;
+                }
             }
             long kmStart = System.nanoTime();
             MiniBatchKMeansClusterer km = new MiniBatchKMeansClusterer(points, landmarkCount, 1024);
@@ -1936,38 +1938,43 @@ public class AsymmetricHashing implements VectorCompressor<AsymmetricHashing.Qua
         final double[] accumulator = new double[dimensions];
         final VectorFloat<?> normalized = vectorTypeSupport.createFloatVector(dimensions);
         final float[] values = normalized instanceof FloatArray ? ((FloatArray) normalized).array() : null;
-        for (int row = 0; row < sampleSize; row++) {
-            int ordinal = ordinals[row];
-            VectorFloat<?> input = source.getVector(ordinal);
-            if (input == null) {
-                throw new NullPointerException("Null ASH training vector at ordinal " + ordinal);
-            }
-            if (input.length() != dimensions) {
-                throw new IllegalArgumentException("ASH training vector at ordinal " + ordinal
-                        + " has dimension " + input.length() + "; expected " + dimensions);
-            }
-            normalized.copyFrom(input, 0, 0, dimensions);
-            // Dimensions are already checked. Call the provider directly so invalid
-            // norms reach argument validation even when VectorUtil assertions are enabled.
-            float norm = (float) Math.sqrt(vectorUtilSupport.dotProduct(normalized, normalized));
-            if (!Float.isFinite(norm)) {
-                throw new IllegalArgumentException("ASH training vector at ordinal " + ordinal
-                        + " has a non-finite FP32 L2 norm");
-            }
-            if (norm > 1e-10f) {
-                VectorUtil.scale(normalized, 1.0f / norm);
-            }
-            if (values != null) {
-                for (int d = 0; d < dimensions; d++) accumulator[d] += values[d];
-            } else {
-                for (int d = 0; d < dimensions; d++) accumulator[d] += normalized.get(d);
-            }
-            if (learn) {
-                int offset = row * dimensions;
+        // A cursor lends each sampled row without copying it first, for every kind of source.
+        try (var cursor = VectorAccess.openSelection(source, ordinals, 0, sampleSize)) {
+            for (int row = 0; row < sampleSize; row++) {
+                if (!cursor.next()) throw new IllegalStateException("Incomplete ASH training sample");
+                int ordinal = ordinals[row];
+                // Borrowed until the next step: it is copied into normalized below.
+                VectorFloat<?> input = cursor.vector();
+                if (input == null) {
+                    throw new NullPointerException("Null ASH training vector at ordinal " + ordinal);
+                }
+                if (input.length() != dimensions) {
+                    throw new IllegalArgumentException("ASH training vector at ordinal " + ordinal
+                            + " has dimension " + input.length() + "; expected " + dimensions);
+                }
+                normalized.copyFrom(input, 0, 0, dimensions);
+                // Dimensions are already checked. Call the provider directly so invalid
+                // norms reach argument validation even when VectorUtil assertions are enabled.
+                float norm = (float) Math.sqrt(vectorUtilSupport.dotProduct(normalized, normalized));
+                if (!Float.isFinite(norm)) {
+                    throw new IllegalArgumentException("ASH training vector at ordinal " + ordinal
+                            + " has a non-finite FP32 L2 norm");
+                }
+                if (norm > 1e-10f) {
+                    VectorUtil.scale(normalized, 1.0f / norm);
+                }
                 if (values != null) {
-                    System.arraycopy(values, 0, sample, offset, dimensions);
+                    for (int d = 0; d < dimensions; d++) accumulator[d] += values[d];
                 } else {
-                    for (int d = 0; d < dimensions; d++) sample[offset + d] = normalized.get(d);
+                    for (int d = 0; d < dimensions; d++) accumulator[d] += normalized.get(d);
+                }
+                if (learn) {
+                    int offset = row * dimensions;
+                    if (values != null) {
+                        System.arraycopy(values, 0, sample, offset, dimensions);
+                    } else {
+                        for (int d = 0; d < dimensions; d++) sample[offset + d] = normalized.get(d);
+                    }
                 }
             }
         }

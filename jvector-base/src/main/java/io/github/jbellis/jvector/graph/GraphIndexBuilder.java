@@ -33,6 +33,7 @@ import io.github.jbellis.jvector.quantization.PQVectors;
 import io.github.jbellis.jvector.quantization.ProductQuantization;
 import io.github.jbellis.jvector.util.*;
 import io.github.jbellis.jvector.vector.VectorSimilarityFunction;
+import io.github.jbellis.jvector.vector.VectorizationProvider;
 import io.github.jbellis.jvector.vector.types.VectorFloat;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -704,17 +705,38 @@ public class GraphIndexBuilder implements Closeable, Accountable {
     }
 
     public ImmutableGraphIndex build(RandomAccessVectorValues ravv) {
-        var vv = ravv.threadLocalSupplier();
-        int size = ravv.size();
-
-        simdExecutor.submit(() -> {
-            IntStream.range(0, size).parallel().forEach(node -> {
-                addGraphNode(node, vv.get().getVector(node));
-            });
-        }).join();
-
+        insertAll(this, ravv, 0, ravv.size(), simdExecutor);
         cleanup();
         return graph;
+    }
+
+    /**
+     * Inserts nodes {@code [from, to)} of {@code ravv} into {@code builder} in parallel. Insertion only borrows each
+     * vector, so a flat store's rows are read into one reused vector per thread instead of copied per node; other
+     * sources lend their vectors as before.
+     */
+    private static void insertAll(GraphIndexBuilder builder, RandomAccessVectorValues ravv, int from, int to,
+                                  ForkJoinPool pool) {
+        var vv = ravv.threadLocalSupplier();
+        try (var rows = ravv instanceof FlatVectorValues
+                ? ExplicitThreadLocal.withInitial(() -> VectorizationProvider.getInstance().getVectorTypeSupport()
+                        .createFloatVector(ravv.dimension()))
+                : null) {
+            pool.submit(() -> IntStream.range(from, to).parallel().forEach(node -> {
+                VectorFloat<?> vector;
+                if (rows == null) {
+                    vector = vv.get().getVector(node);
+                } else {
+                    vector = rows.get();
+                    ravv.getVectorInto(node, vector, 0);
+                }
+                builder.addGraphNode(node, vector);
+            })).join();
+        } catch (RuntimeException | Error e) {
+            throw e;
+        } catch (Exception e) {
+            throw new RuntimeException(e);
+        }
     }
     /**
      * Validates that the current entry node has been completely added.
@@ -1356,12 +1378,8 @@ public class GraphIndexBuilder implements Closeable, Accountable {
                     .withParallelExecutor(parallelExecutor)
                     .build();
 
-            var vv = newVectors.threadLocalSupplier();
-
             // parallel graph construction from the merge documents Ids
-            simdExecutor.submit(() -> IntStream.range(startingNodeOffset, newVectors.size()).parallel().forEach(ord -> {
-                builder.addGraphNode(ord, vv.get().getVector(ord));
-            })).join();
+            insertAll(builder, newVectors, startingNodeOffset, newVectors.size(), simdExecutor);
 
             builder.cleanup();
             return builder.getGraph();
