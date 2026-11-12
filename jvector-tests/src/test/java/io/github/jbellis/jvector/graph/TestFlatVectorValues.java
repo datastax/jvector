@@ -351,15 +351,19 @@ public class TestFlatVectorValues {
         var list = vectors(random, count, dimension);
         var queries = vectors(random, 100, dimension);
         for (var similarity : VectorSimilarityFunction.values()) {
-            // Small pages, so inserts keep allocating pages while searches run.
+            // One writer with concurrent searches: the build is deterministic, so a flat store must give exactly the
+            // graph, and the recall, of separate vectors.
             var flat = FlatVectorValues.appendable(dimension, 4 * 32, 256 * 32);
-            int flatFound = liveBuildAndCount(flat, list, queries, similarity, (ordinal, v) -> flat.add(ordinal, v));
+            int flatFound = liveBuildAndCount(flat, list, queries, similarity, (ordinal, v) -> flat.add(ordinal, v), 1);
             assertEquals(count, flat.size());
-            var separate = new ListRandomAccessVectorValues(list, dimension);
-            int listFound = liveBuildAndCount(separate, list, queries, similarity, (ordinal, v) -> 0L);
-            // Concurrent builds differ run to run; allow the spread of two such builds, not a systematic loss.
-            assertTrue(similarity + ": flat store found " + flatFound + ", separate vectors " + listFound,
-                    flatFound >= listFound - queries.size() / 20);
+            int listFound = liveBuildAndCount(new ListRandomAccessVectorValues(list, dimension), list, queries, similarity,
+                    (ordinal, v) -> 0L, 1);
+            assertEquals(similarity + ": flat store and separate vectors", listFound, flatFound);
+            // Several writers, small pages: rows keep arriving while searches read them. Concurrent builds differ run to
+            // run, so this checks correctness (no failure, every reachable row scored right), not recall.
+            var concurrent = FlatVectorValues.appendable(dimension, 4 * 32, 256 * 32);
+            liveBuildAndCount(concurrent, list, queries, similarity, (ordinal, v) -> concurrent.add(ordinal, v), 4);
+            assertEquals(count, concurrent.size());
         }
     }
 
@@ -369,8 +373,8 @@ public class TestFlatVectorValues {
 
     /** Live-builds a graph over {@code vectors} with 4 writers and 2 searchers; returns queries whose best match is in the top 10. */
     private static int liveBuildAndCount(RandomAccessVectorValues vectors, List<VectorFloat<?>> list, List<VectorFloat<?>> queries,
-                                         VectorSimilarityFunction similarity, RowSink sink) throws Exception {
-        int count = list.size(), dimension = vectors.dimension(), writers = 4, readers = 2;
+                                         VectorSimilarityFunction similarity, RowSink sink, int writers) throws Exception {
+        int count = list.size(), dimension = vectors.dimension(), readers = 2;
         var next = new java.util.concurrent.atomic.AtomicInteger();
         var published = new java.util.concurrent.atomic.AtomicInteger();
         var failure = new java.util.concurrent.atomic.AtomicReference<Throwable>();
