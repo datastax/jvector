@@ -128,9 +128,9 @@ public class TestPreEncodedCodeCache extends RandomizedTest {
             int[][] runs = {{0, 1}, {7, 50}, {290, count - 290}, {0, count}};
             for (int[] run : runs) {
                 int first = run[0], rows = run[1];
-                ByteBuffer buf = PreEncodedCodeCache.allocateAligned(cache.directBufferBytes(rows));
+                ByteBuffer buf = cache.allocateAligned(cache.directBufferBytes(rows));
                 int at = cache.readRowsDirect(first, rows, buf);
-                assertTrue("rows start inside the aligned head", at >= 0 && at < PreEncodedCodeCache.DIRECT_ALIGN);
+                assertTrue("rows start inside the aligned head", at >= 0 && at < cache.directAlign());
                 for (int r = 0; r < rows; r++) {
                     buf.position(at + r * codeSize);
                     buf.get(dst, 0, codeSize);

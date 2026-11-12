@@ -2897,7 +2897,7 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
                 long[][] pairs = pairsByTask[task];
                 int[] count = countByTask[task];
                 for (int t = 0; t < j.targets; t++) pairs[t] = new long[Math.max(64, (to - from) * 6)];
-                final ByteBuffer buf = direct ? sc.directBuffer(readBufBytes) : null;
+                final ByteBuffer buf = direct ? sc.directBuffer(candidateStore, readBufBytes) : null;
                 int bufLo = 0, bufHi = 0, bufBase = 0;   // rows [bufLo, bufHi) are in buf, row bufLo at bufBase
                 for (int i = from; i < to; i++) {
                     int newOrd = lo + i;
@@ -2990,7 +2990,7 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
                     // Mapped mode decodes straight from the mapping, as a store that fits in RAM wants.
                     int qAhead = from;
                     long read = 0;
-                    final ByteBuffer buf = direct ? sc.directBuffer(readBufBytes) : null;
+                    final ByteBuffer buf = direct ? sc.directBuffer(candidateStore, readBufBytes) : null;
                     int bufLo = 0, bufHi = 0, bufBase = 0;   // rows [bufLo, bufHi) are in buf, row bufLo at bufBase
                     int planHi = 0;
                     int a = from;
@@ -3135,9 +3135,9 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
 
         ByteBuffer directBuf;   // cell walk in direct mode: the thread's aligned read buffer
 
-        ByteBuffer directBuffer(int bytes) {
+        ByteBuffer directBuffer(PreEncodedCodeCache store, int bytes) {
             if (directBuf == null || directBuf.capacity() < bytes) {
-                directBuf = PreEncodedCodeCache.allocateAligned(bytes);
+                directBuf = store.allocateAligned(bytes);
             }
             return directBuf;
         }
