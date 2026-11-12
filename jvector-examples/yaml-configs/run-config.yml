@@ -1,6 +1,6 @@
 # Run-level controls for BenchYAML (applies to the whole invocation)
 yamlSchemaVersion: 1
-onDiskIndexVersion: 6
+onDiskIndexVersion: 7
 
 # Benchmark stats to compute
 benchmarks:

@@ -662,6 +662,17 @@ public class TestOnDiskGraphIndex extends RandomizedTest {
         }
     }
 
+    @Test
+    public void testInlineByteVectorsRequiresVersion7() {
+        var graph = new TestUtil.RandomlyConnectedGraphIndex(32, 4, getRandom());
+        var e = assertThrows(IllegalArgumentException.class, () -> new OnDiskGraphIndexWriter.Builder(graph,
+                testDirectory.resolve("version_6_inline_byte_vectors"))
+                .withVersion(6)
+                .with(new InlineByteVectors(8))
+                .build());
+        assertTrue(e.getMessage(), e.getMessage().startsWith("Feature INLINE_BYTE_VECTORS is not supported by version 6"));
+    }
+
     /**
      * getByteVector throws UnsupportedOperationException when the graph has no INLINE_BYTE_VECTORS feature.
      */

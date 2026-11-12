@@ -1,5 +1,5 @@
 yamlSchemaVersion: 1
-onDiskIndexVersion: 6
+onDiskIndexVersion: 7
 
 dataset: cohere-english-v3-10M
 useDatasetPrefetching: false
