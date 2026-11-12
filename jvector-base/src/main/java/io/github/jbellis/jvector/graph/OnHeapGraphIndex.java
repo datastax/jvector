@@ -426,6 +426,21 @@ public class OnHeapGraphIndex implements MutableGraphIndex {
         // we have done here.
         private final int timestamp = completions.clock();
 
+        /** As in FrozenView, visiting only the neighbors that completed before this view was created. */
+        @Override
+        int gatherUnvisited(int level, int node, IntMarker visited, BatchScratch batch) {
+            var neighbors = level < layers.size() ? layers.get(level).get(node) : null;
+            if (neighbors == null) return 0;
+            int count = 0;
+            for (int i = 0, size = neighbors.size(); i < size; i++) {
+                int friendOrd = neighbors.getNode(i);
+                if (completions.completedAt(friendOrd) < timestamp && visited.mark(friendOrd)) {
+                    count = batch.add(count, friendOrd);
+                }
+            }
+            return count;
+        }
+
         @Override
         public NodesIterator getNeighborsIterator(int level, int node) {
             NodesIterator it = OnHeapGraphIndex.this.getNeighborsIterator(level, node);
@@ -493,6 +508,22 @@ public class OnHeapGraphIndex implements MutableGraphIndex {
     }
 
     private class FrozenView implements View {
+        /**
+         * Stores the neighbors of {@code node} at {@code level} that {@code visited} newly marks in {@code batch},
+         * in neighbor order, and returns how many there are. Reads the neighbor array directly rather than through
+         * an iterator, so the loop has no per-neighbor interface calls.
+         */
+        int gatherUnvisited(int level, int node, IntMarker visited, BatchScratch batch) {
+            var neighbors = level < layers.size() ? layers.get(level).get(node) : null;
+            if (neighbors == null) return 0;
+            int count = 0;
+            for (int i = 0, size = neighbors.size(); i < size; i++) {
+                int friendOrd = neighbors.getNode(i);
+                if (visited.mark(friendOrd)) count = batch.add(count, friendOrd);
+            }
+            return count;
+        }
+
         @Override
         public NodesIterator getNeighborsIterator(int level, int node) {
             return OnHeapGraphIndex.this.getNeighborsIterator(level, node);
@@ -504,11 +535,7 @@ public class OnHeapGraphIndex implements MutableGraphIndex {
             if (scoreFunction.supportsBatchScoring()) {
                 // Gather the unvisited neighbors, score them in one batch, then hand them on in neighbor order.
                 var batch = BATCH_SCRATCH.get();
-                int count = 0;
-                for (var it = getNeighborsIterator(level, node); it.hasNext(); ) {
-                    var friendOrd = it.nextInt();
-                    if (visited.mark(friendOrd)) count = batch.add(count, friendOrd);
-                }
+                int count = gatherUnvisited(level, node, visited, batch);
                 scoreFunction.similarityTo(batch.nodes, count, batch.scores);
                 neighborProcessor.processBatch(batch.nodes, batch.scores, count);
                 return;
