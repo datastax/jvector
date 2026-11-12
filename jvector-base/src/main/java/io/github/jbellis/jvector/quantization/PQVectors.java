@@ -447,19 +447,15 @@ public abstract class PQVectors implements CompressedVectors {
         return 1024;
     }
 
+    /**
+     * Retained vector storage plus the compressor's reported bytes. Derived scoring-table
+     * workspaces retain their existing separate accounting boundary. Built-in subclasses cache
+     * this total; this fallback remains available to custom storage implementations.
+     */
     @Override
     public long ramBytesUsed() {
-        int REF_BYTES = RamUsageEstimator.NUM_BYTES_OBJECT_REF;
-        int OH_BYTES = RamUsageEstimator.NUM_BYTES_OBJECT_HEADER;
-        int AH_BYTES = RamUsageEstimator.NUM_BYTES_ARRAY_HEADER;
-
-        long codebooksSize = pq.ramBytesUsed();
-        long chunksArraySize = OH_BYTES + AH_BYTES + (long) validChunkCount() * REF_BYTES;
-        long dataSize = 0;
-        for (int i = 0; i < validChunkCount(); i++) {
-            dataSize += compressedDataChunks[i].ramBytesUsed();
-        }
-        return codebooksSize + chunksArraySize + dataSize;
+        return pq.ramBytesUsed() + RamUsageEstimator.shallowSizeOf(this)
+                + RamUsageEstimator.sizeOfObjectGraph(compressedDataChunks, object -> true);
     }
 
     @Override

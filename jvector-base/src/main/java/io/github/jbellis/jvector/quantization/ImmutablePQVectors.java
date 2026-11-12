@@ -27,6 +27,7 @@ import java.util.concurrent.ConcurrentHashMap;
 
 public class ImmutablePQVectors extends PQVectors {
     private final int vectorCount;
+    private final long retainedBytes;
     private final Map<VectorSimilarityFunction, VectorFloat<?>> codebookPartialSumsMap;
 
     /**
@@ -38,10 +39,17 @@ public class ImmutablePQVectors extends PQVectors {
      */
     public ImmutablePQVectors(ProductQuantization pq, ByteSequence<?>[] compressedDataChunks, int vectorCount, int vectorsPerChunk) {
         super(pq);
-        this.compressedDataChunks = compressedDataChunks;
+        // Own the reference array; callers may still update code values, whose sizes are fixed.
+        this.compressedDataChunks = compressedDataChunks.clone();
         this.vectorCount = vectorCount;
         this.vectorsPerChunk = vectorsPerChunk;
         this.codebookPartialSumsMap = new ConcurrentHashMap<>();
+        retainedBytes = super.ramBytesUsed();
+    }
+
+    @Override
+    public long ramBytesUsed() {
+        return retainedBytes;
     }
 
     @Override
