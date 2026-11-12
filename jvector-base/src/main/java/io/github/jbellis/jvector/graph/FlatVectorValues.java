@@ -39,8 +39,11 @@ import io.github.jbellis.jvector.vector.types.VectorTypeSupport;
  */
 public final class FlatVectorValues implements RandomAccessVectorValues {
     private static final VectorTypeSupport vts = VectorizationProvider.getInstance().getVectorTypeSupport();
-    /** Floats per page by default: 16 MiB. */
-    static final int DEFAULT_PAGE_FLOATS = 1 << 22;
+    /**
+     * Floats per page by default: 4 GiB, so most stores are one page and a batch of rows is one kernel call. Larger
+     * stores split a batch by page.
+     */
+    static final int DEFAULT_PAGE_FLOATS = 1 << 30;
     private static final int ROW_ALIGNMENT_FLOATS = 16;
 
     private final int size;
@@ -127,21 +130,132 @@ public final class FlatVectorValues implements RandomAccessVectorValues {
         if (query.length() != dimension) {
             throw new IllegalArgumentException("query dimension " + query.length() + " != " + dimension);
         }
-        switch (similarity) {
-            case DOT_PRODUCT:
-                return node -> (1 + VectorUtil.dotProduct(query, 0, page(node), offset(node), dimension)) / 2;
-            case EUCLIDEAN:
-                return node -> 1 / (1 + VectorUtil.squareL2Distance(query, 0, page(node), offset(node), dimension));
-            case COSINE:
-                return node -> (1 + VectorUtil.cosine(query, 0, page(node), offset(node), dimension)) / 2;
-            default:
-                throw new UnsupportedOperationException("Unsupported similarity function " + similarity);
-        }
+        return new QueryScoreFunction(query, similarity);
     }
 
     /** Exact scores of stored row {@code node1} against other stored rows, read in place. */
     public AnchoredScoreFunction scoreFunctionFor(int node1, VectorSimilarityFunction similarity) {
         return new AnchoredScoreFunction(similarity).anchorAt(node1);
+    }
+
+    private static void requireSupported(VectorSimilarityFunction similarity) {
+        switch (similarity) {
+            case DOT_PRODUCT:
+            case EUCLIDEAN:
+            case COSINE:
+                return;
+            default:
+                throw new UnsupportedOperationException("Unsupported similarity function " + similarity);
+        }
+    }
+
+    /** The score of one row: the raw kernel value at a row offset, with the {@link VectorSimilarityFunction#compare} transform. */
+    private float score(VectorSimilarityFunction similarity, VectorFloat<?> a, int aOffset, int node) {
+        var page = page(node);
+        int offset = offset(node);
+        switch (similarity) {
+            case DOT_PRODUCT:
+                return (1 + VectorUtil.dotProduct(a, aOffset, page, offset, dimension)) / 2;
+            case EUCLIDEAN:
+                return 1 / (1 + VectorUtil.squareL2Distance(a, aOffset, page, offset, dimension));
+            default:
+                return (1 + VectorUtil.cosine(a, aOffset, page, offset, dimension)) / 2;
+        }
+    }
+
+    /** Raw kernel values of {@code query} against {@code count} rows of one page, then the score transform. */
+    private void scoreRows(VectorSimilarityFunction similarity, VectorFloat<?> query, VectorFloat<?> page,
+                           int[] rows, int count, float[] out) {
+        switch (similarity) {
+            case DOT_PRODUCT:
+                VectorUtil.dotProductRows(query, page, stride, rows, count, dimension, out);
+                for (int i = 0; i < count; i++) out[i] = (1 + out[i]) / 2;
+                return;
+            case EUCLIDEAN:
+                VectorUtil.squareL2DistanceRows(query, page, stride, rows, count, dimension, out);
+                for (int i = 0; i < count; i++) out[i] = 1 / (1 + out[i]);
+                return;
+            default:
+                VectorUtil.cosineRows(query, page, stride, rows, count, dimension, out);
+                for (int i = 0; i < count; i++) out[i] = (1 + out[i]) / 2;
+        }
+    }
+
+    /**
+     * Batch scoring shared by the score functions. With one page, node ids are the page's rows and the batch is one
+     * kernel call. Otherwise the nodes are split by page, one call per page present, using buffers in {@code scratch}.
+     */
+    private void scoreMany(VectorSimilarityFunction similarity, VectorFloat<?> query, int[] nodes, int count,
+                           float[] scores, BatchScratch scratch) {
+        if (pages.length == 1) {
+            scoreRows(similarity, query, pages[0], nodes, count, scores);
+            return;
+        }
+        scratch.ensure(count);
+        int pending = count;
+        for (int i = 0; i < count; i++) scratch.pending[i] = i;
+        while (pending > 0) {
+            int page = nodes[scratch.pending[0]] >>> pageShift;
+            int n = 0, kept = 0;
+            for (int j = 0; j < pending; j++) {
+                int position = scratch.pending[j];
+                int node = nodes[position];
+                if (node >>> pageShift == page) {
+                    scratch.rows[n] = node & pageMask;
+                    scratch.positions[n++] = position;
+                } else {
+                    scratch.pending[kept++] = position;
+                }
+            }
+            scoreRows(similarity, query, pages[page], scratch.rows, n, scratch.scores);
+            for (int k = 0; k < n; k++) scores[scratch.positions[k]] = scratch.scores[k];
+            pending = kept;
+        }
+    }
+
+    /** Buffers for splitting a batch across pages; allocated only for stores of more than one page. */
+    private static final class BatchScratch {
+        int[] pending = new int[0];
+        int[] rows = new int[0];
+        int[] positions = new int[0];
+        float[] scores = new float[0];
+
+        void ensure(int count) {
+            if (pending.length >= count) return;
+            pending = new int[count];
+            rows = new int[count];
+            positions = new int[count];
+            scores = new float[count];
+        }
+    }
+
+    /** Exact scores of a query against stored rows; batches go to the row-gather kernels. Not safe for concurrent use. */
+    private final class QueryScoreFunction implements ScoreFunction.ExactScoreFunction {
+        private final VectorFloat<?> query;
+        private final VectorSimilarityFunction similarity;
+        private BatchScratch scratch;
+
+        QueryScoreFunction(VectorFloat<?> query, VectorSimilarityFunction similarity) {
+            requireSupported(similarity);
+            this.query = query;
+            this.similarity = similarity;
+        }
+
+        @Override
+        public float similarityTo(int node2) {
+            return score(similarity, query, 0, node2);
+        }
+
+        @Override
+        public void similarityTo(int[] nodes, int count, float[] scores) {
+            if (scratch == null && pages.length > 1) scratch = new BatchScratch();
+            scoreMany(similarity, query, nodes, count, scores, scratch);
+        }
+
+        @Override
+        public boolean supportsBatchScoring() {
+            return true;
+        }
     }
 
     /**
@@ -151,25 +265,25 @@ public final class FlatVectorValues implements RandomAccessVectorValues {
      */
     public final class AnchoredScoreFunction implements ScoreFunction.ExactScoreFunction {
         private final VectorSimilarityFunction similarity;
+        private int anchor;
         private VectorFloat<?> anchorPage;
         private int anchorOffset;
+        /** A copy of the anchor row for batch scoring, which reads its query from offset 0; made on first use. */
+        private VectorFloat<?> anchorCopy;
+        private boolean anchorCopied;
+        private BatchScratch scratch;
 
         private AnchoredScoreFunction(VectorSimilarityFunction similarity) {
-            switch (similarity) {
-                case DOT_PRODUCT:
-                case EUCLIDEAN:
-                case COSINE:
-                    break;
-                default:
-                    throw new UnsupportedOperationException("Unsupported similarity function " + similarity);
-            }
+            requireSupported(similarity);
             this.similarity = similarity;
         }
 
         /** Scores against {@code node1} from now on; returns this. */
         public AnchoredScoreFunction anchorAt(int node1) {
+            anchor = node1;
             anchorPage = page(node1);
             anchorOffset = offset(node1);
+            anchorCopied = false;
             return this;
         }
 
@@ -180,16 +294,23 @@ public final class FlatVectorValues implements RandomAccessVectorValues {
 
         @Override
         public float similarityTo(int node2) {
-            var page2 = page(node2);
-            int offset2 = offset(node2);
-            switch (similarity) {
-                case DOT_PRODUCT:
-                    return (1 + VectorUtil.dotProduct(anchorPage, anchorOffset, page2, offset2, dimension)) / 2;
-                case EUCLIDEAN:
-                    return 1 / (1 + VectorUtil.squareL2Distance(anchorPage, anchorOffset, page2, offset2, dimension));
-                default:
-                    return (1 + VectorUtil.cosine(anchorPage, anchorOffset, page2, offset2, dimension)) / 2;
+            return score(similarity, anchorPage, anchorOffset, node2);
+        }
+
+        @Override
+        public void similarityTo(int[] nodes, int count, float[] scores) {
+            if (!anchorCopied) {
+                if (anchorCopy == null) anchorCopy = vts.createFloatVector(dimension);
+                getVectorInto(anchor, anchorCopy, 0);
+                anchorCopied = true;
             }
+            if (scratch == null && pages.length > 1) scratch = new BatchScratch();
+            scoreMany(similarity, anchorCopy, nodes, count, scores, scratch);
+        }
+
+        @Override
+        public boolean supportsBatchScoring() {
+            return true;
         }
     }
 

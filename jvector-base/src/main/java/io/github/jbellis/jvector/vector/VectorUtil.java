@@ -100,6 +100,21 @@ public final class VectorUtil {
   /**
    * Returns the sum of squared differences of the two vectors, or subvectors, of the given length.
    */
+  /** Dot products of {@code query} with rows of {@code base}; see {@link VectorUtilSupport#dotProductRows}. */
+  public static void dotProductRows(VectorFloat<?> query, VectorFloat<?> base, int stride, int[] rows, int count, int length, float[] out) {
+    impl.dotProductRows(query, base, stride, rows, count, length, out);
+  }
+
+  /** Cosine similarities of {@code query} with rows of {@code base}; see {@link VectorUtilSupport#cosineRows}. */
+  public static void cosineRows(VectorFloat<?> query, VectorFloat<?> base, int stride, int[] rows, int count, int length, float[] out) {
+    impl.cosineRows(query, base, stride, rows, count, length, out);
+  }
+
+  /** Squared L2 distances of {@code query} to rows of {@code base}; see {@link VectorUtilSupport#squareDistanceRows}. */
+  public static void squareL2DistanceRows(VectorFloat<?> query, VectorFloat<?> base, int stride, int[] rows, int count, int length, float[] out) {
+    impl.squareDistanceRows(query, base, stride, rows, count, length, out);
+  }
+
   public static float squareL2Distance(VectorFloat<?> a, int aoffset, VectorFloat<?> b, int boffset, int length) {
     float r = impl.squareDistance(a, aoffset, b, boffset, length);
     assert Float.isFinite(r);

@@ -48,6 +48,9 @@ REQUIRED_SYMBOLS=(
   dot_product_f32
   cosine_f32
   euclidean_f32
+  cosine_rows_f32
+  dot_product_rows_f32
+  euclidean_rows_f32
   add_in_place_f32
   add_scalar_in_place_f32
   sub_in_place_f32

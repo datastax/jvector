@@ -248,6 +248,49 @@ public interface VectorUtilSupport {
   float squareDistance(VectorFloat<?> a, int aoffset, VectorFloat<?> b, int boffset, int length);
 
   /**
+   * Scores {@code query} against {@code count} rows of {@code base}: {@code out[i]} is the dot product of
+   * {@code query[0, length)} with {@code base[rows[i] * stride, rows[i] * stride + length)}. Each score equals the
+   * matching single-pair {@link #dotProduct(VectorFloat, int, VectorFloat, int, int)}; implementations may score the
+   * rows together, for example in one native call.
+   */
+  default void dotProductRows(VectorFloat<?> query, VectorFloat<?> base, int stride, int[] rows, int count, int length, float[] out) {
+    checkRows(query, base, stride, rows, count, length, out);
+    for (int i = 0; i < count; i++) out[i] = dotProduct(query, 0, base, rows[i] * stride, length);
+  }
+
+  /** Like {@link #dotProductRows}, with {@link #cosine(VectorFloat, int, VectorFloat, int, int)}. */
+  default void cosineRows(VectorFloat<?> query, VectorFloat<?> base, int stride, int[] rows, int count, int length, float[] out) {
+    checkRows(query, base, stride, rows, count, length, out);
+    for (int i = 0; i < count; i++) out[i] = cosine(query, 0, base, rows[i] * stride, length);
+  }
+
+  /** Like {@link #dotProductRows}, with {@link #squareDistance(VectorFloat, int, VectorFloat, int, int)}. */
+  default void squareDistanceRows(VectorFloat<?> query, VectorFloat<?> base, int stride, int[] rows, int count, int length, float[] out) {
+    checkRows(query, base, stride, rows, count, length, out);
+    for (int i = 0; i < count; i++) out[i] = squareDistance(query, 0, base, rows[i] * stride, length);
+  }
+
+  /**
+   * Rejects a row-scoring call that would read or write outside its arrays. Implementations that score rows
+   * themselves must perform the same checks.
+   */
+  static void checkRows(VectorFloat<?> query, VectorFloat<?> base, int stride, int[] rows, int count, int length, float[] out) {
+    if (count < 0 || length < 0 || stride < 0) {
+      throw new IllegalArgumentException("count, length and stride must be nonnegative");
+    }
+    java.util.Objects.checkFromIndexSize(0, count, rows.length);
+    java.util.Objects.checkFromIndexSize(0, count, out.length);
+    java.util.Objects.checkFromIndexSize(0, length, query.length());
+    long baseLength = base.length();
+    for (int i = 0; i < count; i++) {
+      int row = rows[i];
+      if (row < 0 || (long) row * stride + length > baseLength) {
+        throw new IndexOutOfBoundsException("row " + row + " is outside the base of " + baseLength + " floats");
+      }
+    }
+  }
+
+  /**
    * Optionally finds the closest contiguous centroid in one bulk operation.
    * Returns {@code -1} when unsupported so callers can retain their Java loop
    * in its original compilation context. Supported implementations retain the

@@ -39,6 +39,12 @@
 //   Output may be partially written on error. No allocation, pointer retention,
 //   callbacks, or blocking are permitted: ordinary graph calls use critical FFM.
 
+// Row-gather FP32 similarity ABI contract:
+//   out[i] = similarity(query[0..length), base[rows[i]*stride .. +length)) for 0 <= i < count, with the same
+//   reduction order as the matching single-pair kernel. rows are borrowed; callers validate that every row lies
+//   inside base and that out does not alias the inputs. No allocation, pointer retention, callbacks, or blocking:
+//   callers use bounded critical FFM calls.
+
 // ASH preparation/symmetric ABI contracts (all pointers are borrowed synchronously):
 //   project: positive rows/cols, row-major matrix[rows*cols], query[cols], out[rows].
 //   batch: nonnegative count; input[count*cols] and out[count*rows] are row-major.
@@ -56,6 +62,9 @@
     KERNEL_ENTRY(float, cosine_f32, (const float *a, size_t aoffset, const float *b, size_t boffset, size_t length), (a, aoffset, b, boffset, length)) \
     KERNEL_ENTRY(float, dot_product_f32, (const float *a, size_t aoffset, const float *b, size_t boffset, size_t length), (a, aoffset, b, boffset, length)) \
     KERNEL_ENTRY(float, euclidean_f32, (const float *a, size_t aoffset, const float *b, size_t boffset, size_t length), (a, aoffset, b, boffset, length)) \
+    KERNEL_ENTRY(void, cosine_rows_f32, (const float *query, const float *base, size_t stride, const int *rows, int count, size_t length, float *out), (query, base, stride, rows, count, length, out)) \
+    KERNEL_ENTRY(void, dot_product_rows_f32, (const float *query, const float *base, size_t stride, const int *rows, int count, size_t length, float *out), (query, base, stride, rows, count, length, out)) \
+    KERNEL_ENTRY(void, euclidean_rows_f32, (const float *query, const float *base, size_t stride, const int *rows, int count, size_t length, float *out), (query, base, stride, rows, count, length, out)) \
     /* Element-wise arithmetic and reductions */ \
     KERNEL_ENTRY(void, add_in_place_f32, (float *v1, const float *v2, size_t length), (v1, v2, length)) \
     KERNEL_ENTRY(void, add_scalar_in_place_f32, (float *v1, float value, size_t length), (v1, value, length)) \

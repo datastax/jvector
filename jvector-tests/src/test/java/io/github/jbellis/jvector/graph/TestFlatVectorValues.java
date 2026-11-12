@@ -19,8 +19,10 @@ package io.github.jbellis.jvector.graph;
 import io.github.jbellis.jvector.TestUtil;
 import io.github.jbellis.jvector.graph.similarity.BuildScoreProvider;
 import io.github.jbellis.jvector.graph.similarity.DefaultSearchScoreProvider;
+import io.github.jbellis.jvector.graph.similarity.ScoreFunction;
 import io.github.jbellis.jvector.util.Bits;
 import io.github.jbellis.jvector.vector.VectorSimilarityFunction;
+import io.github.jbellis.jvector.vector.VectorUtil;
 import io.github.jbellis.jvector.vector.VectorizationProvider;
 import io.github.jbellis.jvector.vector.types.VectorFloat;
 import org.junit.Test;
@@ -183,6 +185,51 @@ public class TestFlatVectorValues {
         var list = new ArrayList<Integer>();
         for (var it = view.getNeighborsIterator(0, node); it.hasNext(); ) list.add(it.nextInt());
         return list;
+    }
+
+    @Test
+    public void batchScoresEqualSingleScoresAcrossPages() {
+        var random = new Random(7);
+        for (int dimension : new int[] {1, 7, 33, 384}) {
+            var source = new ListRandomAccessVectorValues(vectors(random, 300, dimension), dimension);
+            // One page, then pages small enough that a batch spans many of them.
+            for (int pageFloats : new int[] {FlatVectorValues.DEFAULT_PAGE_FLOATS, 16 * 64}) {
+                var flat = FlatVectorValues.copyOf(source, pageFloats);
+                for (var similarity : VectorSimilarityFunction.values()) {
+                    var queryScores = flat.scoreFunctionFor(TestUtil.randomVector(random, dimension), similarity);
+                    var pairScores = flat.scoreFunctionFor(11, similarity);
+                    assertTrue(queryScores.supportsBatchScoring() && pairScores.supportsBatchScoring());
+                    for (int count : new int[] {0, 1, 5, 64, 300}) {
+                        int[] nodes = new int[count + 2];
+                        for (int i = 0; i < count; i++) nodes[i] = random.nextInt(source.size());
+                        for (var sf : new ScoreFunction[] {queryScores, pairScores.anchorAt(random.nextInt(source.size()))}) {
+                            float[] scores = new float[count + 2];
+                            sf.similarityTo(nodes, count, scores);
+                            for (int i = 0; i < count; i++) {
+                                assertEquals(similarity + " dim " + dimension + " count " + count,
+                                        sf.similarityTo(nodes[i]), scores[i], 0f);
+                            }
+                            assertEquals(0f, scores[count], 0f); // nothing written past count
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    @Test
+    public void rowScoringRejectsRowsOutsideTheBase() {
+        var random = new Random(8);
+        var vts = VectorizationProvider.getInstance().getVectorTypeSupport();
+        var base = vts.createFloatVector(4 * 16);
+        var query = TestUtil.randomVector(random, 16);
+        float[] out = new float[2];
+        assertThrows(IndexOutOfBoundsException.class,
+                () -> VectorUtil.dotProductRows(query, base, 16, new int[] {1, 4}, 2, 16, out));
+        assertThrows(IndexOutOfBoundsException.class,
+                () -> VectorUtil.squareL2DistanceRows(query, base, 16, new int[] {-1}, 1, 16, out));
+        assertThrows(IndexOutOfBoundsException.class,
+                () -> VectorUtil.cosineRows(query, base, 16, new int[] {3}, 1, 17, out));
     }
 
     @Test

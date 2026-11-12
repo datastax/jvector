@@ -427,6 +427,27 @@ class NativeVectorUtilSupport extends PanamaVectorUtilSupport
     }
 
     @Override
+    public void dotProductRows(VectorFloat<?> query, VectorFloat<?> base, int stride, int[] rows, int count, int length, float[] out) {
+        if (!NativeRowKernels.dotProductRows(query, base, stride, rows, count, length, out)) {
+            super.dotProductRows(query, base, stride, rows, count, length, out);
+        }
+    }
+
+    @Override
+    public void cosineRows(VectorFloat<?> query, VectorFloat<?> base, int stride, int[] rows, int count, int length, float[] out) {
+        if (!NativeRowKernels.cosineRows(query, base, stride, rows, count, length, out)) {
+            super.cosineRows(query, base, stride, rows, count, length, out);
+        }
+    }
+
+    @Override
+    public void squareDistanceRows(VectorFloat<?> query, VectorFloat<?> base, int stride, int[] rows, int count, int length, float[] out) {
+        if (!NativeRowKernels.squareDistanceRows(query, base, stride, rows, count, length, out)) {
+            super.squareDistanceRows(query, base, stride, rows, count, length, out);
+        }
+    }
+
+    @Override
     public int tryClosestCentroid(VectorFloat<?> point, int pointOffset,
                                VectorFloat<?> centroids, int centroidCount, int dimension) {
         if (centroidCount <= 0) {
