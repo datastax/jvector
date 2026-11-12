@@ -64,7 +64,7 @@ import java.util.Objects;
  *   similarity = max(0, (1 + rawDotProduct) / 2)
  * </pre>
  */
-public final class FusedASHDecoder implements ScoreFunction.ApproximateScoreFunction {
+public final class FusedASHDecoder implements ScoreFunction.AdaptiveApproximateScoreFunction {
 
     /**
      * Source of fused neighborhood bytes. The implementation is provided by the graph feature,

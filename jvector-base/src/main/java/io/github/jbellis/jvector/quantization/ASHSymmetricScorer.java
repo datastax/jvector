@@ -147,19 +147,19 @@ public final class ASHSymmetricScorer {
                 + ((xs * crossA + ys * crossB) + (offset(a) + offset(b))) + landmarkDots[ca][cb];
     }
 
-    public ScoreFunction.ApproximateScoreFunction scoreFunctionFor(int node) {
+    public ScoreFunction.AdaptiveApproximateScoreFunction scoreFunctionFor(int node) {
         if (landmarks != 1) return scoreFunctionFor(vectors.get(node));
         return c1ScoreFunction(signs(node), codes.signOffset(node), body(node), codes.bodyOffset(node),
                 codes.scales[node], offset(node));
     }
 
     /** The operand must already be encoded with this instance's compressor. */
-    public ScoreFunction.ApproximateScoreFunction scoreFunctionFor(AsymmetricHashing.QuantizedVector query) {
+    public ScoreFunction.AdaptiveApproximateScoreFunction scoreFunctionFor(AsymmetricHashing.QuantizedVector query) {
         if (landmarks != 1) return vectors.scoreFunctionFor(preparedState(query), simd);
         return c1ScoreFunction(query.binaryVector, 0, query.extraBits, 0, query.scale, centeredOffset(query));
     }
 
-    private ScoreFunction.ApproximateScoreFunction c1ScoreFunction(long[] querySigns, int querySignOffset,
+    private ScoreFunction.AdaptiveApproximateScoreFunction c1ScoreFunction(long[] querySigns, int querySignOffset,
                                                                    byte[] queryBody, int queryBodyOffset,
                                                                    float queryScale, float queryOffset) {
         final ASHCodes c = codes;
@@ -173,7 +173,7 @@ public final class ASHSymmetricScorer {
             final int d = dimensions, b = bits;
             final io.github.jbellis.jvector.vector.VectorUtilSupport vu = backend;
             final boolean batch = vu.supportsAshSymmetricDotRows();
-            return new ScoreFunction.ApproximateScoreFunction() {
+            return new ScoreFunction.AdaptiveApproximateScoreFunction() {
                 @Override
                 public float similarityTo(int node) {
                     float dot = (queryScale * scales[node])

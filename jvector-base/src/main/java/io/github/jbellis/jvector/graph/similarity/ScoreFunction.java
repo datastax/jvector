@@ -82,6 +82,14 @@ public interface ScoreFunction {
         return false;
     }
 
+    /**
+     * Whether a top-K search scored by this function always stops adaptively, whatever
+     * {@link SearchScoreProvider} wraps it. Only {@code GraphSearcher.useAdaptiveTermination(false)} overrides it.
+     */
+    default boolean requiresAdaptiveTermination() {
+        return false;
+    }
+
 
     interface ExactScoreFunction extends ScoreFunction {
         default boolean isExact() {
@@ -92,6 +100,18 @@ public interface ScoreFunction {
     interface ApproximateScoreFunction extends ScoreFunction {
         default boolean isExact() {
             return false;
+        }
+    }
+
+    /**
+     * An approximate score function whose top-K searches always stop adaptively unless the searcher's adaptive
+     * stopping is turned off explicitly. Every ASH score function is one, so ASH graph searches cannot fall back to
+     * the standard rule by being wrapped in a provider that does not ask for adaptive stopping.
+     */
+    interface AdaptiveApproximateScoreFunction extends ApproximateScoreFunction {
+        @Override
+        default boolean requiresAdaptiveTermination() {
+            return true;
         }
     }
 }

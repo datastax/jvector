@@ -453,8 +453,11 @@ public class GraphSearcher implements Closeable {
         try {
             assert approximateResults.size() == 0; // should be cleared by setEntryPointsFromPreviousLayer
             approximateResults.setMaxSize(rerankK);
+            // ASH score functions require adaptive stopping whatever provider wraps them; only
+            // useAdaptiveTermination(false) turns it off.
             boolean adaptive = adaptiveTerminationEnabled
-                    && scoreProvider.supportsAdaptiveDotProductTermination()
+                    && (scoreProvider.supportsAdaptiveDotProductTermination()
+                        || scoreProvider.scoreFunction().requiresAdaptiveTermination())
                     && level == 0 && threshold == 0.0f && rerankK > 0;
             if (adaptive) {
                 adaptiveTermination.reset(rerankK, adaptiveTerminationGamma, scoreProvider.adaptiveScoresAreRawDotProducts());

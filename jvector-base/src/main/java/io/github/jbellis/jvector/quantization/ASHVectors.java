@@ -199,7 +199,7 @@ public class ASHVectors implements CompressedVectors {
     }
 
     @Override
-    public ScoreFunction.ApproximateScoreFunction scoreFunctionFor(
+    public ScoreFunction.AdaptiveApproximateScoreFunction scoreFunctionFor(
             VectorFloat<?> query,
             VectorSimilarityFunction similarityFunction) {
 
@@ -240,7 +240,7 @@ public class ASHVectors implements CompressedVectors {
      * Applies {@code f} to stored codes in place, in graph similarity units. One lambda per storage
      * shape keeps each call site free of null checks for the array a bit width does not use.
      */
-    private ScoreFunction.ApproximateScoreFunction nodeScoreFunction(ASHScorer.CodeScorer f) {
+    private ScoreFunction.AdaptiveApproximateScoreFunction nodeScoreFunction(ASHScorer.CodeScorer f) {
         final ASHCodes c = codes;
         if (c.signWords == 0) {
             return node -> ASHScorer.toSimilarity(f.dot(null, 0, c.bodyPage(node), c.bodyOffset(node),
@@ -258,7 +258,7 @@ public class ASHVectors implements CompressedVectors {
     // ASH single vector scoring (1-bit only, reads the stored sign pages in place)
     // ============================================================================
 
-    private final class SimdASHScoreFunction implements ScoreFunction.ApproximateScoreFunction {
+    private final class SimdASHScoreFunction implements ScoreFunction.AdaptiveApproximateScoreFunction {
         private final QueryPrecompute qp;
         private final VectorUtilSupport vecUtil;
 
@@ -456,7 +456,7 @@ public class ASHVectors implements CompressedVectors {
     }
 
     // Package-private prepared-state entry points shared by symmetric scoring.
-    ScoreFunction.ApproximateScoreFunction scoreFunctionFor(ASHScorer.QueryPrecompute qp, boolean simd) {
+    ScoreFunction.AdaptiveApproximateScoreFunction scoreFunctionFor(ASHScorer.QueryPrecompute qp, boolean simd) {
         if (ash.bitsPerDimension == 1 && simd) {
             return new SimdASHScoreFunction(new QueryPrecompute(qp.d, qp.C, qp.qProj,
                     qp.sumQProj, qp.dotQMuByLandmark));
@@ -979,7 +979,7 @@ public class ASHVectors implements CompressedVectors {
      * when the score function is created, so there is nothing further to precompute.
      */
     @Override
-    public ScoreFunction.ApproximateScoreFunction precomputedScoreFunctionFor(
+    public ScoreFunction.AdaptiveApproximateScoreFunction precomputedScoreFunctionFor(
             VectorFloat<?> query,
             VectorSimilarityFunction similarityFunction) {
         return scoreFunctionFor(query, similarityFunction);
@@ -987,7 +987,7 @@ public class ASHVectors implements CompressedVectors {
 
     /** Symmetric node-to-node dot-product similarity from the stored encoded vectors. */
     @Override
-    public ScoreFunction.ApproximateScoreFunction diversityFunctionFor(
+    public ScoreFunction.AdaptiveApproximateScoreFunction diversityFunctionFor(
             int node1,
             VectorSimilarityFunction similarityFunction) {
         if (similarityFunction != VectorSimilarityFunction.DOT_PRODUCT)
