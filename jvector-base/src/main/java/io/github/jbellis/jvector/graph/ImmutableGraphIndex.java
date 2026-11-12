@@ -159,6 +159,11 @@ public interface ImmutableGraphIndex extends AutoCloseable, Accountable {
      */
     interface NeighborProcessor {
         void process(int friendOrd, float similarity);
+
+        /** Processes {@code count} scored neighbors in order, exactly as one {@link #process} call each. */
+        default void processBatch(int[] friendOrds, float[] similarities, int count) {
+            for (int i = 0; i < count; i++) process(friendOrds[i], similarities[i]);
+        }
     }
 
     /**

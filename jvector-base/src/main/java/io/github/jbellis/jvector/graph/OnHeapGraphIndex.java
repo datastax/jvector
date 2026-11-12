@@ -510,7 +510,7 @@ public class OnHeapGraphIndex implements MutableGraphIndex {
                     if (visited.mark(friendOrd)) count = batch.add(count, friendOrd);
                 }
                 scoreFunction.similarityTo(batch.nodes, count, batch.scores);
-                for (int i = 0; i < count; i++) neighborProcessor.process(batch.nodes[i], batch.scores[i]);
+                neighborProcessor.processBatch(batch.nodes, batch.scores, count);
                 return;
             }
             for (var it = getNeighborsIterator(level, node); it.hasNext(); ) {

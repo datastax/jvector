@@ -498,18 +498,8 @@ public class GraphSearcher implements Closeable {
             var scoreTracker = scoreTrackerFactory.getScoreTracker(false, rerankK, threshold);
 
             var scoreFunction = scoreProvider.scoreFunction();
-            ImmutableGraphIndex.NeighborProcessor neighborProcessor = (node2, score) -> {
-                visitedCount++;
-                scoreTracker.track(score);
-                if (trackBest && acceptOrdsThisLayer.get(node2) && score >= threshold) offerScored(node2, score, rerankK);
-                if (bounded) {
-                    if (!mayExpand(score, rerankK)) {
-                        deferredCandidates.add(node2, score);
-                        return;
-                    }
-                }
-                candidates.push(node2, score);
-            };
+            layerProcessor.configure(scoreTracker, acceptOrdsThisLayer, threshold, rerankK, trackBest, bounded);
+            var neighborProcessor = layerProcessor;
 
             // the main search loop
             while (candidates.size() > 0) {
@@ -597,6 +587,58 @@ public class GraphSearcher implements Closeable {
     SearchResult resume(int topK, int rerankK, float threshold, float rerankFloor) {
         searchLayer0(topK, rerankK, threshold);
         return reranking(topK, rerankK, rerankFloor);
+    }
+
+    private final LayerNeighborProcessor layerProcessor = new LayerNeighborProcessor();
+
+    /**
+     * Handles each scored neighbor during one layer search, configured when that layer's search starts. Settings
+     * that are fixed for the layer, such as whether scores are tracked or every node is accepted, are resolved once
+     * there, so the per-neighbor work in a batch is a tight loop.
+     */
+    private final class LayerNeighborProcessor implements ImmutableGraphIndex.NeighborProcessor {
+        private ScoreTracker scoreTracker;
+        private boolean trackScores;
+        private Bits accept;
+        private boolean acceptAll;
+        private float threshold;
+        private int rerankK;
+        private boolean trackBest;
+        private boolean bounded;
+
+        void configure(ScoreTracker scoreTracker, Bits accept, float threshold, int rerankK,
+                       boolean trackBest, boolean bounded) {
+            this.scoreTracker = scoreTracker;
+            this.trackScores = !(scoreTracker instanceof ScoreTracker.NoOpTracker);
+            this.accept = accept;
+            this.acceptAll = accept instanceof Bits.MatchAllBits;
+            this.threshold = threshold;
+            this.rerankK = rerankK;
+            this.trackBest = trackBest;
+            this.bounded = bounded;
+        }
+
+        @Override
+        public void process(int node, float score) {
+            visitedCount++;
+            handle(node, score);
+        }
+
+        @Override
+        public void processBatch(int[] nodes, float[] scores, int count) {
+            visitedCount += count;
+            for (int i = 0; i < count; i++) handle(nodes[i], scores[i]);
+        }
+
+        private void handle(int node, float score) {
+            if (trackScores) scoreTracker.track(score);
+            if (trackBest && score >= threshold && (acceptAll || accept.get(node))) offerScored(node, score, rerankK);
+            if (bounded && !mayExpand(score, rerankK)) {
+                deferredCandidates.add(node, score);
+                return;
+            }
+            candidates.push(node, score);
+        }
     }
 
     /**
