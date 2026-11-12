@@ -248,14 +248,15 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
 
     // ---- Sparse sources: the same-source join ----
     // A node keeps only its LIVE same-source edges. When most of a source is live that is nearly all
-    // of them; when a source's live nodes are a minority (a shard of a sharded compaction keeps 1/M
-    // of every source, a heavily deleted source keeps little) most of a node's edges point at dead
-    // nodes and nothing replaced them: measured on 2 x 1M vectors split into 64 shards, a node kept
-    // 0.5 of its 32 same-source edges and the output was nearly bipartite between the sources. Below
-    // this live fraction a source is therefore searched for its own nodes like any other source: at
-    // level 0 it is one more target of the cell walk, elsewhere one more graph search.
-    private static final float DEFAULT_SAME_SOURCE_JOIN_BELOW = 0.5f;
-    private float sameSourceJoinBelow = DEFAULT_SAME_SOURCE_JOIN_BELOW;
+    // of them; when a source's live nodes are a minority, as in a shard of a sharded compaction
+    // (which keeps 1/M of every source), most of a node's edges point at dead nodes and nothing
+    // replaced them: measured on 2 x 1M vectors split into 64 shards, a node kept 0.5 of its 32
+    // same-source edges and the output was nearly bipartite between the sources. In a shard, a
+    // source below this live fraction is therefore searched for its own nodes like any other source:
+    // at level 0 it is one more target of the cell walk, elsewhere one more graph search. An ordinary
+    // compaction never joins a source with itself (the fraction is 0), whatever its deletions.
+    private static final float SHARD_SAME_SOURCE_JOIN_BELOW = 0.5f;
+    private float sameSourceJoinBelow = 0f;
 
     // Sharded compaction: what is trained once for every shard. Null for an ordinary compaction.
     private SharedTraining shared;
@@ -266,6 +267,16 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
     /** Whether so few of source {@code s}'s nodes are live that its own nodes are joined like another source's. */
     private boolean sparseSource(int s) {
         return numLiveNodesPerSource.get(s) < (double) sameSourceJoinBelow * sources.get(s).size(0);
+    }
+
+    /** Whether any source is joined with itself (see {@link #sparseSource}). */
+    private boolean anySparseSource() {
+        for (int s = 0; s < sources.size(); s++) {
+            if (sparseSource(s)) {
+                return true;
+            }
+        }
+        return false;
     }
     /**
      * Constructs a new OnDiskGraphIndexCompactor for graphs without a non-fused compressed sidecar.
@@ -430,18 +441,6 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
             return -1;
         }
         return ((com.sun.management.OperatingSystemMXBean) bean).getTotalPhysicalMemorySize() - Runtime.getRuntime().maxMemory();
-    }
-
-    /**
-     * Sets the live fraction below which a source's own nodes are joined like another source's: a
-     * node of such a source gathers same-source candidates beyond the edges it retained, because
-     * most of those edges point at dead nodes. The default is one half; 0 never joins a source with
-     * itself, 1 always does (as long as any of its nodes is dead).
-     */
-    OnDiskGraphIndexCompactor withSameSourceJoinBelow(float liveFraction) {
-        if (!(liveFraction >= 0f && liveFraction <= 1f)) throw new IllegalArgumentException("liveFraction must be in [0, 1]");
-        this.sameSourceJoinBelow = liveFraction;
-        return this;
     }
 
     /**
@@ -651,7 +650,7 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
      * shard's merge adopts them. A shard's merge is otherwise an ordinary compaction whose live
      * nodes are the shard's, and it finds a node's same-source neighbours again, since most of
      * the edges a node had in its source lead to nodes of other shards
-     * (see {@link #withSameSourceJoinBelow}).
+     * (see {@link #sparseSource}).
      * <p>
      * Shards may become known one at a time, as when each output is written as its rows arrive:
      * nothing is done until the first {@link #compactShard}. Shards are compacted one at a time;
@@ -715,7 +714,7 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
             shard.walkQueryBytes = walkQueryBytes;
             shard.recordAnnounceAhead = recordAnnounceAhead;
             shard.walkDirectSetting = walkDirectSetting;
-            shard.sameSourceJoinBelow = sameSourceJoinBelow;
+            shard.sameSourceJoinBelow = SHARD_SAME_SOURCE_JOIN_BELOW;
             log.info("Sharded compaction: shard {} with {} live nodes", shardsCompacted++, shard.numTotalNodes);
             return shard;
         }
@@ -1346,13 +1345,14 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
     }
 
     /**
-     * The most candidates a node gathers at any level: every source can contribute a search's
-     * worth, the node's own included (the same-source join of a sparse source), on top of the edges
-     * it retained and, at level 0, the reverse candidates.
+     * The most candidates a node gathers at any level: every other source can contribute a search's
+     * worth, the node's own too when a source is joined with itself (a sparse source of a shard), on
+     * top of the edges it retained and, at level 0, the reverse candidates.
      */
     private int maxCandidateSize() {
         int maxUpperDegree = maxUpperDegree();
-        int base = searchTopK(maxDegrees.get(0)) * sources.size() + maxDegrees.get(0) + REVERSE_CANDIDATE_SLOTS;
+        int level0Targets = anySparseSource() ? sources.size() : sources.size() - 1;
+        int base = searchTopK(maxDegrees.get(0)) * level0Targets + maxDegrees.get(0) + REVERSE_CANDIDATE_SLOTS;
         int upper = maxUpperDegree == 0 ? 0 : searchTopK(maxUpperDegree) * sources.size() + maxUpperDegree;
         return Math.max(base, upper);
     }
