@@ -52,6 +52,7 @@ public class VamanaDiversityProvider implements DiversityProvider {
         // add diverse candidates, gradually increasing alpha to the threshold
         // (so that the nearest candidates are prioritized)
         float currentAlpha = 1.0f;
+        ScoreFunction sf = null; // re-aimed at each candidate where the provider allows it
         while (currentAlpha <= alpha + 1E-6 && nSelected < maxDegree) {
             for (int i = diverseBefore; i < neighbors.size() && nSelected < maxDegree; i++) {
                 if (selected.get(i)) {
@@ -60,7 +61,7 @@ public class VamanaDiversityProvider implements DiversityProvider {
 
                 int cNode = neighbors.getNode(i);
                 float cScore = neighbors.getScore(i);
-                var sf = scoreProvider.diversityScoreFunctionFor(cNode);
+                sf = scoreProvider.diversityScoreFunctionFor(cNode, sf);
                 if (isDiverse(cNode, cScore, neighbors, sf, selected, currentAlpha)) {
                     selected.set(i);
                     nSelected++;

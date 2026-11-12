@@ -124,6 +124,68 @@ public class TestFlatVectorValues {
     }
 
     @Test
+    public void reanchoredPairScoresMatchFreshOnes() {
+        var random = new Random(5);
+        int dimension = 33;
+        var source = new ListRandomAccessVectorValues(vectors(random, 50, dimension), dimension);
+        var flat = FlatVectorValues.copyOf(source, 1 << 10);
+        for (var similarity : VectorSimilarityFunction.values()) {
+            var bsp = BuildScoreProvider.randomAccessScoreProvider(flat, similarity);
+            var reused = bsp.diversityScoreFunctionFor(0, null);
+            for (int anchor = 0; anchor < source.size(); anchor++) {
+                var next = bsp.diversityScoreFunctionFor(anchor, reused);
+                assertTrue("re-aimed in place", next == reused);
+                for (int node = 0; node < source.size(); node++) {
+                    float expected = similarity.compare(source.getVector(anchor), source.getVector(node));
+                    assertEquals(similarity + " anchor " + anchor, expected, next.similarityTo(node), TOLERANCE);
+                }
+            }
+            // A score function for another similarity is not re-aimed.
+            var other = VectorSimilarityFunction.values()[(similarity.ordinal() + 1) % VectorSimilarityFunction.values().length];
+            var foreign = flat.scoreFunctionFor(0, other);
+            assertTrue(bsp.diversityScoreFunctionFor(1, foreign) != foreign);
+        }
+    }
+
+    @Test
+    public void flatBuildMatchesListBuild() {
+        var random = new Random(6);
+        int dimension = 24;
+        var source = new ListRandomAccessVectorValues(vectors(random, 1500, dimension), dimension);
+        var flat = FlatVectorValues.copyOf(source);
+        for (var similarity : VectorSimilarityFunction.values()) {
+            for (boolean hierarchy : new boolean[] {false, true}) {
+                // One thread, so both builds insert in the same order and see the same neighbors.
+                var pool = new java.util.concurrent.ForkJoinPool(1);
+                try (var expected = new GraphIndexBuilder(BuildScoreProvider.randomAccessScoreProvider(source, similarity),
+                             dimension, 12, 40, 1.2f, 1.2f, hierarchy, true, pool, pool);
+                     var actual = new GraphIndexBuilder(BuildScoreProvider.randomAccessScoreProvider(flat, similarity),
+                             dimension, 12, 40, 1.2f, 1.2f, hierarchy, true, pool, pool)) {
+                    var g1 = expected.build(source);
+                    var g2 = actual.build(source);
+                    assertEquals(g1.size(), g2.size());
+                    var v1 = g1.getView();
+                    var v2 = g2.getView();
+                    for (int node = 0; node < source.size(); node++) {
+                        assertEquals(similarity + " hierarchy " + hierarchy + " node " + node,
+                                neighbors(v1, node), neighbors(v2, node));
+                    }
+                } catch (java.io.IOException e) {
+                    throw new java.io.UncheckedIOException(e);
+                } finally {
+                    pool.shutdown();
+                }
+            }
+        }
+    }
+
+    private static List<Integer> neighbors(ImmutableGraphIndex.View view, int node) {
+        var list = new ArrayList<Integer>();
+        for (var it = view.getNeighborsIterator(0, node); it.hasNext(); ) list.add(it.nextInt());
+        return list;
+    }
+
+    @Test
     public void rejectsMismatchedQueries() {
         var random = new Random(4);
         var flat = FlatVectorValues.copyOf(new ListRandomAccessVectorValues(vectors(random, 4, 8), 8));

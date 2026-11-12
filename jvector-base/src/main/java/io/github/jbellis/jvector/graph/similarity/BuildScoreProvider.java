@@ -16,6 +16,7 @@
 
 package io.github.jbellis.jvector.graph.similarity;
 
+import io.github.jbellis.jvector.graph.FlatVectorValues;
 import io.github.jbellis.jvector.graph.RandomAccessVectorValues;
 import io.github.jbellis.jvector.graph.RemappedRandomAccessVectorValues;
 import io.github.jbellis.jvector.quantization.AsymmetricHashing;
@@ -94,6 +95,15 @@ public interface BuildScoreProvider {
     }
 
     /**
+     * Like {@link #diversityScoreFunctionFor(int)}, but may re-aim {@code previous} at {@code node1} and return it
+     * instead of creating a new score function. {@code previous} is null or a score function this method returned
+     * earlier that the caller no longer needs for its earlier node.
+     */
+    default ScoreFunction diversityScoreFunctionFor(int node1, ScoreFunction previous) {
+        return diversityScoreFunctionFor(node1);
+    }
+
+    /**
      * Returns a BSP that performs exact score comparisons using the given RandomAccessVectorValues and VectorSimilarityFunction.
      *
      * Helper method for the special case that mapping between graph node IDs and ravv ordinals is the identity function.
@@ -107,6 +117,9 @@ public interface BuildScoreProvider {
      * graphToRavvOrdMap maps graph node IDs to ravv ordinals.
      */
     static BuildScoreProvider randomAccessScoreProvider(RandomAccessVectorValues ravv, VectorSimilarityFunction similarityFunction) {
+        if (ravv instanceof FlatVectorValues) {
+            return flatScoreProvider((FlatVectorValues) ravv, similarityFunction);
+        }
         // We need two sources of vectors in order to perform diversity check comparisons without
         // colliding.  ThreadLocalSupplier makes this a no-op if the RAVV is actually un-shared.
         var vectors = ravv.threadLocalSupplier();
@@ -174,6 +187,57 @@ public interface BuildScoreProvider {
             @Override
             public ScoreFunction diversityScoreFunctionFor(int node1) {
                 return scoreFunctionFor(node1);
+            }
+        };
+    }
+
+    /** Exact scores read in place from a flat store; diversity checks re-aim one score function per caller. */
+    private static BuildScoreProvider flatScoreProvider(FlatVectorValues flat, VectorSimilarityFunction similarityFunction) {
+        return new BuildScoreProvider() {
+            @Override
+            public boolean isExact() {
+                return true;
+            }
+
+            @Override
+            public VectorFloat<?> approximateCentroid() {
+                var centroid = vts.createFloatVector(flat.dimension());
+                var row = vts.createFloatVector(flat.dimension());
+                for (int i = 0; i < flat.size(); i++) {
+                    flat.getVectorInto(i, row, 0);
+                    VectorUtil.addInPlace(centroid, row);
+                }
+                VectorUtil.scale(centroid, 1.0f / flat.size());
+                return centroid;
+            }
+
+            @Override
+            public SearchScoreProvider searchProviderFor(VectorFloat<?> vector) {
+                return new DefaultSearchScoreProvider(flat.scoreFunctionFor(vector, similarityFunction));
+            }
+
+            @Override
+            public SearchScoreProvider searchProviderFor(int node1) {
+                return new DefaultSearchScoreProvider(flat.scoreFunctionFor(node1, similarityFunction));
+            }
+
+            @Override
+            public SearchScoreProvider diversityProviderFor(int node1) {
+                return new DefaultSearchScoreProvider(flat.scoreFunctionFor(node1, similarityFunction));
+            }
+
+            @Override
+            public ScoreFunction diversityScoreFunctionFor(int node1) {
+                return flat.scoreFunctionFor(node1, similarityFunction);
+            }
+
+            @Override
+            public ScoreFunction diversityScoreFunctionFor(int node1, ScoreFunction previous) {
+                if (previous instanceof FlatVectorValues.AnchoredScoreFunction) {
+                    var anchored = (FlatVectorValues.AnchoredScoreFunction) previous;
+                    if (anchored.scores(flat, similarityFunction)) return anchored.anchorAt(node1);
+                }
+                return flat.scoreFunctionFor(node1, similarityFunction);
             }
         };
     }

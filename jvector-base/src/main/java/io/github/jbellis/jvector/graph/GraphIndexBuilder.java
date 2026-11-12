@@ -66,6 +66,8 @@ public class GraphIndexBuilder implements Closeable, Accountable {
     private final int beamWidth;
     private final ExplicitThreadLocal<NodeArray> naturalScratch;
     private final ExplicitThreadLocal<NodeArray> concurrentScratch;
+    /** Per-thread copy of the in-progress insertions taken when an insert starts; reused across inserts. */
+    private final ExplicitThreadLocal<InProgressSnapshot> inProgressSnapshots = ExplicitThreadLocal.withInitial(InProgressSnapshot::new);
 
     private final int dimension;
     private final float neighborOverflow;
@@ -877,7 +879,7 @@ public class GraphIndexBuilder implements Closeable, Accountable {
         graph.addNode(nodeLevel);
 
         insertionsInProgress.add(nodeLevel);
-        var inProgressBefore = insertionsInProgress.clone();
+        var inProgressBefore = inProgressSnapshots.get().copyOf(insertionsInProgress);
         try (var gs = searchers.get()) {
             var view = graph.getView();
             gs.setView(view); // new snapshot
@@ -926,7 +928,7 @@ public class GraphIndexBuilder implements Closeable, Accountable {
         return IntStream.rangeClosed(0, nodeLevel.level).mapToLong(graph::ramBytesUsedOneNode).sum();
     }
 
-    private void updateNeighborsOneLayer(int level, int node, NodeScore[] neighbors, NodeArray naturalScratchPooled, ConcurrentSkipListSet<NodeAtLevel> inProgressBefore, NodeArray concurrentScratchPooled, SearchScoreProvider ssp) {
+    private void updateNeighborsOneLayer(int level, int node, NodeScore[] neighbors, NodeArray naturalScratchPooled, InProgressSnapshot inProgressBefore, NodeArray concurrentScratchPooled, SearchScoreProvider ssp) {
         // Update neighbors with these candidates.
         // The DiskANN paper calls for using the entire set of visited nodes along the search path as
         // potential candidates, but in practice we observe neighbor lists being completely filled using
@@ -1090,18 +1092,34 @@ public class GraphIndexBuilder implements Closeable, Accountable {
 
     private NodeArray getConcurrentCandidates(int level,
                                               int newNode,
-                                              Set<NodeAtLevel> inProgress,
+                                              InProgressSnapshot inProgress,
                                               NodeArray scratch,
                                               ScoreFunction scoreFunction)
     {
         scratch.clear();
-        for (NodeAtLevel n : inProgress) {
+        for (int i = 0; i < inProgress.size; i++) {
+            NodeAtLevel n = inProgress.nodes[i];
             if (n.node == newNode || n.level < level) {
                 continue;
             }
             scratch.insertSorted(n.node, scoreFunction.similarityTo(n.node));
         }
         return scratch;
+    }
+
+    /** The in-progress insertions as of one moment, in a buffer that grows as needed and is reused. */
+    private static final class InProgressSnapshot {
+        NodeAtLevel[] nodes = new NodeAtLevel[16];
+        int size;
+
+        InProgressSnapshot copyOf(ConcurrentSkipListSet<NodeAtLevel> inProgress) {
+            size = 0;
+            for (NodeAtLevel n : inProgress) {
+                if (size == nodes.length) nodes = Arrays.copyOf(nodes, 2 * size);
+                nodes[size++] = n;
+            }
+            return this;
+        }
     }
 
     @Override

@@ -140,18 +140,56 @@ public final class FlatVectorValues implements RandomAccessVectorValues {
     }
 
     /** Exact scores of stored row {@code node1} against other stored rows, read in place. */
-    public ScoreFunction.ExactScoreFunction scoreFunctionFor(int node1, VectorSimilarityFunction similarity) {
-        var page1 = page(node1);
-        int offset1 = offset(node1);
-        switch (similarity) {
-            case DOT_PRODUCT:
-                return node2 -> (1 + VectorUtil.dotProduct(page1, offset1, page(node2), offset(node2), dimension)) / 2;
-            case EUCLIDEAN:
-                return node2 -> 1 / (1 + VectorUtil.squareL2Distance(page1, offset1, page(node2), offset(node2), dimension));
-            case COSINE:
-                return node2 -> (1 + VectorUtil.cosine(page1, offset1, page(node2), offset(node2), dimension)) / 2;
-            default:
-                throw new UnsupportedOperationException("Unsupported similarity function " + similarity);
+    public AnchoredScoreFunction scoreFunctionFor(int node1, VectorSimilarityFunction similarity) {
+        return new AnchoredScoreFunction(similarity).anchorAt(node1);
+    }
+
+    /**
+     * Exact scores of one stored row against the others. The anchor row can be moved with {@link #anchorAt}, so a
+     * caller that scores against many anchors in turn, such as a diversity check, allocates one of these instead of
+     * one per anchor. Not safe for concurrent use.
+     */
+    public final class AnchoredScoreFunction implements ScoreFunction.ExactScoreFunction {
+        private final VectorSimilarityFunction similarity;
+        private VectorFloat<?> anchorPage;
+        private int anchorOffset;
+
+        private AnchoredScoreFunction(VectorSimilarityFunction similarity) {
+            switch (similarity) {
+                case DOT_PRODUCT:
+                case EUCLIDEAN:
+                case COSINE:
+                    break;
+                default:
+                    throw new UnsupportedOperationException("Unsupported similarity function " + similarity);
+            }
+            this.similarity = similarity;
+        }
+
+        /** Scores against {@code node1} from now on; returns this. */
+        public AnchoredScoreFunction anchorAt(int node1) {
+            anchorPage = page(node1);
+            anchorOffset = offset(node1);
+            return this;
+        }
+
+        /** True when this scores rows of {@code store} with {@code similarity}, so it can be re-anchored for that use. */
+        public boolean scores(FlatVectorValues store, VectorSimilarityFunction similarity) {
+            return store == FlatVectorValues.this && similarity == this.similarity;
+        }
+
+        @Override
+        public float similarityTo(int node2) {
+            var page2 = page(node2);
+            int offset2 = offset(node2);
+            switch (similarity) {
+                case DOT_PRODUCT:
+                    return (1 + VectorUtil.dotProduct(anchorPage, anchorOffset, page2, offset2, dimension)) / 2;
+                case EUCLIDEAN:
+                    return 1 / (1 + VectorUtil.squareL2Distance(anchorPage, anchorOffset, page2, offset2, dimension));
+                default:
+                    return (1 + VectorUtil.cosine(anchorPage, anchorOffset, page2, offset2, dimension)) / 2;
+            }
         }
     }
 
