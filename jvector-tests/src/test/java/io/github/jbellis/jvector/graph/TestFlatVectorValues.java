@@ -228,6 +228,19 @@ public class TestFlatVectorValues {
         return list;
     }
 
+    /** The native backend keeps pages in native memory, so a batch spanning pages takes the one-call path. */
+    @Test
+    public void nativeBackendTablesStoragePages() {
+        var provider = VectorizationProvider.getInstance();
+        org.junit.Assume.assumeTrue(provider.getClass().getSimpleName().startsWith("Native"));
+        var vts = provider.getVectorTypeSupport();
+        VectorFloat<?>[] pages = {vts.createStorageVector(32), vts.createStorageVector(64)};
+        org.junit.Assert.assertNotNull(provider.getVectorUtilSupport().pagedRowTable(pages));
+        // Heap vectors can move, so they are never tabled.
+        org.junit.Assert.assertNull(provider.getVectorUtilSupport().pagedRowTable(
+                new VectorFloat<?>[] {vts.createFloatVector(32), vts.createFloatVector(32)}));
+    }
+
     @Test
     public void batchScoresEqualSingleScoresAcrossPages() {
         var random = new Random(7);
