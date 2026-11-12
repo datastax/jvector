@@ -57,13 +57,20 @@ public final class FlatVectorValues implements BatchedVectorValues {
      */
     static final int DEFAULT_PAGE_FLOATS = 1 << 30;
     /**
-     * Floats per full page of an appendable store by default: 64 MiB. A batch spanning pages is one kernel call on a
-     * native backend, so the size only bounds the spare rows of a store that stops growing.
+     * Floats per full page of an appendable store by default. Where the backend scores a batch spanning pages in one
+     * call, 64 MiB: the size then only bounds the spare rows of a store that stops growing. Elsewhere a batch is
+     * scored one page at a time, so 256 MiB keeps batches to fewer pages.
      */
-    public static final int DEFAULT_APPENDABLE_PAGE_FLOATS = 1 << 24;
+    public static final int DEFAULT_APPENDABLE_PAGE_FLOATS = tablesStoragePages() ? 1 << 24 : 1 << 26;
     /** Floats in the first page of an appendable store by default: 1 MiB, so a small store stays small. */
     static final int DEFAULT_FIRST_PAGE_FLOATS = 1 << 18;
     private static final int ROW_ALIGNMENT_FLOATS = 16;
+
+    /** Whether this backend can score rows across storage pages in one call. */
+    private static boolean tablesStoragePages() {
+        VectorFloat<?>[] probe = {vts.createStorageVector(ROW_ALIGNMENT_FLOATS), vts.createStorageVector(ROW_ALIGNMENT_FLOATS)};
+        return vus.pagedRowTable(probe) != null;
+    }
 
     private final int dimension;
     private final int stride;
