@@ -293,7 +293,8 @@ public class MultiConfig {
     private static String describe(List<Compression> entries, boolean detailed) {
         var parts = new ArrayList<String>();
         for (var entry : entries) {
-            String part = entry.type;
+            // No compression means the stage scores full-precision vectors; say so.
+            String part = "None".equals(entry.type) ? "FP32" : entry.type;
             if (detailed && "ASH".equals(entry.type)) {
                 Map<String, ?> parameters = entry.parameters == null ? Map.of() : entry.parameters;
                 Object bits = parameters.get("bitsPerDimension");

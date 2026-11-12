@@ -216,7 +216,9 @@ public class IndexParametersTest {
         assertEquals("onDisk: build ASH-2b symmetric -> search fused ASH-2b -> rerank NVQ", compressed.describePipeline());
         assertEquals("onDisk: build ASH -> search fused ASH -> rerank NVQ", compressed.pipelineSignature());
         var memory = MultiConfig.getConfig(INDEX_PARAMETERS.resolve("in-memory-ash/mpnet-1m.yml").toString());
-        assertEquals("inMemory: build None -> search ASH-2b -> rerank FP32", memory.describePipeline());
+        assertEquals("inMemory: build FP32 -> search ASH-2b -> rerank FP32", memory.describePipeline());
+        var uncompressed = MultiConfig.getConfig(INDEX_PARAMETERS.resolve("glove-100-angular.yml").toString());
+        assertEquals("onDisk: build FP32 -> search FP32 -> rerank None", uncompressed.describePipeline());
         var landmarks = MultiConfig.getConfig(INDEX_PARAMETERS.resolve("ash-options/ada002-1M-4-landmarks.yml").toString());
         assertEquals("onDisk: build ASH-2b 4 landmarks asymmetric -> search fused ASH-2b 4 landmarks -> rerank NVQ",
                 landmarks.describePipeline());
