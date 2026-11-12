@@ -97,11 +97,9 @@ public abstract class QuantizationCompactionStrategy {
      * Installs a compressor trained elsewhere in place of {@link #retrain}. A sharded compaction
      * trains once, on the live nodes of every shard, and each shard's merge adopts the result
      * instead of training again on its own slice. After this call {@link #compressor()} returns
-     * {@code trained}.
+     * {@code trained}; a strategy without a compressor (e.g. {@link #NONE}) ignores it.
      */
-    public void adoptCompressor(VectorCompressor<?> trained) {
-        throw new UnsupportedOperationException(getClass().getSimpleName() + " cannot adopt a compressor");
-    }
+    public abstract void adoptCompressor(VectorCompressor<?> trained);
 
     /**
      * Trains a fresh compressor on a balanced sample of merged source vectors. May be a no-op
