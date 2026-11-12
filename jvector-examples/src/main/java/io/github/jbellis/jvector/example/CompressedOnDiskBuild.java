@@ -184,10 +184,14 @@ final class CompressedOnDiskBuild implements IndexBuildStrategy {
         boolean deferFeatures = writers.values().stream()
                 .allMatch(writer -> writer instanceof OnDiskParallelGraphIndexWriter);
         long startTime = System.nanoTime();
+        // Build the graph incrementally, or with a GraphBuildAccelerator if one is selected; an
+        // accelerated build runs alongside the inline writes below.
+        var acceleratedBuild = AcceleratedBuild.start(builder, floatVectors, ds.getSimilarityFunction());
+        boolean accelerated = acceleratedBuild != null;
         if (ds.useDatasetPrefetching()) {
             VectorAccess.forEach(floatVectors, PhysicalCoreExecutor.pool(), (node, vector) -> {
                 if (!deferFeatures) writeInlineStates(writers, contexts, node, vector);
-                builder.addGraphNode(node, vector);
+                if (!accelerated) builder.addGraphNode(node, vector);
             });
         } else {
             var vv = floatVectors.threadLocalSupplier();
@@ -195,9 +199,12 @@ final class CompressedOnDiskBuild implements IndexBuildStrategy {
                 IntStream.range(0, floatVectors.size()).parallel().forEach(node -> {
                     var vector = vv.get().getVector(node);
                     if (!deferFeatures) writeInlineStates(writers, contexts, node, vector);
-                    builder.addGraphNode(node, vector);
+                    if (!accelerated) builder.addGraphNode(node, vector);
                 });
             }).join();
+        }
+        if (accelerated) {
+            acceleratedBuild.join();
         }
         builder.cleanup();
 
