@@ -233,6 +233,146 @@ public class TestFlatVectorValues {
     }
 
     @Test
+    public void appendableRowsRoundTripAcrossGrowingPages() {
+        var random = new Random(9);
+        for (int dimension : new int[] {1, 7, 33}) {
+            int stride = (dimension + 15) / 16 * 16;
+            int count = 1000;
+            var list = vectors(random, count, dimension);
+            // First page of 2 rows, doubling to full pages of 32 rows; ordinals arrive shuffled.
+            var flat = FlatVectorValues.appendable(dimension, 2 * stride, 32 * stride);
+            var order = new ArrayList<Integer>();
+            for (int i = 0; i < count; i++) order.add(i);
+            java.util.Collections.shuffle(order, random);
+            long allocated = 0;
+            for (int ordinal : order) allocated += flat.add(ordinal, list.get(ordinal));
+            assertEquals(count, flat.size());
+            assertEquals(allocated, flat.ramBytesUsed());
+            // Spare rows stay below both the rows stored and one full page.
+            long spareFloats = flat.ramBytesUsed() / Float.BYTES - (long) count * stride;
+            assertTrue(spareFloats >= 0 && spareFloats < 32L * stride && spareFloats <= (long) count * stride);
+            var into = VectorizationProvider.getInstance().getVectorTypeSupport().createFloatVector(dimension);
+            for (int node = 0; node < count; node++) {
+                float[] expected = values(list.get(node));
+                assertArrayEquals(expected, values(flat.getVector(node)), 0f);
+                flat.getVectorInto(node, into, 0);
+                assertArrayEquals(expected, values(into), 0f);
+            }
+            for (var similarity : VectorSimilarityFunction.values()) {
+                var query = TestUtil.randomVector(random, dimension);
+                var sf = flat.scoreFunctionFor(query, similarity);
+                int[] nodes = new int[count];
+                for (int i = 0; i < count; i++) nodes[i] = order.get(i);
+                float[] scores = new float[count];
+                sf.similarityTo(nodes, count, scores);
+                for (int i = 0; i < count; i++) {
+                    float expected = similarity.compare(query, list.get(nodes[i]));
+                    assertEquals(similarity + " dim " + dimension, expected, sf.similarityTo(nodes[i]), TOLERANCE);
+                    assertEquals(sf.similarityTo(nodes[i]), scores[i], 0f);
+                }
+            }
+        }
+    }
+
+    @Test
+    public void appendableStoreRejectsMisuse() {
+        var random = new Random(10);
+        var flat = FlatVectorValues.appendable(8);
+        assertThrows(IllegalArgumentException.class, () -> flat.add(-1, TestUtil.randomVector(random, 8)));
+        assertThrows(IllegalArgumentException.class, () -> flat.add(0, TestUtil.randomVector(random, 9)));
+        var fixed = FlatVectorValues.copyOf(new ListRandomAccessVectorValues(vectors(random, 4, 8), 8));
+        assertThrows(UnsupportedOperationException.class, () -> fixed.add(4, TestUtil.randomVector(random, 8)));
+        assertEquals(0, FlatVectorValues.appendable(8).size());
+    }
+
+    /**
+     * Writers append rows and insert them into a graph while readers search it, as Cassandra's memtable index does:
+     * each writer takes the next ordinal, stores its row, then adds the node, which publishes the row. The finished
+     * graph must find the exact best matches as often as the same live build over a list of separate vectors.
+     */
+    @Test
+    public void liveInsertsAndSearchesOverAnAppendableStore() throws Exception {
+        var random = new Random(11);
+        int dimension = 32, count = 4000;
+        var list = vectors(random, count, dimension);
+        var queries = vectors(random, 100, dimension);
+        for (var similarity : VectorSimilarityFunction.values()) {
+            // Small pages, so inserts keep allocating pages while searches run.
+            var flat = FlatVectorValues.appendable(dimension, 4 * 32, 256 * 32);
+            int flatFound = liveBuildAndCount(flat, list, queries, similarity, (ordinal, v) -> flat.add(ordinal, v));
+            assertEquals(count, flat.size());
+            var separate = new ListRandomAccessVectorValues(list, dimension);
+            int listFound = liveBuildAndCount(separate, list, queries, similarity, (ordinal, v) -> 0L);
+            // Concurrent builds differ run to run; allow the spread of two such builds, not a systematic loss.
+            assertTrue(similarity + ": flat store found " + flatFound + ", separate vectors " + listFound,
+                    flatFound >= listFound - queries.size() / 20);
+        }
+    }
+
+    private interface RowSink {
+        long add(int ordinal, VectorFloat<?> vector);
+    }
+
+    /** Live-builds a graph over {@code vectors} with 4 writers and 2 searchers; returns queries whose best match is in the top 10. */
+    private static int liveBuildAndCount(RandomAccessVectorValues vectors, List<VectorFloat<?>> list, List<VectorFloat<?>> queries,
+                                         VectorSimilarityFunction similarity, RowSink sink) throws Exception {
+        int count = list.size(), dimension = vectors.dimension(), writers = 4, readers = 2;
+        var next = new java.util.concurrent.atomic.AtomicInteger();
+        var published = new java.util.concurrent.atomic.AtomicInteger();
+        var failure = new java.util.concurrent.atomic.AtomicReference<Throwable>();
+        try (var builder = new GraphIndexBuilder(BuildScoreProvider.randomAccessScoreProvider(vectors, similarity),
+                dimension, 16, 50, 1.2f, 1.2f, false)) {
+            var threads = new ArrayList<Thread>();
+            for (int w = 0; w < writers; w++) {
+                threads.add(new Thread(() -> {
+                    try {
+                        for (int ordinal; (ordinal = next.getAndIncrement()) < count; ) {
+                            sink.add(ordinal, list.get(ordinal));
+                            builder.addGraphNode(ordinal, list.get(ordinal));
+                            published.incrementAndGet();
+                        }
+                    } catch (Throwable t) {
+                        failure.compareAndSet(null, t);
+                    }
+                }));
+            }
+            for (int r = 0; r < readers; r++) {
+                int first = r;
+                threads.add(new Thread(() -> {
+                    try (var searcher = new GraphSearcher(builder.getGraph())) {
+                        for (int q = first; published.get() < count && failure.get() == null; q = (q + 1) % queries.size()) {
+                            var query = queries.get(q);
+                            var result = searcher.search(DefaultSearchScoreProvider.exact(query, similarity, vectors), 5, Bits.ALL);
+                            for (var ns : result.getNodes()) {
+                                // Every node a search can reach has its row stored.
+                                assertEquals(similarity.compare(query, list.get(ns.node)), ns.score, TOLERANCE);
+                            }
+                        }
+                    } catch (Throwable t) {
+                        failure.compareAndSet(null, t);
+                    }
+                }));
+            }
+            for (var t : threads) t.start();
+            for (var t : threads) t.join();
+            if (failure.get() != null) throw new AssertionError(similarity + " live build failed", failure.get());
+            builder.cleanup();
+            int found = 0;
+            try (var searcher = new GraphSearcher(builder.getGraph())) {
+                for (var query : queries) {
+                    int best = 0;
+                    for (int node = 1; node < count; node++) {
+                        if (similarity.compare(query, list.get(node)) > similarity.compare(query, list.get(best))) best = node;
+                    }
+                    var result = searcher.search(DefaultSearchScoreProvider.exact(query, similarity, vectors), 10, Bits.ALL);
+                    for (var ns : result.getNodes()) if (ns.node == best) found++;
+                }
+            }
+            return found;
+        }
+    }
+
+    @Test
     public void rejectsMismatchedQueries() {
         var random = new Random(4);
         var flat = FlatVectorValues.copyOf(new ListRandomAccessVectorValues(vectors(random, 4, 8), 8));

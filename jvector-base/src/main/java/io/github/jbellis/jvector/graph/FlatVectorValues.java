@@ -23,83 +23,199 @@ import io.github.jbellis.jvector.vector.VectorizationProvider;
 import io.github.jbellis.jvector.vector.types.VectorFloat;
 import io.github.jbellis.jvector.vector.types.VectorTypeSupport;
 
+import java.util.concurrent.atomic.AtomicInteger;
+
 /**
  * Full-precision vectors stored back to back in a few large pages, so scoring reads a row in place: there is no
  * per-vector object to reach first, and neighboring rows share pages instead of being scattered across the heap.
  * <p>
- * Rows are padded to a multiple of 16 floats (64 bytes) and each page holds a power-of-two number of rows, so a
- * row's page and offset come from a shift and a mask. Every {@link VectorSimilarityFunction} is scored with the
- * existing offset-based kernels ({@link VectorUtil#dotProduct(VectorFloat, int, VectorFloat, int, int)},
+ * Rows are padded to a multiple of 16 floats (64 bytes). Pages hold power-of-two row counts that double from a
+ * first page up to a maximum and then stay at the maximum, so a row's page and offset come from a few bit
+ * operations, and a growing store never holds more spare rows than it has rows, nor more than one page. Every
+ * {@link VectorSimilarityFunction} is scored with the existing offset-based kernels
+ * ({@link VectorUtil#dotProduct(VectorFloat, int, VectorFloat, int, int)},
  * {@link VectorUtil#squareL2Distance(VectorFloat, int, VectorFloat, int, int)} and
  * {@link VectorUtil#cosine(VectorFloat, int, VectorFloat, int, int)}), with the same score transforms as
- * {@link VectorSimilarityFunction#compare}.
+ * {@link VectorSimilarityFunction#compare}; batches use the row-gather kernels, one call per page present.
  * <p>
- * Instances are immutable after {@link #copyOf} and safe for concurrent readers. {@link #getVector} returns a
+ * A store is either a fixed copy ({@link #copyOf}) or appendable ({@link #appendable}). An appendable store takes
+ * rows with {@link #add} from any number of threads, each ordinal once, in any order; readers never lock. A row is
+ * visible to another thread once its writer publishes the ordinal through a happens-before edge, as adding the node
+ * to a concurrent graph does, so a graph can be built and searched while rows arrive. {@link #getVector} returns a
  * fresh copy and is meant for occasional access; hot paths should use {@link #scoreFunctionFor}.
  */
 public final class FlatVectorValues implements RandomAccessVectorValues {
     private static final VectorTypeSupport vts = VectorizationProvider.getInstance().getVectorTypeSupport();
     /**
-     * Floats per page by default: 4 GiB, so most stores are one page and a batch of rows is one kernel call. Larger
-     * stores split a batch by page.
+     * Floats per page of a fixed copy by default: 4 GiB, so most copies are one page and a batch of rows is one
+     * kernel call. Larger copies split a batch by page.
      */
     static final int DEFAULT_PAGE_FLOATS = 1 << 30;
+    /**
+     * Floats per full page of an appendable store by default: 256 MiB. Larger pages mean fewer kernel calls per
+     * batch; smaller ones bound the spare rows of a store that stops growing.
+     */
+    public static final int DEFAULT_APPENDABLE_PAGE_FLOATS = 1 << 26;
+    /** Floats in the first page of an appendable store by default: 1 MiB, so a small store stays small. */
+    static final int DEFAULT_FIRST_PAGE_FLOATS = 1 << 18;
     private static final int ROW_ALIGNMENT_FLOATS = 16;
 
-    private final int size;
     private final int dimension;
     private final int stride;
-    private final int pageShift;
-    private final int pageMask;
-    private final VectorFloat<?>[] pages;
+    /** log2 of the rows in the first page and in a full page. */
+    private final int firstShift, fullShift;
+    private final int fullMask;
+    /** Whether {@link #add} is allowed. */
+    private final boolean appendable;
+    /** Every page up to the highest ordinal added; replaced, never mutated in place, when it grows. */
+    private volatile VectorFloat<?>[] pages;
+    private final AtomicInteger rowCount = new AtomicInteger();
+    private volatile long allocatedFloats;
 
-    private FlatVectorValues(int size, int dimension, int maxPageFloats) {
+    private FlatVectorValues(int dimension, int firstPageFloats, int fullPageFloats, boolean appendable) {
         if (dimension <= 0) throw new IllegalArgumentException("dimension must be positive: " + dimension);
-        this.size = size;
         this.dimension = dimension;
         this.stride = (dimension + ROW_ALIGNMENT_FLOATS - 1) / ROW_ALIGNMENT_FLOATS * ROW_ALIGNMENT_FLOATS;
-        int rowsPerPage = Integer.highestOneBit(Math.max(1, maxPageFloats / stride));
-        this.pageShift = Integer.numberOfTrailingZeros(rowsPerPage);
-        this.pageMask = rowsPerPage - 1;
-        int pageCount = (int) (((long) size + rowsPerPage - 1) / rowsPerPage);
-        this.pages = new VectorFloat<?>[pageCount];
-        for (int p = 0; p < pageCount; p++) {
-            int rows = Math.min(rowsPerPage, size - p * rowsPerPage);
-            pages[p] = vts.createFloatVector(rows * stride);
-        }
+        int fullRows = rowsFor(fullPageFloats, stride);
+        int firstRows = Math.min(rowsFor(firstPageFloats, stride), fullRows);
+        this.firstShift = Integer.numberOfTrailingZeros(firstRows);
+        this.fullShift = Integer.numberOfTrailingZeros(fullRows);
+        this.fullMask = fullRows - 1;
+        this.appendable = appendable;
+        this.pages = new VectorFloat<?>[0];
     }
 
-    /** Copies every vector of {@code source} into a new flat store. */
+    private static int rowsFor(int pageFloats, int stride) {
+        if (pageFloats <= 0) throw new IllegalArgumentException("page size must be positive: " + pageFloats);
+        return Integer.highestOneBit(Math.max(1, pageFloats / stride));
+    }
+
+    /** Copies every vector of {@code source} into a new, fixed flat store. */
     public static FlatVectorValues copyOf(RandomAccessVectorValues source) {
         return copyOf(source, DEFAULT_PAGE_FLOATS);
     }
 
     static FlatVectorValues copyOf(RandomAccessVectorValues source, int maxPageFloats) {
-        var flat = new FlatVectorValues(source.size(), source.dimension(), maxPageFloats);
-        for (int node = 0; node < flat.size; node++) {
+        var flat = new FlatVectorValues(source.dimension(), maxPageFloats, maxPageFloats, false);
+        int size = source.size();
+        if (size > 0) flat.allocateThrough(flat.pageOf(size - 1), size);
+        var pages = flat.pages;
+        for (int node = 0; node < size; node++) {
             var v = source.getVector(node);
             if (v == null) throw new IllegalArgumentException("Missing vector for node " + node);
-            flat.pages[node >>> flat.pageShift].copyFrom(v, 0, flat.offset(node), flat.dimension);
+            pages[flat.pageOf(node)].copyFrom(v, 0, flat.offset(node), flat.dimension);
         }
+        flat.rowCount.set(size);
         return flat;
     }
 
+    /** An empty store that takes rows with {@link #add}, with default page sizes. */
+    public static FlatVectorValues appendable(int dimension) {
+        return appendable(dimension, DEFAULT_FIRST_PAGE_FLOATS, DEFAULT_APPENDABLE_PAGE_FLOATS);
+    }
+
+    /**
+     * An empty store that takes rows with {@link #add}. Pages start at about {@code firstPageFloats} floats and
+     * double up to about {@code fullPageFloats}; both are rounded down to a power-of-two row count of at least one.
+     */
+    public static FlatVectorValues appendable(int dimension, int firstPageFloats, int fullPageFloats) {
+        return new FlatVectorValues(dimension, firstPageFloats, fullPageFloats, true);
+    }
+
+    /**
+     * Stores {@code vector} as row {@code ordinal}. Safe to call from many threads at once, for distinct ordinals
+     * in any order; each ordinal must be added once, before it is published to readers.
+     *
+     * @return the bytes of page memory this call allocated, usually zero
+     */
+    public long add(int ordinal, VectorFloat<?> vector) {
+        if (!appendable) throw new UnsupportedOperationException("This flat store is a fixed copy");
+        if (ordinal < 0) throw new IllegalArgumentException("ordinal must be nonnegative: " + ordinal);
+        if (vector.length() != dimension) {
+            throw new IllegalArgumentException("vector dimension " + vector.length() + " != " + dimension);
+        }
+        int page = pageOf(ordinal);
+        var current = pages;
+        long allocated = 0;
+        if (page >= current.length) {
+            allocated = allocateThrough(page, -1);
+            current = pages;
+        }
+        current[page].copyFrom(vector, 0, offset(ordinal), dimension);
+        rowCount.incrementAndGet();
+        return allocated;
+    }
+
+    /**
+     * Allocates every missing page up to {@code lastPage}, then publishes the larger directory. The last page of a
+     * fixed copy holds only {@code size}'s rows; appendable pages are always full.
+     *
+     * @return the bytes allocated
+     */
+    private synchronized long allocateThrough(int lastPage, int size) {
+        var current = pages;
+        if (lastPage < current.length) return 0;
+        var grown = java.util.Arrays.copyOf(current, lastPage + 1);
+        long floats = 0;
+        for (int p = current.length; p <= lastPage; p++) {
+            int rows = rowsInPage(p);
+            if (size >= 0 && p == lastPage) rows = size - firstRowOf(p);
+            grown[p] = vts.createFloatVector(rows * stride);
+            floats += (long) rows * stride;
+        }
+        allocatedFloats += floats;
+        pages = grown;
+        return floats * Float.BYTES;
+    }
+
+    /** Pages 0..k hold the first page's rows, then doubling counts up to a full page, then full pages. */
+    private int pageOf(int node) {
+        if (node < (1 << firstShift)) return 0;
+        if (node >>> fullShift != 0) return (node >>> fullShift) + fullShift - firstShift;
+        return 31 - Integer.numberOfLeadingZeros(node) - firstShift + 1;
+    }
+
+    private int rowOf(int node) {
+        if (node < (1 << firstShift)) return node;
+        if (node >>> fullShift != 0) return node & fullMask;
+        return node - Integer.highestOneBit(node);
+    }
+
+    private int rowsInPage(int page) {
+        int doublings = fullShift - firstShift;
+        if (page == 0) return 1 << firstShift;
+        return page <= doublings ? 1 << (firstShift + page - 1) : 1 << fullShift;
+    }
+
+    private int firstRowOf(int page) {
+        int doublings = fullShift - firstShift;
+        if (page == 0) return 0;
+        if (page <= doublings) return 1 << (firstShift + page - 1);
+        return (page - doublings) << fullShift;
+    }
+
     private int offset(int node) {
-        return (node & pageMask) * stride;
+        return rowOf(node) * stride;
     }
 
     private VectorFloat<?> page(int node) {
-        return pages[node >>> pageShift];
+        return pages[pageOf(node)];
     }
 
+    /** The rows added so far; for a fixed copy, all of them. */
     @Override
     public int size() {
-        return size;
+        return rowCount.get();
     }
 
     @Override
     public int dimension() {
         return dimension;
+    }
+
+    /** Bytes of page memory allocated, including rows not yet added. */
+    public long ramBytesUsed() {
+        return allocatedFloats * Float.BYTES;
     }
 
     /** Returns a copy of the row; prefer {@link #scoreFunctionFor} or {@link #getVectorInto} on hot paths. */
@@ -182,26 +298,31 @@ public final class FlatVectorValues implements RandomAccessVectorValues {
     }
 
     /**
-     * Batch scoring shared by the score functions. With one page, node ids are the page's rows and the batch is one
-     * kernel call. Otherwise the nodes are split by page, one call per page present, using buffers in {@code scratch}.
+     * Batch scoring shared by the score functions: one kernel call per page present in the batch, using buffers in
+     * {@code scratch} to split the batch when there is more than one page.
      */
     private void scoreMany(VectorSimilarityFunction similarity, VectorFloat<?> query, int[] nodes, int count,
                            float[] scores, BatchScratch scratch) {
+        var pages = this.pages;
         if (pages.length == 1) {
+            // Every node is in page 0, where a node's row is the node itself.
             scoreRows(similarity, query, pages[0], nodes, count, scores);
             return;
         }
+        if (count == 0) return;
+        // The store may have grown past one page after the caller looked; a one-off buffer covers that race.
+        if (scratch == null) scratch = new BatchScratch();
         scratch.ensure(count);
         int pending = count;
         for (int i = 0; i < count; i++) scratch.pending[i] = i;
         while (pending > 0) {
-            int page = nodes[scratch.pending[0]] >>> pageShift;
+            int page = pageOf(nodes[scratch.pending[0]]);
             int n = 0, kept = 0;
             for (int j = 0; j < pending; j++) {
                 int position = scratch.pending[j];
                 int node = nodes[position];
-                if (node >>> pageShift == page) {
-                    scratch.rows[n] = node & pageMask;
+                if (pageOf(node) == page) {
+                    scratch.rows[n] = rowOf(node);
                     scratch.positions[n++] = position;
                 } else {
                     scratch.pending[kept++] = position;
@@ -213,7 +334,7 @@ public final class FlatVectorValues implements RandomAccessVectorValues {
         }
     }
 
-    /** Buffers for splitting a batch across pages; allocated only for stores of more than one page. */
+    /** Buffers for splitting a batch across pages; they stay empty while a store has one page. */
     private static final class BatchScratch {
         int[] pending = new int[0];
         int[] rows = new int[0];
@@ -321,6 +442,6 @@ public final class FlatVectorValues implements RandomAccessVectorValues {
 
     @Override
     public String toString() {
-        return String.format("FlatVectorValues(size=%d, dimension=%d, stride=%d, pages=%d)", size, dimension, stride, pages.length);
+        return String.format("FlatVectorValues(size=%d, dimension=%d, stride=%d, pages=%d)", size(), dimension, stride, pages.length);
     }
 }
