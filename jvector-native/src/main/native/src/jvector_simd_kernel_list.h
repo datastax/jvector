@@ -65,6 +65,10 @@
     KERNEL_ENTRY(void, cosine_rows_f32, (const float *query, const float *base, size_t stride, const int *rows, int count, size_t length, float *out), (query, base, stride, rows, count, length, out)) \
     KERNEL_ENTRY(void, dot_product_rows_f32, (const float *query, const float *base, size_t stride, const int *rows, int count, size_t length, float *out), (query, base, stride, rows, count, length, out)) \
     KERNEL_ENTRY(void, euclidean_rows_f32, (const float *query, const float *base, size_t stride, const int *rows, int count, size_t length, float *out), (query, base, stride, rows, count, length, out)) \
+    /* As the row kernels, for rows spread over pages: row i is row_in_page[i] of the page at address pages[page_of[i]]. */ \
+    KERNEL_ENTRY(void, cosine_paged_rows_f32, (const float *query, const int64_t *pages, const int *page_of, const int *row_in_page, size_t stride, int count, size_t length, float *out), (query, pages, page_of, row_in_page, stride, count, length, out)) \
+    KERNEL_ENTRY(void, dot_product_paged_rows_f32, (const float *query, const int64_t *pages, const int *page_of, const int *row_in_page, size_t stride, int count, size_t length, float *out), (query, pages, page_of, row_in_page, stride, count, length, out)) \
+    KERNEL_ENTRY(void, euclidean_paged_rows_f32, (const float *query, const int64_t *pages, const int *page_of, const int *row_in_page, size_t stride, int count, size_t length, float *out), (query, pages, page_of, row_in_page, stride, count, length, out)) \
     /* Element-wise arithmetic and reductions */ \
     KERNEL_ENTRY(void, add_in_place_f32, (float *v1, const float *v2, size_t length), (v1, v2, length)) \
     KERNEL_ENTRY(void, add_scalar_in_place_f32, (float *v1, float value, size_t length), (v1, value, length)) \

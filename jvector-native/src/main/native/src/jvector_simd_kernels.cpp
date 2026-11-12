@@ -405,50 +405,55 @@ HWY_FLATTEN float euclidean_f32(
     return L2SquareDistance(a, aoffset, b, boffset, length);
 }
 
-// Score a query against gathered rows of one contiguous base. Each score reuses the single-pair kernel, so it is
-// bit-identical to a separate call; the gain is one downcall per batch and prefetching rows ahead of their scoring.
+// Score a query against gathered rows. Each score reuses the single-pair kernel, so it is bit-identical to a
+// separate call; the gain is one downcall per batch and prefetching rows ahead of their scoring. row_at(i) gives
+// the start of the i-th requested row, in one contiguous base or in one of several pages.
 // Rows are prefetched four ahead, and only their first 16 cache lines (1 KiB): the hardware prefetcher streams the
 // rest of a row once its start is read. Measured on IBM 1M (384 dimensions), this beat one row ahead, eight ahead
 // (DiskANN's default lookahead with 16 lines), and prefetching every row of the batch first.
-template <typename Distance>
-HWY_INLINE void score_rows_f32(const float *HWY_RESTRICT query, const float *HWY_RESTRICT base, size_t stride,
-                               const int *HWY_RESTRICT rows, int count, size_t length, float *HWY_RESTRICT out,
-                               Distance distance)
+template <typename RowAt, typename Distance>
+HWY_INLINE void score_rows_f32(const float *HWY_RESTRICT query, RowAt row_at, int count, size_t length,
+                               float *HWY_RESTRICT out, Distance distance)
 {
     constexpr size_t kFloatsPerLine = 64 / sizeof(float);
     constexpr int kRowsAhead = 4;
     const size_t prefetch_floats = std::min(length, size_t{16} * kFloatsPerLine);
     auto prefetch = [&](int i) {
-        const float *row = base + static_cast<size_t>(rows[i]) * stride;
+        const float *row = row_at(i);
         for (size_t f = 0; f < prefetch_floats; f += kFloatsPerLine) hwy::Prefetch(row + f);
     };
     for (int i = 0; i < count && i < kRowsAhead; ++i) prefetch(i);
     for (int i = 0; i < count; ++i) {
         if (i + kRowsAhead < count) prefetch(i + kRowsAhead);
-        out[i] = distance(query, base, static_cast<size_t>(rows[i]) * stride, length);
+        out[i] = distance(query, row_at(i), length);
     }
 }
 
-HWY_FLATTEN void cosine_rows_f32(const float *query, const float *base, size_t stride, const int *rows,
-                                 int count, size_t length, float *out)
-{
-    score_rows_f32(query, base, stride, rows, count, length, out,
-                   [](const float *q, const float *b, size_t offset, size_t n) { return CosineDistance(q, 0, b, offset, n); });
+namespace {
+inline float cosine_at(const float *q, const float *row, size_t n) { return CosineDistance(q, 0, row, 0, n); }
+inline float dot_at(const float *q, const float *row, size_t n) { return DotProduct(q, 0, row, 0, n); }
+inline float l2_at(const float *q, const float *row, size_t n) { return L2SquareDistance(q, 0, row, 0, n); }
 }
 
-HWY_FLATTEN void dot_product_rows_f32(const float *query, const float *base, size_t stride, const int *rows,
-                                      int count, size_t length, float *out)
-{
-    score_rows_f32(query, base, stride, rows, count, length, out,
-                   [](const float *q, const float *b, size_t offset, size_t n) { return DotProduct(q, 0, b, offset, n); });
+#define JVECTOR_ROWS_KERNELS(name, distance)                                                                         \
+HWY_FLATTEN void name##_rows_f32(const float *query, const float *base, size_t stride, const int *rows,             \
+                                 int count, size_t length, float *out)                                               \
+{                                                                                                                    \
+    score_rows_f32(query, [&](int i) { return base + static_cast<size_t>(rows[i]) * stride; }, count, length, out,   \
+                   distance);                                                                                        \
+}                                                                                                                    \
+HWY_FLATTEN void name##_paged_rows_f32(const float *query, const int64_t *pages, const int *page_of,                \
+                                       const int *row_in_page, size_t stride, int count, size_t length, float *out)  \
+{                                                                                                                    \
+    score_rows_f32(query, [&](int i) {                                                                               \
+        return reinterpret_cast<const float *>(pages[page_of[i]]) + static_cast<size_t>(row_in_page[i]) * stride;    \
+    }, count, length, out, distance);                                                                                \
 }
 
-HWY_FLATTEN void euclidean_rows_f32(const float *query, const float *base, size_t stride, const int *rows,
-                                    int count, size_t length, float *out)
-{
-    score_rows_f32(query, base, stride, rows, count, length, out,
-                   [](const float *q, const float *b, size_t offset, size_t n) { return L2SquareDistance(q, 0, b, offset, n); });
-}
+JVECTOR_ROWS_KERNELS(cosine, cosine_at)
+JVECTOR_ROWS_KERNELS(dot_product, dot_at)
+JVECTOR_ROWS_KERNELS(euclidean, l2_at)
+#undef JVECTOR_ROWS_KERNELS
 
 // Keep the centroid scan native so even tiny PQ subvectors need only one downcall.
 // Reuse exactly the single-distance kernel and strict comparison: neither the

@@ -274,6 +274,37 @@ public interface VectorUtilSupport {
    * Rejects a row-scoring call that would read or write outside its arrays. Implementations that score rows
    * themselves must perform the same checks.
    */
+  /**
+   * The handle the paged-row methods need to score rows spread over {@code pages} (storage vectors from
+   * {@link io.github.jbellis.jvector.vector.types.VectorTypeSupport#createStorageVector}) in one call, or null when
+   * this backend cannot, in which case callers score each page separately. The pages must not change for as long as
+   * the handle is used.
+   */
+  default Object pagedRowTable(VectorFloat<?>[] pages) {
+    return null;
+  }
+
+  /**
+   * As {@link #dotProductRows}, for row {@code rowInPage[i]} of page {@code pageOf[i]}; {@code table} is a non-null
+   * {@link #pagedRowTable} of {@code pages}.
+   */
+  default void dotProductPagedRows(VectorFloat<?> query, VectorFloat<?>[] pages, Object table, int[] pageOf,
+                                   int[] rowInPage, int stride, int count, int length, float[] out) {
+    throw new UnsupportedOperationException("paged rows are unavailable on this backend");
+  }
+
+  /** As {@link #dotProductPagedRows}, with the {@link #cosineRows} kernel. */
+  default void cosinePagedRows(VectorFloat<?> query, VectorFloat<?>[] pages, Object table, int[] pageOf,
+                               int[] rowInPage, int stride, int count, int length, float[] out) {
+    throw new UnsupportedOperationException("paged rows are unavailable on this backend");
+  }
+
+  /** As {@link #dotProductPagedRows}, with the {@link #squareDistanceRows} kernel. */
+  default void squareDistancePagedRows(VectorFloat<?> query, VectorFloat<?>[] pages, Object table, int[] pageOf,
+                                       int[] rowInPage, int stride, int count, int length, float[] out) {
+    throw new UnsupportedOperationException("paged rows are unavailable on this backend");
+  }
+
   static void checkRows(VectorFloat<?> query, VectorFloat<?> base, int stride, int[] rows, int count, int length, float[] out) {
     if (count < 0 || length < 0 || stride < 0) {
       throw new IllegalArgumentException("count, length and stride must be nonnegative");

@@ -49,13 +49,87 @@ final class NativeRowKernels {
     private static final MethodHandle DOT_PRODUCT = bind("dot_product_rows_f32");
     private static final MethodHandle COSINE = bind("cosine_rows_f32");
     private static final MethodHandle EUCLIDEAN = bind("euclidean_rows_f32");
+    private static final FunctionDescriptor PAGED_DESCRIPTOR =
+            FunctionDescriptor.ofVoid(ADDRESS, ADDRESS, ADDRESS, ADDRESS, JAVA_LONG, JAVA_INT, JAVA_LONG, ADDRESS);
+    private static final MethodHandle DOT_PRODUCT_PAGED = bind("dot_product_paged_rows_f32", PAGED_DESCRIPTOR);
+    private static final MethodHandle COSINE_PAGED = bind("cosine_paged_rows_f32", PAGED_DESCRIPTOR);
+    private static final MethodHandle EUCLIDEAN_PAGED = bind("euclidean_paged_rows_f32", PAGED_DESCRIPTOR);
 
     private NativeRowKernels() {}
 
     private static MethodHandle bind(String symbol) {
+        return bind(symbol, DESCRIPTOR);
+    }
+
+    private static MethodHandle bind(String symbol, FunctionDescriptor descriptor) {
         return SymbolLookup.loaderLookup().find(symbol)
-                .map(address -> Linker.nativeLinker().downcallHandle(address, DESCRIPTOR, Linker.Option.critical(true)))
+                .map(address -> Linker.nativeLinker().downcallHandle(address, descriptor, Linker.Option.critical(true)))
                 .orElse(null);
+    }
+
+    /**
+     * The native addresses of {@code pages}, for the paged kernels, or null when a paged kernel is missing or a page
+     * is not native memory (a heap page can move, so its address cannot be kept).
+     */
+    static long[] pageTable(VectorFloat<?>[] pages) {
+        if (DOT_PRODUCT_PAGED == null || COSINE_PAGED == null || EUCLIDEAN_PAGED == null) return null;
+        long[] addresses = new long[pages.length];
+        for (int p = 0; p < pages.length; p++) {
+            if (!(pages[p] instanceof MemorySegmentVectorFloat page)) return null;
+            var segment = page.get();
+            if (!segment.isNative()) return null;
+            addresses[p] = segment.address();
+        }
+        return addresses;
+    }
+
+    /**
+     * Scores {@code query} against row {@code rowInPage[i]} of page {@code pageOf[i]} for each {@code i < count}, in
+     * one call per bounded chunk. {@code table} must be {@code pageTable(pages)}. Every page index and row range is
+     * checked against {@code pages} before any call, and the pages stay reachable until the calls return.
+     */
+    static void scorePaged(VectorSimilarityKernel kernel, VectorFloat<?> query, VectorFloat<?>[] pages, long[] table,
+                           int[] pageOf, int[] rowInPage, int stride, int count, int length, float[] out) {
+        var handle = kernel == VectorSimilarityKernel.DOT_PRODUCT ? DOT_PRODUCT_PAGED
+                : kernel == VectorSimilarityKernel.COSINE ? COSINE_PAGED : EUCLIDEAN_PAGED;
+        if (table.length != pages.length) throw new IllegalArgumentException("page table does not match the pages");
+        if (query.length() < length || stride < length || length < 0) throw new IllegalArgumentException("bad row shape");
+        java.util.Objects.checkFromIndexSize(0, count, Math.min(pageOf.length, Math.min(rowInPage.length, out.length)));
+        for (int i = 0; i < count; i++) {
+            int page = pageOf[i];
+            java.util.Objects.checkIndex(page, pages.length);
+            long end = (long) rowInPage[i] * stride + length;
+            if (rowInPage[i] < 0 || end > pages[page].length()) throw new IndexOutOfBoundsException("row outside its page");
+        }
+        var querySegment = ((MemorySegmentVectorFloat) query).get();
+        var tableSegment = MemorySegment.ofArray(table);
+        int rowsPerCall = Math.max(1, MAX_CRITICAL_FLOATS / Math.max(1, length));
+        try {
+            for (int start = 0; start < count; start += rowsPerCall) {
+                int n = Math.min(rowsPerCall, count - start);
+                invokePaged(handle, querySegment, tableSegment,
+                        MemorySegment.ofArray(pageOf).asSlice((long) start * Integer.BYTES),
+                        MemorySegment.ofArray(rowInPage).asSlice((long) start * Integer.BYTES),
+                        stride, n, length, MemorySegment.ofArray(out).asSlice((long) start * Float.BYTES));
+            }
+        } finally {
+            // The table holds raw addresses; keep the pages, and so their memory, alive until the calls finish.
+            java.lang.ref.Reference.reachabilityFence(pages);
+        }
+    }
+
+    /** Which similarity kernel a paged call uses. */
+    enum VectorSimilarityKernel { DOT_PRODUCT, COSINE, EUCLIDEAN }
+
+    private static void invokePaged(MethodHandle kernel, MemorySegment query, MemorySegment pages, MemorySegment pageOf,
+                                    MemorySegment rowInPage, int stride, int count, int length, MemorySegment out) {
+        try {
+            kernel.invokeExact(query, pages, pageOf, rowInPage, (long) stride, count, (long) length, out);
+        } catch (RuntimeException | Error failure) {
+            throw failure;
+        } catch (Throwable failure) {
+            throw new AssertionError("Unexpected paged row-scoring invocation failure", failure);
+        }
     }
 
     /** Scores with the native dot-product kernel; returns false, scoring nothing, if the library lacks it. */

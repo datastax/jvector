@@ -45,6 +45,18 @@ public class MemorySegmentVectorProvider implements VectorTypeSupport
         return new MemorySegmentVectorFloat(length);
     }
 
+    /**
+     * Native memory, 64-byte aligned, so native kernels can address any number of storage vectors in one call. The
+     * memory belongs to an automatic arena: it is freed only once the vector is unreachable, so it can never be
+     * freed while anything that can still read it holds the vector.
+     */
+    @Override
+    public VectorFloat<?> createStorageVector(int length)
+    {
+        if (length < 0) throw new IllegalArgumentException("negative length " + length);
+        return new MemorySegmentVectorFloat(java.lang.foreign.Arena.ofAuto().allocate((long) length * Float.BYTES, 64));
+    }
+
     @Override
     public VectorFloat<?> readFloatVector(RandomAccessReader r, int size) throws IOException
     {

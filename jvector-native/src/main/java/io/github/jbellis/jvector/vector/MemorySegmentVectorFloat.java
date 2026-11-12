@@ -60,6 +60,18 @@ final public class MemorySegmentVectorFloat implements VectorFloat<MemorySegment
         this.segment = java.util.Objects.requireNonNull(data);
     }
 
+    /** A vector over native memory, for storage vectors; it has no backing array. */
+    MemorySegmentVectorFloat(MemorySegment nativeMemory) {
+        if (!nativeMemory.isNative()) throw new IllegalArgumentException("expected native memory");
+        this.segment = nativeMemory;
+    }
+
+    /** True when the elements are in a Java float array, so {@link #array()} is available. */
+    private boolean onHeap() {
+        Object current = segment;
+        return current instanceof float[] || ((MemorySegment) current).heapBase().isPresent();
+    }
+
     @Override
     public long ramBytesUsed()
     {
@@ -160,7 +172,13 @@ final public class MemorySegmentVectorFloat implements VectorFloat<MemorySegment
     @Override
     public void copyFrom(VectorFloat<?> src, int srcOffset, int destOffset, int length)
     {
-        if (src instanceof FloatArray csrc) {
+        if (src instanceof MemorySegmentVectorFloat msrc && !(msrc.onHeap() && onHeap())) {
+            // Native memory on either side: copy segment to segment.
+            Objects.checkFromIndexSize(srcOffset, length, src.length());
+            Objects.checkFromIndexSize(destOffset, length, length());
+            MemorySegment.copy(msrc.get(), (long) srcOffset * Float.BYTES, get(), (long) destOffset * Float.BYTES,
+                    (long) length * Float.BYTES);
+        } else if (src instanceof FloatArray csrc && onHeap()) {
             System.arraycopy(csrc.array(), srcOffset, array(), destOffset, length);
         } else {
             Objects.checkFromIndexSize(srcOffset, length, src.length());
@@ -205,6 +223,8 @@ final public class MemorySegmentVectorFloat implements VectorFloat<MemorySegment
     @Override
     public float[] array() {
         Object current = segment;
-        return current instanceof float[] data ? data : (float[]) ((MemorySegment) current).heapBase().get();
+        if (current instanceof float[] data) return data;
+        return (float[]) ((MemorySegment) current).heapBase()
+                .orElseThrow(() -> new IllegalStateException("A native storage vector has no backing array"));
     }
 }

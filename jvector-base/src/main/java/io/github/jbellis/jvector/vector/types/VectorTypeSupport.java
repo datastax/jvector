@@ -38,6 +38,17 @@ public interface VectorTypeSupport {
     VectorFloat<?> createFloatVector(int length);
 
     /**
+     * Create a zero-filled vector for long-lived bulk storage, such as the pages of a flat vector store. A provider
+     * may place it outside the Java heap so its native kernels can address many such vectors in one call; such a
+     * vector supports element access and copies but not {@code FloatArray#array()}.
+     * @param length the length of the vector to create.
+     * @return the created vector.
+     */
+    default VectorFloat<?> createStorageVector(int length) {
+        return createFloatVector(length);
+    }
+
+    /**
      * Read a vector from the given RandomAccessReader.
      * @param r the reader to read the vector from.
      * @param size the size of the vector to read.

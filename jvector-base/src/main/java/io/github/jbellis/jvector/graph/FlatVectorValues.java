@@ -19,6 +19,7 @@ package io.github.jbellis.jvector.graph;
 import io.github.jbellis.jvector.graph.similarity.ScoreFunction;
 import io.github.jbellis.jvector.vector.VectorSimilarityFunction;
 import io.github.jbellis.jvector.vector.VectorUtil;
+import io.github.jbellis.jvector.vector.VectorUtilSupport;
 import io.github.jbellis.jvector.vector.VectorizationProvider;
 import io.github.jbellis.jvector.vector.types.VectorFloat;
 import io.github.jbellis.jvector.vector.types.VectorTypeSupport;
@@ -36,7 +37,10 @@ import java.util.concurrent.atomic.AtomicInteger;
  * ({@link VectorUtil#dotProduct(VectorFloat, int, VectorFloat, int, int)},
  * {@link VectorUtil#squareL2Distance(VectorFloat, int, VectorFloat, int, int)} and
  * {@link VectorUtil#cosine(VectorFloat, int, VectorFloat, int, int)}), with the same score transforms as
- * {@link VectorSimilarityFunction#compare}; batches use the row-gather kernels, one call per page present.
+ * {@link VectorSimilarityFunction#compare}; batches use the row-gather kernels. Pages are storage vectors
+ * ({@link VectorTypeSupport#createStorageVector}), which a native backend places outside the Java heap, so a batch
+ * whose rows span pages is still one kernel call through a table of the pages' addresses; other backends score a
+ * batch one page at a time.
  * <p>
  * A store is either a fixed copy ({@link #copyOf}) or appendable ({@link #appendable}). An appendable store takes
  * rows with {@link #add} from any number of threads, each ordinal once, in any order; readers never lock. A row is
@@ -46,16 +50,17 @@ import java.util.concurrent.atomic.AtomicInteger;
  */
 public final class FlatVectorValues implements BatchedVectorValues {
     private static final VectorTypeSupport vts = VectorizationProvider.getInstance().getVectorTypeSupport();
+    private static final VectorUtilSupport vus = VectorizationProvider.getInstance().getVectorUtilSupport();
     /**
      * Floats per page of a fixed copy by default: 4 GiB, so most copies are one page and a batch of rows is one
      * kernel call. Larger copies split a batch by page.
      */
     static final int DEFAULT_PAGE_FLOATS = 1 << 30;
     /**
-     * Floats per full page of an appendable store by default: 256 MiB. Larger pages mean fewer kernel calls per
-     * batch; smaller ones bound the spare rows of a store that stops growing.
+     * Floats per full page of an appendable store by default: 64 MiB. A batch spanning pages is one kernel call on a
+     * native backend, so the size only bounds the spare rows of a store that stops growing.
      */
-    public static final int DEFAULT_APPENDABLE_PAGE_FLOATS = 1 << 26;
+    public static final int DEFAULT_APPENDABLE_PAGE_FLOATS = 1 << 24;
     /** Floats in the first page of an appendable store by default: 1 MiB, so a small store stays small. */
     static final int DEFAULT_FIRST_PAGE_FLOATS = 1 << 18;
     private static final int ROW_ALIGNMENT_FLOATS = 16;
@@ -69,6 +74,19 @@ public final class FlatVectorValues implements BatchedVectorValues {
     private final boolean appendable;
     /** Every page up to the highest ordinal added; replaced, never mutated in place, when it grows. */
     private volatile VectorFloat<?>[] pages;
+    /** The pages with the backend's handle for scoring rows across them in one call; published after pages. */
+    private volatile PagedRows pagedRows;
+
+    /** A set of pages and the {@link VectorUtilSupport#pagedRowTable} handle for exactly those pages. */
+    private static final class PagedRows {
+        final VectorFloat<?>[] pages;
+        final Object table;
+
+        PagedRows(VectorFloat<?>[] pages, Object table) {
+            this.pages = pages;
+            this.table = table;
+        }
+    }
     private final AtomicInteger rowCount = new AtomicInteger();
     private volatile long allocatedFloats;
 
@@ -160,11 +178,13 @@ public final class FlatVectorValues implements BatchedVectorValues {
         for (int p = current.length; p <= lastPage; p++) {
             int rows = rowsInPage(p);
             if (size >= 0 && p == lastPage) rows = size - firstRowOf(p);
-            grown[p] = vts.createFloatVector(rows * stride);
+            grown[p] = vts.createStorageVector(rows * stride);
             floats += (long) rows * stride;
         }
         allocatedFloats += floats;
         pages = grown;
+        Object table = grown.length > 1 ? vus.pagedRowTable(grown) : null;
+        pagedRows = table == null ? null : new PagedRows(grown, table);
         return floats * Float.BYTES;
     }
 
@@ -345,6 +365,24 @@ public final class FlatVectorValues implements BatchedVectorValues {
         }
     }
 
+    /** Raw kernel values of {@code query} against rows spread over pages, then the score transform. */
+    private void scorePagedRows(VectorSimilarityFunction similarity, VectorFloat<?> query, PagedRows paged,
+                                int[] pageOf, int[] rowInPage, int count, float[] out) {
+        switch (similarity) {
+            case DOT_PRODUCT:
+                vus.dotProductPagedRows(query, paged.pages, paged.table, pageOf, rowInPage, stride, count, dimension, out);
+                for (int i = 0; i < count; i++) out[i] = (1 + out[i]) / 2;
+                return;
+            case EUCLIDEAN:
+                vus.squareDistancePagedRows(query, paged.pages, paged.table, pageOf, rowInPage, stride, count, dimension, out);
+                for (int i = 0; i < count; i++) out[i] = 1 / (1 + out[i]);
+                return;
+            default:
+                vus.cosinePagedRows(query, paged.pages, paged.table, pageOf, rowInPage, stride, count, dimension, out);
+                for (int i = 0; i < count; i++) out[i] = (1 + out[i]) / 2;
+        }
+    }
+
     /** Raw kernel values of {@code query} against {@code count} rows of one page, then the score transform. */
     private void scoreRows(VectorSimilarityFunction similarity, VectorFloat<?> query, VectorFloat<?> page,
                            int[] rows, int count, float[] out) {
@@ -379,6 +417,17 @@ public final class FlatVectorValues implements BatchedVectorValues {
         // The store may have grown past one page after the caller looked; a one-off buffer covers that race.
         if (scratch == null) scratch = new BatchScratch();
         scratch.ensure(count);
+        var paged = pagedRows;
+        if (paged != null) {
+            // One kernel call for the whole batch, through the table of page addresses. A node the caller can see
+            // was added after its page, and so after this table, was published.
+            for (int i = 0; i < count; i++) {
+                scratch.pending[i] = pageOf(nodes[i]);
+                scratch.rows[i] = rowOf(nodes[i]);
+            }
+            scorePagedRows(similarity, query, paged, scratch.pending, scratch.rows, count, scores);
+            return;
+        }
         int pending = count;
         for (int i = 0; i < count; i++) scratch.pending[i] = i;
         while (pending > 0) {
@@ -400,7 +449,7 @@ public final class FlatVectorValues implements BatchedVectorValues {
         }
     }
 
-    /** Buffers for splitting a batch across pages; they stay empty while a store has one page. */
+    /** Buffers for a batch whose rows span pages: page and row indexes, or the pieces of a batch split by page. */
     private static final class BatchScratch {
         int[] pending = new int[0];
         int[] rows = new int[0];

@@ -448,6 +448,32 @@ class NativeVectorUtilSupport extends PanamaVectorUtilSupport
     }
 
     @Override
+    public Object pagedRowTable(VectorFloat<?>[] pages) {
+        return NativeRowKernels.pageTable(pages);
+    }
+
+    @Override
+    public void dotProductPagedRows(VectorFloat<?> query, VectorFloat<?>[] pages, Object table, int[] pageOf,
+                                    int[] rowInPage, int stride, int count, int length, float[] out) {
+        NativeRowKernels.scorePaged(NativeRowKernels.VectorSimilarityKernel.DOT_PRODUCT, query, pages, (long[]) table,
+                pageOf, rowInPage, stride, count, length, out);
+    }
+
+    @Override
+    public void cosinePagedRows(VectorFloat<?> query, VectorFloat<?>[] pages, Object table, int[] pageOf,
+                                int[] rowInPage, int stride, int count, int length, float[] out) {
+        NativeRowKernels.scorePaged(NativeRowKernels.VectorSimilarityKernel.COSINE, query, pages, (long[]) table,
+                pageOf, rowInPage, stride, count, length, out);
+    }
+
+    @Override
+    public void squareDistancePagedRows(VectorFloat<?> query, VectorFloat<?>[] pages, Object table, int[] pageOf,
+                                        int[] rowInPage, int stride, int count, int length, float[] out) {
+        NativeRowKernels.scorePaged(NativeRowKernels.VectorSimilarityKernel.EUCLIDEAN, query, pages, (long[]) table,
+                pageOf, rowInPage, stride, count, length, out);
+    }
+
+    @Override
     public int tryClosestCentroid(VectorFloat<?> point, int pointOffset,
                                VectorFloat<?> centroids, int centroidCount, int dimension) {
         if (centroidCount <= 0) {
