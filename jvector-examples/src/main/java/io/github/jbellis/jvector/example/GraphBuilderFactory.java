@@ -35,6 +35,7 @@ import io.github.jbellis.jvector.quantization.CompressedVectors;
 import io.github.jbellis.jvector.quantization.PQVectors;
 import io.github.jbellis.jvector.util.PhysicalCoreExecutor;
 import io.github.jbellis.jvector.vector.VectorSimilarityFunction;
+import io.github.jbellis.jvector.vector.VectorizationProvider;
 
 import java.io.FileNotFoundException;
 import java.io.IOException;
@@ -160,11 +161,19 @@ final class GraphBuilderFactory {
                         else builder.addGraphNode(node, vector);
                     });
                 } else {
+                    // Insertion borrows the vector, so each thread reads rows into one reused vector.
                     var views = vectors.threadLocalSupplier();
+                    var rows = ThreadLocal.withInitial(() -> VectorizationProvider.getInstance()
+                            .getVectorTypeSupport().createFloatVector(vectors.dimension()));
                     constructionPool(build).submit(() ->
                             IntStream.range(0, vectors.size()).parallel().forEach(node -> {
-                                if (symmetricInsertion) builder.addGraphNode(node, scores.searchProviderFor(node));
-                                else builder.addGraphNode(node, views.get().getVector(node));
+                                if (symmetricInsertion) {
+                                    builder.addGraphNode(node, scores.searchProviderFor(node));
+                                } else {
+                                    var row = rows.get();
+                                    views.get().getVectorInto(node, row, 0);
+                                    builder.addGraphNode(node, row);
+                                }
                             })).join();
                 }
             }
