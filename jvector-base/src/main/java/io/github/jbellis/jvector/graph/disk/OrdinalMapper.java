@@ -166,7 +166,7 @@ public interface OrdinalMapper {
         SparseOrdinalMapper() {
             oldToNew = new Int2IntHashMap(OMITTED);
             newToOld = new Int2IntHashMap(OMITTED);
-            maxOrdinal = Integer.MIN_VALUE;
+            maxOrdinal = -1;
         }
 
         @Override
@@ -213,10 +213,10 @@ public interface OrdinalMapper {
          */
         DenseOrdinalMapper(int oldOrdinalUpperBound, int newOrdinalUpperBound) {
             oldToNew = new int[oldOrdinalUpperBound];
-            newToOld = new int[oldOrdinalUpperBound];
+            newToOld = new int[newOrdinalUpperBound];
             Arrays.fill(oldToNew, OMITTED);
             Arrays.fill(newToOld, OMITTED);
-            maxOrdinal = Integer.MIN_VALUE;
+            maxOrdinal = -1;
         }
 
         @Override
