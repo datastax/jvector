@@ -20,6 +20,7 @@ import com.sun.management.ThreadMXBean;
 import io.github.jbellis.jvector.example.benchmarks.datasets.DataSet;
 import io.github.jbellis.jvector.example.benchmarks.datasets.DataSets;
 import io.github.jbellis.jvector.graph.ListRandomAccessVectorValues;
+import io.github.jbellis.jvector.graph.RandomAccessVectorValues;
 import io.github.jbellis.jvector.graph.similarity.BuildScoreProvider;
 import io.github.jbellis.jvector.vector.VectorSimilarityFunction;
 import io.github.jbellis.jvector.vector.VectorizationProvider;
@@ -89,7 +90,8 @@ public final class DistancesFP {
             } else {
                 var base = dataset.getBaseVectors();
                 var queries = dataset.getQueryVectors();
-                timing(base.subList(0, Math.min(base.size(), positiveProperty("maxBaseVectors", 65_536))),
+                // The timing loops reuse their sample many times, so take owned copies of it once.
+                timing(new ArrayList<>(base.subList(0, Math.min(base.size(), positiveProperty("maxBaseVectors", 65_536)))),
                         queries.subList(0, Math.min(queries.size(), positiveProperty("maxQueries", 16))),
                         dataset.getSimilarityFunction());
             }
@@ -191,12 +193,12 @@ public final class DistancesFP {
         int[] atValues = {10, 15, 20, 30, 40, 50};
         int maxAt = atValues[atValues.length - 1];
         var similarity = dataset.getSimilarityFunction();
-        List<VectorFloat<?>> base = dataset.getBaseVectors();
+        RandomAccessVectorValues base = dataset.getBaseRavv();
         List<VectorFloat<?>> allQueries = dataset.getQueryVectors();
         List<VectorFloat<?>> queries = allQueries.subList(0,
                 Math.min(allQueries.size(), positiveProperty("maxQueries", Integer.MAX_VALUE)));
         List<? extends List<Integer>> groundTruth = dataset.getGroundTruth();
-        if (base.isEmpty() || queries.isEmpty()) throw new IllegalArgumentException("Base and query vectors must be nonempty");
+        if (base.size() == 0 || queries.isEmpty()) throw new IllegalArgumentException("Base and query vectors must be nonempty");
         if (groundTruth.size() < queries.size())
             throw new IllegalArgumentException("Ground truth has " + groundTruth.size() + " rows for " + queries.size() + " queries");
         if (maxAt > base.size()) throw new IllegalArgumentException("Recall needs at least " + maxAt + " base vectors");
@@ -204,7 +206,7 @@ public final class DistancesFP {
             if (groundTruth.get(q).size() < recallK)
                 throw new IllegalArgumentException("Ground truth row " + q + " has fewer than recall.k=" + recallK + " entries");
         }
-        int dimensions = base.get(0).length();
+        int dimensions = base.dimension();
         System.out.printf(Locale.ROOT, "DistancesFP recall provider=%s dimensions=%d base=%d queries=%d recall.k=%d threads=%d%n",
                 VectorizationProvider.getInstance().getClass().getSimpleName(), dimensions, base.size(),
                 queries.size(), recallK, threads);
@@ -216,14 +218,17 @@ public final class DistancesFP {
             var tasks = new ArrayList<ForkJoinTask<double[]>>();
             for (int first = 0; first < queries.size(); first += chunk) {
                 int from = first, to = Math.min(first + chunk, queries.size());
+                var baseViews = base.threadLocalSupplier();
                 tasks.add(pool.submit(() -> {
+                    var taskBase = baseViews.get();
+                    var row = VectorizationProvider.getInstance().getVectorTypeSupport().createFloatVector(dimensions);
                     double[] local = new double[atValues.length];
                     int[][] ids = new int[QUERY_BLOCK][maxAt];
                     float[][] scores = new float[QUERY_BLOCK][maxAt];
                     int[] sizes = new int[QUERY_BLOCK];
                     for (int block = from; block < to; block += QUERY_BLOCK) {
                         int count = Math.min(QUERY_BLOCK, to - block);
-                        topScores(queries.subList(block, block + count), base, similarity, maxAt, ids, scores, sizes);
+                        topScores(queries.subList(block, block + count), taskBase, row, similarity, maxAt, ids, scores, sizes);
                         for (int b = 0; b < count; b++) {
                             var expected = new HashSet<Integer>(groundTruth.get(block + b).subList(0, recallK));
                             for (int a = 0; a < atValues.length; a++) {
@@ -258,11 +263,11 @@ public final class DistancesFP {
      * For each query, fills ids[q]/scores[q] with its n highest similarity scores, best first, and sizes[q]
      * with how many were filled. All queries share one pass over the base.
      */
-    private static void topScores(List<VectorFloat<?>> queries, List<VectorFloat<?>> base,
+    private static void topScores(List<VectorFloat<?>> queries, RandomAccessVectorValues base, VectorFloat<?> vector,
                                   VectorSimilarityFunction similarity, int n, int[][] ids, float[][] scores, int[] sizes) {
         Arrays.fill(sizes, 0);
         for (int i = 0; i < base.size(); i++) {
-            var vector = base.get(i);
+            base.getVectorInto(i, vector, 0); // one reused vector per task: nothing is allocated per row
             for (int q = 0; q < queries.size(); q++) {
                 float score = similarity.compare(queries.get(q), vector);
                 float[] top = scores[q];

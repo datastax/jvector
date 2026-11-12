@@ -15,6 +15,7 @@
  */
 package io.github.jbellis.jvector.example.benchmarks.datasets;
 
+import io.github.jbellis.jvector.example.util.FlatFvecLoader;
 import io.github.jbellis.jvector.example.util.SiftLoader;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -461,6 +462,11 @@ public class DataSetLoaderSimpleMFD implements DataSetLoader {
                 } catch (IOException e) {
                     throw new UncheckedIOException(e);
                 }
+            }
+            if (props.loadBehavior() == DataSetProperties.LoadBehavior.NO_SCRUB) {
+                // Ingest the base vectors into the flat store a database would hold them in: one copy, no per-vector objects.
+                var base = FlatFvecLoader.load(effectiveCacheDir.resolve(baseFile));
+                return new SimpleDataSet(dataSetName, props.similarityFunction().orElseThrow(), base, queryVectors, gtVectors);
             }
             var baseVectors = SiftLoader.readFvecs(effectiveCacheDir.resolve(baseFile).toString());
             return DataSetUtils.processDataSet(dataSetName, props, baseVectors, queryVectors, gtVectors);

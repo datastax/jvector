@@ -16,11 +16,13 @@
 
 package io.github.jbellis.jvector.example.benchmarks.datasets;
 
+import io.github.jbellis.jvector.graph.FlatVectorValues;
 import io.github.jbellis.jvector.graph.ListRandomAccessVectorValues;
 import io.github.jbellis.jvector.graph.RandomAccessVectorValues;
 import io.github.jbellis.jvector.vector.VectorSimilarityFunction;
 import io.github.jbellis.jvector.vector.types.VectorFloat;
 
+import java.util.AbstractList;
 import java.util.List;
 
 public class SimpleDataSet implements DataSet {
@@ -31,11 +33,35 @@ public class SimpleDataSet implements DataSet {
     private final List<? extends List<Integer>> groundTruth;
     private RandomAccessVectorValues baseRavv;
 
+    /**
+     * A dataset whose base vectors are held only in {@code base}, as a database holds them after ingestion. Graph
+     * builds, exact search and encoders read the store through {@link #getBaseRavv()}; {@link #getBaseVectors()} is a
+     * compatibility view that returns a copy of each vector it is asked for.
+     */
+    public SimpleDataSet(String name,
+                         VectorSimilarityFunction similarityFunction,
+                         FlatVectorValues base,
+                         List<VectorFloat<?>> queryVectors,
+                         List<? extends List<Integer>> groundTruth)
+    {
+        this(name, similarityFunction, copyingView(base), base, queryVectors, groundTruth);
+    }
+
     public SimpleDataSet(String name,
                          VectorSimilarityFunction similarityFunction,
                          List<VectorFloat<?>> baseVectors,
                          List<VectorFloat<?>> queryVectors,
                          List<? extends List<Integer>> groundTruth)
+    {
+        this(name, similarityFunction, baseVectors, null, queryVectors, groundTruth);
+    }
+
+    private SimpleDataSet(String name,
+                          VectorSimilarityFunction similarityFunction,
+                          List<VectorFloat<?>> baseVectors,
+                          RandomAccessVectorValues baseRavv,
+                          List<VectorFloat<?>> queryVectors,
+                          List<? extends List<Integer>> groundTruth)
     {
         if (baseVectors.isEmpty()) {
             throw new IllegalArgumentException("Base vectors must not be empty");
@@ -59,14 +85,22 @@ public class SimpleDataSet implements DataSet {
         this.baseVectors = baseVectors;
         this.queryVectors = queryVectors;
         this.groundTruth = groundTruth;
+        this.baseRavv = baseRavv;
 
         System.out.format("%n%s: %d base and %d query vectors created, dimensions %d%n",
                 name, baseVectors.size(), queryVectors.size(), baseVectors.get(0).length());
     }
 
+    private static List<VectorFloat<?>> copyingView(FlatVectorValues base) {
+        return new AbstractList<>() {
+            @Override public VectorFloat<?> get(int ordinal) { return base.getVector(ordinal); }
+            @Override public int size() { return base.size(); }
+        };
+    }
+
     @Override
     public int getDimension() {
-        return getBaseVectors().get(0).length();
+        return getBaseRavv().dimension();
     }
 
     @Override

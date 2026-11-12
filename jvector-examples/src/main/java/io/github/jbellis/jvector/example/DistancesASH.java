@@ -1211,7 +1211,9 @@ public class DistancesASH {
                 throw new IllegalArgumentException("ASH scores inner products; dataset " + name + " uses " + similarity);
             }
             System.out.println("Running " + dataset.getName() + ", similarity " + similarity);
-            testASHEncodings(dataset.getBaseVectors(), dataset.getQueryVectors(), dataset.getGroundTruth());
+            // This benchmark works on owned vector lists, so it copies the base once.
+            testASHEncodings(new java.util.ArrayList<>(dataset.getBaseVectors()), dataset.getQueryVectors(),
+                    dataset.getGroundTruth());
         }
     }
 }
