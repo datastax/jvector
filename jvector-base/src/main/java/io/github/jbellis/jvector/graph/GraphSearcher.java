@@ -55,6 +55,9 @@ public class GraphSearcher implements Closeable {
     private final NodeQueue rerankedResults;
     private final IntHashSet visited;
     private final NodesUnsorted evictedResults;
+    // Scored nodes that the current layer search can no longer expand (see searchOneLayer); they return to the
+    // candidates at the next layer search, so a later layer or resume() sees the same candidates as before.
+    private final NodesUnsorted deferredCandidates;
 
     // Search parameters that we save here for use by resume()
     private Bits acceptOrds;
@@ -62,11 +65,15 @@ public class GraphSearcher implements Closeable {
     private CachingReranker cachingReranker;
 
     private boolean pruneSearch;
+    private boolean boundCandidates = true;
     private boolean adaptiveTerminationEnabled = true;
     private float adaptiveTerminationGamma = AdaptiveTermination.DEFAULT_GAMMA;
     private final AdaptiveTermination adaptiveTermination = new AdaptiveTermination();
-    private final NodeQueue adaptiveResults = new NodeQueue(new BoundedLongHeap(100), NodeQueue.Order.MIN_HEAP);
-    private final IntHashSet adaptiveResultMembers = new IntHashSet();
+    // The best rerankK accepted nodes scored so far in the current layer search, worst on top.
+    private final NodeQueue bestScored = new NodeQueue(new BoundedLongHeap(100), NodeQueue.Order.MIN_HEAP);
+    // Once bestScored is full: the lowest score a newly scored node may have and still be expanded.
+    private float expandBar;
+    private boolean adaptiveBar;
     private final ScoreTracker.ScoreTrackerFactory scoreTrackerFactory;
 
     private int visitedCount;
@@ -87,6 +94,7 @@ public class GraphSearcher implements Closeable {
         this.view = view;
         this.candidates = new NodeQueue(new GrowableLongHeap(100), NodeQueue.Order.MAX_HEAP);
         this.evictedResults = new NodesUnsorted(100);
+        this.deferredCandidates = new NodesUnsorted(100);
         this.approximateResults = new NodeQueue(new BoundedLongHeap(100), NodeQueue.Order.MIN_HEAP);
         this.rerankedResults = new NodeQueue(new BoundedLongHeap(100), NodeQueue.Order.MIN_HEAP);
         this.visited = new IntHashSet();
@@ -141,6 +149,11 @@ public class GraphSearcher implements Closeable {
     @Deprecated
     public void usePruning(boolean usage) {
         pruneSearch = false;
+    }
+
+    /** For tests: whether layer searches defer candidates they can no longer expand (the default). */
+    void boundCandidates(boolean enabled) {
+        this.boundCandidates = enabled;
     }
 
     /** Enable or disable adaptive stopping for score providers that explicitly support it. */
@@ -368,6 +381,7 @@ public class GraphSearcher implements Closeable {
         // reset the scratch data structures
         approximateResults.clear();
         evictedResults.clear();
+        deferredCandidates.clear();
         candidates.clear();
         visited.clear();
 
@@ -384,10 +398,11 @@ public class GraphSearcher implements Closeable {
     private boolean stopSearch(NodeQueue localCandidates, ScoreTracker scoreTracker, int rerankK,
                                float threshold, boolean adaptive) {
         if (adaptive && approximateResults.size() >= rerankK) {
-            var decision = adaptiveTermination.shouldTerminate(localCandidates.topScore(), adaptiveResults);
+            var decision = adaptiveTermination.shouldTerminate(localCandidates.topScore(), bestScored);
             if (decision == AdaptiveTermination.Decision.CONTINUE) return false;
+            // A candidate among the best scored nodes is still expanded.
             if (decision == AdaptiveTermination.Decision.TERMINATE)
-                return !adaptiveResultMembers.contains(localCandidates.topNode());
+                return localCandidates.topScore() < bestScored.topScore();
         }
         if (approximateResults.size() >= rerankK
                 && localCandidates.topScore() < approximateResults.topScore()) return true;
@@ -441,7 +456,26 @@ public class GraphSearcher implements Closeable {
             boolean adaptive = adaptiveTerminationEnabled
                     && scoreProvider.supportsAdaptiveDotProductTermination()
                     && level == 0 && threshold == 0.0f && rerankK > 0;
-            if (adaptive) resetAdaptiveTermination(scoreProvider, rerankK, acceptOrdsThisLayer);
+            if (adaptive) {
+                adaptiveTermination.reset(rerankK, adaptiveTerminationGamma, scoreProvider.adaptiveScoresAreRawDotProducts());
+            }
+            // Bounded candidates: a scored node is expanded only while it ranks among the best rerankK accepted
+            // nodes scored so far (or, adaptively, within the cutoff of the rerankK-th), and that bar only rises.
+            // So a node that misses it when scored can never be expanded by this layer search: it is deferred
+            // instead of entering the candidate heap. Threshold searches keep every candidate.
+            boolean bounded = boundCandidates && threshold <= 0.0f && rerankK > 0;
+            boolean trackBest = bounded || adaptive;
+            deferredCandidates.foreach(candidates::push);
+            deferredCandidates.clear();
+            bestScored.clear();
+            expandBar = Float.NEGATIVE_INFINITY;
+            adaptiveBar = adaptive;
+            if (trackBest) {
+                bestScored.setMaxSize(rerankK);
+                candidates.foreach((node, score) -> {
+                    if (acceptOrdsThisLayer.get(node) && score >= threshold) offerScored(node, score, rerankK);
+                });
+            }
 
             // TopK and filtered pruning are disabled. Threshold searches retain their
             // legacy threshold early-termination path inside ScoreTrackerFactory.
@@ -449,10 +483,16 @@ public class GraphSearcher implements Closeable {
 
             var scoreFunction = scoreProvider.scoreFunction();
             ImmutableGraphIndex.NeighborProcessor neighborProcessor = (node2, score) -> {
-                if (adaptive && acceptOrdsThisLayer.get(node2)) offerAdaptiveResult(node2, score, rerankK);
-                scoreTracker.track(score);
-                candidates.push(node2, score);
                 visitedCount++;
+                scoreTracker.track(score);
+                if (trackBest && acceptOrdsThisLayer.get(node2) && score >= threshold) offerScored(node2, score, rerankK);
+                if (bounded) {
+                    if (!mayExpand(score, rerankK)) {
+                        deferredCandidates.add(node2, score);
+                        return;
+                    }
+                }
+                candidates.push(node2, score);
             };
 
             // the main search loop
@@ -466,7 +506,6 @@ public class GraphSearcher implements Closeable {
                 int topCandidateNode = candidates.pop();
                 if (acceptOrdsThisLayer.get(topCandidateNode) && topCandidateScore >= threshold) {
                     addTopCandidate(topCandidateNode, topCandidateScore, rerankK);
-                    if (adaptive) offerAdaptiveResult(topCandidateNode, topCandidateScore, rerankK);
                 }
 
                 // skip edge loading if we've found a local maximum and we have enough results
@@ -544,27 +583,30 @@ public class GraphSearcher implements Closeable {
         return reranking(topK, rerankK, rerankFloor);
     }
 
-    private void resetAdaptiveTermination(SearchScoreProvider scoreProvider, int rerankK, Bits accepted) {
-        adaptiveTermination.reset(rerankK, adaptiveTerminationGamma, scoreProvider.adaptiveScoresAreRawDotProducts());
-        adaptiveResults.clear();
-        adaptiveResults.setMaxSize(rerankK);
-        adaptiveResultMembers.clear();
-        candidates.foreach((node, score) -> {
-            if (accepted.get(node)) offerAdaptiveResult(node, score, rerankK);
-        });
+    /**
+     * Keeps {@code node} if it is among the best {@code rerankK} accepted nodes scored so far, and raises the
+     * expansion bar when the rerankK-th best score rises.
+     */
+    private void offerScored(int node, float score, int rerankK) {
+        if (bestScored.size() < rerankK) {
+            bestScored.push(node, score);
+            if (bestScored.size() == rerankK) updateExpandBar();
+        } else if (score > bestScored.topScore()) {
+            bestScored.push(node, score);
+            updateExpandBar();
+        }
     }
 
-    private void offerAdaptiveResult(int node, float score, int rerankK) {
-        if (adaptiveResultMembers.contains(node)) return;
-        if (adaptiveResults.size() < rerankK) {
-            adaptiveResults.push(node, score);
-            adaptiveResultMembers.add(node);
-        } else if (score > adaptiveResults.topScore()) {
-            int evicted = adaptiveResults.topNode();
-            adaptiveResults.push(node, score);
-            adaptiveResultMembers.remove(evicted);
-            adaptiveResultMembers.add(node);
-        }
+    /** The rerankK-th best score, or adaptively the lowest score within its cutoff, whichever is lower. */
+    private void updateExpandBar() {
+        float kth = bestScored.topScore();
+        expandBar = adaptiveBar ? Math.min(kth, adaptiveTermination.lowestContinuableScore(kth)) : kth;
+    }
+
+    /** Whether a node just scored can still be expanded by the current layer search; see searchOneLayer. */
+    private boolean mayExpand(float score, int rerankK) {
+        // A NaN score compares false against every bar, as it does in the stopping rule, so it is kept.
+        return bestScored.size() < rerankK || !(score < expandBar);
     }
 
     @SuppressWarnings("StatementWithEmptyBody")

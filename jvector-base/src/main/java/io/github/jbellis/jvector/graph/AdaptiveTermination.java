@@ -111,6 +111,22 @@ final class AdaptiveTermination {
                 : Decision.CONTINUE;
     }
 
+    /**
+     * The lowest score a candidate may have and still be continued when the k-th best score found is
+     * {@code kthScore}: candidates scoring below it are past the cutoff, which only tightens as the search finds
+     * better nodes. Rounded down, so it never excludes a candidate {@link #shouldTerminate} would continue; when
+     * this rule cannot interpret the scores it returns negative infinity, leaving the standard rule to decide.
+     */
+    float lowestContinuableScore(float kthScore) {
+        double kthDistance = scoreToDistance(kthScore);
+        if (unsupportedScoreObserved || Double.isNaN(kthDistance) || Double.isInfinite(kthDistance)) {
+            return Float.NEGATIVE_INFINITY;
+        }
+        double cutoff = (1.0d + gamma) * kthDistance + EPSILON;
+        double score = rawDotProductScores ? 1.0d - 2.0d * cutoff : 1.0d - cutoff;
+        return Math.nextDown(Math.nextDown((float) score));
+    }
+
     private double scoreToDistance(float score) {
         if (!Float.isFinite(score)) {
             return Double.NaN;
