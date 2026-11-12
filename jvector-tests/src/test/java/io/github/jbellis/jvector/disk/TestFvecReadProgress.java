@@ -15,7 +15,6 @@
  */
 package io.github.jbellis.jvector.disk;
 
-import org.junit.BeforeClass;
 import org.junit.Test;
 import java.io.EOFException;
 import java.io.IOException;
@@ -24,16 +23,14 @@ import java.nio.MappedByteBuffer;
 import java.nio.channels.*;
 import static org.junit.Assert.*;
 
+/**
+ * A reader that spins would call the test channel without end, so the channel fails after a fixed number of calls
+ * instead of the tests relying on a wall-clock timeout, which a slow or busy machine can exceed.
+ */
 public class TestFvecReadProgress {
-    /**
-     * Initialize FvecFileVectorValues, which loads the vectorization provider (possibly a native library), before
-     * any timed test, so each timeout covers only the read loop it guards against spinning.
-     */
-    @BeforeClass public static void initializeOutsideTheTimeouts() throws ClassNotFoundException {
-        Class.forName(FvecFileVectorValues.class.getName(), true, TestFvecReadProgress.class.getClassLoader());
-    }
+    private static final int MAX_CALLS = 1000;
 
-    @Test(timeout = 1000) public void repeatedZeroReadsFailInsteadOfSpinning() {
+    @Test public void repeatedZeroReadsFailInsteadOfSpinning() {
         var channel = new TestChannel(-1);
         var failure = assertThrows(IOException.class, () ->
                 FvecFileVectorValues.readFully(channel, ByteBuffer.allocate(1), 123));
@@ -41,7 +38,7 @@ public class TestFvecReadProgress {
         assertEquals(16, channel.calls);
     }
 
-    @Test(timeout = 1000) public void progressResetsTheZeroReadLimitAndPreservesOffsets() throws Exception {
+    @Test public void progressResetsTheZeroReadLimitAndPreservesOffsets() throws Exception {
         var channel = new TestChannel(15);
         var buffer = ByteBuffer.allocate(4);
         buffer.position(2);
@@ -52,20 +49,24 @@ public class TestFvecReadProgress {
         assertEquals((byte) 124, buffer.get(3));
     }
 
-    @Test(timeout = 1000) public void eofStillFailsImmediately() {
+    @Test public void eofStillFailsImmediately() {
         var channel = new TestChannel(0) {
-            @Override public int read(ByteBuffer buffer, long offset) { return -1; }
+            @Override public int read(ByteBuffer buffer, long offset) { countCall(); return -1; }
         };
         assertThrows(EOFException.class, () ->
                 FvecFileVectorValues.readFully(channel, ByteBuffer.allocate(1), 0));
+        assertEquals(1, channel.calls);
     }
 
     private static class TestChannel extends FileChannel {
         final int zerosPerByte;
         int calls, zeros;
         TestChannel(int zerosPerByte) { this.zerosPerByte = zerosPerByte; }
+        void countCall() {
+            if (++calls > MAX_CALLS) throw new AssertionError("readFully kept reading after " + MAX_CALLS + " calls");
+        }
         @Override public int read(ByteBuffer buffer, long offset) {
-            calls++;
+            countCall();
             if (zerosPerByte < 0 || zeros++ < zerosPerByte) return 0;
             zeros = 0;
             buffer.put((byte) offset);
