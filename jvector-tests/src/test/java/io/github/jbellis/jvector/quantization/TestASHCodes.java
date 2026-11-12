@@ -272,6 +272,13 @@ public class TestASHCodes {
             assertThrows(IllegalArgumentException.class, () -> vu.ashSymmetricDotAt(page, 0, page, 0, 8, 1));
             assertThrows(IndexOutOfBoundsException.class, () -> vu.ashSymmetricDotAt(page, 150, page, 0, 384, 2));
             vu.ashSymmetricDotAt(page, 104, page, 0, 384, 2);
+            // Two 96-byte rows at stride 100: the second ends inside the array, a third would not.
+            float[] out = new float[3];
+            vu.ashSymmetricDotRows(page, 0, page, 100, 2, 384, 2, out);
+            assertEquals(Float.floatToIntBits(vu.ashSymmetricDotAt(page, 0, page, 100, 384, 2)), Float.floatToIntBits(out[1]));
+            assertThrows(IndexOutOfBoundsException.class, () -> vu.ashSymmetricDotRows(page, 0, page, 105, 2, 384, 2, out));
+            assertThrows(IndexOutOfBoundsException.class, () -> vu.ashSymmetricDotRows(page, 0, page, 100, 3, 384, 2, out));
+            assertThrows(IllegalArgumentException.class, () -> vu.ashSymmetricDotRows(page, 0, page, 100, 1, 384, 1, out));
         }
     }
 

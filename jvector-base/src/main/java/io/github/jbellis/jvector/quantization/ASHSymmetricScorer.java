@@ -102,6 +102,18 @@ public final class ASHSymmetricScorer {
 
     private float offset(int node) { return centeredOffsets[node]; }
 
+    /** Per-thread buffer that batch scoring gathers codes into; it grows to the largest batch. */
+    private static final class GatherBuffer {
+        private static final ThreadLocal<GatherBuffer> PER_THREAD = ThreadLocal.withInitial(GatherBuffer::new);
+        private byte[] bytes = new byte[0];
+    }
+
+    private static byte[] gatherBuffer(int bytes) {
+        var buffer = GatherBuffer.PER_THREAD.get();
+        if (buffer.bytes.length < bytes) buffer.bytes = new byte[Math.max(bytes, 2 * buffer.bytes.length)];
+        return buffer.bytes;
+    }
+
     private long[] signs(int node) { return codes.signWords == 0 ? null : codes.signPage(node); }
 
     private byte[] body(int node) { return codes.bodyBytes == 0 ? null : codes.bodyPage(node); }
@@ -160,11 +172,36 @@ public final class ASHSymmetricScorer {
             final float[] offsets = centeredOffsets;
             final int d = dimensions, b = bits;
             final io.github.jbellis.jvector.vector.VectorUtilSupport vu = backend;
-            return node -> {
-                float dot = (queryScale * scales[node])
-                        * vu.ashSymmetricDotAt(queryBody, queryBodyOffset, pages[node >>> shift], (node & mask) * stride, d, b)
-                        + (queryOffset + offsets[node]) + landmarkDot;
-                return ASHScorer.toSimilarity(dot);
+            final boolean batch = vu.supportsAshSymmetricDotRows();
+            return new ScoreFunction.ApproximateScoreFunction() {
+                @Override
+                public float similarityTo(int node) {
+                    float dot = (queryScale * scales[node])
+                            * vu.ashSymmetricDotAt(queryBody, queryBodyOffset, pages[node >>> shift], (node & mask) * stride, d, b)
+                            + (queryOffset + offsets[node]) + landmarkDot;
+                    return ASHScorer.toSimilarity(dot);
+                }
+
+                @Override
+                public boolean supportsBatchScoring() {
+                    return batch;
+                }
+
+                /** Gathers the codes into one contiguous buffer and scores them in one call; same scores as above. */
+                @Override
+                public void similarityTo(int[] nodes, int count, float[] scores) {
+                    byte[] rows = gatherBuffer(count * stride);
+                    for (int i = 0; i < count; i++) {
+                        int node = nodes[i];
+                        System.arraycopy(pages[node >>> shift], (node & mask) * stride, rows, i * stride, stride);
+                    }
+                    vu.ashSymmetricDotRows(queryBody, queryBodyOffset, rows, stride, count, d, b, scores);
+                    for (int i = 0; i < count; i++) {
+                        int node = nodes[i];
+                        float dot = (queryScale * scales[node]) * scores[i] + (queryOffset + offsets[node]) + landmarkDot;
+                        scores[i] = ASHScorer.toSimilarity(dot);
+                    }
+                }
             };
         }
         return node -> {

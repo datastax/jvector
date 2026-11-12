@@ -53,9 +53,12 @@ final class NativeASHSymmetricKernels {
     private static final boolean TRACE = Boolean.getBoolean("jextract.trace.downcalls");
     private static final String PAIR_SYMBOL = "ash_symmetric_dot";
     private static final String LUT_SYMBOL = "ash_symmetric_lut_i16";
+    private static final String ROWS_SYMBOL = "ash_symmetric_dot_rows";
     private static final FunctionDescriptor PAIR_DESCRIPTOR =
             FunctionDescriptor.of(JAVA_FLOAT, ADDRESS, ADDRESS, JAVA_INT, JAVA_INT);
     private static final FunctionDescriptor LUT_DESCRIPTOR =
+            FunctionDescriptor.ofVoid(ADDRESS, ADDRESS, JAVA_INT, JAVA_INT, JAVA_INT, JAVA_INT, ADDRESS);
+    private static final FunctionDescriptor ROWS_DESCRIPTOR =
             FunctionDescriptor.ofVoid(ADDRESS, ADDRESS, JAVA_INT, JAVA_INT, JAVA_INT, JAVA_INT, ADDRESS);
     private static final MemorySegment PAIR_ADDRESS = find(PAIR_SYMBOL);
     private static final MemorySegment LUT_ADDRESS = find(LUT_SYMBOL);
@@ -64,11 +67,13 @@ final class NativeASHSymmetricKernels {
     private static final MethodHandle PAIR_ORDINARY = downcall(PAIR_ADDRESS, PAIR_DESCRIPTOR, false);
     private static final MethodHandle LUT_CRITICAL = downcall(LUT_ADDRESS, LUT_DESCRIPTOR, true);
     private static final MethodHandle LUT_ORDINARY = downcall(LUT_ADDRESS, LUT_DESCRIPTOR, false);
+    private static final MethodHandle ROWS_CRITICAL = downcall(find(ROWS_SYMBOL), ROWS_DESCRIPTOR, true);
 
     private NativeASHSymmetricKernels() {}
 
     static boolean hasPairKernel() { return PAIR_CRITICAL != null; }
     static boolean hasLutKernel() { return LUT_CRITICAL != null; }
+    static boolean hasRowsKernel() { return ROWS_CRITICAL != null; }
 
     static float dot(long[] aBits, byte[] aCodes, long[] bBits, byte[] bCodes, int dimensions, int bits) {
         if (dimensions < 0 || (bits != 1 && bits != 2 && bits != 4)) throw badPairShape();
@@ -117,6 +122,46 @@ final class NativeASHSymmetricKernels {
                 : pairOrdinary(MemorySegment.ofArray(aBits).asSlice((long) aOffset * Long.BYTES, words * Long.BYTES),
                                MemorySegment.ofArray(bBits).asSlice((long) bOffset * Long.BYTES, words * Long.BYTES),
                                words * Long.BYTES, dimensions, 1);
+    }
+
+    /**
+     * 2/4-bit query code against {@code count} codes {@code stride} bytes apart: {@code out[i]} equals
+     * {@link #dotAt} of the query and row {@code i}. Each critical call scores at most
+     * {@code MAX_CRITICAL_WORK} dimensions in total.
+     */
+    static void dotRows(byte[] query, int queryOffset, byte[] rows, int stride, int count,
+                        int dimensions, int bits, float[] out) {
+        if (dimensions < 0 || count < 0 || (bits != 2 && bits != 4)) throw badOffsetShape();
+        if (ROWS_CRITICAL == null) throw rowsUnavailable();
+        long bytes = ((long) dimensions * bits + 7) / 8;
+        if (stride < bytes || queryOffset < 0 || queryOffset + bytes > query.length || count > out.length
+                || (count > 0 && (long) (count - 1) * stride + bytes > rows.length))
+            throw outOfBounds("ASH code row ranges");
+        if (count == 0) return;
+        if (TRACE) trace(ROWS_SYMBOL, dimensions, count);
+        if (dimensions > MAX_CRITICAL_WORK) {
+            for (int i = 0; i < count; i++) out[i] = dotAt(query, queryOffset, rows, i * stride, dimensions, bits);
+            return;
+        }
+        int perCall = Math.max(1, MAX_CRITICAL_WORK / Math.max(1, dimensions));
+        for (int first = 0; first < count; first += perCall) {
+            rowsCritical(query, queryOffset, rows, first * stride, stride, Math.min(perCall, count - first),
+                         dimensions, bits, out, first);
+        }
+    }
+
+    // Hot path: as in pairCritical, the sliced segments stay local to invokeExact.
+    private static void rowsCritical(byte[] query, int queryOffset, byte[] rows, int rowsOffset, int stride,
+                                     int count, int dimensions, int bits, float[] out, int outOffset) {
+        try {
+            ROWS_CRITICAL.invokeExact(MemorySegment.ofArray(query).asSlice(queryOffset),
+                                      MemorySegment.ofArray(rows).asSlice(rowsOffset), stride, count, dimensions, bits,
+                                      MemorySegment.ofArray(out).asSlice((long) outOffset * Float.BYTES));
+        } catch (RuntimeException | Error e) {
+            throw e;
+        } catch (Throwable t) {
+            throw unexpected(ROWS_SYMBOL, t);
+        }
     }
 
     private static float pairCriticalAt(long[] a, int aOffset, long[] b, int bOffset, int dimensions) {
@@ -253,6 +298,10 @@ final class NativeASHSymmetricKernels {
 
     private static UnsupportedOperationException pairUnavailable() {
         return new UnsupportedOperationException("Native symmetric pair kernel unavailable");
+    }
+
+    private static UnsupportedOperationException rowsUnavailable() {
+        return new UnsupportedOperationException("Native symmetric rows kernel unavailable");
     }
 
     private static UnsupportedOperationException lutUnavailable() {

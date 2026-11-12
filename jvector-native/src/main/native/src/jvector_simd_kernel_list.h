@@ -83,6 +83,7 @@
     KERNEL_ENTRY(void, ash_project_f32, (const float *matrix, const float *query, int rows, int cols, float *out), (matrix, query, rows, cols, out)) \
     KERNEL_ENTRY(void, ash_project_batch_f32, (const float *matrix, const float *inputs, int rows, int cols, int count, float *out), (matrix, inputs, rows, cols, count, out)) \
     KERNEL_ENTRY(float, ash_symmetric_dot, (const void *a, const void *b, int dimensions, int bits), (a, b, dimensions, bits)) \
+    KERNEL_ENTRY(void, ash_symmetric_dot_rows, (const void *query, const void *rows, int stride, int count, int dimensions, int bits, float *out), (query, rows, stride, count, dimensions, bits, out)) \
     KERNEL_ENTRY(void, ash_symmetric_lut_i16, (const unsigned char *codes, const int16_t *lut, int groups, int stride, int lane, int count, float *out), (codes, lut, groups, stride, lane, count, out)) \
     /* Canonical ASH dot using the prepared query LUT. */ \
     KERNEL_ENTRY(float, ash_canonical_lut_dot_f32, (const unsigned char *code, const float *lut, int groups), (code, lut, groups)) \

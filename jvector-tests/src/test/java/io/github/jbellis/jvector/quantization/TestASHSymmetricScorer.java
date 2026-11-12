@@ -229,6 +229,32 @@ public class TestASHSymmetricScorer {
         assertThrows(IllegalArgumentException.class, () -> BuildScoreProvider.ashBuildScoreProvider(VectorSimilarityFunction.DOT_PRODUCT, encoded));
     }
 
+    @Test public void batchScoresMatchSingleScoresBitForBit() throws Exception {
+        // 1024 projected dimensions put 512 (2-bit) or 256 (4-bit) codes in each 256 KiB page, so a batch gathers
+        // codes from several pages; 700 codes exceed one bounded native call.
+        var input = inputs(1200, 1024);
+        var values = MockVectorValues.fromValues(input);
+        var random = new Random(41);
+        for (int bits : new int[]{2, 4}) {
+            var ash = AsymmetricHashing.initialize(values, AsymmetricHashing.RANDOM,
+                    AsymmetricHashing.HEADER_BITS + 1024 * bits, 1, bits);
+            var encoded = ash.encodeAll(values, java.util.concurrent.ForkJoinPool.commonPool());
+            var scorer = new ASHSymmetricScorer(encoded);
+            for (int origin : new int[]{0, 777, 1199}) {
+                var sf = scorer.scoreFunctionFor(origin);
+                for (int count : new int[]{0, 1, 7, 40, 700}) {
+                    int[] nodes = random.ints(count, 0, input.length).toArray();
+                    float[] scores = new float[count];
+                    sf.similarityTo(nodes, count, scores);
+                    for (int i = 0; i < count; i++) {
+                        assertEquals("bits=" + bits + " origin=" + origin + " node=" + nodes[i],
+                                Float.floatToIntBits(sf.similarityTo(nodes[i])), Float.floatToIntBits(scores[i]));
+                    }
+                }
+            }
+        }
+    }
+
     @Test public void constructionWorksWithPackedCodesAndNegativeSimilarities() throws Exception {
         var input = inputs(80,40);
         for (int d = 0; d < 40; d++) input[1].set(d, -input[0].get(d));

@@ -87,6 +87,19 @@ public interface VectorUtilSupport {
     throw new UnsupportedOperationException("Offset symmetric ASH SIMD is unavailable on this backend");
   }
 
+  /** Whether {@link #ashSymmetricDotRows} scores all rows in one call rather than one call per row. */
+  default boolean supportsAshSymmetricDotRows() { return false; }
+
+  /**
+   * Symmetric 2/4-bit dot products of one code against {@code count} codes stored {@code stride} bytes apart from
+   * the start of {@code rows}: {@code out[i]} equals {@link #ashSymmetricDotAt} of the query and row {@code i}.
+   * Requires {@link #supportsAshSymmetricDotAt()}.
+   */
+  default void ashSymmetricDotRows(byte[] query, int queryOffset, byte[] rows, int stride, int count,
+                                   int dimensions, int bits, float[] out) {
+    for (int i = 0; i < count; i++) out[i] = ashSymmetricDotAt(query, queryOffset, rows, i * stride, dimensions, bits);
+  }
+
   /**
    * Symmetric 1-bit dot product, {@code dimensions - 2 * mismatches}, of sign words stored at offsets
    * inside larger arrays. Same result as {@link #ashSymmetricDot} with {@code bits == 1}.

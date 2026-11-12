@@ -165,6 +165,13 @@ float ash_symmetric_dot(const void *a, const void *b, int dimensions, int bits) 
     return AshFourBitPair(static_cast<const uint8_t *>(a), static_cast<const uint8_t *>(b), dimensions);
 }
 
+// Scores one code against count contiguous codes stride bytes apart, each exactly as ash_symmetric_dot.
+void ash_symmetric_dot_rows(const void *query, const void *rows, int stride, int count, int dimensions, int bits,
+                            float *HWY_RESTRICT out) {
+    const auto *row = static_cast<const uint8_t *>(rows);
+    for (int i = 0; i < count; ++i) out[i] = ash_symmetric_dot(query, row + static_cast<size_t>(i) * stride, dimensions, bits);
+}
+
 #ifndef JVECTOR_ASH_PAIR_ONLY
 // Exact signed-short LUTs, unlike the IVF scan's approximate uint8 LUTs. Widen
 // before accumulation. At most 8192 groups enter an int32 subtotal, then spill

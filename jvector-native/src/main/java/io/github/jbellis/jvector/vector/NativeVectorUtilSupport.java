@@ -133,6 +133,19 @@ class NativeVectorUtilSupport extends PanamaVectorUtilSupport
     }
 
     @Override
+    public boolean supportsAshSymmetricDotRows() {
+        return NativeASHSymmetricKernels.hasRowsKernel();
+    }
+
+    @Override
+    public void ashSymmetricDotRows(byte[] query, int queryOffset, byte[] rows, int stride, int count,
+                                    int dimensions, int bits, float[] out) {
+        if (NativeASHSymmetricKernels.hasRowsKernel())
+            NativeASHSymmetricKernels.dotRows(query, queryOffset, rows, stride, count, dimensions, bits, out);
+        else super.ashSymmetricDotRows(query, queryOffset, rows, stride, count, dimensions, bits, out);
+    }
+
+    @Override
     public void ashSymmetricLutScore(byte[] codes, int groups, int stride, int lane, int count,
                                      short[] lut, float[] out, int outOffset) {
         if (NativeASHSymmetricKernels.hasLutKernel())

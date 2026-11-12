@@ -41,6 +41,23 @@ public interface ScoreFunction {
     float similarityTo(int node2);
 
     /**
+     * Scores {@code count} nodes: {@code scores[i]} is {@code similarityTo(nodes[i])} for {@code 0 <= i < count}.
+     * Implementations that report {@link #supportsBatchScoring()} score the nodes together, for example in one
+     * native call, and must give the same scores as {@link #similarityTo(int)}.
+     */
+    default void similarityTo(int[] nodes, int count, float[] scores) {
+        for (int i = 0; i < count; i++) scores[i] = similarityTo(nodes[i]);
+    }
+
+    /**
+     * @return true if {@link #similarityTo(int[], int, float[])} is faster than one {@link #similarityTo(int)} per
+     * node, so callers should gather the nodes they need before scoring them
+     */
+    default boolean supportsBatchScoring() {
+        return false;
+    }
+
+    /**
      * Computes the similarity to the neighborIndex-th neighbor of origin.
      * Before calling this function, enableSimilarityToNeighbors must be called first with the same origin.
      * This function only works if it is called for the same origin node multiple times.
