@@ -22,6 +22,7 @@ import java.util.Objects;
 
 import io.github.jbellis.jvector.vector.cnative.NativeSimdOps;
 import io.github.jbellis.jvector.vector.types.ByteSequence;
+import io.github.jbellis.jvector.vector.types.FloatArray;
 import io.github.jbellis.jvector.vector.types.VectorFloat;
 import jdk.incubator.vector.ByteVector;
 import jdk.incubator.vector.FloatVector;
@@ -33,6 +34,9 @@ import jdk.incubator.vector.VectorSpecies;
  */
 class NativeVectorUtilSupport extends PanamaVectorUtilSupport
 {
+    private static final int NATIVE_DIMENSION_THRESHOLD =
+            Integer.getInteger("jvector.native_vector_threshold", 512);
+
     public NativeVectorUtilSupport() {}
 
     /** Select once at provider creation; leave the wide scan and its call site unchanged. */
@@ -93,7 +97,8 @@ class NativeVectorUtilSupport extends PanamaVectorUtilSupport
 
     @Override
     protected FloatVector fromVectorFloat(VectorSpecies<Float> SPEC, VectorFloat<?> vector, int offset) {
-        return FloatVector.fromMemorySegment(SPEC, ((MemorySegmentVectorFloat) vector).get(), vector.offset(offset), ByteOrder.LITTLE_ENDIAN);
+        // Read the backing array directly so Panama paths never materialize the MemorySegment view.
+        return FloatVector.fromArray(SPEC, ((FloatArray) vector).array(), offset);
     }
 
     @Override
@@ -103,7 +108,7 @@ class NativeVectorUtilSupport extends PanamaVectorUtilSupport
 
     @Override
     protected void intoVectorFloat(FloatVector vector, VectorFloat<?> v, int offset) {
-        vector.intoMemorySegment(((MemorySegmentVectorFloat) v).get(), v.offset(offset), ByteOrder.LITTLE_ENDIAN);
+        vector.intoArray(((FloatArray) v).array(), offset);
     }
 
     @Override
@@ -261,13 +266,14 @@ class NativeVectorUtilSupport extends PanamaVectorUtilSupport
 
     @Override
     public float squareDistance(VectorFloat<?> v1, VectorFloat<?> v2) {
-        return NativeSimdOps.euclidean_f32(((MemorySegmentVectorFloat) v1).get(), 0,
-                                          ((MemorySegmentVectorFloat) v2).get(), 0,
-                                          v1.length());
+        return squareDistance(v1, 0, v2, 0, v1.length());
     }
 
     @Override
     public float squareDistance(VectorFloat<?> v1, int v1offset, VectorFloat<?> v2, int v2offset, int length) {
+        if (length <= NATIVE_DIMENSION_THRESHOLD) {
+            return super.squareDistance(v1, v1offset, v2, v2offset, length);
+        }
         return NativeSimdOps.euclidean_f32(((MemorySegmentVectorFloat) v1).get(), v1offset,
                                           ((MemorySegmentVectorFloat) v2).get(), v2offset,
                                           length);
@@ -275,13 +281,14 @@ class NativeVectorUtilSupport extends PanamaVectorUtilSupport
 
     @Override
     public float cosine(VectorFloat<?> v1, VectorFloat<?> v2) {
-        return NativeSimdOps.cosine_f32(((MemorySegmentVectorFloat) v1).get(), 0,
-                                       ((MemorySegmentVectorFloat) v2).get(), 0,
-                                       v1.length());
+        return cosine(v1, 0, v2, 0, v1.length());
     }
 
     @Override
     public float cosine(VectorFloat<?> v1, int v1offset, VectorFloat<?> v2, int v2offset, int length) {
+        if (length <= NATIVE_DIMENSION_THRESHOLD) {
+            return super.cosine(v1, v1offset, v2, v2offset, length);
+        }
         return NativeSimdOps.cosine_f32(((MemorySegmentVectorFloat) v1).get(), v1offset,
                                        ((MemorySegmentVectorFloat) v2).get(), v2offset,
                                        length);
@@ -289,13 +296,14 @@ class NativeVectorUtilSupport extends PanamaVectorUtilSupport
 
     @Override
     public float dotProduct(VectorFloat<?> v1, VectorFloat<?> v2) {
-        return NativeSimdOps.dot_product_f32(((MemorySegmentVectorFloat) v1).get(), 0,
-                                             ((MemorySegmentVectorFloat) v2).get(), 0,
-                                             v1.length());
+        return dotProduct(v1, 0, v2, 0, v1.length());
     }
 
     @Override
     public float dotProduct(VectorFloat<?> v1, int v1offset, VectorFloat<?> v2, int v2offset, int length) {
+        if (length <= NATIVE_DIMENSION_THRESHOLD) {
+            return super.dotProduct(v1, v1offset, v2, v2offset, length);
+        }
         return NativeSimdOps.dot_product_f32(((MemorySegmentVectorFloat) v1).get(), v1offset,
                                              ((MemorySegmentVectorFloat) v2).get(), v2offset,
                                              length);
