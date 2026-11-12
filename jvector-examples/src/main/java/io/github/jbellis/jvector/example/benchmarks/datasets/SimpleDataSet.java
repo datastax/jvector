@@ -100,7 +100,8 @@ public class SimpleDataSet implements DataSet {
 
     @Override
     public int getDimension() {
-        return getBaseRavv().dimension();
+        // A list-backed dataset makes its RAVV from this, so read the list directly until it exists.
+        return baseRavv != null ? baseRavv.dimension() : baseVectors.get(0).length();
     }
 
     @Override
