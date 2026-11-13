@@ -71,7 +71,7 @@ import static io.github.jbellis.jvector.graph.disk.AbstractGraphIndexWriter.FOOT
 public class OnDiskGraphIndex implements ImmutableGraphIndex, AutoCloseable, Accountable
 {
     private static final Logger logger = LoggerFactory.getLogger(OnDiskGraphIndex.class);
-    public static final int CURRENT_VERSION = 6;
+    public static final int CURRENT_VERSION = 7;
     static final int MAGIC = 0xFFFF0D61; // FFFF to distinguish from old graphs, which should never start with a negative size "ODGI"
     static final VectorTypeSupport vectorTypeSupport = VectorizationProvider.getInstance().getVectorTypeSupport();
     final ReaderSupplier readerSupplier;

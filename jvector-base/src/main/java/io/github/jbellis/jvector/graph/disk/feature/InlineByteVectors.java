@@ -20,6 +20,7 @@ import io.github.jbellis.jvector.annotations.Experimental;
 import io.github.jbellis.jvector.disk.IndexWriter;
 import io.github.jbellis.jvector.disk.RandomAccessReader;
 import io.github.jbellis.jvector.graph.disk.CommonHeader;
+import io.github.jbellis.jvector.graph.disk.OnDiskGraphIndex;
 import io.github.jbellis.jvector.vector.VectorizationProvider;
 import io.github.jbellis.jvector.vector.types.ByteSequence;
 import io.github.jbellis.jvector.vector.types.VectorTypeSupport;
@@ -72,8 +73,14 @@ public class InlineByteVectors extends AbstractFeature {
         return new InlineByteVectors(header.dimension);
     }
 
+    @Deprecated
     @Override
     public void writeHeader(IndexWriter out) {
+        writeHeader(out, OnDiskGraphIndex.CURRENT_VERSION);
+    }
+
+    @Override
+    public void writeHeader(IndexWriter out, int version) {
         // common header carries dimension; nothing extra needed
     }
 

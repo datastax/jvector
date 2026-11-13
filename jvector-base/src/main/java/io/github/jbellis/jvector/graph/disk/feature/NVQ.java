@@ -69,9 +69,15 @@ public class NVQ extends AbstractFeature {
         }
     }
 
+    @Deprecated
     @Override
     public void writeHeader(IndexWriter out) throws IOException {
-        nvq.write(out, OnDiskGraphIndex.CURRENT_VERSION);
+        writeHeader(out, OnDiskGraphIndex.CURRENT_VERSION);
+    }
+
+    @Override
+    public void writeHeader(IndexWriter out, int version) throws IOException {
+        nvq.write(out, version);
     }
 
     @Override

@@ -36,7 +36,26 @@ public interface Feature extends Comparable<Feature> {
 
     int featureSize();
 
+    /**
+     * Writes this feature's header at {@link io.github.jbellis.jvector.graph.disk.OnDiskGraphIndex#CURRENT_VERSION}.
+     *
+     * @deprecated a header embedded in a graph must be written at the graph's version; use
+     *             {@link #writeHeader(IndexWriter, int)}
+     */
+    @Deprecated
     void writeHeader(IndexWriter out) throws IOException;
+
+    /**
+     * Writes this feature's header for a graph written at {@code version}. Features that serialize a
+     * compressor write it at this version, so a graph written at an older version is laid out as that
+     * version wrote it. The default ignores the version, for headers that don't depend on it.
+     *
+     * @param out the output to write to
+     * @param version the on-disk format version of the graph being written
+     */
+    default void writeHeader(IndexWriter out, int version) throws IOException {
+        writeHeader(out);
+    }
 
     default void writeInline(IndexWriter out, State state) throws IOException {
         // default no-op
