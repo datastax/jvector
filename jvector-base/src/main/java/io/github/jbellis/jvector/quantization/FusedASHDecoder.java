@@ -61,7 +61,7 @@ import java.util.Objects;
  *
  * <pre>
  *   rawDotProduct = scale * &lt;Aq, code&gt; + &lt;q, μ&gt; + offset
- *   similarity = max(0, (1 + rawDotProduct) / 2)
+ *   similarity = (1 + rawDotProduct) / 2   (unclamped, the exact DOT_PRODUCT scale)
  * </pre>
  */
 public final class FusedASHDecoder implements ScoreFunction.AdaptiveApproximateScoreFunction {

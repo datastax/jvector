@@ -81,9 +81,9 @@ HWY_INLINE int AshFinish(D d, const unsigned char *header, int blockSize, int la
     const auto offset = AshPromoteHalf(d, offsetBits);
     const auto raw = hn::Add(hn::MulAdd(scale, dot, hn::Set(d, landmarkDot)), offset);
     const auto half = hn::Set(d, 0.5f);
+    // (1 + dot) / 2, unclamped, as ASHScorer.toSimilarity.
     const auto similarity = hn::MulAdd(raw, half, half);
-    const auto result = hn::IfThenElse(hn::IsNaN(similarity), similarity, hn::Max(hn::Zero(d), similarity));
-    hn::StoreN(result, d, out, count);
+    hn::StoreN(similarity, d, out, count);
     return kAshSuccess;
 }
 

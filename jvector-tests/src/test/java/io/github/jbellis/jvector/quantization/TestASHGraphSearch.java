@@ -123,12 +123,25 @@ public class TestASHGraphSearch {
     }
 
     @Test
-    public void dotProductSimilarityHasNonnegativeLowerBound() {
-        assertEquals(0f, ASHScorer.toSimilarity(-1.25f), 0f);
+    public void dotProductSimilarityUsesTheExactScaleUnclamped() {
+        assertEquals(-0.125f, ASHScorer.toSimilarity(-1.25f), 0f);
         assertEquals(0f, ASHScorer.toSimilarity(-1f), 0f);
         assertEquals(0.375f, ASHScorer.toSimilarity(-0.25f), 0f);
         assertEquals(0.5f, ASHScorer.toSimilarity(0f), 0f);
         assertEquals(1f, ASHScorer.toSimilarity(1f), 0f);
+        assertEquals(3f, ASHScorer.toSimilarity(5f), 0f);
+        for (float dot : new float[] {-7.5f, -1.25f, 0f, 0.75f, 4f}) {
+            float a = 0.3f * dot, b = 0.7f * dot;
+            assertEquals(VectorSimilarityFunction.DOT_PRODUCT.compare(vector(a), vector(1f))
+                    - VectorSimilarityFunction.DOT_PRODUCT.compare(vector(b), vector(1f)),
+                    ASHScorer.toSimilarity(a) - ASHScorer.toSimilarity(b), 1e-6f);
+        }
+    }
+
+    private static VectorFloat<?> vector(float value) {
+        var v = VectorizationProvider.getInstance().getVectorTypeSupport().createFloatVector(1);
+        v.set(0, value);
+        return v;
     }
 
     private static void restore(String name, String value) {

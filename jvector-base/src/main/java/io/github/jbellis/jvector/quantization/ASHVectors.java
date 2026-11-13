@@ -32,8 +32,8 @@ import java.util.Objects;
 
 /**
  * Container for ASH-compressed vectors with scalar, SIMD, and block scoring.
- * All public node and block scorers return nonnegative DOT_PRODUCT similarities,
- * {@code max(0, (1 + rawDotProduct) / 2)}, rather than raw ASH dot products.
+ * All public node and block scorers return DOT_PRODUCT similarities on the exact scale,
+ * {@code (1 + rawDotProduct) / 2} (unclamped), rather than raw ASH dot products.
  *
  * <p>
  * This class implements the functionality required for:

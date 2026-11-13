@@ -55,15 +55,14 @@ import io.github.jbellis.jvector.vector.types.VectorFloat;
  */
 public final class ASHScorer {
     /**
-     * Converts a raw ASH dot-product estimate to the graph's DOT_PRODUCT similarity
-     * scale. Graph search uses zero as its minimum similarity, including during
-     * hierarchy descent; passing a negative raw dot product can lose the entry point.
-     * Clamp the lower tail because quantization can estimate a dot product below -1.
-     * Kernels and this class's ASHScoreFunction retain raw dot products; node and
-     * block scorer adapters must apply this conversion exactly once.
+     * Converts a raw ASH dot-product estimate to the graph's DOT_PRODUCT similarity scale, (1 + dot) / 2, the same
+     * scale exact DOT_PRODUCT scoring uses. The estimate is not clamped: like an exact dot product of vectors that are
+     * not unit length, it can fall below -1 or above 1, and ranking needs those values. Graph search starts hierarchy
+     * descent from negative infinity, so negative similarities do not lose the entry point. Kernels and this class's
+     * ASHScoreFunction retain raw dot products; node and block scorer adapters must apply this conversion exactly once.
      */
     public static float toSimilarity(float dotProduct) {
-        return Math.max(0f, (1f + dotProduct) / 2f);
+        return (1f + dotProduct) / 2f;
     }
 
     private final AsymmetricHashing ash;

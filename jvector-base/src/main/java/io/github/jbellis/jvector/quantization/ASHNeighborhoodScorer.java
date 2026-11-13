@@ -27,7 +27,7 @@ import java.util.Objects;
  *
  * <p>Construction computes the query projection, landmark terms, and nibble LUT once. Each
  * {@link #score} call then performs lookup, binary16 header decoding, landmark correction, and
- * conversion to the graph's nonnegative DOT_PRODUCT similarity. The graph decoder and isolated
+ * conversion to the graph's DOT_PRODUCT similarity, (1 + dot) / 2, unclamped. The graph decoder and isolated
  * benchmark share this implementation.</p>
  *
  * <p>Publicly constructed prepared state is independently owned and immutable. Such instances may be shared across threads with independent output
