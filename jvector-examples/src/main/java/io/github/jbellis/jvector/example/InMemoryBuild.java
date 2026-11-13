@@ -17,6 +17,7 @@
 package io.github.jbellis.jvector.example;
 
 import io.github.jbellis.jvector.disk.ReaderSupplierFactory;
+import io.github.jbellis.jvector.example.benchmarks.datasets.ByteDataSet;
 import io.github.jbellis.jvector.example.benchmarks.datasets.DataSet;
 import io.github.jbellis.jvector.graph.ImmutableGraphIndex;
 import io.github.jbellis.jvector.graph.disk.OnDiskGraphIndex;
@@ -81,6 +82,38 @@ final class InMemoryBuild implements IndexBuildStrategy {
 
             var index = OnDiskGraphIndex.load(ReaderSupplierFactory.open(graphPath));
             indexes.put(features, index);
+        }
+        return new BuiltIndexes(indexes, new LinkedHashMap<>(), buildTimeS);
+    }
+
+    /** Builds an int8 index in memory and writes each requested feature set; int8 supports INLINE_BYTE_VECTORS. */
+    BuiltIndexes buildInt8(List<? extends Set<FeatureId>> featureSets, BuildConfig build, ByteDataSet ds) throws IOException {
+        var byteVectors = ds.getBaseRavv();
+        Map<Set<FeatureId>, ImmutableGraphIndex> indexes = new LinkedHashMap<>();
+        var builder = GraphBuilderFactory.forByteVectors(byteVectors, ds.getSimilarityFunction(), build);
+        long start = System.nanoTime();
+        var onHeapGraph = builder.build(byteVectors);
+        double buildTimeS = (System.nanoTime() - start) / 1_000_000_000.0;
+        System.out.format("Build (int8) M=%d overflow=%.2f ef=%d in %.2fs%n",
+                          build.M, build.neighborOverflow, build.efConstruction, buildTimeS);
+        for (int i = 0; i <= onHeapGraph.getMaxLevel(); i++) {
+            System.out.format("  L%d: %d nodes, %.2f avg degree%n",
+                              i, onHeapGraph.size(i), onHeapGraph.getAverageDegree(i));
+        }
+        int n = 0;
+        for (var features : featureSets) {
+            if (FeatureProviders.anyMatch(features, p -> !p.supportsInMemoryBuild())) {
+                System.out.println("Skipping " + features + " when building in memory: it needs a compressed build");
+                continue;
+            }
+            var graphPath = workDirectory.resolve("graph" + n++);
+            var ctx = FeatureProviders.configureWriter(features, onHeapGraph, graphPath, byteVectors);
+            try (var writer = ctx.buildWriter()) {
+                start = System.nanoTime();
+                writer.write(ctx.ordinalSuppliers());
+                System.out.format("Wrote %s in %.2fs%n", features, (System.nanoTime() - start) / 1_000_000_000.0);
+            }
+            indexes.put(features, OnDiskGraphIndex.load(ReaderSupplierFactory.open(graphPath)));
         }
         return new BuiltIndexes(indexes, new LinkedHashMap<>(), buildTimeS);
     }

@@ -17,6 +17,7 @@
 package io.github.jbellis.jvector.example.util;
 
 import io.github.jbellis.jvector.vector.VectorizationProvider;
+import io.github.jbellis.jvector.vector.types.ByteSequence;
 import io.github.jbellis.jvector.vector.types.VectorFloat;
 import io.github.jbellis.jvector.vector.types.VectorTypeSupport;
 
@@ -53,6 +54,38 @@ public class SiftLoader {
                 var floatBuffer = byteBuffer.asFloatBuffer();
                 floatBuffer.get(vector);
                 vectors.add(vectorTypeSupport.createFloatVector(vector));
+            }
+        } catch (IOException ex) {
+            throw new UncheckedIOException(ex);
+        }
+        return vectors;
+    }
+
+    /// Reads a `.bvecs`-layout file whose components are **signed int8** values (-128..127).
+    ///
+    /// The layout is the same as the TexMex `.bvecs` format (a little-endian int dimension followed by
+    /// `dimension` bytes, per vector), but the payload is interpreted as signed.
+    /// **Unsigned uint8 payloads, which is what conventional `.bvecs` files such as SIFT1B/BIGANN contain
+    /// (0..255), are not supported.**
+    /// Bytes are copied as-is, so an unsigned file would be silently misread (200 becomes -56)
+    /// and distances would change. Convert unsigned data to signed int8 before loading it.
+    ///
+    /// @param filePath path to a signed-int8 `.bvecs`-layout file
+    /// @return the vectors, as signed int8 byte sequences
+    public static List<ByteSequence<?>> readInt8Bvecs(String filePath) {
+        var vectors = new ArrayList<ByteSequence<?>>();
+        try (var dis = new DataInputStream(new BufferedInputStream(new FileInputStream(filePath)))) {
+            while (dis.available() > 0) {
+                var dimension = Integer.reverseBytes(dis.readInt());
+                if (dimension <= 0) {
+                    throw new IOException("Corrupt bvecs file: negative or zero dimension " + dimension + " (possible file corruption or wrong format)");
+                }
+                if (dimension > 100_000) {
+                    throw new IOException("Unreasonable dimension " + dimension + " in bvecs file (possible file corruption or wrong format)");
+                }
+                var data = new byte[dimension];
+                dis.readFully(data);
+                vectors.add(vectorTypeSupport.createByteSequence(data));
             }
         } catch (IOException ex) {
             throw new UncheckedIOException(ex);

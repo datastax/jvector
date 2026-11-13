@@ -16,6 +16,8 @@
 
 package io.github.jbellis.jvector.example;
 
+import io.github.jbellis.jvector.example.benchmarks.datasets.BaseDataSet;
+import io.github.jbellis.jvector.example.benchmarks.datasets.ByteDataSet;
 import io.github.jbellis.jvector.example.benchmarks.datasets.DataSet;
 import io.github.jbellis.jvector.example.util.CompressorParameters;
 import io.github.jbellis.jvector.example.yaml.MultiConfig;
@@ -51,6 +53,14 @@ public final class GridSpec {
 
     /** The sweep a dataset's YAML config describes. */
     public static GridSpec fromConfig(MultiConfig config) {
+        return fromConfig(config, null);
+    }
+
+    /**
+     * Like {@link #fromConfig(MultiConfig)}, but for an int8 dataset the feature sets are the fixed
+     * int8 set, since reranking and fused-graph options do not apply to byte vectors.
+     */
+    public static GridSpec fromConfig(MultiConfig config, BaseDataSet ds) {
         var construction = config.construction;
         var search = config.search;
         return fromGrids(construction.addHierarchy,
@@ -59,7 +69,7 @@ public final class GridSpec {
                 construction.neighborOverflow,
                 construction.efConstruction,
                 construction.getCompressorParameters(),
-                construction.getFeatureSets(),
+                ds instanceof ByteDataSet ? construction.getInt8FeatureSets() : construction.getFeatureSets(),
                 SearchConfig.builder()
                         .searchCompressors(search.getCompressorParameters())
                         .topKGrid(search.topKOverquery)
