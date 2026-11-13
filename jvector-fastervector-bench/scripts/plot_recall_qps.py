@@ -1,6 +1,8 @@
 """Recall@10 vs QPS: BenchYAML (graph) and BenchIvfYAML (IVF-ASH) experiments.csv on one chart.
 
-usage: python3 plot_recall_qps.py GRAPH.csv IVF.csv [OUT.png] [--ivf-qps-column COL]
+usage: python3 plot_recall_qps.py GRAPH.csv IVF.csv [OUT.png] [--ivf-qps-column COL] [--fvec RESULTS.csv]...
+
+--fvec adds fastervector's fvec-bench results.csv (throughput cases), one curve per build.
 """
 import argparse
 
@@ -21,20 +23,34 @@ def main():
     p.add_argument("--ivf-qps-column", default="search.throughput.avg_qps",
                    help="IVF throughput column: avg_qps (batched) or coalesced.avg_qps")
     p.add_argument("--recall", default="search.accuracy.recall_at_10")
+    p.add_argument("--fvec", action="append", default=[],
+                   help="an fvec-bench results.csv; repeatable")
     a = p.parse_args()
 
     g = pd.read_csv(a.graph_csv)
     ivf = pd.read_csv(a.ivf_csv)
 
-    curves = []  # (label, recall, qps, knob values, knob name)
+    # (label, recall, qps, knob values, knob name, color key, dashed): one color per graph build or
+    # IVF nlist, so the same IVF build through jvector (solid) and fvec-bench (dashed) shares a hue
+    curves = []
     for (m, ef, comp), d in g.groupby(["M", "efConstruction", "build_compressor"]):
         d = d.sort_values("overquery")
         curves.append((f"graph M={m} ef={ef}, fused PQ + NVQ rerank",
-                       d[a.recall], d["search.throughput.avg_qps"], d["overquery"], "oq"))
+                       d[a.recall], d["search.throughput.avg_qps"], d["overquery"], "oq",
+                       ("graph", m, ef, comp), False))
     for (nlist, sf), d in ivf.groupby(["nlist", "storageFactor"]):
         d = d.sort_values("nprobe")
         curves.append((f"IVF-ASH nlist={nlist} sf={sf}",
-                       d[a.recall], d[a.ivf_qps_column], d["nprobe"], "np"))
+                       d[a.recall], d[a.ivf_qps_column], d["nprobe"], "np",
+                       ("ivf", nlist), False))
+    for path in a.fvec:
+        f = pd.read_csv(path)
+        f = f[f["mode"] == "throughput"]
+        for (nc, qd, bits, storage), d in f.groupby(["ncentroids", "quantized_dim", "ashbits", "storage"]):
+            d = d.sort_values("nprobe")
+            curves.append((f"fvec-bench nlist={nc} q{qd} b{bits} {storage.split('-')[0]}",
+                           d["recall"], d["qps_mean"], d["nprobe"], "np",
+                           ("ivf", nc), True))
 
     plt.rcParams.update({"font.size": 10, "axes.edgecolor": MUTED, "axes.labelcolor": INK,
                          "xtick.color": MUTED, "ytick.color": MUTED})
@@ -42,9 +58,11 @@ def main():
     ax.set_facecolor("#fcfcfb")
     fig.patch.set_facecolor("#fcfcfb")
 
-    for i, (label, r, q, knob, kname) in enumerate(curves):
-        c = SERIES[i % len(SERIES)]
-        ax.plot(r, q, color=c, lw=2, marker=MARKERS[i % len(MARKERS)], ms=6,
+    keys = list(dict.fromkeys(c[5] for c in curves))
+    for label, r, q, knob, kname, key, dashed in curves:
+        i = keys.index(key)
+        ax.plot(r, q, color=SERIES[i % len(SERIES)], lw=2, ls="--" if dashed else "-",
+                marker=MARKERS[i % len(MARKERS)], ms=6,
                 markeredgecolor="#fcfcfb", markeredgewidth=1.5, label=label, zorder=3)
         # label the knob at the ends and every other point, not every point
         n = len(r)

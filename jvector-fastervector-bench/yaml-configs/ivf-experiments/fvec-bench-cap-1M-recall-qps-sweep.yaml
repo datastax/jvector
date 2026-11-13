@@ -1,0 +1,53 @@
+# SPDX-License-Identifier: Apache-2.0
+#
+# fvec-bench suite (fastervector's own Rust harness, not BenchIvfYAML): the recall-vs-QPS sweep
+# in cap-1M-recall-qps-sweep.yml, run on the engine directly, so the curve shows what the FFM
+# layer costs. Every build and store setting is spelled out to match what jvector's IvfAshIndex
+# gets from the C API, because fvec-bench's own cap-1M defaults (quantized_dim 1536, 1 bit) are
+# the same 32x size but a different encoding:
+#
+#   storageFactor 1.0 -> quant_dim = dim * 1.0 / ASH_BITS = 768, ash_bits 2, ITQ
+#   one ssdPaths entry -> one device file; stripe 64 KiB, 4-byte ids, queue depth 64
+#   search: prefetch on, one io thread per search thread
+#
+# Run from a fastervector checkout, with the store on the disk the jvector run used:
+#
+#   fvec-bench run <this file> --ssd-dir /path/to/ivf_cache [--catalog <catalog listing cap-1M>]
+#
+# The throughput mode times one batch search over all queries, which is BenchIvfYAML's
+# batched QPS. results.csv in the run directory is what plot_recall_qps.py reads.
+schema_version: 1
+
+config:
+  default:
+    datasets:
+      names: [ cap-1M ]           # not in the shipped catalog: --catalog, or a registered one
+
+    construction:
+      index_type: ivfash
+      ncentroids: [ 1024, 4096 ]  # nlist
+      quantized_dim: [ 768 ]
+      ashbits: [ 2 ]
+      optimizer: [ itq ]
+      threads: auto
+
+    search:
+      top_k: 10
+      nprobe: [ 1, 2, 3, 4, 6, 8, 12, 16, 24, 32, 48, 64, 128 ]
+      threads: [ auto ]           # every CPU, as searchThreads: 0
+      modes: [ throughput ]
+
+    storage:
+      - medium: ssd
+        dir: /mnt/nvme/ivf_cache  # replaced by --ssd-dir
+        k: 1
+        stripe_block: 65536
+        id_bytes: 4
+        io_queue_depth: 64
+        prefetch: [ 1 ]
+        io_threads: [ threads ]
+
+    criterion:
+      sample_size: 10
+      warm_up_s: 2
+      measurement_s: 10

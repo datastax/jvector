@@ -294,3 +294,9 @@ It needs `pandas` and `matplotlib`. It draws one curve per graph build and per I
 `(nlist, storageFactor)`, with Recall@10 on x and QPS on a log scale, and labels points with their
 overquery or nprobe. IVF's curve uses batched QPS; `--ivf-qps-column
 search.throughput.coalesced.avg_qps` plots coalesced QPS instead.
+
+To see what the FFM layer costs, run the same sweep through fastervector's own harness,
+`fvec-bench`, with `yaml-configs/ivf-experiments/fvec-bench-cap-1M-recall-qps-sweep.yaml`. It sets
+the build and store parameters jvector's `IvfAshIndex` gets from the C API, which differ from
+fvec-bench's own defaults for cap-1M. Add its `results.csv` with `--fvec <run dir>/results.csv`;
+each IVF build keeps its color, drawn dashed for fvec-bench.
