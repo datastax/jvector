@@ -1,0 +1,46 @@
+yamlSchemaVersion: 1
+onDiskIndexVersion: 6
+
+# Recall-vs-QPS sweep, graph side. Pairs with
+# jvector-fastervector-bench/yaml-configs/ivf-experiments/cap-1M-recall-qps-sweep.yml, which sweeps
+# IVF's nprobe on the same dataset and topK. The index is cap-1M.yml (this directory) unchanged, the
+# regression config: fused PQ mFactor 8, NVQ reranking; only topKOverquery is swept.
+#
+# It has to live in this directory: BenchYAML prefixes the name it is given with this directory and
+# silently falls back to default.yml if the file isn't here. Run with BenchYAML, not AutoBenchYAML,
+# so each overquery value is its own row in experiments.csv:
+#
+#   java ... io.github.jbellis.jvector.example.BenchYAML cap-1M-recall-qps-sweep.yml
+#
+# Overquery 1.0 gives Recall@10 0.66 on cap-1M; recall approaches its ceiling by about 10-20, so
+# the values are dense at the low end and stop at 20.
+dataset: cap-1M
+useDatasetPrefetching: false
+
+construction:
+  outDegree: [32]
+  efConstruction: [100]
+  neighborOverflow: [1.2f]
+  addHierarchy: [Yes]
+  refineFinalGraph: [Yes]
+  fusedGraph: [Yes]
+  compression:
+    - type: PQ
+      parameters:
+        mFactor: 8
+        centerData: No
+        anisotropicThreshold: -1.0
+  reranking:
+    - NVQ
+  useSavedIndexIfExists: Yes  # reruns reuse the index and only repeat the searches
+
+search:
+  topKOverquery:
+    10: [1.0, 1.5, 2.0, 3.0, 5.0, 8.0, 12.0, 20.0]
+  useSearchPruning: [Yes]
+  compression:
+    - type: PQ
+      parameters:
+        mFactor: 8
+        centerData: No
+        anisotropicThreshold: -1.0

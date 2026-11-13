@@ -1,0 +1,28 @@
+yamlSchemaVersion: 1
+
+# Recall-vs-QPS sweep, IVF side. Pairs with
+# jvector-examples/yaml-configs/index-parameters/cap-1M-recall-qps-sweep.yml, which sweeps the graph's topKOverquery on the same dataset and topK. Run with BenchIvfYAML, not
+# AutoBenchIvfYAML: the Auto runner averages every search point into one row, and a sweep needs
+# one row per point (run-config.yml's logging section writes them to experiments.csv).
+#
+#   java ... -Divf.perQuery=false io.github.jbellis.jvector.fastervector.bench.BenchIvfYAML \
+#       jvector-fastervector-bench/yaml-configs/ivf-experiments/cap-1M-recall-qps-sweep.yml
+#
+# nprobe is the knob, like the graph's overquery: each value is one point on the curve. On cap-1M
+# at nlist 1024, nprobe 4 gives Recall@10 0.74 and recall flattens at about 0.86 (32x) by
+# nprobe 64-128, so the values are dense at the low end, where the curve bends, and stop at 128.
+# nlist 4096 gives smaller lists, so it needs a larger nprobe for the same recall and usually
+# gives more QPS at high recall; both are worth plotting as separate curves.
+dataset: cap-1M
+
+construction:
+  nlist: [1024, 4096]         # ~sqrt(N) and ~4 sqrt(N); one curve each
+  storageFactor: [1.0]        # 32x, the graph's PQ mFactor 8; add 2.0 (16x) to raise the recall ceiling (~0.89)
+  buildThreads: 0             # all CPUs; override with -Divf.buildThreads
+  ssdPaths: [ivf_cache]       # override with -Divf.ssdPaths; use the same disk the graph index is on
+  useSavedIndexIfExists: Yes  # reruns reuse the indexes and only repeat the searches
+
+search:
+  topKNprobe:
+    10: [1, 2, 3, 4, 6, 8, 12, 16, 24, 32, 48, 64, 128]
+  searchThreads: [0]          # 0 = all CPUs, as the graph's QPS uses

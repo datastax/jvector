@@ -25,6 +25,7 @@ import io.github.jbellis.jvector.fastervector.bench.IvfConfig.SearchPoint;
 import io.github.jbellis.jvector.graph.SearchResult;
 
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
 
 /**
@@ -79,6 +80,9 @@ public class IvfAccuracyBenchmark implements IvfQueryBenchmark {
         }
 
         int topK = point.topK();
+        // A small nprobe can probe lists holding fewer than topK vectors, so a query can return
+        // fewer than topK results; the missing ones count as misses
+        results.replaceAll(r -> padded(r, topK));
         var groundTruth = system.dataSet().getGroundTruth();
         List<Metric> out = new ArrayList<>();
         if (computeRecall) {
@@ -110,5 +114,21 @@ public class IvfAccuracyBenchmark implements IvfQueryBenchmark {
         // IVF has no graph traversal, so the visit counts are zero
         float worst = nodes.length == 0 ? Float.NaN : nodes[nodes.length - 1].score;
         return new SearchResult(nodes, 0, 0, 0, 0, worst);
+    }
+
+    /**
+     * {@code result} filled up to {@code k} nodes with ordinals -1, -2, ...: they match no ground
+     * truth, and they are distinct because the accuracy metrics reject repeated ordinals.
+     */
+    static SearchResult padded(SearchResult result, int k) {
+        var nodes = result.getNodes();
+        if (nodes.length >= k) {
+            return result;
+        }
+        var out = Arrays.copyOf(nodes, k);
+        for (int i = nodes.length; i < k; i++) {
+            out[i] = new SearchResult.NodeScore(-1 - (i - nodes.length), Float.NEGATIVE_INFINITY);
+        }
+        return new SearchResult(out, 0, 0, 0, 0, result.getWorstApproximateScoreInTopK());
     }
 }

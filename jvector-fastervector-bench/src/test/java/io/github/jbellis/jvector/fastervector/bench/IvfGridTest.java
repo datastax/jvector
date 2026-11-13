@@ -83,6 +83,20 @@ class IvfGridTest {
     }
 
     @Test
+    void shortResultsCountTheMissingAsMisses() {
+        // a small nprobe can probe lists holding fewer than topK vectors
+        var ivf = new io.github.jbellis.jvector.fastervector.SearchResult(List.of(
+                List.of(new NodeScore(0, 1f), new NodeScore(1, 0.5f), new NodeScore(2, 0.2f)),
+                List.of(new NodeScore(5, 1f))));
+        var results = IvfAccuracyBenchmark.toSearchResults(ivf);
+        results.replaceAll(r -> IvfAccuracyBenchmark.padded(r, 3));
+        assertEquals(3, results.get(1).getNodes().length);
+        // query 0 finds all three true neighbors, query 1 one of three
+        double recall = AccuracyMetrics.recallFromSearchResults(List.of(List.of(0, 1, 2), List.of(5, 6, 7)), results, 3, 3);
+        assertEquals(4.0 / 6, recall, 1e-9);
+    }
+
+    @Test
     void indexLayoutMatchesTheBuilder() {
         List<Path> ssds = List.of(Path.of("/ssd0"), Path.of("/ssd1"));
         assertEquals(Path.of("/ssd0/ds/nlist4-sf1.0/dev0.ash.blk.manifest"), IvfSystem.manifestPath(ssds, "ds/nlist4-sf1.0"));
