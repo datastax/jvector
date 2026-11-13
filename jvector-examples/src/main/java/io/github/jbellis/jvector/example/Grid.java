@@ -47,6 +47,7 @@ import io.github.jbellis.jvector.graph.disk.feature.FusedPQ;
 import io.github.jbellis.jvector.graph.disk.feature.NVQ;
 import io.github.jbellis.jvector.quantization.NVQVectors;
 import io.github.jbellis.jvector.quantization.ProductQuantization;
+import io.github.jbellis.jvector.vector.VectorSimilarityFunction;
 import io.github.jbellis.jvector.vector.VectorizationProvider;
 import io.github.jbellis.jvector.quantization.VectorCompressor;
 import io.github.jbellis.jvector.util.ExplicitThreadLocal;
@@ -849,7 +850,14 @@ public class Grid {
 
 
         private final ExplicitThreadLocal<GraphSearcher> searchers = ExplicitThreadLocal.withInitial(() -> {
-            return new GraphSearcher(index);
+            var searcher = new GraphSearcher(index);
+            // Benchmark knobs: jvector.bench.adaptive=false turns adaptive stopping off; jvector.bench.adaptiveGamma
+            // sets its margin.
+            String gamma = System.getProperty("jvector.bench.adaptiveGamma");
+            boolean adaptive = Boolean.parseBoolean(System.getProperty("jvector.bench.adaptive", "true"));
+            if (gamma != null) searcher.useAdaptiveTermination(adaptive, Float.parseFloat(gamma));
+            else searcher.useAdaptiveTermination(adaptive);
+            return searcher;
         });
 
         ConfiguredSystem(DataSet ds, ImmutableGraphIndex index, CompressedVectors cv, Set<FeatureId> features) {
@@ -867,6 +875,11 @@ public class Grid {
             this.scoresFromIndex = FeatureProviders.anyMatch(features, FeatureProvider::providesApproximateScoring);
             // File-backed sources borrow scratch storage; concurrent scorers need separate views.
             this.exactVectors = ds.getBaseRavv().threadLocalSupplier();
+        }
+
+        /** Top-K searches stop adaptively, reading scores as distances under the dataset's similarity function. */
+        private VectorSimilarityFunction adaptiveSimilarity() {
+            return ds.getSimilarityFunction();
         }
 
         /** Metadata from the same ASH model used for query scoring. */
@@ -904,7 +917,7 @@ public class Grid {
                 asf = cv.precomputedScoreFunctionFor(queryVector, ds.getSimilarityFunction());
             }
             var rr = scoringView.rerankerFor(queryVector, ds.getSimilarityFunction());
-            return new DefaultSearchScoreProvider(asf, rr, features.contains(FeatureId.FUSED_ASH) || cv instanceof ASHVectors);
+            return new DefaultSearchScoreProvider(asf, rr, adaptiveSimilarity());
         }
 
         private SearchScoreProvider configuredScorer(VectorFloat<?> query, ImmutableGraphIndex.View view) {
@@ -933,7 +946,7 @@ public class Grid {
                     reranker = nvq.rerankerFor(query, similarity, diskView);
                 }
             }
-            return new DefaultSearchScoreProvider(score, reranker, features.contains(FeatureId.FUSED_ASH) || cv instanceof ASHVectors);
+            return new DefaultSearchScoreProvider(score, reranker, adaptiveSimilarity());
         }
 
         public GraphSearcher getSearcher() {

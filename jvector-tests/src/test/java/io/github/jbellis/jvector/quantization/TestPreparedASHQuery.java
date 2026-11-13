@@ -228,7 +228,7 @@ public class TestPreparedASHQuery {
                         preparer.prepareBatch(new VectorFloat<?>[]{values[q]}, new PreparedQuery[]{state}, 1);
                         var provider = queuedView.scoreProviderFor(state, true);
                         var ordinary = new DefaultSearchScoreProvider(
-                                directView.approximateScoreFunctionFor(values[q], DOT), directView.rerankerFor(values[q], DOT), true);
+                                directView.approximateScoreFunctionFor(values[q], DOT), directView.rerankerFor(values[q], DOT), DOT);
                         Bits accepted = n -> (n & 1) == 0;
                         assertSameResults(direct.search(ordinary, 3, 17, 0f, 0f, accepted),
                                 queued.search(provider, 3, 17, 0f, 0f, accepted));

@@ -24,8 +24,8 @@ import io.github.jbellis.jvector.vector.types.VectorFloat;
 public final class DefaultSearchScoreProvider implements SearchScoreProvider {
     private final ScoreFunction scoreFunction;
     private final ScoreFunction.ExactScoreFunction reranker;
-    private final boolean adaptiveDotProductTermination;
-    private final boolean adaptiveScoresAreRawDotProducts;
+    private final VectorSimilarityFunction adaptiveSimilarity;
+    private final float dotProductBound;
 
     /**
      * @param scoreFunction the primary, fast scoring function
@@ -44,28 +44,54 @@ public final class DefaultSearchScoreProvider implements SearchScoreProvider {
      * <p>
      * Most often it will be convenient to get the reranker either using `RandomAccessVectorValues.rerankerFor`
      * or `ScoringView.rerankerFor`.
+     * <p>
+     * Searches with this provider stop by the standard rule, since it cannot tell what its scores measure; use
+     * {@link #forSimilarity} to let top-K searches stop adaptively where the similarity function supports it.
      */
     public DefaultSearchScoreProvider(ScoreFunction scoreFunction, ScoreFunction.ExactScoreFunction reranker) {
-        this(scoreFunction, reranker, false, false);
+        this(scoreFunction, reranker, null);
     }
 
-    public DefaultSearchScoreProvider(ScoreFunction scoreFunction, ScoreFunction.ExactScoreFunction reranker, boolean adaptiveDotProductTermination) {
-        this(scoreFunction, reranker, adaptiveDotProductTermination, false);
+    /**
+     * @param adaptiveSimilarity the similarity function {@code scoreFunction} scores by, letting top-K searches stop
+     *                           adaptively; null keeps the standard rule
+     */
+    public DefaultSearchScoreProvider(ScoreFunction scoreFunction, ScoreFunction.ExactScoreFunction reranker,
+                                      VectorSimilarityFunction adaptiveSimilarity) {
+        this(scoreFunction, reranker, adaptiveSimilarity, Float.NaN);
     }
 
-    public DefaultSearchScoreProvider(ScoreFunction scoreFunction, ScoreFunction.ExactScoreFunction reranker, boolean adaptiveDotProductTermination, boolean adaptiveScoresAreRawDotProducts) {
+    /**
+     * @param dotProductBound for DOT_PRODUCT scores, an upper bound on the dot product between the query and any
+     *                        stored vector, used in place of the score function's own; NaN defers to it
+     */
+    public DefaultSearchScoreProvider(ScoreFunction scoreFunction, ScoreFunction.ExactScoreFunction reranker,
+                                      VectorSimilarityFunction adaptiveSimilarity, float dotProductBound) {
         assert scoreFunction != null;
         this.scoreFunction = scoreFunction;
         this.reranker = reranker;
-        this.adaptiveDotProductTermination = adaptiveDotProductTermination;
-        this.adaptiveScoresAreRawDotProducts = adaptiveScoresAreRawDotProducts;
+        this.adaptiveSimilarity = adaptiveSimilarity;
+        this.dotProductBound = dotProductBound;
+    }
+
+    /**
+     * A provider for scores of {@code similarity} whose top-K searches stop adaptively. Dot-product searches need
+     * the score function's {@link ScoreFunction#dotProductBound} and keep the standard rule without one.
+     * {@link io.github.jbellis.jvector.graph.GraphSearcher#useAdaptiveTermination} turns adaptive stopping off.
+     */
+    public static DefaultSearchScoreProvider forSimilarity(ScoreFunction scoreFunction,
+                                                           ScoreFunction.ExactScoreFunction reranker,
+                                                           VectorSimilarityFunction similarity) {
+        return new DefaultSearchScoreProvider(scoreFunction, reranker, similarity);
     }
 
     @Override
-    public boolean supportsAdaptiveDotProductTermination() { return adaptiveDotProductTermination; }
+    public VectorSimilarityFunction adaptiveSimilarity() { return adaptiveSimilarity; }
 
     @Override
-    public boolean adaptiveScoresAreRawDotProducts() { return adaptiveScoresAreRawDotProducts; }
+    public float dotProductBound() {
+        return Float.isNaN(dotProductBound) ? scoreFunction.dotProductBound() : dotProductBound;
+    }
 
     public ScoreFunction scoreFunction() {
         return scoreFunction;
@@ -82,19 +108,25 @@ public final class DefaultSearchScoreProvider implements SearchScoreProvider {
     }
 
     /**
-     * A SearchScoreProvider for a single-pass search based on exact similarity.
+     * A SearchScoreProvider for a single-pass search based on exact similarity, stopping adaptively where
+     * {@code vsf} supports it (see {@link #forSimilarity}).
      * Generally only suitable when your RandomAccessVectorValues is entirely in-memory,
      * e.g. during construction.
      */
     public static DefaultSearchScoreProvider exact(VectorFloat<?> v, VectorSimilarityFunction vsf, RandomAccessVectorValues ravv) {
+        return forSimilarity(exactScoreFunction(v, vsf, ravv), null, vsf);
+    }
+
+    /** Exact scores of {@code v} against {@code ravv}, safe for concurrent use. */
+    static ScoreFunction.ExactScoreFunction exactScoreFunction(VectorFloat<?> v, VectorSimilarityFunction vsf,
+                                                               RandomAccessVectorValues ravv) {
         // don't use ESF.reranker, we need thread safety here
-        var sf = new ScoreFunction.ExactScoreFunction() {
+        return new ScoreFunction.ExactScoreFunction() {
             @Override
             public float similarityTo(int node2) {
                 return vsf.compare(v, ravv.getVector(node2));
             }
         };
-        return new DefaultSearchScoreProvider(sf);
     }
 
     /**
@@ -110,6 +142,6 @@ public final class DefaultSearchScoreProvider implements SearchScoreProvider {
                 return vsf.compare(v, ravv.getVector(graphToRavvOrdMap[node2]));
             }
         };
-        return new DefaultSearchScoreProvider(sf);
+        return forSimilarity(sf, null, vsf);
     }
 }

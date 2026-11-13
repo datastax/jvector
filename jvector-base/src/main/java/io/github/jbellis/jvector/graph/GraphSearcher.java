@@ -71,6 +71,10 @@ public class GraphSearcher implements Closeable {
     private final AdaptiveTermination adaptiveTermination = new AdaptiveTermination();
     // The best rerankK accepted nodes scored so far in the current layer search, worst on top.
     private final NodeQueue bestScored = new NodeQueue(new BoundedLongHeap(100), NodeQueue.Order.MIN_HEAP);
+    // Adaptively: the best CAP_FACTOR * rerankK accepted nodes scored so far, whose worst score caps the search.
+    private final NodeQueue capScored = new NodeQueue(new BoundedLongHeap(AdaptiveTermination.CAP_FACTOR * 100),
+                                                      NodeQueue.Order.MIN_HEAP);
+    private int capSize;
     // Once bestScored is full: the lowest score a newly scored node may have and still be expanded.
     private float expandBar;
     private boolean adaptiveBar;
@@ -156,12 +160,21 @@ public class GraphSearcher implements Closeable {
         this.boundCandidates = enabled;
     }
 
-    /** Enable or disable adaptive stopping for score providers that explicitly support it. */
+    /**
+     * Enable or disable adaptive stopping for top-K searches whose score providers name their similarity function
+     * ({@link SearchScoreProvider#adaptiveSimilarity}) or whose score functions require it. Enabled by default. A search
+     * that stops adaptively expands at least what the standard rule would and at most what a standard search with
+     * twice the beam would.
+     */
     public void useAdaptiveTermination(boolean enabled) {
         adaptiveTerminationEnabled = enabled;
     }
 
-    /** Configure the relative squared-distance margin for adaptive stopping. */
+    /**
+     * As {@link #useAdaptiveTermination(boolean)}, with {@code gamma} the relative margin on the metric distance: a
+     * search stops when the best unexpanded candidate is more than {@code 1 + gamma} times as far from the query as
+     * the k-th best result found. The default is about 0.005.
+     */
     public void useAdaptiveTermination(boolean enabled, float gamma) {
         AdaptiveTermination.validateGamma(gamma);
         adaptiveTerminationEnabled = enabled;
@@ -455,13 +468,8 @@ public class GraphSearcher implements Closeable {
             approximateResults.setMaxSize(rerankK);
             // ASH score functions require adaptive stopping whatever provider wraps them; only
             // useAdaptiveTermination(false) turns it off.
-            boolean adaptive = adaptiveTerminationEnabled
-                    && (scoreProvider.supportsAdaptiveDotProductTermination()
-                        || scoreProvider.scoreFunction().requiresAdaptiveTermination())
-                    && level == 0 && threshold == 0.0f && rerankK > 0;
-            if (adaptive) {
-                adaptiveTermination.reset(rerankK, adaptiveTerminationGamma, scoreProvider.adaptiveScoresAreRawDotProducts());
-            }
+            boolean adaptive = adaptiveTerminationEnabled && level == 0 && threshold == 0.0f && rerankK > 0
+                    && startAdaptiveTermination(scoreProvider, rerankK);
             // Bounded candidates: a scored node is expanded only while it ranks among the best rerankK accepted
             // nodes scored so far (or, adaptively, within the cutoff of the rerankK-th), and that bar only rises.
             // So a node that misses it when scored can never be expanded by this layer search: it is deferred
@@ -471,6 +479,9 @@ public class GraphSearcher implements Closeable {
             deferredCandidates.foreach(candidates::push);
             deferredCandidates.clear();
             bestScored.clear();
+            capScored.clear();
+            capSize = AdaptiveTermination.CAP_FACTOR * rerankK;
+            if (adaptive) capScored.setMaxSize(capSize);
             expandBar = Float.NEGATIVE_INFINITY;
             adaptiveBar = adaptive;
             if (trackBest) {
@@ -591,18 +602,42 @@ public class GraphSearcher implements Closeable {
      * expansion bar when the rerankK-th best score rises.
      */
     private void offerScored(int node, float score, int rerankK) {
-        if (bestScored.size() < rerankK) {
-            bestScored.push(node, score);
-            if (bestScored.size() == rerankK) updateExpandBar();
-        } else if (score > bestScored.topScore()) {
-            bestScored.push(node, score);
-            updateExpandBar();
+        // Every score above the best so far passes through here, so adaptive stopping sees the highest score found.
+        boolean changed = false;
+        if (adaptiveBar && (capScored.size() < capSize || score > capScored.topScore())) {
+            capScored.push(node, score);
+            changed = true;
         }
+        if (bestScored.size() < rerankK || score > bestScored.topScore()) {
+            bestScored.push(node, score);
+            if (adaptiveBar) adaptiveTermination.observe(score);
+            changed = true;
+        }
+        // The bar depends on both the rerankK-th best and the cap, so it is refreshed when either moves.
+        if (changed && bestScored.size() == rerankK) updateExpandBar();
     }
 
-    /** The rerankK-th best score, or adaptively the lowest score within its cutoff, whichever is lower. */
+    /**
+     * Prepares adaptive stopping for this layer search when the provider asks for it, or its score function requires
+     * it (scoring DOT_PRODUCT), and the rule can read the scores as distances; otherwise the standard rule decides.
+     */
+    private boolean startAdaptiveTermination(SearchScoreProvider scoreProvider, int rerankK) {
+        var scoreFunction = scoreProvider.scoreFunction();
+        var similarity = scoreProvider.adaptiveSimilarity();
+        if (similarity == null && scoreFunction.requiresAdaptiveTermination()) {
+            similarity = VectorSimilarityFunction.DOT_PRODUCT;
+        }
+        if (similarity == null) return false;
+        float bound = similarity == VectorSimilarityFunction.DOT_PRODUCT ? scoreProvider.dotProductBound() : Float.NaN;
+        return adaptiveTermination.reset(rerankK, adaptiveTerminationGamma, similarity, bound);
+    }
+
+    /** The rerankK-th best score, or adaptively the lowest score within its cutoff and the cap, whichever is lower. */
     private void updateExpandBar() {
         float kth = bestScored.topScore();
+        if (adaptiveBar && capScored.size() >= capSize) {
+            adaptiveTermination.raiseCap(capScored.topScore());
+        }
         expandBar = adaptiveBar ? Math.min(kth, adaptiveTermination.lowestContinuableScore(kth)) : kth;
     }
 

@@ -34,6 +34,11 @@ public interface Feature extends Comparable<Feature> {
 
     int headerSize();
 
+    /** The bytes {@link #writeHeader(IndexWriter, int)} writes at {@code version}. */
+    default int headerSize(int version) {
+        return headerSize();
+    }
+
     int featureSize();
 
     /**

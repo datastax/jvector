@@ -90,6 +90,16 @@ public interface ScoreFunction {
         return false;
     }
 
+    /**
+     * For DOT_PRODUCT scores, an upper bound on the dot product this function can score between its query and any
+     * stored vector, such as the query's length times the largest stored vector length; NaN when unknown. Adaptive
+     * stopping reads dot-product scores as distances only when it is known, so it must hold for every vector the
+     * search can reach. Called once per search.
+     */
+    default float dotProductBound() {
+        return Float.NaN;
+    }
+
 
     interface ExactScoreFunction extends ScoreFunction {
         default boolean isExact() {

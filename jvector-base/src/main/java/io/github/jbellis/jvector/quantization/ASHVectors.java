@@ -139,6 +139,8 @@ public class ASHVectors implements CompressedVectors {
     public ASHVectors(AsymmetricHashing ash,
                       AsymmetricHashing.QuantizedVector[] compressedVectors) {
         this(ash, ASHCodes.copyOf(compressedVectors, ash.quantizedDim, ash.bitsPerDimension), null);
+        // The codes may come from another instance of the model, so the lengths they encode are counted here.
+        ash.recordEncodedCodes(compressedVectors);
     }
 
     /** Takes ownership of {@code codes}, which must not change afterward. */
@@ -210,7 +212,7 @@ public class ASHVectors implements CompressedVectors {
         // ASHScorer dispatches canonical 2/4-bit projection scoring to SIMD when available.
         // The packed masked-add path below is specific to one-bit codes.
         if (ash.bitsPerDimension != 1) {
-            return nodeScoreFunction(scorer.codeScorerFor(scorer.precomputeQuery(query)));
+            return nodeScoreFunction(scorer.precomputeQuery(query));
         }
 
         final AshSingleKernel kernel = AshSingleKernel.fromProperty();
@@ -218,7 +220,7 @@ public class ASHVectors implements CompressedVectors {
 
         // Scalar forced
         if (kernel == AshSingleKernel.SCALAR) {
-            return nodeScoreFunction(scorer.codeScorerFor(scorer.precomputeQuery(query)));
+            return nodeScoreFunction(scorer.precomputeQuery(query));
         }
 
         // AUTO/SIMD: use SIMD scorer only when backend supports masked-load kernel;
@@ -233,25 +235,60 @@ public class ASHVectors implements CompressedVectors {
         if (kernel == AshSingleKernel.SIMD) {
             throw new IllegalStateException("ASH single-vector SIMD is unavailable on " + vecUtil.getClass().getName());
         }
-        return nodeScoreFunction(scorer.codeScorerFor(scorer.precomputeQuery(query)));
+        return nodeScoreFunction(scorer.precomputeQuery(query));
     }
 
     /**
      * Applies {@code f} to stored codes in place, in graph similarity units. One lambda per storage
      * shape keeps each call site free of null checks for the array a bit width does not use.
      */
-    private ScoreFunction.AdaptiveApproximateScoreFunction nodeScoreFunction(ASHScorer.CodeScorer f) {
+    private ScoreFunction.AdaptiveApproximateScoreFunction nodeScoreFunction(ASHScorer.QueryPrecompute qp) {
+        return nodeScoreFunction(scorer.codeScorerFor(qp), qp);
+    }
+
+    private ScoreFunction.AdaptiveApproximateScoreFunction nodeScoreFunction(ASHScorer.CodeScorer f,
+                                                                            ASHScorer.QueryPrecompute qp) {
         final ASHCodes c = codes;
         if (c.signWords == 0) {
-            return node -> ASHScorer.toSimilarity(f.dot(null, 0, c.bodyPage(node), c.bodyOffset(node),
-                    scales[node], offsets[node], landmarks[node] & 0xFF));
+            return new BoundedScoreFunction(qp) {
+                @Override
+                public float similarityTo(int node) {
+                    return ASHScorer.toSimilarity(f.dot(null, 0, c.bodyPage(node), c.bodyOffset(node),
+                            scales[node], offsets[node], landmarks[node] & 0xFF));
+                }
+            };
         }
         if (c.bodyBytes == 0) {
-            return node -> ASHScorer.toSimilarity(f.dot(c.signPage(node), c.signOffset(node), null, 0,
-                    scales[node], offsets[node], landmarks[node] & 0xFF));
+            return new BoundedScoreFunction(qp) {
+                @Override
+                public float similarityTo(int node) {
+                    return ASHScorer.toSimilarity(f.dot(c.signPage(node), c.signOffset(node), null, 0,
+                            scales[node], offsets[node], landmarks[node] & 0xFF));
+                }
+            };
         }
-        return node -> ASHScorer.toSimilarity(f.dot(c.signPage(node), c.signOffset(node),
-                c.bodyPage(node), c.bodyOffset(node), scales[node], offsets[node], landmarks[node] & 0xFF));
+        return new BoundedScoreFunction(qp) {
+            @Override
+            public float similarityTo(int node) {
+                return ASHScorer.toSimilarity(f.dot(c.signPage(node), c.signOffset(node),
+                        c.bodyPage(node), c.bodyOffset(node), scales[node], offsets[node], landmarks[node] & 0xFF));
+            }
+        };
+    }
+
+    /** An ASH score function for one prepared query, reporting the query's dot-product bound. */
+    private abstract class BoundedScoreFunction implements ScoreFunction.AdaptiveApproximateScoreFunction {
+        private final ASHScorer.QueryPrecompute qp;
+
+        /** {@code qp} null leaves the bound unknown. */
+        BoundedScoreFunction(ASHScorer.QueryPrecompute qp) {
+            this.qp = qp;
+        }
+
+        @Override
+        public float dotProductBound() {
+            return qp == null ? Float.NaN : scorer.dotProductBound(qp);
+        }
     }
 
     // ============================================================================
@@ -282,6 +319,12 @@ public class ASHVectors implements CompressedVectors {
             this.qProj = qp.qProj;
 
             this.codes = ASHVectors.this.codes;
+        }
+
+        @Override
+        public float dotProductBound() {
+            float m = ash.maxEncodedNorm();
+            return (Float.isNaN(qp.queryNorm) ? m : qp.queryNorm) * m;
         }
 
         @Override
@@ -370,7 +413,7 @@ public class ASHVectors implements CompressedVectors {
                     "ASH block scorer supports DOT_PRODUCT only");
         }
 
-        return new LegacyASHBlockScorer(nodeScoreFunction(scorer.scalarCodeScorerFor(query)), codes.size);
+        return new LegacyASHBlockScorer(nodeScoreFunction(scorer.scalarCodeScorerFor(query), null), codes.size);
     }
 
     /**
@@ -459,9 +502,9 @@ public class ASHVectors implements CompressedVectors {
     ScoreFunction.AdaptiveApproximateScoreFunction scoreFunctionFor(ASHScorer.QueryPrecompute qp, boolean simd) {
         if (ash.bitsPerDimension == 1 && simd) {
             return new SimdASHScoreFunction(new QueryPrecompute(qp.d, qp.C, qp.qProj,
-                    qp.sumQProj, qp.dotQMuByLandmark));
+                    qp.sumQProj, qp.dotQMuByLandmark, qp.queryNorm));
         }
-        return nodeScoreFunction(scorer.codeScorerFor(qp, simd));
+        return nodeScoreFunction(scorer.codeScorerFor(qp, simd), qp);
     }
 
     ASHBlockScorer blockScorerFor(ASHScorer.QueryPrecompute prepared, int blockSize, boolean simd) {
@@ -825,7 +868,8 @@ public class ASHVectors implements CompressedVectors {
             dotQMu[c] = VectorUtil.dotProduct(query, ash.landmarks[c]);
         }
 
-        return new QueryPrecompute(d, C, qProj, ASHScorer.sum(qProj), dotQMu);
+        return new QueryPrecompute(d, C, qProj, ASHScorer.sum(qProj), dotQMu,
+                (float) Math.sqrt(VectorUtil.dotProduct(query, query)));
     }
 
     static final class QueryPrecompute {
@@ -834,16 +878,26 @@ public class ASHVectors implements CompressedVectors {
         final float[] qProj;               // [d], Aq
         final float sumQProj;              // <Aq, 1>
         final float[] dotQMu;              // [C]
+        final float queryNorm;             // ||q||, or NaN when prepared from a stored code
 
         QueryPrecompute(int d, int C,
                         float[] qProj,
                         float sumQProj,
                         float[] dotQMu) {
+            this(d, C, qProj, sumQProj, dotQMu, Float.NaN);
+        }
+
+        QueryPrecompute(int d, int C,
+                        float[] qProj,
+                        float sumQProj,
+                        float[] dotQMu,
+                        float queryNorm) {
             this.d = d;
             this.C = C;
             this.qProj = qProj;
             this.sumQProj = sumQProj;
             this.dotQMu = dotQMu;
+            this.queryNorm = queryNorm;
         }
     }
 

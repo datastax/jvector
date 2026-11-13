@@ -75,7 +75,7 @@ public class TestBoundedCandidates {
     private static DefaultSearchScoreProvider provider(VectorFloat<?> query, VectorSimilarityFunction similarity,
                                                        RandomAccessVectorValues vectors, boolean adaptive) {
         var exact = DefaultSearchScoreProvider.exact(query, similarity, vectors);
-        return new DefaultSearchScoreProvider(exact.scoreFunction(), null, adaptive);
+        return new DefaultSearchScoreProvider(exact.scoreFunction(), null, adaptive ? similarity : null);
     }
 
     private static Bits randomFilter(Random random, int count, double density) {

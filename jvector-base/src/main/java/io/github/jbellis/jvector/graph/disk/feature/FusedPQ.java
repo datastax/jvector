@@ -96,6 +96,11 @@ public class FusedPQ extends AbstractFeature implements FusedFeature {
     }
 
     @Override
+    public int headerSize(int version) {
+        return pq.compressorSize(version);
+    }
+
+    @Override
     public int featureSize() {
         return pq.compressedVectorSize() * maxDegree;
     }

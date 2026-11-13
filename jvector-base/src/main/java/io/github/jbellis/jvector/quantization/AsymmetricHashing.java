@@ -157,6 +157,30 @@ public class AsymmetricHashing implements VectorCompressor<AsymmetricHashing.Qua
     // Immutable retained Java storage; native/query representations are charged lazily.
     private final long heapBytes;
 
+    // The largest length of any vector this model has encoded or holds codes for, or was saved with. Not part of the
+    // model's identity.
+    private final io.github.jbellis.jvector.util.MaxVectorLength maxEncoded = new io.github.jbellis.jvector.util.MaxVectorLength();
+
+    // Half-precision headers estimate a squared length to within about 0.1%; codes recorded from their headers are
+    // counted this much longer, so the recorded length stays an upper bound.
+    private static final float HEADER_NORM_MARGIN = 1f + 1f / 128f;
+
+    void recordEncodedSquaredNorm(float squaredNorm) {
+        maxEncoded.recordSquared(squaredNorm);
+    }
+
+    /**
+     * The largest length of any vector this model has encoded, including vectors encoded before it was saved and
+     * loaded, and of any vector whose codes {@link ASHVectors} has wrapped with it (estimated from the codes, with a
+     * margin for their half-precision headers). A vector's length is recorded before its encoding returns. With a
+     * query's length, it bounds the dot products ASH estimates for that query, which adaptive stopping needs to read
+     * ASH scores as distances. NaN until the model encodes or holds a vector, when dot-product searches stop by the
+     * standard rule.
+     */
+    public float maxEncodedNorm() {
+        return maxEncoded.get();
+    }
+
     // Both optimizers quantize the projected body the same way; they differ only in the
     // learned transform.
     private final BinaryQuantizer quantizer = new ProjectedBinaryQuantizer();
@@ -607,7 +631,8 @@ public class AsymmetricHashing implements VectorCompressor<AsymmetricHashing.Qua
                         originalDimension
                 );
 
-        return new AsymmetricHashing(
+        float maxEncodedNorm = in.readFloat();
+        var ash = new AsymmetricHashing(
                 originalDimension,
                 encodedBits,
                 quantizedDim,
@@ -618,6 +643,8 @@ public class AsymmetricHashing implements VectorCompressor<AsymmetricHashing.Qua
                 lp.proj,
                 lp.sum
         );
+        ash.maxEncoded.restore(maxEncodedNorm);
+        return ash;
     }
 
 
@@ -655,6 +682,7 @@ public class AsymmetricHashing implements VectorCompressor<AsymmetricHashing.Qua
         // Stiefel transform serialization:
         // Serialize A = W^T in float precision as a [d][D] row-major matrix.
         writeStiefelTransform(out, stiefelTransform);
+        out.writeFloat(maxEncodedNorm());
     }
 
     // ---------------------------------------------------------------------
@@ -886,6 +914,39 @@ public class AsymmetricHashing implements VectorCompressor<AsymmetricHashing.Qua
     /** Header-calibrated correction for symmetric scoring, using the stored code/header. */
     float centeredOffset(QuantizedVector vector) {
         return centeredOffset(vector.scale, vector.offset, vector.landmark, vector.binaryVector, 0, vector.extraBits, 0);
+    }
+
+    /** The squared length of a code's decoded components: the norm its scale is divided by. */
+    float codeSquaredNorm(QuantizedVector vector) {
+        if (bitsPerDimension == 1) return quantizedDim;
+        boolean projection = usesFastScanProjectionCode(bitsPerDimension);
+        double sum = 0;
+        for (int j = 0; j < quantizedDim; j++) {
+            float v = projection ? projectionComponent(vector.extraBits, 0, j, bitsPerDimension)
+                    : decodeOffsetBinary(offsetBinaryField(vector.extraBits, 0, j, bitsPerDimension), bitsPerDimension);
+            sum += v * v;
+        }
+        return (float) sum;
+    }
+
+    /**
+     * The squared length of the vector {@code vector} encodes, from its stored terms:
+     * {@code ||x||^2 = ||x - mu||^2 + 2 (<x, mu> - ||mu||^2) + ||mu||^2}, with {@code ||x - mu|| = scale * ||code||}.
+     * Exact up to the half-precision rounding of the header.
+     */
+    float encodedSquaredNorm(QuantizedVector vector) {
+        int c = vector.landmark & 255;
+        return vector.scale * vector.scale * codeSquaredNorm(vector) + 2f * centeredOffset(vector) + landmarkNormSq[c];
+    }
+
+    /**
+     * Counts vectors encoded by another instance of this model in {@link #maxEncodedNorm}, from their codes, with a
+     * margin for the half-precision headers.
+     */
+    void recordEncodedCodes(QuantizedVector[] vectors) {
+        for (var vector : vectors) {
+            if (vector != null) recordEncodedSquaredNorm(encodedSquaredNorm(vector) * HEADER_NORM_MARGIN);
+        }
     }
 
     /**
@@ -1777,6 +1838,8 @@ public class AsymmetricHashing implements VectorCompressor<AsymmetricHashing.Qua
         assert quantizedDim > 0;
 
         final float rawOffset = dotXMu - landmarkNormSq[c];
+        // ||x||^2 = ||x - mu||^2 + 2 <x, mu> - ||mu||^2, from the terms already computed.
+        recordEncodedSquaredNorm(sqDist + 2f * dotXMu - landmarkNormSq[c]);
 
         // Header fields needed before quantization. The final offset may be
         // adjusted after quantization for C++-style fast-scan projection codes.
@@ -2715,6 +2778,7 @@ public class AsymmetricHashing implements VectorCompressor<AsymmetricHashing.Qua
         size += Integer.BYTES; // stiefel rows
         size += Integer.BYTES; // stiefel cols
         size += Float.BYTES * quantizedDim * originalDimension;
+        size += Float.BYTES; // largest encoded vector length
         return size;
     }
 

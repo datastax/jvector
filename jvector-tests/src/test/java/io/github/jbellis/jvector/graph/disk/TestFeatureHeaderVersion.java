@@ -26,6 +26,8 @@ import io.github.jbellis.jvector.graph.disk.feature.Feature;
 import io.github.jbellis.jvector.graph.disk.feature.FeatureId;
 import io.github.jbellis.jvector.graph.disk.feature.FusedASH;
 import io.github.jbellis.jvector.graph.disk.feature.FusedPQ;
+import io.github.jbellis.jvector.graph.disk.feature.SeparatedVectors;
+import io.github.jbellis.jvector.graph.disk.feature.InlineVectors;
 import io.github.jbellis.jvector.graph.disk.feature.NVQ;
 import io.github.jbellis.jvector.graph.disk.feature.SeparatedNVQ;
 import io.github.jbellis.jvector.quantization.AsymmetricHashing;
@@ -40,6 +42,7 @@ import java.util.EnumMap;
 import java.util.List;
 
 import static org.junit.Assert.assertArrayEquals;
+import static org.junit.Assert.assertEquals;
 
 /**
  * A feature header embedded in a graph serializes its compressor at the graph's version, not at
@@ -75,6 +78,14 @@ public class TestFeatureHeaderVersion extends RandomizedTest {
                 new Case(FeatureId.FUSED_ASH, fusedAsh, (out, v) -> {
                     ash.write(out, v);
                     out.writeInt(blockSize);
+                }),
+                // Full-precision vectors store their largest length from version 7: unknown until any are written.
+                new Case(FeatureId.INLINE_VECTORS, new InlineVectors(DIMENSION), (out, v) -> {
+                    if (v >= 7) out.writeFloat(Float.NaN);
+                }),
+                new Case(FeatureId.SEPARATED_VECTORS, new SeparatedVectors(DIMENSION, 4321L), (out, v) -> {
+                    out.writeLong(4321L);
+                    if (v >= 7) out.writeFloat(Float.NaN);
                 }));
 
         for (int version = 2; version <= OnDiskGraphIndex.CURRENT_VERSION; version++) {
@@ -89,6 +100,7 @@ public class TestFeatureHeaderVersion extends RandomizedTest {
                 // The format's own framing (feature ids, counts) precedes the header.
                 byte[] header = Arrays.copyOfRange(written, written.length - expected.length, written.length);
                 assertArrayEquals(c.id + " at version " + version, expected, header);
+                assertEquals(c.id + " header size at version " + version, expected.length, c.feature.headerSize(version));
             }
         }
     }

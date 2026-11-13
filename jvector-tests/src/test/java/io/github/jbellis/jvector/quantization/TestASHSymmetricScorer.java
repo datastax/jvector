@@ -265,7 +265,8 @@ public class TestASHSymmetricScorer {
             var encoded = ash.encodeAll(values, java.util.concurrent.ForkJoinPool.commonPool());
             var bsp = BuildScoreProvider.ashBuildScoreProvider(VectorSimilarityFunction.DOT_PRODUCT,encoded);
             assertTrue(new ASHSymmetricScorer(encoded).dotProduct(0,1) < 0f);
-            assertFalse(bsp.searchProviderFor(0).adaptiveScoresAreRawDotProducts());
+            assertEquals(VectorSimilarityFunction.DOT_PRODUCT, bsp.searchProviderFor(0).adaptiveSimilarity());
+            assertTrue(Float.isFinite(bsp.searchProviderFor(0).dotProductBound()));
             try (var builder = new GraphIndexBuilder(bsp,40,16,40,1.2f,1.2f,true,true)) {
                 for (int i=0;i<input.length;i++) builder.addGraphNode(i,input[i]);
                 builder.cleanup();

@@ -30,10 +30,27 @@ public class SeparatedVectors extends AbstractSeparatedFeature {
     private static final VectorTypeSupport vectorTypeSupport = VectorizationProvider.getInstance().getVectorTypeSupport();
     private final int dimension;
     private long offset;
+    // The largest length of the vectors this feature has written, for the header.
+    private final MaxVectorNorm written = new MaxVectorNorm();
+    // The largest length stored in a loaded index's header; NaN when unknown.
+    private final float stored;
 
     public SeparatedVectors(int dimension, long offset) {
+        this(dimension, offset, Float.NaN);
+    }
+
+    private SeparatedVectors(int dimension, long offset, float stored) {
         this.dimension = dimension;
         this.offset = offset;
+        this.stored = stored;
+    }
+
+    /**
+     * The largest length of the stored vectors: from the header of a loaded index, or of the vectors written so far.
+     * NaN when unknown, as for an index written before format version 7.
+     */
+    public float maxVectorNorm() {
+        return Float.isNaN(stored) ? written.get() : stored;
     }
 
     @Override
@@ -53,7 +70,12 @@ public class SeparatedVectors extends AbstractSeparatedFeature {
 
     @Override
     public int headerSize() {
-        return Long.BYTES;
+        return headerSize(OnDiskGraphIndex.CURRENT_VERSION);
+    }
+
+    @Override
+    public int headerSize(int version) {
+        return Long.BYTES + MaxVectorNorm.headerSize(version);
     }
 
     @Override
@@ -70,12 +92,14 @@ public class SeparatedVectors extends AbstractSeparatedFeature {
     @Override
     public void writeHeader(IndexWriter out, int version) throws IOException {
         out.writeLong(offset);
+        written.write(out, version);
     }
 
     @Override
     public void writeSeparately(IndexWriter out, State state_) throws IOException {
         var state = (InlineVectors.State) state_;
         if (state.vector != null) {
+            written.record(state.vector);
             vectorTypeSupport.writeFloatVector(out, state.vector);
         } else {
             // Write zeros for missing vector
@@ -90,7 +114,7 @@ public class SeparatedVectors extends AbstractSeparatedFeature {
     static SeparatedVectors load(CommonHeader header, RandomAccessReader reader) {
         try {
             long offset = reader.readLong();
-            return new SeparatedVectors(header.dimension, offset);
+            return new SeparatedVectors(header.dimension, offset, MaxVectorNorm.read(reader, header.version));
         } catch (IOException e) {
             throw new UncheckedIOException(e);
         }

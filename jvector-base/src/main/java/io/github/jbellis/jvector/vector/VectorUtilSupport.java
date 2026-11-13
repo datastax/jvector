@@ -176,7 +176,7 @@ public interface VectorUtilSupport {
 
   /**
    * Scores one complete C=1 FusedASH neighborhood, including all serialized blocks and headers.
-   * The result is {@code max(0, (1 + rawDotProduct) / 2)}, matching graph DOT_PRODUCT similarity.
+   * The result is {@code (1 + rawDotProduct) / 2}, unclamped, matching graph DOT_PRODUCT similarity.
    *
    * <p>Inputs are read-only for the call; output storage must be distinct from {@code lut}.
    * Calls may share immutable inputs across threads when their output arrays are separate.
@@ -207,7 +207,7 @@ public interface VectorUtilSupport {
    * INT8 query. Each block's body is {@code [unit][lane][bits bytes]} for {@code units} units of
    * eight dimensions, followed by the usual headers. Per lane,
    * {@code dot = (<q, field> - center) * invScale}, and the result is
-   * {@code max(0, (1 + scale * dot + landmarkDot + offset) / 2)}.
+   * {@code (1 + scale * dot + landmarkDot + offset) / 2}, unclamped.
    *
    * @param codes complete packed neighborhood, with full serialized storage for its final block
    * @param bits bits per dimension: 3, 5, 6, 7, 8 or 9

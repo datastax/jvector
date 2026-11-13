@@ -16,6 +16,8 @@
 
 package io.github.jbellis.jvector.graph.similarity;
 
+import io.github.jbellis.jvector.vector.VectorSimilarityFunction;
+
 /** Encapsulates comparing node distances to a specific vector for GraphSearcher. */
 public interface SearchScoreProvider {
 
@@ -25,9 +27,17 @@ public interface SearchScoreProvider {
 
     ScoreFunction.ExactScoreFunction exactScoreFunction();
 
-    /** Approximate scores use graph DOT_PRODUCT similarity and support adaptive termination. */
-    default boolean supportsAdaptiveDotProductTermination() { return false; }
+    /**
+     * The similarity function whose scores {@link #scoreFunction} returns, when top-K searches with this provider may
+     * stop adaptively; null keeps the standard rule. Score functions that require adaptive stopping
+     * ({@link ScoreFunction#requiresAdaptiveTermination}) score DOT_PRODUCT and stop adaptively regardless.
+     */
+    default VectorSimilarityFunction adaptiveSimilarity() { return null; }
 
-    /** Whether the supported ASH score is a raw dot product in [-1, 1]. */
-    default boolean adaptiveScoresAreRawDotProducts() { return false; }
+    /**
+     * For DOT_PRODUCT scores, an upper bound on the dot product between the query and any vector the search can
+     * reach; NaN when unknown, which keeps the standard rule. By default the score function's
+     * {@link ScoreFunction#dotProductBound}.
+     */
+    default float dotProductBound() { return scoreFunction().dotProductBound(); }
 }

@@ -65,7 +65,7 @@ public class TestASHAdaptiveStopping {
                 VectorUtil.l2normalize(query);
                 var asf = encoded.precomputedScoreFunctionFor(query, VectorSimilarityFunction.DOT_PRODUCT);
                 assertTrue(asf.requiresAdaptiveTermination());
-                var requested = search(graph, new DefaultSearchScoreProvider(asf, null, true), true);
+                var requested = search(graph, new DefaultSearchScoreProvider(asf, null, VectorSimilarityFunction.DOT_PRODUCT), true);
                 // Plain wrappers that do not ask for adaptive stopping still get it.
                 assertSame(requested, search(graph, new DefaultSearchScoreProvider(asf), true));
                 assertSame(requested, search(graph, new DefaultSearchScoreProvider(asf, null), true));
@@ -73,7 +73,7 @@ public class TestASHAdaptiveStopping {
                 // The searcher's switch is the override: the search is then the standard one.
                 ScoreFunction.ApproximateScoreFunction unmarked = asf::similarityTo;
                 var standard = search(graph, new DefaultSearchScoreProvider(unmarked), true);
-                assertSame(standard, search(graph, new DefaultSearchScoreProvider(asf, null, true), false));
+                assertSame(standard, search(graph, new DefaultSearchScoreProvider(asf, null, VectorSimilarityFunction.DOT_PRODUCT), false));
             }
         }
     }

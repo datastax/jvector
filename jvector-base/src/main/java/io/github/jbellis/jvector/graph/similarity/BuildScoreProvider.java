@@ -156,8 +156,9 @@ public interface BuildScoreProvider {
 
             @Override
             public SearchScoreProvider searchProviderFor(VectorFloat<?> vector) {
+                // Construction keeps the standard stopping rule for full-precision scores.
                 var vc = vectorsCopy.get();
-                return DefaultSearchScoreProvider.exact(vector, similarityFunction, vc);
+                return new DefaultSearchScoreProvider(DefaultSearchScoreProvider.exactScoreFunction(vector, similarityFunction, vc));
             }
 
             @Override
@@ -314,12 +315,15 @@ public interface BuildScoreProvider {
             @Override
             public SearchScoreProvider searchProviderFor(VectorFloat<?> vector) {
                 // Query-time asymmetric scoring is already implemented by ASHVectors.
-                return new DefaultSearchScoreProvider(ashv.precomputedScoreFunctionFor(vector, vsf), null, true);
+                return new DefaultSearchScoreProvider(ashv.precomputedScoreFunctionFor(vector, vsf), null, VectorSimilarityFunction.DOT_PRODUCT);
             }
 
             @Override
             public SearchScoreProvider searchProviderFor(int node1) {
-                return new DefaultSearchScoreProvider(symmetric.scoreFunctionFor(node1), null, true);
+                // A stored node's length is not kept; the largest encoded length bounds it.
+                float m = ash.maxEncodedNorm();
+                return new DefaultSearchScoreProvider(symmetric.scoreFunctionFor(node1), null,
+                        VectorSimilarityFunction.DOT_PRODUCT, m * m);
             }
 
             @Override

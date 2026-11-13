@@ -51,10 +51,10 @@ public final class ASHBuildScoreExperiment {
                 public boolean isExact() { return false; }
                 public VectorFloat<?> approximateCentroid() { return encoded.getCompressor().landmarks[0].copy(); }
                 public SearchScoreProvider searchProviderFor(VectorFloat<?> x) {
-                    return new DefaultSearchScoreProvider(encoded.precomputedScoreFunctionFor(x,vsf),null,true);
+                    return new DefaultSearchScoreProvider(encoded.precomputedScoreFunctionFor(x,vsf),null,io.github.jbellis.jvector.vector.VectorSimilarityFunction.DOT_PRODUCT);
                 }
                 public SearchScoreProvider searchProviderFor(int node) {
-                    return new DefaultSearchScoreProvider(symmetric.scoreFunctionFor(node),null,true);
+                    return new DefaultSearchScoreProvider(symmetric.scoreFunctionFor(node),null,io.github.jbellis.jvector.vector.VectorSimilarityFunction.DOT_PRODUCT);
                 }
                 public SearchScoreProvider diversityProviderFor(int node) { return searchProviderFor(node); }
             };
@@ -68,7 +68,7 @@ public final class ASHBuildScoreExperiment {
             io.github.jbellis.jvector.util.PhysicalCoreExecutor.pool().submit(() ->
                     java.util.stream.IntStream.range(0, cached.length).parallel().forEach(node ->
                             cached[node] = new DefaultSearchScoreProvider(
-                                    encoded.precomputedScoreFunctionFor(views.get().getVector(node), vsf), null, true)))
+                                    encoded.precomputedScoreFunctionFor(views.get().getVector(node), vsf), null, io.github.jbellis.jvector.vector.VectorSimilarityFunction.DOT_PRODUCT)))
                     .join();
             long landmarks = encoded.getCompressor().landmarkCount;
             long floats = (long) cached.length * ((1L + landmarks) * encoded.getCompressor().quantizedDim + 2 * landmarks);
@@ -81,7 +81,7 @@ public final class ASHBuildScoreExperiment {
             public boolean isExact() { return false; }
             public VectorFloat<?> approximateCentroid() { return encoded.getCompressor().landmarks[0].copy(); }
             public SearchScoreProvider searchProviderFor(VectorFloat<?> x) {
-                return new DefaultSearchScoreProvider(encoded.precomputedScoreFunctionFor(x,vsf),null,true);
+                return new DefaultSearchScoreProvider(encoded.precomputedScoreFunctionFor(x,vsf),null,io.github.jbellis.jvector.vector.VectorSimilarityFunction.DOT_PRODUCT);
             }
             public SearchScoreProvider searchProviderFor(int node) { return cached == null ? searchProviderFor(views.get().getVector(node)) : cached[node]; }
             public SearchScoreProvider diversityProviderFor(int node) { return searchProviderFor(node); }

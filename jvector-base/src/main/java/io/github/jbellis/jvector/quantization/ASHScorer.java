@@ -324,6 +324,17 @@ public final class ASHScorer {
         // Stored offsets include the landmark term, so every scorer needs only Aq and, for 1-bit
         // codes, its sum.
         prepared.sumQProj = sum(prepared.qProj);
+        prepared.queryNorm = (float) Math.sqrt(VectorUtil.dotProduct(query, query));
+    }
+
+    /**
+     * An upper bound on the dot products ASH estimates for {@code prepared}'s query: its length times the largest
+     * encoded vector length. A query prepared from a stored code, whose length is not kept, is bounded by the
+     * largest length. Estimates above it raise adaptive stopping's bound, which only loosens the margin.
+     */
+    float dotProductBound(QueryPrecompute prepared) {
+        float m = ash.maxEncodedNorm();
+        return (Float.isNaN(prepared.queryNorm) ? m : prepared.queryNorm) * m;
     }
 
     /** Left-to-right FP32 sum, the order every 1-bit scorer uses for {@code <Aq, 1>}. */
@@ -339,6 +350,7 @@ public final class ASHScorer {
         final float[] qProj;                   // [d], Aq
         final float[] dotQMuByLandmark;        // [C]
         float sumQProj;                        // <Aq, 1>, set with qProj
+        float queryNorm = Float.NaN;           // ||q||, when prepared from a raw query
 
         QueryPrecompute(int d, int C, float[] qProj, float[] dotQMuByLandmark) {
             this.d = d;

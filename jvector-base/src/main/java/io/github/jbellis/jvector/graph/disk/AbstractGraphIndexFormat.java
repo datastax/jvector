@@ -389,7 +389,7 @@ abstract class AbstractGraphIndexFormat implements GraphIndexFormat {
     public int headerSize(Map<FeatureId,? extends Feature> features) {
         int size = this.commonHeaderSize();
 
-        size += features.values().stream().mapToInt(Feature::headerSize).sum();
+        size += features.values().stream().mapToInt(f -> f.headerSize(getVersion())).sum();
 
         return size;
     }

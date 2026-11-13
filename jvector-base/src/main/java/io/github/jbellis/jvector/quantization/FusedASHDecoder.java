@@ -128,6 +128,7 @@ public final class FusedASHDecoder implements ScoreFunction.AdaptiveApproximateS
     private final Int2ObjectHashMap<FusedFeature.InlineSource> hierarchyCachedFeatures;
     private final InlineSourceAccessor inlineSourceAccessor;
     private final ASHScorer.ASHScoreFunction sourceScorer;
+    private final float dotProductBound;
 
     private final int maxDegree;
 
@@ -256,6 +257,13 @@ public final class FusedASHDecoder implements ScoreFunction.AdaptiveApproximateS
                 externalPrepared == null ? (scratch == null ? null : scratch.lut) : externalPrepared.lut,
                 externalPrepared != null);
         this.sourceScorer = scorer.scoreFunctionFor(preparedQuery, neighborhoodScorer.queryLut());
+        this.dotProductBound = scorer.dotProductBound(preparedQuery);
+    }
+
+    /** The query's length times the largest encoded vector length, taken when this decoder was prepared. */
+    @Override
+    public float dotProductBound() {
+        return dotProductBound;
     }
 
     public static FusedASHDecoder newDecoder(

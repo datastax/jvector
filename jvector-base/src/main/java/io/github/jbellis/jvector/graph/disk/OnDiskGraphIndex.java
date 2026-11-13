@@ -740,7 +740,24 @@ public class OnDiskGraphIndex implements ImmutableGraphIndex, AutoCloseable, Acc
         @Override
         public ScoreFunction.ExactScoreFunction rerankerFor(VectorFloat<?> queryVector, VectorSimilarityFunction vsf) {
             if (features.containsKey(FeatureId.INLINE_VECTORS)) {
-                return RandomAccessVectorValues.super.rerankerFor(queryVector, vsf);
+                // Exact scores of the inline vectors, reporting the dot-product bound adaptive stopping needs: the
+                // query's length times the largest stored length (NaN when the header did not store it).
+                float maxNorm = ((InlineVectors) features.get(FeatureId.INLINE_VECTORS)).maxVectorNorm();
+                return new ScoreFunction.ExactScoreFunction() {
+                    private final VectorFloat<?> scratch = vectorTypeSupport.createFloatVector(dimension);
+
+                    @Override
+                    public float similarityTo(int node2) {
+                        getVectorInto(node2, scratch, 0);
+                        return vsf.compare(queryVector, scratch);
+                    }
+
+                    @Override
+                    public float dotProductBound() {
+                        return (float) Math.sqrt(io.github.jbellis.jvector.vector.VectorUtil.dotProduct(queryVector, queryVector))
+                                * maxNorm;
+                    }
+                };
             } else if (features.containsKey(FeatureId.NVQ_VECTORS)) {
                 return ((NVQ) features.get(FeatureId.NVQ_VECTORS)).rerankerFor(queryVector, vsf, this);
             } else {
@@ -755,7 +772,7 @@ public class OnDiskGraphIndex implements ImmutableGraphIndex, AutoCloseable, Acc
             if (feature == null) throw new UnsupportedOperationException("Prepared query scoring requires FusedASH");
             var asf = feature.approximateScoreFunctionFor(prepared, this);
             var rr = rerank ? rerankerFor(prepared.queryVector(), VectorSimilarityFunction.DOT_PRODUCT) : null;
-            return new io.github.jbellis.jvector.graph.similarity.DefaultSearchScoreProvider(asf, rr, true);
+            return new io.github.jbellis.jvector.graph.similarity.DefaultSearchScoreProvider(asf, rr, io.github.jbellis.jvector.vector.VectorSimilarityFunction.DOT_PRODUCT);
         }
 
         @Override

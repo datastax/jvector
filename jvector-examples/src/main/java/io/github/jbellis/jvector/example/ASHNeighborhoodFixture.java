@@ -274,9 +274,9 @@ final class ASHNeighborhoodFixture {
     }
 
     private static void validateModelEnvelope(byte[] model) throws IOException {
-        // Fixture V1 embeds ASH's eight-int prefix, one landmark, and its row-major transform.
-        // Check declared dimensions against the bytes before ASH.load allocates model arrays.
-        int fixedModelBytes = 11 * Integer.BYTES;
+        // Fixture V1 embeds ASH's eight-int prefix, one landmark, its row-major transform, and the largest
+        // encoded vector length. Check declared dimensions against the bytes before ASH.load allocates model arrays.
+        int fixedModelBytes = 11 * Integer.BYTES + Float.BYTES;
         if (model.length < fixedModelBytes) {
             throw new IOException("Truncated fixture model");
         }

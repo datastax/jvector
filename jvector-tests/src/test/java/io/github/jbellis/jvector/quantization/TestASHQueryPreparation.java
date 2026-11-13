@@ -202,7 +202,7 @@ public class TestASHQueryPreparation {
                         var searchView = (OnDiskGraphIndex.View) searcher.getView();
                         var approximate = searchView.approximateScoreFunctionFor(vectors[3], DOT);
                         var provider = new DefaultSearchScoreProvider(approximate,
-                                searchView.rerankerFor(vectors[3], DOT), true);
+                                searchView.rerankerFor(vectors[3], DOT), DOT);
                         approximate.enableSimilarityToNeighbors(0);
                         float original = approximate.similarityToNeighbor(0, 0);
                         assertEquals(5, searcher.search(provider, 5, 10, 0f, 0f, Bits.ALL).getNodes().length);

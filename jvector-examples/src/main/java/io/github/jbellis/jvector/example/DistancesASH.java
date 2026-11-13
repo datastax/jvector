@@ -243,8 +243,9 @@ public class DistancesASH {
         for (int j = 0; j < ash.originalDimension; j++) {
             centroidDot += (double) ash.landmarks[ca].get(j) * ash.landmarks[cb].get(j);
         }
-        return Math.max(0, (1 + (double) a.scale * b.scale * dot + a.scale * crossA
-                + b.scale * crossB + correctionA + correctionB + centroidDot) / 2);
+        // Graph DOT_PRODUCT similarity, unclamped as the library scores it.
+        return (1 + (double) a.scale * b.scale * dot + a.scale * crossA
+                + b.scale * crossB + correctionA + correctionB + centroidDot) / 2;
     }
 
     private static final class ScanScorer {

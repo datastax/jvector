@@ -59,8 +59,22 @@ abstract class PQDecoder implements ScoreFunction.ApproximateScoreFunction {
     }
 
     static class DotProductDecoder extends CachingDecoder {
+        private final VectorFloat<?> query;
+
         public DotProductDecoder(PQVectors cv, VectorFloat<?> query) {
             super(cv, query, VectorSimilarityFunction.DOT_PRODUCT);
+            this.query = query;
+        }
+
+        /** PQ scores the centered query against centered reconstructions, so their lengths bound the score. */
+        @Override
+        public float dotProductBound() {
+            var center = cv.pq.globalCentroid;
+            double squared = VectorUtil.dotProduct(query, query);
+            if (center != null) {
+                squared += VectorUtil.dotProduct(center, center) - 2.0 * VectorUtil.dotProduct(query, center);
+            }
+            return (float) Math.sqrt(Math.max(0.0, squared)) * cv.maxReconstructedNorm();
         }
 
         @Override

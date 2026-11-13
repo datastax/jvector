@@ -46,6 +46,8 @@ import static org.junit.Assert.assertTrue;
  * scorer that ignored norms (ranking by direction alone) would miss most of the true neighbors. Each scorer is judged
  * against itself on the same directions at unit length, so its accuracy at a given budget does not decide the result:
  * a scorer that keeps norm information is at least as accurate on the mixed lengths and clearly above norm-blind ranking.
+ * Graph searches that stop adaptively must engage on both datasets and find what searches stopping by the standard
+ * rule find.
  */
 public class TestUnnormalizedVectors {
     private static final int N = 1000, DIM = 64, QUERIES = 100, K = 10;
@@ -53,6 +55,8 @@ public class TestUnnormalizedVectors {
     private static final double NOISE = 0.05;
     // How far above norm-blind ranking a norm-aware scorer must be.
     private static final double MARGIN = 0.1;
+    // How much recall adaptive stopping may give up against the standard rule.
+    private static final double ADAPTIVE_LOSS = 0.02;
 
     @Test
     public void graphSearchRanksByTheFullDotProduct() throws Exception {
@@ -84,12 +88,17 @@ public class TestUnnormalizedVectors {
         var unitResults = runAll("unit length  ", unitBase, unitQueries, truth(unitQueries, unitBase));
         for (var name : mixed.keySet()) {
             double[] m = mixed.get(name), u = unitResults.get(name);
-            System.out.format("%-22s mixed scan %.3f graph %.3f | unit scan %.3f graph %.3f | mixed - unit %+.3f%n",
-                    name, m[0], m[1], u[0], u[1], m[0] - u[0]);
+            System.out.format("%-22s mixed scan %.3f graph %.3f adaptive %.3f | unit scan %.3f graph %.3f adaptive %.3f | mixed - unit %+.3f%n",
+                    name, m[0], m[1], m[2], u[0], u[1], u[2], m[0] - u[0]);
             for (int i = 0; i < 2; i++) {
                 String path = i == 0 ? "scan" : "graph";
                 if (!(m[i] >= u[i] - NOISE)) failures.add(name + " " + path + " loses to norms: " + m[i] + " < unit " + u[i]);
                 if (!(m[i] >= normBlind + MARGIN)) failures.add(name + " " + path + " near norm-blind: " + m[i]);
+            }
+            for (var r : new double[][] {m, u}) {
+                String which = r == m ? " mixed" : " unit";
+                if (!(r[2] >= r[1] - ADAPTIVE_LOSS)) failures.add(name + which + " adaptive " + r[2] + " < standard " + r[1]);
+                if (r[3] == 0) failures.add(name + which + " adaptive stopping never changed a search");
             }
         }
         assertTrue("the data must separate norm-aware from norm-blind ranking: " + normBlind, normBlind < 0.5);
@@ -102,9 +111,28 @@ public class TestUnnormalizedVectors {
             throws java.io.IOException {
         var ravv = new ListRandomAccessVectorValues(base, DIM);
         var vsf = VectorSimilarityFunction.DOT_PRODUCT;
+        // A list of vectors does not track lengths, so the exact scores report the bound dot-product adaptive stopping
+        // needs: the query's length times the largest stored length.
+        float maxNorm = 0;
+        for (var v : base) maxNorm = Math.max(maxNorm, (float) Math.sqrt(VectorUtil.dotProduct(v, v)));
+        final float largest = maxNorm;
         var results = new java.util.LinkedHashMap<String, double[]>();
         results.put("exact (256 B)", check(label, "exact (256 B)", BuildScoreProvider.randomAccessScoreProvider(ravv, vsf),
-                ravv, queries, truth, q -> DefaultSearchScoreProvider.exact(q, vsf, ravv).scoreFunction()));
+                ravv, queries, truth, q -> {
+                    var exact = DefaultSearchScoreProvider.exact(q, vsf, ravv).scoreFunction();
+                    float bound = (float) Math.sqrt(VectorUtil.dotProduct(q, q)) * largest;
+                    return new ScoreFunction.ExactScoreFunction() {
+                        @Override
+                        public float similarityTo(int node) {
+                            return exact.similarityTo(node);
+                        }
+
+                        @Override
+                        public float dotProductBound() {
+                            return bound;
+                        }
+                    };
+                }));
         // PQ: 16 B = 16 subspaces of 4 dimensions; 32 B = 32 subspaces of 2; 256 centroids each.
         for (int m : new int[] {16, 32}) {
             var pqv = ProductQuantization.compute(ravv, m, 256, false).encodeAll(ravv, ForkJoinPool.commonPool());
@@ -148,36 +176,48 @@ public class TestUnnormalizedVectors {
     }
 
     /**
-     * Brute-force and graph recall@K against {@code truth}, as {scan, graph}. The graph is built with the same scoring
-     * and searched with adaptive stopping off.
+     * Recall@K against {@code truth} by brute force, by graph search stopping by the standard rule, and by graph
+     * search stopping adaptively, then the fraction of queries whose adaptive search visited a different number of
+     * nodes: {scan, graph, adaptive, changed}. The graph is built with the same scoring.
      */
     private static double[] check(String label, String name, BuildScoreProvider bsp, ListRandomAccessVectorValues ravv,
                                   List<VectorFloat<?>> queries, List<Set<Integer>> truth,
                                   java.util.function.Function<VectorFloat<?>, ScoreFunction> scorerFor) {
-        List<Set<Integer>> scan = new ArrayList<>(), graphResults = new ArrayList<>();
+        List<Set<Integer>> scan = new ArrayList<>(), graphResults = new ArrayList<>(), adaptiveResults = new ArrayList<>();
+        int changed = 0;
         ImmutableGraphIndex graph;
         try (var builder = new GraphIndexBuilder(bsp, DIM, 16, 100, 1.2f, 1.2f, false)) {
             graph = builder.build(ravv);
         } catch (Exception e) {
             throw new RuntimeException(e);
         }
-        try (var searcher = new GraphSearcher(graph)) {
+        try (var searcher = new GraphSearcher(graph); var adaptive = new GraphSearcher(graph)) {
             searcher.useAdaptiveTermination(false);
             for (var q : queries) {
                 var sf = scorerFor.apply(q);
                 scan.add(topK(sf::similarityTo));
-                var result = searcher.search(new DefaultSearchScoreProvider(sf), K, 100, 0f, 0f, Bits.ALL);
-                var found = new HashSet<Integer>();
-                for (var ns : result.getNodes()) found.add(ns.node);
-                graphResults.add(found);
+                var result = searcher.search(new DefaultSearchScoreProvider(sf, null, VectorSimilarityFunction.DOT_PRODUCT),
+                        K, 100, 0f, 0f, Bits.ALL);
+                graphResults.add(nodes(result));
+                var adaptiveResult = adaptive.search(new DefaultSearchScoreProvider(sf, null, VectorSimilarityFunction.DOT_PRODUCT),
+                        K, 100, 0f, 0f, Bits.ALL);
+                adaptiveResults.add(nodes(adaptiveResult));
+                if (adaptiveResult.getVisitedCount() != result.getVisitedCount()) changed++;
             }
         } catch (Exception e) {
             throw new RuntimeException(e);
         }
         double scanRecall = recall(scan, truth), graphRecall = recall(graphResults, truth);
-        System.out.format("%s %-22s brute-force recall@%d %.3f, graph recall@%d %.3f%n",
-                label, name, K, scanRecall, K, graphRecall);
-        return new double[] {scanRecall, graphRecall};
+        double adaptiveRecall = recall(adaptiveResults, truth);
+        System.out.format("%s %-22s brute-force recall@%d %.3f, graph recall@%d %.3f, adaptive %.3f (%d of %d searches changed)%n",
+                label, name, K, scanRecall, K, graphRecall, adaptiveRecall, changed, queries.size());
+        return new double[] {scanRecall, graphRecall, adaptiveRecall, changed / (double) queries.size()};
+    }
+
+    private static Set<Integer> nodes(io.github.jbellis.jvector.graph.SearchResult result) {
+        var found = new HashSet<Integer>();
+        for (var ns : result.getNodes()) found.add(ns.node);
+        return found;
     }
 
     private static Set<Integer> topK(IntFunction<Float> score) {
