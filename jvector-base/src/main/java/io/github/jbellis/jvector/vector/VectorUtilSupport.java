@@ -173,14 +173,45 @@ public interface VectorUtilSupport {
    */
   float assembleAndSumPQ(VectorFloat<?> codebookPartialSums, int subspaceCount, ByteSequence<?> vector1Ordinals, int vector1OrdinalOffset, ByteSequence<?> node2Ordinals, int node2OrdinalOffset, int clusterCount);
 
-  /** Calculates the dot product of two signed int8 byte vectors. */
-  float dotProduct(ByteSequence<?> a, ByteSequence<?> b);
+  /**
+   * Calculates the dot product of two signed int8 byte vectors.
+   * The default is a scalar fallback; implementations should override it with a faster version.
+   */
+  default float dotProduct(ByteSequence<?> a, ByteSequence<?> b) {
+    int sum = 0;
+    for (int i = 0; i < a.length(); i++) {
+      sum += a.get(i) * b.get(i);
+    }
+    return sum;
+  }
 
-  /** Returns the sum of squared differences of two signed int8 byte vectors. */
-  float squareDistance(ByteSequence<?> a, ByteSequence<?> b);
+  /**
+   * Returns the sum of squared differences of two signed int8 byte vectors.
+   * The default is a scalar fallback; implementations should override it with a faster version.
+   */
+  default float squareDistance(ByteSequence<?> a, ByteSequence<?> b) {
+    int sum = 0;
+    for (int i = 0; i < a.length(); i++) {
+      int diff = a.get(i) - b.get(i);
+      sum += diff * diff;
+    }
+    return sum;
+  }
 
-  /** Returns the cosine similarity of two signed int8 byte vectors. */
-  float cosine(ByteSequence<?> a, ByteSequence<?> b);
+  /**
+   * Returns the cosine similarity of two signed int8 byte vectors.
+   * The default is a scalar fallback; implementations should override it with a faster version.
+   */
+  default float cosine(ByteSequence<?> a, ByteSequence<?> b) {
+    long dot = 0, normA = 0, normB = 0;
+    for (int i = 0; i < a.length(); i++) {
+      int ai = a.get(i), bi = b.get(i);
+      dot += ai * bi;
+      normA += ai * ai;
+      normB += bi * bi;
+    }
+    return (float) (dot / Math.sqrt((double) normA * normB));
+  }
 
   int hammingDistance(long[] v1, long[] v2);
 
