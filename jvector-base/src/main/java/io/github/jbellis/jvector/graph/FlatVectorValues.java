@@ -95,6 +95,8 @@ public final class FlatVectorValues implements BatchedVectorValues {
         }
     }
     private final AtomicInteger rowCount = new AtomicInteger();
+    // The largest length of any row, recorded before the row is published.
+    private final io.github.jbellis.jvector.util.MaxVectorLength maxLength = new io.github.jbellis.jvector.util.MaxVectorLength();
     private volatile long allocatedFloats;
 
     private FlatVectorValues(int dimension, int firstPageFloats, int fullPageFloats, boolean appendable) {
@@ -129,6 +131,7 @@ public final class FlatVectorValues implements BatchedVectorValues {
             var v = source.getVector(node);
             if (v == null) throw new IllegalArgumentException("Missing vector for node " + node);
             pages[flat.pageOf(node)].copyFrom(v, 0, flat.offset(node), flat.dimension);
+            flat.maxLength.record(v);
         }
         flat.rowCount.set(size);
         return flat;
@@ -167,8 +170,18 @@ public final class FlatVectorValues implements BatchedVectorValues {
             current = pages;
         }
         current[page].copyFrom(vector, 0, offset(ordinal), dimension);
+        maxLength.record(vector);
         rowCount.incrementAndGet();
         return allocated;
+    }
+
+    /**
+     * The largest length of any row added so far, or NaN for an empty store. A row's length is recorded before
+     * {@link #add} returns, so it covers every row published to readers; dot-product searches that stop adaptively
+     * bound their scores with it.
+     */
+    public float maxVectorNorm() {
+        return maxLength.get();
     }
 
     /**
@@ -484,6 +497,12 @@ public final class FlatVectorValues implements BatchedVectorValues {
             requireSupported(similarity);
             this.query = query;
             this.similarity = similarity;
+        }
+
+        /** The query's length times the largest stored length, read when a search starts. */
+        @Override
+        public float dotProductBound() {
+            return (float) Math.sqrt(VectorUtil.dotProduct(query, query)) * maxVectorNorm();
         }
 
         @Override

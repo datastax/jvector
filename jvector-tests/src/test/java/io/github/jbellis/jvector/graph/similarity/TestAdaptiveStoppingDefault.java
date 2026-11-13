@@ -18,6 +18,7 @@ package io.github.jbellis.jvector.graph.similarity;
 import io.github.jbellis.jvector.TestUtil;
 import io.github.jbellis.jvector.disk.SimpleMappedReader;
 import io.github.jbellis.jvector.disk.SimpleWriter;
+import io.github.jbellis.jvector.graph.FlatVectorValues;
 import io.github.jbellis.jvector.graph.ListRandomAccessVectorValues;
 import io.github.jbellis.jvector.graph.disk.OnDiskGraphIndex;
 import io.github.jbellis.jvector.quantization.AsymmetricHashing;
@@ -81,6 +82,15 @@ public class TestAdaptiveStoppingDefault {
 
         // A list of vectors does not track lengths, so dot-product searches over it keep the standard rule.
         assertTrue(Float.isNaN(DefaultSearchScoreProvider.exact(query, dot, ravv).dotProductBound()));
+
+        // The flat store records the largest length as rows are added; empty, it has none.
+        assertTrue(Float.isNaN(FlatVectorValues.appendable(dim).maxVectorNorm()));
+        var flat = FlatVectorValues.appendable(dim);
+        for (int i = 0; i < n; i++) flat.add(i, base.get(i));
+        assertEquals(maxNorm, flat.maxVectorNorm(), maxNorm * 1e-6f);
+        assertEquals(queryNorm * maxNorm, DefaultSearchScoreProvider.exact(query, dot, flat).dotProductBound(),
+                queryNorm * maxNorm * 1e-5f);
+        assertEquals(maxNorm, FlatVectorValues.copyOf(ravv).maxVectorNorm(), maxNorm * 1e-6f);
 
         // A caller that knows the bound can supply it.
         var exact = DefaultSearchScoreProvider.exact(query, dot, ravv).scoreFunction();

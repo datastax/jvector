@@ -109,6 +109,9 @@ public class TestFlatVectorValues {
                     dimension, 16, 50, 1.2f, 1.2f, false);
             var graph = builder.build(source);
             try (var searcher = new GraphSearcher(graph)) {
+                // Same scores, same stopping rule: only the flat store tracks vector lengths, so adaptive dot-product
+                // stopping would apply to it alone.
+                searcher.useAdaptiveTermination(false);
                 for (int q = 0; q < 20; q++) {
                     var query = TestUtil.randomVector(random, dimension);
                     var expected = searcher.search(DefaultSearchScoreProvider.exact(query, similarity, source), 10, 0f, Bits.ALL);
