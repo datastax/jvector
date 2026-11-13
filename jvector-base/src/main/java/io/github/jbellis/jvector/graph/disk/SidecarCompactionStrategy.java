@@ -99,6 +99,11 @@ public final class SidecarCompactionStrategy extends QuantizationCompactionStrat
     }
 
     @Override
+    public void adoptCompressor(VectorCompressor<?> trained) {
+        this.retrainedCompressor = java.util.Objects.requireNonNull(trained, "trained");
+    }
+
+    @Override
     public VectorCompressor<?> compressor() {
         return retrainedCompressor;
     }

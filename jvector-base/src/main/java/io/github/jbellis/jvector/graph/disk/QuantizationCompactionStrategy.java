@@ -83,10 +83,23 @@ public abstract class QuantizationCompactionStrategy {
         }
 
         @Override
+        public void adoptCompressor(VectorCompressor<?> trained) {
+            // no-op: nothing is quantized
+        }
+
+        @Override
         public String toString() {
             return "QuantizationCompactionStrategy.NONE";
         }
     };
+
+    /**
+     * Installs a compressor trained elsewhere in place of {@link #retrain}. A sharded compaction
+     * trains once, on the live nodes of every shard, and each shard's merge adopts the result
+     * instead of training again on its own slice. After this call {@link #compressor()} returns
+     * {@code trained}; a strategy without a compressor (e.g. {@link #NONE}) ignores it.
+     */
+    public abstract void adoptCompressor(VectorCompressor<?> trained);
 
     /**
      * Trains a fresh compressor on a balanced sample of merged source vectors. May be a no-op
@@ -276,7 +289,7 @@ public abstract class QuantizationCompactionStrategy {
         final PreEncodedCodeCache cache;
         try (FileChannel fc = FileChannel.open(writer.getOutputPath(), StandardOpenOption.READ, StandardOpenOption.WRITE)) {
             fc.write(ByteBuffer.wrap(new byte[]{0}), secondaryOffset + secondaryBytes - 1);
-            cache = PreEncodedCodeCache.map(fc, tempOffset, codeCount, codeSize);
+            cache = PreEncodedCodeCache.map(fc, writer.getOutputPath(), tempOffset, codeCount, codeSize);
             if (secondarySize > 0) {
                 secondaryCache = PreEncodedCodeCache.map(fc, secondaryOffset, codeCount, secondarySize);
             }
@@ -314,8 +327,16 @@ public abstract class QuantizationCompactionStrategy {
                     ByteSequence<?> code2 = enc2 == null ? null : vectorTypeSupport.createByteSequence(secondarySize);
                     VectorFloat<?> vec = vectorTypeSupport.createFloatVector(ctx.dimension);
                     long count = 0;
+                    // the source is read at random (new-ordinal order), so each record is announced a fixed
+                    // number of nodes ahead of its read instead of being faulted in when the read reaches it
+                    final int ahead = ctx.recordAnnounceAhead;
+                    int announced = cStart;   // first new ordinal not yet announced
                     try (var view = source.getView()) {
                         for (int newOrd = cStart; newOrd < cEnd; newOrd++) {
+                            for (int stop = Math.min(cEnd, newOrd + ahead + 1); ahead > 0 && announced < stop; announced++) {
+                                int oldAhead = mapper.newToOld(announced);
+                                if (oldAhead >= 0 && alive.get(oldAhead)) source.announceL0Record(oldAhead);
+                            }
                             int oldOrd = mapper.newToOld(newOrd);
                             if (oldOrd < 0 || !alive.get(oldOrd)) continue;
                             view.getVectorInto(oldOrd, vec, 0);

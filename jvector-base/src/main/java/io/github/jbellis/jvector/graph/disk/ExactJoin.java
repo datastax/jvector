@@ -34,12 +34,18 @@ final class ExactJoin {
     final long[] heaps;                // [(targetIndex * n + i) * k + j]
     final int[] sizes;                 // [targetIndex * n + i]
     final float[] thresholds;          // score of the k-th best so far, -inf until the heap is full
+    long pairsWalked;                  // (cell, node) pairs the walk scored, all targets; sizes the next range
+    long maxTargetPairs;               // the busiest target's share of them
     final Object[] locks = new Object[1024];
 
     private final int numSources;
     private final int[] sizeRank;
 
-    ExactJoin(int src, int lo, int hi, int k, int numSources, int[] sizeRank) {
+    /**
+     * @param selfTarget whether the searching source is also scanned for its own nodes (a sparse
+     *                   source, whose retained same-source edges mostly point at dead nodes)
+     */
+    ExactJoin(int src, int lo, int hi, int k, int numSources, int[] sizeRank, boolean selfTarget) {
         this.numSources = numSources;
         this.sizeRank = sizeRank;
         this.src = src;
@@ -50,7 +56,7 @@ final class ExactJoin {
         Arrays.fill(targetIndex, -1);
         int t = 0;
         for (int i = 0; i < numSources; i++) {
-            if (i != src && sizeRank[i] > sizeRank[src]) targetIndex[i] = t++;
+            if (i == src ? selfTarget : sizeRank[i] > sizeRank[src]) targetIndex[i] = t++;
         }
         targets = t;
         heaps = new long[Math.multiplyExact(Math.multiplyExact(targets, n), k)];

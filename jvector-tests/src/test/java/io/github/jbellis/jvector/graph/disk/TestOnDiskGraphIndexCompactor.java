@@ -1205,7 +1205,338 @@ public class TestOnDiskGraphIndexCompactor extends RandomizedTest {
         cellJoinMergeRecall(VectorSimilarityFunction.COSINE, true);
     }
 
+    /**
+     * The walk's direct reads, the record announce-ahead and fixed budgets: the options change how
+     * the store and the sources are read, never what is scored, so the merge must come out the same.
+     */
+    @Test
+    public void testCellJoinMergeDirectReadsAndFixedBudgets() throws Exception {
+        cellJoinMergeRecall(VectorSimilarityFunction.DOT_PRODUCT, false,
+                            c -> c.withWalkDirectReads(true).withRecordAnnounceAhead(8).withCellWalkBudgets(64L << 20, 64L << 20));
+    }
+
+    /**
+     * {@code withVersion}: the output is written at the requested on-disk format version, whatever
+     * the sources' version, and reads back through the versioned loader with its vectors, its
+     * hierarchy and a working search. Versions that cannot hold the output are rejected up front:
+     * upper layers need 4 or above, fused PQ needs 6.
+     */
+    @Test
+    public void testCompactWithVersion() throws Exception {
+        VectorSimilarityFunction vsf = VectorSimilarityFunction.COSINE;
+        int perSource = 2000, nSrc = 2;
+        java.util.Random rnd = new java.util.Random(20261111);
+        for (boolean hierarchy : new boolean[]{true, false}) {
+            List<VectorFloat<?>> all = new ArrayList<>();
+            List<Path> paths = new ArrayList<>();
+            for (int sIdx = 0; sIdx < nSrc; sIdx++) {
+                List<VectorFloat<?>> vecs = seededVectors(rnd, perSource, dimension);
+                paths.add(buildPlainSourceGraph(vecs, vsf, hierarchy, "version_" + (hierarchy ? "h" : "flat") + "_src_" + sIdx));
+                all.addAll(vecs);
+            }
+            int[] versions = hierarchy ? new int[]{4, 5, 6} : new int[]{2, 3, 4, 5, 6};
+            for (int version : versions) {
+                compactAtVersion(paths, all, vsf, version, hierarchy, "version_" + (hierarchy ? "h" : "flat") + "_v" + version);
+            }
+            if (hierarchy) {
+                assertRejectedVersion(paths, vsf, 3, "upper layers need version 4 or above");
+            }
+        }
+        // fused PQ sources: the output carries fused PQ, which only version 6 holds
+        List<Path> fused = new ArrayList<>();
+        for (int sIdx = 0; sIdx < nSrc; sIdx++) {
+            fused.add(buildFusedSourceGraph(seededVectors(rnd, perSource, dimension), vsf, true, "version_fused_src_" + sIdx));
+        }
+        assertRejectedVersion(fused, vsf, 5, "fused PQ needs version 6");
+        try {
+            openCompactor(fused, vsf).withVersion(OnDiskGraphIndex.CURRENT_VERSION + 1);
+            org.junit.Assert.fail("an unknown version must be rejected");
+        } catch (IllegalArgumentException expected) {
+            // expected
+        }
+    }
+
+    private OnDiskGraphIndexCompactor openCompactor(List<Path> paths, VectorSimilarityFunction vsf) throws IOException {
+        List<OnDiskGraphIndex> graphs = new ArrayList<>();
+        List<FixedBitSet> live = new ArrayList<>();
+        for (Path path : paths) {
+            var g = OnDiskGraphIndex.load(ReaderSupplierFactory.open(path));
+            graphs.add(g);
+            var lv = new FixedBitSet(g.getIdUpperBound());
+            lv.set(0, g.getIdUpperBound());
+            live.add(lv);
+        }
+        return new OnDiskGraphIndexCompactor(graphs, live, vsf, null);
+    }
+
+    private void compactAtVersion(List<Path> paths, List<VectorFloat<?>> all, VectorSimilarityFunction vsf,
+                                  int version, boolean hierarchy, String name) throws Exception {
+        var compactor = openCompactor(paths, vsf).withVersion(version);
+        Path out = testDirectory.resolve(name);
+        compactor.compact(out);
+        var mappers = compactor.ordinalMappers();
+        int total = all.size(), perSource = total / paths.size();
+        try (ReaderSupplier rs = ReaderSupplierFactory.open(out)) {
+            var merged = OnDiskGraphIndex.load(rs);
+            assertEquals("version of " + name, version, merged.version);
+            assertEquals("nodes of " + name, total, merged.size(0));
+            assertEquals("hierarchy of " + name, hierarchy, merged.getMaxLevel() >= 1);
+            assertFalse("fused PQ in " + name, merged.getFeatures().containsKey(FeatureId.FUSED_PQ));
+            List<VectorFloat<?>> expected = new ArrayList<>(java.util.Collections.nCopies(total, (VectorFloat<?>) null));
+            for (int sIdx = 0; sIdx < paths.size(); sIdx++) {
+                for (int i = 0; i < perSource; i++) {
+                    expected.set(mappers.get(sIdx).oldToNew(i), all.get(sIdx * perSource + i));
+                }
+            }
+            try (var view = merged.getView()) {
+                var v = vectorTypeSupport.createFloatVector(dimension);
+                for (int n = 0; n < total; n++) {
+                    view.getVectorInto(n, v, 0);
+                    assertVecEquals(expected.get(n), v, n);
+                }
+            }
+            var ravv = new ListRandomAccessVectorValues(expected, dimension);
+            try (GraphSearcher searcher = new GraphSearcher(merged)) {
+                int selfHits = 0, nq = 100;
+                java.util.Random rnd = new java.util.Random(version);
+                for (int qi = 0; qi < nq; qi++) {
+                    int target = rnd.nextInt(total);
+                    SearchScoreProvider ssp = DefaultSearchScoreProvider.exact(expected.get(target), vsf, ravv);
+                    SearchResult sr = searcher.search(ssp, 10, Bits.ALL);
+                    for (var ns : sr.getNodes()) if (ns.node == target) selfHits++;
+                }
+                assertTrue("self-hits " + selfHits + "/" + nq + " in " + name, selfHits >= nq * 9 / 10);
+            }
+        }
+    }
+
+    private void assertRejectedVersion(List<Path> paths, VectorSimilarityFunction vsf, int version, String why) throws Exception {
+        var compactor = openCompactor(paths, vsf).withVersion(version);
+        try {
+            compactor.compact(testDirectory.resolve("version_rejected_" + version));
+            org.junit.Assert.fail(why);
+        } catch (IllegalArgumentException expected) {
+            // expected
+        } catch (RuntimeException e) {
+            assertTrue(why + ": " + e, e.getCause() instanceof IllegalArgumentException);
+        }
+    }
+
+    /**
+     * A sharded merge keeps a slice of every source's nodes, and the slice can miss every node of
+     * the sources' top levels. The output's hierarchy then ends at the highest level that still has
+     * a live node, with the entry node on it; dropping the top level only, and dropping every upper
+     * level (a single-layer output), are both merged and searched.
+     */
+    @Test
+    public void testMergeWithoutLiveNodesAtTopLevels() throws Exception {
+        VectorSimilarityFunction vsf = VectorSimilarityFunction.COSINE;
+        int perSource = 3000, nSrc = 2;
+        java.util.Random rnd = new java.util.Random(20261107);
+        List<VectorFloat<?>> all = new ArrayList<>();
+        List<OnDiskGraphIndex> graphs = new ArrayList<>();
+        List<ReaderSupplier> rss = new ArrayList<>();
+        for (int sIdx = 0; sIdx < nSrc; sIdx++) {
+            List<VectorFloat<?>> vecs = seededVectors(rnd, perSource, dimension);
+            Path path = buildPlainSourceGraph(vecs, vsf, true, "notop_src_" + sIdx);
+            rss.add(ReaderSupplierFactory.open(path));
+            graphs.add(OnDiskGraphIndex.load(rss.get(sIdx)));
+            all.addAll(vecs);
+        }
+        int sourceTop = graphs.stream().mapToInt(OnDiskGraphIndex::getMaxLevel).max().orElse(0);
+        assertTrue("sources must have a hierarchy", sourceTop >= 1);
+        // keep = the highest level that keeps its live nodes: every node of the levels above is dead
+        for (int keep : new int[]{sourceTop - 1, 0}) {
+            List<FixedBitSet> live = new ArrayList<>();
+            int liveTotal = 0;
+            for (var g : graphs) {
+                var lv = new FixedBitSet(g.getIdUpperBound());
+                lv.set(0, g.getIdUpperBound());
+                for (int level = keep + 1; level <= g.getMaxLevel(); level++) {
+                    var it = g.getNodes(level);
+                    while (it.hasNext()) lv.clear(it.next());
+                }
+                live.add(lv);
+                liveTotal += lv.cardinality();
+            }
+            assertTrue("the test must delete something", liveTotal < nSrc * perSource);
+            var compactor = new OnDiskGraphIndexCompactor(graphs, live, vsf, null);
+            Path out = testDirectory.resolve("notop_merged_" + keep);
+            compactor.compact(out);
+            var mappers = compactor.ordinalMappers();
+            List<VectorFloat<?>> reordered = new ArrayList<>(Collections.nCopies(liveTotal, (VectorFloat<?>) null));
+            for (int sIdx = 0; sIdx < nSrc; sIdx++) {
+                for (int i = live.get(sIdx).nextSetBit(0); i >= 0 && i < perSource; i = i + 1 < perSource ? live.get(sIdx).nextSetBit(i + 1) : -1) {
+                    reordered.set(mappers.get(sIdx).oldToNew(i), all.get(sIdx * perSource + i));
+                }
+            }
+            try (ReaderSupplier rs = ReaderSupplierFactory.open(out)) {
+                var merged = OnDiskGraphIndex.load(rs);
+                assertEquals("live nodes (keep=" + keep + ")", liveTotal, merged.size(0));
+                assertEquals("output top level (keep=" + keep + ")", keep, merged.getMaxLevel());
+                assertTrue("the top level has nodes", merged.size(keep) > 0);
+                try (var view = merged.getView()) {
+                    assertEquals("entry node level", keep, view.entryNode().level);
+                    assertTrue("entry node is a live node", view.entryNode().node >= 0 && view.entryNode().node < liveTotal);
+                    var v = vectorTypeSupport.createFloatVector(dimension);
+                    for (int n = 0; n < liveTotal; n++) {
+                        view.getVectorInto(n, v, 0);
+                        assertVecEquals(reordered.get(n), v, n);
+                    }
+                }
+                var ravv = new ListRandomAccessVectorValues(reordered, dimension);
+                try (GraphSearcher searcher = new GraphSearcher(merged)) {
+                    int selfHits = 0, nq = 100;
+                    for (int qi = 0; qi < nq; qi++) {
+                        int target = rnd.nextInt(liveTotal);
+                        SearchScoreProvider ssp = DefaultSearchScoreProvider.exact(reordered.get(target), vsf, ravv);
+                        SearchResult sr = searcher.search(ssp, 10, Bits.ALL);
+                        for (var ns : sr.getNodes()) if (ns.node == target) selfHits++;
+                    }
+                    assertTrue("self-hits " + selfHits + "/" + nq + " (keep=" + keep + ")", selfHits >= nq * 9 / 10);
+                }
+            }
+        }
+        for (var r : rss) r.close();
+    }
+
+    /** One session, several outputs, full-precision sources. */
+    @Test
+    public void testCompactShardedFullPrecisionSources() throws Exception {
+        compactSharded(false);
+    }
+
+    /** One session, several outputs, fused-PQ sources: every shard adopts the codebook trained once. */
+    @Test
+    public void testCompactShardedFusedSources() throws Exception {
+        compactSharded(true);
+    }
+
+    /**
+     * {@code sharded().compactShard} per output: every node of a shard lands in that shard, at the
+     * ordinal the shard's mappers report, with its vector; a node in no shard and a deleted node
+     * land nowhere. A shard keeps a quarter of each source, so a node keeps about a quarter of its
+     * same-source edges: the same-source join must restore them, which the edge mix of the
+     * outputs shows.
+     */
+    private void compactSharded(boolean fusedSources) throws Exception {
+        VectorSimilarityFunction vsf = VectorSimilarityFunction.COSINE;
+        int perSource = 3000, nSrc = 2, shards = 4;
+        java.util.Random rnd = new java.util.Random(20261109);
+        List<VectorFloat<?>> all = new ArrayList<>();
+        List<OnDiskGraphIndex> graphs = new ArrayList<>();
+        List<ReaderSupplier> rss = new ArrayList<>();
+        List<FixedBitSet> live = new ArrayList<>();
+        for (int sIdx = 0; sIdx < nSrc; sIdx++) {
+            List<VectorFloat<?>> vecs = seededVectors(rnd, perSource, dimension);
+            String name = "sharded_" + (fusedSources ? "fused" : "plain") + "_src_" + sIdx;
+            Path path = fusedSources ? buildFusedSourceGraph(vecs, vsf, true, name) : buildPlainSourceGraph(vecs, vsf, true, name);
+            rss.add(ReaderSupplierFactory.open(path));
+            graphs.add(OnDiskGraphIndex.load(rss.get(sIdx)));
+            var lv = new FixedBitSet(perSource);
+            for (int i = 0; i < perSource; i++) if (i % 10 != 3) lv.set(i);          // every tenth node is deleted
+            live.add(lv);
+            all.addAll(vecs);
+        }
+        // the live nodes are spread over the shards; a few are in no shard
+        List<List<FixedBitSet>> shardNodes = new ArrayList<>();              // [shard][source]
+        for (int m = 0; m < shards; m++) {
+            List<FixedBitSet> perShard = new ArrayList<>();
+            for (int sIdx = 0; sIdx < nSrc; sIdx++) {
+                var bits = new FixedBitSet(perSource);
+                for (int i = 0; i < perSource; i++) {
+                    if (live.get(sIdx).get(i) && i % 97 != 0 && (i * 31 + sIdx) % shards == m) bits.set(i);
+                }
+                perShard.add(bits);
+            }
+            shardNodes.add(perShard);
+        }
+        List<Path> outs = new ArrayList<>();
+        String outName = "sharded_" + (fusedSources ? "fused" : "plain") + "_out_";
+        for (int m = 0; m < shards; m++) outs.add(testDirectory.resolve(outName + m));
+
+        var compactor = new OnDiskGraphIndexCompactor(graphs, live, vsf, null);
+        var session = compactor.sharded();
+        List<List<OrdinalMapper>> mappers = new ArrayList<>();
+        for (int m = 0; m < shards; m++) mappers.add(session.compactShard(shardNodes.get(m), outs.get(m)));
+
+        long sameSourceEdges = 0, edges = 0;
+        for (int m = 0; m < shards; m++) {
+            List<VectorFloat<?>> expected = new ArrayList<>();
+            int count = 0;
+            for (int sIdx = 0; sIdx < nSrc; sIdx++) count += shardNodes.get(m).get(sIdx).cardinality();
+            for (int i = 0; i < count; i++) expected.add(null);
+            int[] sourceOf = new int[count];
+            for (int sIdx = 0; sIdx < nSrc; sIdx++) {
+                for (int i = 0; i < perSource; i++) {
+                    int ord = mappers.get(m).get(sIdx).oldToNew(i);
+                    if (shardNodes.get(m).get(sIdx).get(i)) {
+                        assertTrue("ordinal " + ord + " of a shard of " + count, ord >= 0 && ord < count);
+                        assertTrue("two nodes at ordinal " + ord, expected.get(ord) == null);
+                        expected.set(ord, all.get(sIdx * perSource + i));
+                        sourceOf[ord] = sIdx;
+                    } else {
+                        assertEquals("a node outside the shard has no ordinal", OrdinalMapper.OMITTED, ord);
+                    }
+                }
+            }
+            try (ReaderSupplier rs = ReaderSupplierFactory.open(outs.get(m))) {
+                var merged = OnDiskGraphIndex.load(rs);
+                assertEquals("nodes of shard " + m, count, merged.size(0));
+                assertEquals("quantized feature in shard " + m, fusedSources, merged.getFeatures().containsKey(FeatureId.FUSED_PQ));
+                try (var view = merged.getView()) {
+                    var v = vectorTypeSupport.createFloatVector(dimension);
+                    for (int n = 0; n < count; n++) {
+                        view.getVectorInto(n, v, 0);
+                        assertVecEquals(expected.get(n), v, n);
+                        var it = view.getNeighborsIterator(0, n);
+                        while (it.hasNext()) {
+                            int nb = it.nextInt();
+                            assertTrue("neighbour " + nb + " of " + n, nb >= 0 && nb < count && nb != n);
+                            if (sourceOf[nb] == sourceOf[n]) sameSourceEdges++;
+                            edges++;
+                        }
+                    }
+                }
+                var ravv = new ListRandomAccessVectorValues(expected, dimension);
+                try (GraphSearcher searcher = new GraphSearcher(merged)) {
+                    int selfHits = 0, nq = 100;
+                    for (int qi = 0; qi < nq; qi++) {
+                        int target = rnd.nextInt(count);
+                        SearchScoreProvider ssp = DefaultSearchScoreProvider.exact(expected.get(target), vsf, ravv);
+                        SearchResult sr = searcher.search(ssp, 10, Bits.ALL);
+                        for (var ns : sr.getNodes()) if (ns.node == target) selfHits++;
+                    }
+                    assertTrue("self-hits " + selfHits + "/" + nq + " in shard " + m, selfHits >= nq * 9 / 10);
+                }
+            }
+        }
+        double sameShare = sameSourceEdges / (double) edges;
+        System.out.printf("Sharded compaction (%s sources): %.1f%% of the level-0 edges stay within a source%n",
+                          fusedSources ? "fused" : "full-precision", 100 * sameShare);
+        // The two sources are draws of one distribution, so about half of a node's nearest
+        // neighbours are of its own source; retained edges alone would leave about a quarter.
+        assertTrue("same-source share of the edges " + sameShare, sameShare >= 0.40);
+
+        // a shard that is not a subset of the compaction's live nodes is rejected
+        var notLive = new ArrayList<FixedBitSet>();
+        for (int sIdx = 0; sIdx < nSrc; sIdx++) notLive.add(new FixedBitSet(perSource));
+        notLive.get(0).set(3);   // node 3 of source 0 is deleted
+        try {
+            compactor.sharded().compactShard(notLive, testDirectory.resolve(outName + "rejected"));
+            org.junit.Assert.fail("a shard holding a deleted node must be rejected");
+        } catch (IllegalArgumentException expectedException) {
+            // expected
+        }
+        for (var r : rss) r.close();
+    }
+
     private void cellJoinMergeRecall(VectorSimilarityFunction vsf, boolean fusedSources) throws Exception {
+        cellJoinMergeRecall(vsf, fusedSources, c -> c);
+    }
+
+    private void cellJoinMergeRecall(VectorSimilarityFunction vsf, boolean fusedSources,
+                                     java.util.function.UnaryOperator<OnDiskGraphIndexCompactor> configure) throws Exception {
         int perSource = 3000;
         int nSrc = 3;
         final java.util.Random rnd = new java.util.Random(20260916);              // fixed: the two merges are compared
@@ -1247,7 +1578,7 @@ public class TestOnDiskGraphIndexCompactor extends RandomizedTest {
         }
 
         String joinName = "celljoin_" + (fusedSources ? "" : "plain_") + vsf + "_join";
-        double joinRecall = mergeAndRecall(graphs, live, perSource, vsf, all, queries, gt, topK, joinName);
+        double joinRecall = mergeAndRecall(graphs, live, perSource, vsf, all, queries, gt, topK, joinName, configure);
         System.out.printf("Cell-join merge recall (%s, %s sources): %.4f%n",
                           vsf, fusedSources ? "fused" : "full-precision", joinRecall);
         try (ReaderSupplier rs = ReaderSupplierFactory.open(testDirectory.resolve(joinName))) {
@@ -1290,9 +1621,16 @@ public class TestOnDiskGraphIndexCompactor extends RandomizedTest {
                                   VectorSimilarityFunction vsf, List<VectorFloat<?>> all,
                                   List<VectorFloat<?>> queries, List<List<Integer>> gt, int topK,
                                   String name) throws Exception {
+        return mergeAndRecall(graphs, live, perSource, vsf, all, queries, gt, topK, name, c -> c);
+    }
+
+    private double mergeAndRecall(List<OnDiskGraphIndex> graphs, List<FixedBitSet> live, int perSource,
+                                  VectorSimilarityFunction vsf, List<VectorFloat<?>> all,
+                                  List<VectorFloat<?>> queries, List<List<Integer>> gt, int topK,
+                                  String name, java.util.function.UnaryOperator<OnDiskGraphIndexCompactor> configure) throws Exception {
         int nSrc = graphs.size();
         int total = nSrc * perSource;
-        var compactor = new OnDiskGraphIndexCompactor(graphs, live, vsf, null);
+        var compactor = configure.apply(new OnDiskGraphIndexCompactor(graphs, live, vsf, null));
         var outputPath = testDirectory.resolve(name);
         compactor.compact(outputPath);
         assertTrue("level-0 candidates should come from cell scans", compactor.cellScanCount() > 0);
@@ -1452,6 +1790,69 @@ public class TestOnDiskGraphIndexCompactor extends RandomizedTest {
 
     /** Inline-vectors-only source graph with the same build parameters as
      *  {@link #buildFusedSourceGraph}, so sidecar-vs-fused comparisons share source quality. */
+    /**
+     * A source written with holes, as Cassandra's one-to-many layout writes them (node {@code i} at
+     * ordinal {@code 7i}, every other ordinal a placeholder, so {@code getIdUpperBound()} is seven
+     * times {@code size(0)}), merged with a dense source: every live node of both lands at a unique
+     * ordinal with its vector, every hole and deleted node is {@link OrdinalMapper#OMITTED}.
+     */
+    @Test
+    public void testCompactSourceWithHoles() throws Exception {
+        VectorSimilarityFunction vsf = VectorSimilarityFunction.COSINE;
+        int n = 3000;
+        java.util.Random rnd = new java.util.Random(20261113);
+        List<VectorFloat<?>> holed = seededVectors(rnd, n, dimension), dense = seededVectors(rnd, n, dimension);
+        // holed source: node i written at ordinal stride*i, so all but one ordinal in stride is a hole
+        int stride = 7;
+        var ravv = new ListRandomAccessVectorValues(holed, dimension);
+        var builder = new GraphIndexBuilder(BuildScoreProvider.randomAccessScoreProvider(ravv, vsf), dimension, 16, 100, 1.2f, 1.2f, true, true, simdExecutor, parallelExecutor);
+        var graph = builder.build(ravv);
+        Path holedPath = testDirectory.resolve("holes_src");
+        Map<Integer, Integer> map = new HashMap<>();
+        for (int i = 0; i < n; i++) map.put(i, stride * i);
+        var wb = new OnDiskGraphIndexWriter.Builder(graph, holedPath).with(new InlineVectors(dimension)).withMap(map);
+        try (var writer = wb.build()) {
+            var sup = new EnumMap<FeatureId, IntFunction<Feature.State>>(FeatureId.class);
+            sup.put(FeatureId.INLINE_VECTORS, ordinal -> new InlineVectors.State(ravv.getVector(ordinal)));
+            writer.write(sup);
+        }
+        Path densePath = buildPlainSourceGraph(dense, vsf, true, "holes_dense");
+        try (var rs0 = ReaderSupplierFactory.open(holedPath); var rs1 = ReaderSupplierFactory.open(densePath)) {
+            var g0 = OnDiskGraphIndex.load(rs0);
+            var g1 = OnDiskGraphIndex.load(rs1);
+            assertEquals(n, g0.size(0));
+            assertEquals(stride * (n - 1) + 1, g0.getIdUpperBound());
+            var live0 = new FixedBitSet(g0.getIdUpperBound());
+            for (int i = 0; i < n; i++) if (i % 10 != 3) live0.set(stride * i);
+            var live1 = new FixedBitSet(n);
+            for (int i = 0; i < n; i++) if (i % 7 != 2) live1.set(i);
+            int count = live0.cardinality() + live1.cardinality();
+            Path out = testDirectory.resolve("holes_out");
+            var compactor = new OnDiskGraphIndexCompactor(List.of(g0, g1), List.of(live0, live1), vsf, null);
+            compactor.compact(out);
+            var mappers = compactor.ordinalMappers();
+            VectorFloat<?>[] expected = new VectorFloat<?>[count];
+            for (int ord = 0; ord < g0.getIdUpperBound(); ord++) {
+                int m = mappers.get(0).oldToNew(ord);
+                if (live0.get(ord)) { assertTrue("ordinal " + m, m >= 0 && m < count); assertTrue("two nodes at " + m, expected[m] == null); expected[m] = holed.get(ord / stride); }
+                else assertEquals(OrdinalMapper.OMITTED, m);
+            }
+            for (int ord = 0; ord < n; ord++) {
+                int m = mappers.get(1).oldToNew(ord);
+                if (live1.get(ord)) { assertTrue("ordinal " + m, m >= 0 && m < count); assertTrue("two nodes at " + m, expected[m] == null); expected[m] = dense.get(ord); }
+                else assertEquals(OrdinalMapper.OMITTED, m);
+            }
+            try (var rs = ReaderSupplierFactory.open(out)) {
+                var merged = OnDiskGraphIndex.load(rs);
+                assertEquals(count, merged.size(0));
+                try (var view = merged.getView()) {
+                    var v = vectorTypeSupport.createFloatVector(dimension);
+                    for (int i = 0; i < count; i++) { view.getVectorInto(i, v, 0); assertVecEquals(expected[i], v, i); }
+                }
+            }
+        }
+    }
+
     private Path buildPlainSourceGraph(List<VectorFloat<?>> vecs, VectorSimilarityFunction vsf, boolean hierarchy, String name) throws IOException {
         var ravv = new ListRandomAccessVectorValues(vecs, dimension);
         var bsp = BuildScoreProvider.randomAccessScoreProvider(ravv, vsf);

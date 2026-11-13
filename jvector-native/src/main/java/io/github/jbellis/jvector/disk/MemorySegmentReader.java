@@ -18,6 +18,7 @@ package io.github.jbellis.jvector.disk;
 
 import java.io.IOException;
 import java.lang.foreign.Arena;
+import java.lang.invoke.MethodHandle;
 import java.lang.foreign.FunctionDescriptor;
 import java.lang.foreign.Linker;
 import java.lang.foreign.MemorySegment;
@@ -46,6 +47,8 @@ public class MemorySegmentReader implements RandomAccessReader {
     private static final Logger logger = LoggerFactory.getLogger(MemorySegmentReader.class);
 
     private static final int MADV_RANDOM = 1; // Value for Linux
+    private static final int MADV_WILLNEED = 3; // POSIX value
+    private static final long PAGE = 4096;
     private static final OfInt intLayout = ValueLayout.JAVA_INT_UNALIGNED.withOrder(ByteOrder.BIG_ENDIAN);
     private static final OfFloat floatLayout = ValueLayout.JAVA_FLOAT_UNALIGNED.withOrder(ByteOrder.BIG_ENDIAN);
     private static final OfLong longLayout = ValueLayout.JAVA_LONG_UNALIGNED.withOrder(ByteOrder.BIG_ENDIAN);
@@ -149,6 +152,7 @@ public class MemorySegmentReader implements RandomAccessReader {
         private final Arena arena;
         private final MemorySegment memory;
         private final Path path;
+        private final MethodHandle madvise;   // posix_madvise, or null when the symbol is missing
 
         public Supplier(Path path) throws IOException {
             this.path = path;
@@ -160,13 +164,14 @@ public class MemorySegmentReader implements RandomAccessReader {
                 var linker = Linker.nativeLinker();
                 var maybeMadvise = linker.defaultLookup().find("posix_madvise");
                 if (maybeMadvise.isPresent()) {
-                    var madvise = linker.downcallHandle(maybeMadvise.get(),
+                    madvise = linker.downcallHandle(maybeMadvise.get(),
                             FunctionDescriptor.of(ValueLayout.JAVA_INT, ValueLayout.ADDRESS, ValueLayout.JAVA_LONG, ValueLayout.JAVA_INT));
                     int result = (int) madvise.invokeExact(memory, memory.byteSize(), MADV_RANDOM);
                     if (result != 0) {
                         throw new IOException("posix_madvise failed with error code: " + result);
                     }
                 } else {
+                    madvise = null;
                     logger.warn("posix_madvise not found, MADV_RANDOM advice not applied");
                 }
             } catch (Throwable e) {
@@ -187,6 +192,29 @@ public class MemorySegmentReader implements RandomAccessReader {
         // is within noise of larger buffers at 64KB).
         private static final ThreadLocal<java.nio.ByteBuffer> PREFETCH_BUF =
                 ThreadLocal.withInitial(() -> java.nio.ByteBuffer.wrap(new byte[64 << 10]));
+
+        /**
+         * {@code POSIX_MADV_WILLNEED} on the pages of {@code [offset, offset + length)}: the kernel
+         * starts reading them in and returns; a later access through the mapping finds them resident
+         * or already in flight. The positional-read prefetch without the symbol.
+         */
+        @Override
+        public void announce(long offset, long length) {
+            if (length <= 0 || madvise == null) {
+                prefetch(offset, length);
+                return;
+            }
+            long from = Math.max(0, offset) & -PAGE;
+            long to = Math.min(memory.byteSize(), offset + length);
+            if (to <= from) {
+                return;
+            }
+            try {
+                int ignored = (int) madvise.invokeExact(memory.asSlice(from, to - from), to - from, MADV_WILLNEED);
+            } catch (Throwable e) {
+                logger.warn("posix_madvise(WILLNEED) of {} [{}, {}) failed; continuing without the announcement", path, from, to, e);
+            }
+        }
 
         @Override
         public void prefetch(long offset, long length) {

@@ -130,6 +130,44 @@ final class WideDecoder {
             return;
         }
         cache.get(newOrdinal, codeBytes);
+        decodeCodeBytes(dst);
+    }
+
+    private java.nio.ByteBuffer bufSrc;        // the buffer the views below were taken from
+    private java.nio.ByteBuffer bufBytes;
+    private java.nio.FloatBuffer bufFloats;
+
+    /**
+     * Decodes the code that starts at byte {@code offset} of {@code src}, a buffer the caller filled
+     * from the cache's file ({@link PreEncodedCodeCache#readRowsDirect}). Raw rows are little-endian
+     * floats, read through one float view per buffer so the per-row cost is a bulk copy.
+     */
+    void decode(java.nio.ByteBuffer src, int offset, VectorFloat<?> dst) {
+        if (src != bufSrc) {
+            // views over the whole capacity: the buffer's position and limit are the caller's read state
+            bufSrc = src;
+            java.nio.ByteBuffer whole = src.duplicate();
+            whole.clear();
+            bufFloats = whole.order(java.nio.ByteOrder.LITTLE_ENDIAN).asFloatBuffer();
+            bufBytes = whole;
+        }
+        if (raw) {
+            if (dst instanceof FloatArray && (offset & 3) == 0) {
+                bufFloats.position(offset >> 2);
+                bufFloats.get(((FloatArray) dst).array(), 0, dimension);
+            } else {
+                bufBytes.position(offset);
+                bufBytes.get(codeBytes, 0, codeBytes.length);
+                RawVectorCode.decodeInto(codeBytes, dst, dimension);
+            }
+            return;
+        }
+        bufBytes.position(offset);
+        bufBytes.get(codeBytes, 0, codeBytes.length);
+        decodeCodeBytes(dst);
+    }
+
+    private void decodeCodeBytes(VectorFloat<?> dst) {
         if (codebooks != null && dst instanceof FloatArray) {
             float[] out = ((FloatArray) dst).array();
             if (pairs != null) {
