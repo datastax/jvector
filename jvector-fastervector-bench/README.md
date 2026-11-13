@@ -275,3 +275,22 @@ The graph's CSV has no footprint columns: its `Disk Usage (MB)` and memory-mappe
 not what's resident. Compare the graph's `QPS` against IVF's `Coalesced QPS` and `QPS` (batched) at similar `Recall@10`;
 the `.json` files have every configuration's numbers, which is where to look for the
 recall-throughput tradeoff.
+
+### Recall-vs-QPS curves
+
+The single-point regression configs give one number per side. To see the whole tradeoff, sweep
+the search knob instead: `cap-1M-recall-qps-sweep.yml` exists on both sides, in
+`yaml-configs/ivf-experiments/` (nprobe) and in `jvector-examples/yaml-configs/index-parameters/`
+(overquery). Run them with the interactive runners, `BenchIvfYAML` and `BenchYAML`, with logging
+turned on in `run-config.yml`: the Auto runners average every point into one row, and a curve needs
+one `experiments.csv` row per point. Then plot both files on one chart:
+
+```bash
+python3 jvector-fastervector-bench/scripts/plot_recall_qps.py \
+    <graph experiments.csv> <ivf experiments.csv> recall_vs_qps.png
+```
+
+It needs `pandas` and `matplotlib`. It draws one curve per graph build and per IVF
+`(nlist, storageFactor)`, with Recall@10 on x and QPS on a log scale, and labels points with their
+overquery or nprobe. IVF's curve uses batched QPS; `--ivf-qps-column
+search.throughput.coalesced.avg_qps` plots coalesced QPS instead.
