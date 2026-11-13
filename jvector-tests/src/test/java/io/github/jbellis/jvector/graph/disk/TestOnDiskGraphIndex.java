@@ -40,6 +40,7 @@ import io.github.jbellis.jvector.quantization.NVQuantization;
 import io.github.jbellis.jvector.quantization.PQVectors;
 import io.github.jbellis.jvector.quantization.ProductQuantization;
 import io.github.jbellis.jvector.util.Bits;
+import io.github.jbellis.jvector.util.RamUsageEstimator;
 import io.github.jbellis.jvector.vector.VectorSimilarityFunction;
 import org.junit.After;
 import org.junit.Before;
@@ -342,7 +343,9 @@ public class TestOnDiskGraphIndex extends RandomizedTest {
              var onDiskGraph = OnDiskGraphIndex.load(readerSupplier);
              var onDiskView = onDiskGraph.getView())
         {
-            assertEquals(96, onDiskGraph.ramBytesUsed()); // Includes the FUSED_ASH feature metadata slot; graph hasn't been read from
+            // Fixed fields, two references per FeatureId and the record layout; the graph hasn't been read from.
+            assertEquals(104 + RamUsageEstimator.NUM_BYTES_OBJECT_REF
+                    + RamUsageEstimator.shallowSizeOfInstance(L0Layout.class), onDiskGraph.ramBytesUsed());
             assertEquals(32, onDiskGraph.getDegree(0));
             assertEquals(2, onDiskGraph.version);
             assertEquals(100_000, onDiskGraph.size(0));
