@@ -1790,6 +1790,69 @@ public class TestOnDiskGraphIndexCompactor extends RandomizedTest {
 
     /** Inline-vectors-only source graph with the same build parameters as
      *  {@link #buildFusedSourceGraph}, so sidecar-vs-fused comparisons share source quality. */
+    /**
+     * A source written with holes, as Cassandra's one-to-many layout writes them (node {@code i} at
+     * ordinal {@code 7i}, every other ordinal a placeholder, so {@code getIdUpperBound()} is seven
+     * times {@code size(0)}), merged with a dense source: every live node of both lands at a unique
+     * ordinal with its vector, every hole and deleted node is {@link OrdinalMapper#OMITTED}.
+     */
+    @Test
+    public void testCompactSourceWithHoles() throws Exception {
+        VectorSimilarityFunction vsf = VectorSimilarityFunction.COSINE;
+        int n = 3000;
+        java.util.Random rnd = new java.util.Random(20261113);
+        List<VectorFloat<?>> holed = seededVectors(rnd, n, dimension), dense = seededVectors(rnd, n, dimension);
+        // holed source: node i written at ordinal stride*i, so all but one ordinal in stride is a hole
+        int stride = 7;
+        var ravv = new ListRandomAccessVectorValues(holed, dimension);
+        var builder = new GraphIndexBuilder(BuildScoreProvider.randomAccessScoreProvider(ravv, vsf), dimension, 16, 100, 1.2f, 1.2f, true, true, simdExecutor, parallelExecutor);
+        var graph = builder.build(ravv);
+        Path holedPath = testDirectory.resolve("holes_src");
+        Map<Integer, Integer> map = new HashMap<>();
+        for (int i = 0; i < n; i++) map.put(i, stride * i);
+        var wb = new OnDiskGraphIndexWriter.Builder(graph, holedPath).with(new InlineVectors(dimension)).withMap(map);
+        try (var writer = wb.build()) {
+            var sup = new EnumMap<FeatureId, IntFunction<Feature.State>>(FeatureId.class);
+            sup.put(FeatureId.INLINE_VECTORS, ordinal -> new InlineVectors.State(ravv.getVector(ordinal)));
+            writer.write(sup);
+        }
+        Path densePath = buildPlainSourceGraph(dense, vsf, true, "holes_dense");
+        try (var rs0 = ReaderSupplierFactory.open(holedPath); var rs1 = ReaderSupplierFactory.open(densePath)) {
+            var g0 = OnDiskGraphIndex.load(rs0);
+            var g1 = OnDiskGraphIndex.load(rs1);
+            assertEquals(n, g0.size(0));
+            assertEquals(stride * (n - 1) + 1, g0.getIdUpperBound());
+            var live0 = new FixedBitSet(g0.getIdUpperBound());
+            for (int i = 0; i < n; i++) if (i % 10 != 3) live0.set(stride * i);
+            var live1 = new FixedBitSet(n);
+            for (int i = 0; i < n; i++) if (i % 7 != 2) live1.set(i);
+            int count = live0.cardinality() + live1.cardinality();
+            Path out = testDirectory.resolve("holes_out");
+            var compactor = new OnDiskGraphIndexCompactor(List.of(g0, g1), List.of(live0, live1), vsf, null);
+            compactor.compact(out);
+            var mappers = compactor.ordinalMappers();
+            VectorFloat<?>[] expected = new VectorFloat<?>[count];
+            for (int ord = 0; ord < g0.getIdUpperBound(); ord++) {
+                int m = mappers.get(0).oldToNew(ord);
+                if (live0.get(ord)) { assertTrue("ordinal " + m, m >= 0 && m < count); assertTrue("two nodes at " + m, expected[m] == null); expected[m] = holed.get(ord / stride); }
+                else assertEquals(OrdinalMapper.OMITTED, m);
+            }
+            for (int ord = 0; ord < n; ord++) {
+                int m = mappers.get(1).oldToNew(ord);
+                if (live1.get(ord)) { assertTrue("ordinal " + m, m >= 0 && m < count); assertTrue("two nodes at " + m, expected[m] == null); expected[m] = dense.get(ord); }
+                else assertEquals(OrdinalMapper.OMITTED, m);
+            }
+            try (var rs = ReaderSupplierFactory.open(out)) {
+                var merged = OnDiskGraphIndex.load(rs);
+                assertEquals(count, merged.size(0));
+                try (var view = merged.getView()) {
+                    var v = vectorTypeSupport.createFloatVector(dimension);
+                    for (int i = 0; i < count; i++) { view.getVectorInto(i, v, 0); assertVecEquals(expected[i], v, i); }
+                }
+            }
+        }
+    }
+
     private Path buildPlainSourceGraph(List<VectorFloat<?>> vecs, VectorSimilarityFunction vsf, boolean hierarchy, String name) throws IOException {
         var ravv = new ListRandomAccessVectorValues(vecs, dimension);
         var bsp = BuildScoreProvider.randomAccessScoreProvider(ravv, vsf);

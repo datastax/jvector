@@ -2633,9 +2633,11 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
         for (int oi = 0; oi < numSources; oi++) {
             int s = order[oi];
             OnDiskGraphIndex source = sources.get(s);
-            int size = source.size(0);
+            // the source's ordinal range: a source written with holes has live nodes above size(0)
+            int size = source.getIdUpperBound();
             FixedBitSet alive = liveNodes.get(s);
             int[] oldToNew = new int[size];
+            Arrays.fill(oldToNew, OrdinalMapper.OMITTED);   // dead nodes and holes: no ordinal
             oldToNewPerSource[s] = oldToNew;
 
             // one streaming pass: locality key per live node, packed with the ordinal
@@ -2661,8 +2663,9 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
                     long[] beamScored = regionMode ? new long[beamScoredCapacity(CELL_ASSIGN_EF, hubMapRef.degree[1])] : null;
                     BeamState beamState = regionMode ? new BeamState(CELL_ASSIGN_EF, hubMapRef.degree[1]) : null;
                     try (var view = (OnDiskGraphIndex.View) source.getView()) {
-                        for (int node = lo; node < hi; node++) {
-                            if (!alive.get(node)) continue;
+                        // the live nodes of [lo, hi): a window of holes or deletions costs its bitset words, not its ordinals
+                        for (int node = alive.nextSetBit(lo); node != DocIdSetIterator.NO_MORE_DOCS && node < hi;
+                             node = node + 1 < size ? alive.nextSetBit(node + 1) : DocIdSetIterator.NO_MORE_DOCS) {
                             view.getVectorInto(node, vec, 0);
                             long key;
                             if (regionMode) {
@@ -2714,18 +2717,6 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
                     starts[cell++] = next;
                 }
                 cellStart[s] = starts;
-            }
-        }
-        // deleted nodes: no ordinal
-        for (int oi = 0; oi < numSources; oi++) {
-            int s = order[oi];
-            FixedBitSet alive = liveNodes.get(s);
-            int size = sources.get(s).size(0);
-            int[] oldToNew = oldToNewPerSource[s];
-            for (int node = 0; node < size; node++) {
-                if (!alive.get(node)) {
-                    oldToNew[node] = OrdinalMapper.OMITTED;
-                }
             }
         }
         assert next == totalOrdinals : next + " ordinals assigned for " + totalOrdinals + " live nodes";
