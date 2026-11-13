@@ -130,12 +130,14 @@ uses the system BLAS and LAPACK (MKL or OpenBLAS) when installed, with a slower 
 ## Benchmarking with BenchYAML
 
 BenchYAML builds and measures indexes from YAML descriptions of datasets, index parameters and
-measurements. From the repository root, this runs the default set of small public datasets, which
-download on first use:
+measurements. For a first run, benchmark one small public dataset from the repository root. It downloads
+on first use (about 430 MB), then builds and searches 100,000 vectors in about a minute and prints one table:
 
 ```bash
-mvn compile exec:exec@bench -pl jvector-examples -am
+mvn compile exec:exec@bench -pl jvector-examples -am -DbenchArgs=cohere-english-v3-100k
 ```
+
+Without `-DbenchArgs`, the same command runs the default set of small public datasets.
 
 Select datasets by name with `-DbenchArgs="cohere ada002"`, or run one index configuration by path,
 such as an [example pipeline](./jvector-examples/yaml-configs/index-parameters/README.md). Compressed

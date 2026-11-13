@@ -3,6 +3,15 @@
 JVector runs dataset benchmarks with BenchYAML. See the
 [BenchYAML Guide](benchyaml-guide.md) for the construction and search fields.
 
+For a first run, benchmark one small public dataset from the repository root:
+```sh
+mvn compile exec:exec@bench -pl jvector-examples -am -DbenchArgs=cohere-english-v3-100k
+```
+It downloads the dataset on first use (about 430 MB), builds and searches 100,000 vectors with the default
+[index parameters](../jvector-examples/yaml-configs/index-parameters/default.yml) and
+[run configuration](../jvector-examples/yaml-configs/run-config.yml), and prints one table of throughput,
+nodes visited and recall for each overquery, in about a minute.
+
 To run a benchmark
 - Decide which dataset(s) you want to benchmark. A dataset consists of
     - The vectors to be indexed, usually called the "base" or "target" vectors
