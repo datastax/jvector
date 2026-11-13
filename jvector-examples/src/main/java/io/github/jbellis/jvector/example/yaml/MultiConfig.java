@@ -225,6 +225,9 @@ public class MultiConfig {
         if (hasSchema3CompressionFields(construction) || hasSchema3CompressionFields(search)) {
             throw new IllegalArgumentException("compression scoring and ASH query settings require schema 3");
         }
+        if (search != null && (search.queryExecution != null || search.requestsPerWorker != null)) {
+            throw new IllegalArgumentException("search.queryExecution and requestsPerWorker require schema 3");
+        }
     }
 
     private static boolean hasSchema3CompressionFields(CommonParameters section) {
@@ -233,8 +236,7 @@ public class MultiConfig {
             if (entry == null) continue;
             if (entry.scoring != null) return true;
             if ("ASH".equals(entry.type) && entry.parameters != null
-                    && (entry.parameters.containsKey("queryExecution")
-                    || entry.parameters.containsKey("maxBatchSize")
+                    && (entry.parameters.containsKey("maxBatchSize")
                     || entry.parameters.containsKey("queryProjection"))) return true;
         }
         return false;

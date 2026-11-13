@@ -116,8 +116,21 @@ final class FeatureProviders {
                                                PQVectors buildPQ, ASHVectors buildASH, VectorFloat<?> inputMean,
                                                ConstructionMetrics metrics, String writerMode, int writerThreads)
             throws FileNotFoundException {
+        return configureWriter(features, graph, outPath, vectors, buildPQ, buildASH, inputMean, metrics, writerMode,
+                writerThreads, null);
+    }
+
+    /** As above, padding base-layer records to {@code pageAlignment} bytes when it is not null. */
+    static FeatureWriteContext configureWriter(Set<FeatureId> features, ImmutableGraphIndex graph,
+                                               Path outPath, RandomAccessVectorValues vectors,
+                                               PQVectors buildPQ, ASHVectors buildASH, VectorFloat<?> inputMean,
+                                               ConstructionMetrics metrics, String writerMode, int writerThreads,
+                                               Integer pageAlignment)
+            throws FileNotFoundException {
         var writer = GraphBuilderFactory.writerBuilder(graph, outPath, vectors.size(), writerMode, writerThreads);
+        if (pageAlignment != null) writer.withPageAlignment(pageAlignment);
         var ctx = new FeatureWriteContext(writer, graph, vectors, buildPQ, buildASH, inputMean, metrics);
+        ctx.reportRecordLayout = pageAlignment != null;
         for (var id : features) {
             require(id).configure(ctx);
         }

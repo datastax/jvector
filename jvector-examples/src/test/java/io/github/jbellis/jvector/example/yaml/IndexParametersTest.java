@@ -180,11 +180,11 @@ public class IndexParametersTest {
                 add(used, "construction.compression.scoring", entry.scoring);
                 if (entry.parameters != null) add(used, "ASH optimizer", entry.parameters.get("optimizer"));
             }
+            add(used, "search.queryExecution", config.search.queryExecution());
             for (var entry : config.search.compression) {
                 add(used, "search.compression.type", entry.type);
                 if ("ASH".equals(entry.type) && entry.parameters != null) {
                     add(used, "ASH queryProjection", entry.parameters.get("queryProjection"));
-                    add(used, "ASH queryExecution", entry.parameters.get("queryExecution"));
                 }
             }
         }
@@ -198,7 +198,7 @@ public class IndexParametersTest {
         required.put("construction.reranking.type", List.of("None", "FP32", "NVQ"));
         required.put("ASH optimizer", List.of("ITQ", "RANDOM"));
         required.put("ASH queryProjection", List.of("auto", "fp32", "fp16", "int8"));
-        required.put("ASH queryExecution", List.of("direct", "queued"));
+        required.put("search.queryExecution", List.of("direct", "queued"));
         var missing = new ArrayList<String>();
         required.forEach((field, values) -> values.stream()
                 .filter(v -> !used.getOrDefault(field, Set.of()).contains(v))

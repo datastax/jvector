@@ -34,6 +34,7 @@ final class GraphIndexFormatV7 extends GraphIndexFormatV6 {
     private static Set<FeatureId> supportedFeatures() {
         var features = EnumSet.copyOf(allFeatures());
         features.add(FeatureId.FUSED_ASH);
+        features.add(FeatureId.PAGE_ALIGNMENT);
         return features;
     }
 }

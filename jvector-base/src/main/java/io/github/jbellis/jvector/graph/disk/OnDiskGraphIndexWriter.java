@@ -107,6 +107,7 @@ public class OnDiskGraphIndexWriter extends RandomAccessOnDiskGraphIndexWriter {
                 for (int n = 0; n < graph.getDegree(0); n++) {
                     out.writeInt(-1);
                 }
+                AbstractGraphIndexFormat.writeZeros(out, l0Layout.paddingAfter(newOrdinal, ordinalMapper.maxOrdinal()));
                 continue;
             }
 
@@ -148,6 +149,7 @@ public class OnDiskGraphIndexWriter extends RandomAccessOnDiskGraphIndexWriter {
             for (; n < graph.getDegree(0); n++) {
                 out.writeInt(-1);
             }
+            AbstractGraphIndexFormat.writeZeros(out, l0Layout.paddingAfter(newOrdinal, ordinalMapper.maxOrdinal()));
         }
     }
 

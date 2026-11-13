@@ -29,6 +29,8 @@ import java.util.function.Predicate;
 public class ConstructionParameters extends CommonParameters {
     public String type;
     public String writerMode;
+    /** onDisk only: pad base-layer records so each starts on this page boundary (a power of two); omit for none. */
+    public Integer pageAlignment;
     public List<Integer> outDegree;
     public List<Integer> efConstruction;
     public List<Float> neighborOverflow;
@@ -53,8 +55,12 @@ public class ConstructionParameters extends CommonParameters {
         if (writerMode != null && !List.of("sequential", "parallel").contains(writerMode)) {
             throw new IllegalArgumentException("construction.writerMode must be sequential or parallel");
         }
-        if ("inMemory".equals(type) && (writerMode != null || fusedGraph != null || useSavedIndexIfExists != null)) {
-            throw new IllegalArgumentException("construction.writerMode, fusedGraph, and useSavedIndexIfExists require onDisk");
+        if ("inMemory".equals(type) && (writerMode != null || fusedGraph != null || useSavedIndexIfExists != null
+                || pageAlignment != null)) {
+            throw new IllegalArgumentException("construction.writerMode, pageAlignment, fusedGraph, and useSavedIndexIfExists require onDisk");
+        }
+        if (pageAlignment != null && (pageAlignment < 512 || pageAlignment > (1 << 20) || Integer.bitCount(pageAlignment) != 1)) {
+            throw new IllegalArgumentException("construction.pageAlignment must be a power of two from 512 to 1048576");
         }
         validateSweep("outDegree", outDegree, value -> value > 0);
         validateSweep("efConstruction", efConstruction, value -> value > 0);

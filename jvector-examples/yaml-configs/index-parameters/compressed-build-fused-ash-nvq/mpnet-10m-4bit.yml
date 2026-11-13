@@ -29,6 +29,7 @@ search:
   topKOverquery:
     10: [1.0, 2.0]
   useSearchPruning: [No]
+  queryExecution: queued
   compression:
     - type: ASH
       parameters:
@@ -37,5 +38,4 @@ search:
         landmarkCount: 1
         bitsPerDimension: 4
         queryProjection: fp16
-        queryExecution: queued
         maxBatchSize: 8

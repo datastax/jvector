@@ -28,6 +28,7 @@ search:
   topKOverquery:
     10: [1.0, 2.0]
   useSearchPruning: [No]
+  queryExecution: direct
   compression:
     - type: ASH
       parameters:
@@ -35,4 +36,3 @@ search:
         optimizer: ITQ
         landmarkCount: 1
         bitsPerDimension: 2
-        queryExecution: direct

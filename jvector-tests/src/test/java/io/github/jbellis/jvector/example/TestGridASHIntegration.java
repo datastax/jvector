@@ -109,7 +109,7 @@ public class TestGridASHIntegration {
             var search = "ASH".equals(codec)
                     ? String.join("\n", "- type: ASH", "  parameters:", "    optimizer: RANDOM",
                             "    encodedBits: 72", "    bitsPerDimension: 2", "    queryProjection: fp32",
-                            "    queryExecution: queued", "    maxBatchSize: 4")
+                            "    maxBatchSize: 4")
                     : "- type: PQ\n  parameters: {m: 4, k: 256}";
             var config = schema3Config("onDisk", "ASH".equals(codec) ? "sequential" : "parallel",
                     true, "NVQ", search);
@@ -249,7 +249,7 @@ public class TestGridASHIntegration {
         var data = schema3Data();
         var search = String.join("\n", "- type: ASH", "  parameters:", "    optimizer: RANDOM",
                 "    encodedBits: 72", "    bitsPerDimension: 2", "    queryProjection: fp32",
-                "    queryExecution: queued", "    maxBatchSize: 4");
+                "    maxBatchSize: 4");
         var config = schema3Config("onDisk", "parallel", true, "NVQ", search);
         config.construction.workers = 2;
         config.search.workers = List.of(1, 2);
@@ -380,6 +380,8 @@ public class TestGridASHIntegration {
                 "  topKOverquery:",
                 "    1: [2.0]",
                 "  useSearchPruning: [No]",
+                // Batched ASH search runs queued; every other case keeps the direct default.
+                search.contains("maxBatchSize") ? "  queryExecution: queued" : "",
                 "  compression:",
                 "    " + search.replace("\n", "\n    "));
         Files.writeString(path, yaml);

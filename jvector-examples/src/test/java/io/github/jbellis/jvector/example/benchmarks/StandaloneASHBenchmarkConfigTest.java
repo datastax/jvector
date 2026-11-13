@@ -103,8 +103,8 @@ public class StandaloneASHBenchmarkConfigTest {
                     assertEquals(List.of(100), construction.get("efConstruction"));
                     var searchSettings = new java.util.LinkedHashMap<>(
                             (Map<String, Object>) compression(search).get("parameters"));
+                    assertEquals(algorithm.equals("ash") ? "queued" : null, search.get("queryExecution"));
                     if (algorithm.equals("ash")) {
-                        assertEquals("queued", searchSettings.remove("queryExecution"));
                         assertEquals(8, searchSettings.remove("maxBatchSize"));
                         assertEquals("auto", searchSettings.remove("queryProjection"));
                     }

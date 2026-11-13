@@ -108,10 +108,8 @@ public final class RunReporting {
                     direct = true;
                     continue;
                 }
-                for (var entry : config.search.compression) {
-                    if ("queued".equals(entry.queryExecution())) queued = true;
-                    else direct = true;
-                }
+                if ("queued".equals(config.search.queryExecution())) queued = true;
+                else direct = true;
             }
         }
         if (direct && queued) return null;

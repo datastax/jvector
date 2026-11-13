@@ -8,9 +8,10 @@ useDatasetPrefetching: false
 
 construction:
   type: onDisk
-  # type: inMemory     # Omit writerMode, fusedGraph, and useSavedIndexIfExists.
+  # type: inMemory     # Omit writerMode, pageAlignment, fusedGraph, and useSavedIndexIfExists.
   # writerMode: parallel  # Default for onDisk.
   # writerMode: sequential
+  # pageAlignment: 4096   # onDisk only. Pads node records to 4 KB pages; helps indexes served from disk.
   outDegree: [32]
   efConstruction: [100]
   neighborOverflow: [1.2f]
@@ -52,6 +53,8 @@ search:
     10: [1.0, 2.0, 5.0, 10.0]
     100: [1.0, 2.0]
   useSearchPruning: [No]
+  # queryExecution: queued   # Default direct. Queued uses one shared worker pool for any compression.
+  # requestsPerWorker: 1     # Queued only. Default max(8, maxBatchSize); 1 suits indexes served from disk.
   compression:
     - type: ASH
       parameters:
@@ -61,9 +64,7 @@ search:
         landmarkCount: 1  # Symmetric and mixed construction require 1.
         bitsPerDimension: 2  # Fused ASH supports 1, 2, and 4.
         # queryProjection: auto  # fp32, fp16, and int8 are also available.
-        # queryExecution: direct
-        # queryExecution: queued
-        # maxBatchSize: 8         # For queued execution.
+        # maxBatchSize: 8         # Queued execution only; batches query projection.
 # Select the compression entries for this case.
 # For source scoring, use None in both sections, fusedGraph: [No], and reranking.type: None.
 # BQ traversal requires fusedGraph: [No].

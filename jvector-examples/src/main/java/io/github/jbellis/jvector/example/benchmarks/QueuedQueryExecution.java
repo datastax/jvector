@@ -97,10 +97,9 @@ public final class QueuedQueryExecution implements AutoCloseable {
         int cores = system.queryWorkerCount();
         int batchSize = system.queryBatchSize();
         if (batchSize <= 0) throw new IllegalArgumentException("Benchmark query batch size must be positive");
-        // One full default batch per worker bounds waiting while permitting
-        // genuine GEMM preparation. Keep the same admission limit for B=1
-        // controls; larger explicitly selected batches remain supported.
-        int capacity = Math.multiplyExact(Math.max(8, batchSize), cores);
+        // Admission bounds waiting: requestsPerWorker queued queries per worker
+        // (default one full batch of 8), never less than one batch.
+        int capacity = system.queryQueueCapacity();
         free = new ArrayBlockingQueue<>(capacity);
         for (int i = 0; i < capacity; i++) free.add(new Request(preparer == null ? null : preparer.newState()));
         var rows = ThreadLocal.withInitial(() -> new Rows(batchSize));

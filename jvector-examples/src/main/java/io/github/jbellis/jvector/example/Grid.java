@@ -190,9 +190,9 @@ public class Grid {
                 boolean fused = spec.featuresFor(build, search).stream().anyMatch(Grid::hasFusedScoring);
                 traversal.validateFor(ds, fused, null);
                 usesAshProjection |= traversal instanceof CompressorParameters.ASHParameters;
-                if ("queued".equals(search.compression.queryExecution())
-                        && (long) Math.max(8, search.compression.maxBatchSize()) * queryWorkerCountForMachine() > Integer.MAX_VALUE) {
-                    throw new IllegalArgumentException("ASH maxBatchSize exceeds the queue limit at the selected worker count");
+                if ("queued".equals(search.queryExecution)
+                        && (long) search.resolvedRequestsPerWorker() * queryWorkerCountForMachine() > Integer.MAX_VALUE) {
+                    throw new IllegalArgumentException("search.requestsPerWorker exceeds the queue limit at the selected worker count");
                 }
             }
         }
@@ -311,7 +311,8 @@ public class Grid {
                         + (ashMode == null ? ""
                                 : ":" + ashMode + ("symmetric-all".equals(ashMode) ? ""
                                         : ":" + System.getProperty("jvector.ash.queryProjection", "auto")))
-                        + (fused ? ":" + compressorId(searchParams, ds) : "");
+                        + (fused ? ":" + compressorId(searchParams, ds) : "")
+                        + (build.pageAlignment == null ? "" : ":page" + build.pageAlignment);
                 strategy = new CompressedOnDiskBuild(cache, workDirectory, buildCodec, constructionMetrics,
                         fusedCodec, cacheIdentity);
             } else {
@@ -406,8 +407,8 @@ public class Grid {
                             try (var cs = new ConfiguredSystem(ds, index, cv, featureSetForIndex, build.rerankingType,
                                     memoryReranker)) {
                                 if (search.compression != null) {
-                                    cs.configureQueryExecution(search.compression.queryExecution(),
-                                            search.compression.maxBatchSize(), workers);
+                                    cs.configureQueryExecution(search.queryExecution, search.queuedBatchSize(),
+                                            workers, search.resolvedRequestsPerWorker());
                                 }
                                 var traversal = cv == null ? null : cv.getCompressor();
                                 if (traversal == null && build.indexType != null) traversal = cs.fusedCompressor();
@@ -457,7 +458,7 @@ public class Grid {
         queryParams.put("executionMode", cs.usesQueuedExecution() ? "queued" : "direct");
         if (cs.usesQueuedExecution()) {
             queryParams.put("workers", cs.queryWorkerCount());
-            queryParams.put("queueCapacity", Math.multiplyExact(Math.max(8, cs.queryBatchSize()), cs.queryWorkerCount()));
+            queryParams.put("queueCapacity", cs.queryQueueCapacity());
             queryParams.put("maxBatchSize", cs.queryBatchSize());
             var preparer = cs.queryPreparer();
             queryParams.put("batchPreparation", preparer != null && preparer.supportsBatchPreparation());
@@ -790,6 +791,7 @@ public class Grid {
         private final NVQVectors memoryReranker;
         private boolean queuedExecution;
         private int queryBatchSize = 8;
+        private int queryRequestsPerWorker = 8;
         private io.github.jbellis.jvector.graph.similarity.QueryPreparer queryPreparer;
         private java.util.concurrent.ExecutorService queuedQueryWorkers;
         private boolean closed;
@@ -831,6 +833,12 @@ public class Grid {
 
         /** As above, with this case's search worker count, or null for the JVM-wide setting. */
         public synchronized void configureQueryExecution(String mode, int batchSize, Integer workers) {
+            configureQueryExecution(mode, batchSize, workers, Math.max(8, batchSize));
+        }
+
+        /** As above, admitting {@code requestsPerWorker} queued queries per worker. */
+        public synchronized void configureQueryExecution(String mode, int batchSize, Integer workers, int requestsPerWorker) {
+            if (requestsPerWorker <= 0) throw new IllegalArgumentException("requestsPerWorker must be positive");
             if (queuedQueryWorkers != null && !java.util.Objects.equals(workers, searchWorkers))
                 throw new IllegalStateException("Query workers are already running; configure workers before searching");
             searchWorkers = workers;
@@ -841,11 +849,17 @@ public class Grid {
                 throw new IllegalArgumentException("Query batch size must be positive and fit its histogram");
             queuedExecution = "queued".equals(mode);
             queryBatchSize = batchSize;
+            queryRequestsPerWorker = requestsPerWorker;
             if (queuedExecution && queryPreparer == null)
                 queryPreparer = index.queryPreparer(ds.getSimilarityFunction()).orElse(null);
         }
         public boolean usesQueuedExecution() { return queuedExecution; }
         public int queryBatchSize() { return queryBatchSize; }
+        public int queryRequestsPerWorker() { return queryRequestsPerWorker; }
+        /** Queued queries admitted at once: requests per worker times workers, never less than one batch. */
+        public int queryQueueCapacity() {
+            return Math.max(queryBatchSize, Math.multiplyExact(queryRequestsPerWorker, queryWorkerCount()));
+        }
         public io.github.jbellis.jvector.graph.similarity.QueryPreparer queryPreparer() { return queryPreparer; }
 
 

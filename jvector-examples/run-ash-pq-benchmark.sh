@@ -81,7 +81,7 @@ CATALOG="$REPO_ROOT/jvector-examples/yaml-configs/ash-pq/$CATALOG_NAME"
 }
 
 if [[ "$MODE" != construction ]]; then
-  # The checked-in recipes put delivery under the ASH search parameters.
+  # The index YAML selects query execution at the search level.
   EXECUTION="$(sed -nE 's/^[[:space:]]+queryExecution:[[:space:]]*(direct|queued)[[:space:]]*(#.*)?$/\1/p' "$CONFIG")"
   if [[ "${EXECUTION:-direct}" != "$MODE" ]]; then
     echo "The index YAML selects ${EXECUTION:-direct}. Use its matching query report selection." >&2

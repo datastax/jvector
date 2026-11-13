@@ -46,7 +46,7 @@ public class Compression {
             case "ASH":
                 allowed = search
                         ? Set.of("optimizer", "encodedBits", "compressionRatio", "landmarkCount", "bitsPerDimension",
-                                 "queryProjection", "queryExecution", "maxBatchSize")
+                                 "queryProjection", "maxBatchSize")
                         : Set.of("optimizer", "encodedBits", "compressionRatio", "landmarkCount", "bitsPerDimension",
                                  "queryProjection");
                 break;
@@ -79,19 +79,18 @@ public class Compression {
             }
             var projection = settings.get("queryProjection");
             if (projection != null) SearchParameters.AshQueryProjectionSetting.validatePrecision(projection);
-            var execution = queryExecution();
-            if (!List.of("direct", "queued").contains(execution)) {
-                throw new IllegalArgumentException(path + ".parameters.queryExecution must be direct or queued");
-            }
-            if (settings.containsKey("maxBatchSize") && !"queued".equals(execution)) {
-                throw new IllegalArgumentException(path + ".parameters.maxBatchSize requires queued queryExecution");
-            }
             maxBatchSize();
         }
     }
 
-    public String queryExecution() {
-        return parameters == null ? "direct" : parameters.getOrDefault("queryExecution", "direct");
+    /** True when this ASH entry sets maxBatchSize explicitly. */
+    public boolean hasMaxBatchSize() {
+        return parameters != null && parameters.containsKey("maxBatchSize");
+    }
+
+    /** Queued batch size: ASH's maxBatchSize (default 8); other compression prepares queries one at a time. */
+    public int queuedBatchSize() {
+        return "ASH".equals(type) ? maxBatchSize() : 1;
     }
 
     public int maxBatchSize() {

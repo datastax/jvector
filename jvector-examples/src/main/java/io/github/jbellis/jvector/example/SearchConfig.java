@@ -42,6 +42,10 @@ public final class SearchConfig {
     final Compression compression;
     /** Search worker counts to sweep over one index; null leaves query concurrency to JVM-wide settings. */
     public final List<Integer> workerGrid;
+    /** direct or queued. */
+    public final String queryExecution;
+    /** Queued queries admitted per worker, or null for the default (the larger of 8 and the batch size). */
+    public final Integer requestsPerWorker;
 
     private SearchConfig(Builder b) {
         this.searchCompressors = b.searchCompressors;
@@ -50,6 +54,18 @@ public final class SearchConfig {
         this.entries = b.entries;
         this.compression = b.compression;
         this.workerGrid = b.workerGrid;
+        this.queryExecution = b.queryExecution == null ? "direct" : b.queryExecution;
+        this.requestsPerWorker = b.requestsPerWorker;
+    }
+
+    /** Batch size for queued execution with this case's compression: ASH's maxBatchSize, else 1. */
+    int queuedBatchSize() {
+        return compression == null ? 1 : compression.queuedBatchSize();
+    }
+
+    /** Queued queries admitted per worker for this case. */
+    int resolvedRequestsPerWorker() {
+        return requestsPerWorker != null ? requestsPerWorker : Math.max(8, queuedBatchSize());
     }
 
     /** The worker counts to query each index with; a single null means the JVM-wide setting. */
@@ -65,6 +81,8 @@ public final class SearchConfig {
                     .searchCompressors(List.of(entry.getCompressorParameters()));
             builder.compression = entry;
             builder.workerGrid = workerGrid;
+            builder.queryExecution = queryExecution;
+            builder.requestsPerWorker = requestsPerWorker;
             return builder.build();
         }).collect(Collectors.toList());
     }
@@ -80,8 +98,13 @@ public final class SearchConfig {
         private List<Compression> entries;
         private Compression compression;
         private List<Integer> workerGrid;
+        private String queryExecution;
+        private Integer requestsPerWorker;
 
         private Builder() {}
+
+        Builder queryExecution(String queryExecution) { this.queryExecution = queryExecution; return this; }
+        Builder requestsPerWorker(Integer requestsPerWorker) { this.requestsPerWorker = requestsPerWorker; return this; }
 
         Builder workerGrid(List<Integer> workerGrid) {
             this.workerGrid = workerGrid == null ? null : List.copyOf(workerGrid);

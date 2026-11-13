@@ -1411,6 +1411,29 @@ public class AsymmetricHashing implements VectorCompressor<AsymmetricHashing.Qua
      * The transform is applied as:
      *     y = A · (x − μ)
      */
+
+    /**
+     * Sets how this model projects queries: the operand precision and the largest group of concurrent
+     * synchronous queries projected together in one matrix multiply (1 disables combining). Call it
+     * before the first query, for example right after loading an index; afterwards it throws
+     * {@link IllegalStateException}. Without it, the {@code jvector.ash.queryProjection} (default
+     * {@code auto}) and {@code jvector.ash.queryBatchSize} (default 8) system properties apply.
+     * Base-vector encoding always uses FP32.
+     */
+    public void setQueryOptions(ASHQueryProjection precision, int maxBatchSize) {
+        stiefelTransform.configureQueries(precision, maxBatchSize);
+    }
+
+    /** The query projection precision this model uses or will use. */
+    public ASHQueryProjection getQueryProjection() {
+        return stiefelTransform.configuredQueryPrecision();
+    }
+
+    /** The largest group of concurrent synchronous queries this model projects together. */
+    public int getQueryBatchSize() {
+        return stiefelTransform.queryBatchSize();
+    }
+
     public static final class StiefelTransform {
 
         /** Forward projection (column-orthonormal). Shape: [originalDim × quantizedDim]. */
@@ -1445,10 +1468,13 @@ public class AsymmetricHashing implements VectorCompressor<AsymmetricHashing.Qua
         // Default group capacity. Larger configured groups are supported by
         // grow-once caller scratch; native code controls its own micro-tiling.
         private static final int QUERY_BATCH_SIZE = 8;
+        private static final String QUERY_BATCH_SIZE_PROPERTY = "jvector.ash.queryBatchSize";
         // Published together with queryProjection. Training/encoding never
         // initializes query-only dispatch or its retained storage.
         private CallerBatchProcessor<float[], float[]> queryBatches;
-        private final int queryBatchSize;
+        // Query settings; fixed once the query projection is prepared.
+        private int queryBatchSize;
+        private ASHQueryProjection queryPrecision; // null: the system property
         private static final class QueryBatchRows {
             float[][] input = new float[QUERY_BATCH_SIZE][];
             float[][] output = new float[QUERY_BATCH_SIZE][];
@@ -1505,7 +1531,8 @@ public class AsymmetricHashing implements VectorCompressor<AsymmetricHashing.Qua
                 synchronized (this) {
                     ready = queryProjection;
                     if (ready == null) {
-                        ready = projection.forQueryScoring();
+                        ready = projection.forQueryScoring(queryPrecision != null
+                                ? queryPrecision : ASHQueryProjection.fromSystemProperty());
                         long retained = ready == projection ? 0 : RamUsageEstimator.shallowSizeOf(ready);
                         if (queryBatchSize > 1 && ready.supportsBatchProjection()) {
                             final var target = ready;
@@ -1543,6 +1570,28 @@ public class AsymmetricHashing implements VectorCompressor<AsymmetricHashing.Qua
             return ready;
         }
 
+        /**
+         * Sets query projection precision and the largest group of concurrent synchronous queries projected
+         * together. Must be called before this model projects its first query.
+         */
+        synchronized void configureQueries(ASHQueryProjection precision, int maxBatchSize) {
+            Objects.requireNonNull(precision, "precision");
+            if (maxBatchSize < 1 || maxBatchSize == Integer.MAX_VALUE)
+                throw new IllegalArgumentException("maxBatchSize must be between 1 and " + (Integer.MAX_VALUE - 1));
+            if (queryProjection != null)
+                throw new IllegalStateException("ASH query options must be set before the first query");
+            queryPrecision = precision;
+            queryBatchSize = maxBatchSize;
+        }
+
+        ASHQueryProjection configuredQueryPrecision() {
+            return queryPrecision != null ? queryPrecision : ASHQueryProjection.fromSystemProperty();
+        }
+
+        int queryBatchSize() {
+            return queryBatchSize;
+        }
+
         /** Projects one vector with the original FP32 representation, including encoding/training. */
         public void project(float[] query, float[] out) {
             projection.project(query, out);
@@ -1561,7 +1610,7 @@ public class AsymmetricHashing implements VectorCompressor<AsymmetricHashing.Qua
 
         public StiefelTransform(RealMatrix W) {
             this.W = Objects.requireNonNull(W, "W");
-            String batchSize = System.getProperty("jvector.ash.queryBatchSize", "8");
+            String batchSize = System.getProperty(QUERY_BATCH_SIZE_PROPERTY, "8");
             try { queryBatchSize = Integer.parseInt(batchSize); }
             catch (NumberFormatException invalid) {
                 throw new IllegalArgumentException("jvector.ash.queryBatchSize must be a positive integer: " + batchSize, invalid);

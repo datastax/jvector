@@ -24,6 +24,7 @@
 
 package io.github.jbellis.jvector.vector;
 
+import io.github.jbellis.jvector.quantization.ASHQueryProjection;
 import io.github.jbellis.jvector.quantization.ProductQuantization;
 import io.github.jbellis.jvector.vector.types.ByteSequence;
 import io.github.jbellis.jvector.vector.types.VectorFloat;
@@ -609,16 +610,19 @@ public interface VectorUtilSupport {
      * without a query-specific representation return this same object.
      */
     default AshProjection forQueryScoring() {
-      String mode = System.getProperty("jvector.ash.queryProjection", "auto");
-      switch (mode) {
-        case "auto":
-        case "fp32": return this;
-        case "fp16": throw new UnsupportedOperationException(
+      return forQueryScoring(ASHQueryProjection.fromSystemProperty());
+    }
+
+    /** As {@link #forQueryScoring()}, with an explicit precision instead of the system property. */
+    default AshProjection forQueryScoring(ASHQueryProjection precision) {
+      switch (precision) {
+        case AUTO:
+        case FP32: return this;
+        case FP16: throw new UnsupportedOperationException(
                 "This provider does not support FP16 ASH query projection");
-        case "int8": throw new UnsupportedOperationException(
+        case INT8: throw new UnsupportedOperationException(
                 "This provider does not support INT8 ASH query projection");
-        default: throw new IllegalArgumentException(
-                "jvector.ash.queryProjection must be auto, fp32, fp16 or int8: " + mode);
+        default: throw new AssertionError(precision);
       }
     }
 

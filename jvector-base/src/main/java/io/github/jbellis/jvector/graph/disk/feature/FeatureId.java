@@ -34,7 +34,8 @@ public enum FeatureId {
     NVQ_VECTORS(NVQ::load),
     SEPARATED_VECTORS(SeparatedVectors::load),
     SEPARATED_NVQ(SeparatedNVQ::load),
-    FUSED_ASH(FusedASH::load);
+    FUSED_ASH(FusedASH::load),
+    PAGE_ALIGNMENT(PageAlignment::load);
 
     private final BiFunction<CommonHeader, RandomAccessReader, Feature> loader;
 

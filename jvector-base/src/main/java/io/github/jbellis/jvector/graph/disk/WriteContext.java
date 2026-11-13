@@ -43,6 +43,8 @@ class WriteContext {
     final long headerSize;
     /** Vector dimension, derived from the configured features rather than the graph. */
     final int dimension;
+    /** Placement of base-layer records. */
+    final L0Layout l0Layout;
 
     /**
      * Constructs a {@code WriteContext} bundling all parameters required for a single serialization session.
@@ -54,6 +56,7 @@ class WriteContext {
      * @param startOffset    byte offset in the output stream at which the graph data begins
      * @param headerSize     byte size of the header written before node records
      * @param dimension      vector dimension, sourced from the configured features
+     * @param l0Layout       placement of base-layer records
      */
     WriteContext(ImmutableGraphIndex graph,
                  OrdinalMapper ordinalMapper,
@@ -61,7 +64,8 @@ class WriteContext {
                  List<Feature> inlineFeatures,
                  long startOffset,
                  long headerSize,
-                 int dimension) {
+                 int dimension,
+                 L0Layout l0Layout) {
         this.graph = graph;
         this.ordinalMapper = ordinalMapper;
         this.featureMap = featureMap;
@@ -69,5 +73,6 @@ class WriteContext {
         this.startOffset = startOffset;
         this.headerSize = headerSize;
         this.dimension = dimension;
+        this.l0Layout = l0Layout;
     }
 }

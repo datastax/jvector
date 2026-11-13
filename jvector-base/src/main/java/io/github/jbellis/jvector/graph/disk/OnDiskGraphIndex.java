@@ -30,6 +30,7 @@ import io.github.jbellis.jvector.graph.disk.feature.FusedPQ;
 import io.github.jbellis.jvector.graph.disk.feature.FusedFeature;
 import io.github.jbellis.jvector.graph.disk.feature.InlineVectors;
 import io.github.jbellis.jvector.graph.disk.feature.NVQ;
+import io.github.jbellis.jvector.graph.disk.feature.PageAlignment;
 import io.github.jbellis.jvector.graph.disk.feature.SeparatedFeature;
 import io.github.jbellis.jvector.graph.similarity.ScoreFunction;
 import io.github.jbellis.jvector.util.Accountable;
@@ -81,6 +82,8 @@ public class OnDiskGraphIndex implements ImmutableGraphIndex, AutoCloseable, Acc
     final NodeAtLevel entryNode;
     final int idUpperBound;
     final int inlineBlockSize; // total size of all inline elements contributed by features
+    /** Placement of base-layer records. */
+    final L0Layout l0Layout;
     final Map<FeatureId, ? extends Feature> features;
     final EnumMap<FeatureId, Integer> inlineOffsets;
 
@@ -111,12 +114,16 @@ public class OnDiskGraphIndex implements ImmutableGraphIndex, AutoCloseable, Acc
         inlineOffsets = new EnumMap<>(FeatureId.class);
         for (var entry : features.entrySet()) {
             var feature = entry.getValue();
-            if (!(feature instanceof SeparatedFeature)) {
+            // Page alignment places records but adds no bytes to them.
+            if (!(feature instanceof SeparatedFeature) && entry.getKey() != FeatureId.PAGE_ALIGNMENT) {
                 inlineOffsets.put(entry.getKey(), inlineBlockSize);
                 inlineBlockSize += feature.featureSize();
             }
         }
         this.inlineBlockSize = inlineBlockSize;
+        int recordBytes = L0Layout.recordBytes(inlineBlockSize, layerInfo.get(0).degree);
+        var alignment = (PageAlignment) features.get(FeatureId.PAGE_ALIGNMENT);
+        this.l0Layout = alignment == null ? L0Layout.unaligned(recordBytes) : L0Layout.aligned(recordBytes, alignment.pageBytes());
         inMemoryNeighbors = new AtomicReference<>(null);
         inMemoryFeatures = new AtomicReference<>(null);
     }
@@ -138,7 +145,7 @@ public class OnDiskGraphIndex implements ImmutableGraphIndex, AutoCloseable, Acc
         var imn = new ArrayList<Int2ObjectHashMap<int[]>>(layerInfo.size());
         // For levels > 0, we load adjacency into memory
         imn.add(null); // L0 placeholder so we don't have to mangle indexing
-        long L0size = idUpperBound * (inlineBlockSize + Integer.BYTES * (1L + 1L + layerInfo.get(0).degree));
+        long L0size = l0Layout.totalBytes(idUpperBound);
         in.seek(neighborsOffset + L0size);
 
         for (int lvl = 1; lvl < layerInfo.size(); lvl++) {
@@ -188,7 +195,7 @@ public class OnDiskGraphIndex implements ImmutableGraphIndex, AutoCloseable, Acc
     private Int2ObjectHashMap<FusedFeature.InlineSource> loadInMemoryFeatures(RandomAccessReader in) throws IOException {
         Int2ObjectHashMap<FusedFeature.InlineSource> hierarchyFeatures = new Int2ObjectHashMap<>();
 
-        long L0size = idUpperBound * (inlineBlockSize + Integer.BYTES * (1L + 1L + layerInfo.get(0).degree));
+        long L0size = l0Layout.totalBytes(idUpperBound);
         long inMemorySize = 0;
         for (int lvl = 1; lvl < layerInfo.size(); lvl++) {
             CommonHeader.LayerInfo info = layerInfo.get(lvl);
@@ -361,15 +368,11 @@ public class OnDiskGraphIndex implements ImmutableGraphIndex, AutoCloseable, Acc
         int size = size(level);
         int maxDegree = getDegree(level);
 
-        long layer0NodeSize = (long) Integer.BYTES // ids
-                + inlineBlockSize // inline elements
-                + (Integer.BYTES * (long) (getDegree(0) + 1));
         long layerUpperNodeSize = (long) Integer.BYTES // ids
                 + (Integer.BYTES * (long) (maxDegree + 1)); // neighbor count + neighbors)
-        long thisLayerNodeSide = level == 0? layer0NodeSize : layerUpperNodeSize;
 
         long layerOffset = neighborsOffset;
-        layerOffset += level > 0? layer0NodeSize * size(0) : 0;
+        layerOffset += level > 0? l0Layout.totalBytes(size(0)) : 0;
         for (int lvl = 1; lvl < level; lvl++) {
             layerOffset += layerUpperNodeSize * size(lvl);
         }
@@ -389,7 +392,7 @@ public class OnDiskGraphIndex implements ImmutableGraphIndex, AutoCloseable, Acc
             int upperBound = level == 0 ? getIdUpperBound() : size(level);
             int pos = 0;
             for (int nodeOrd = 0; nodeOrd < upperBound; nodeOrd++) {
-                long nodeOffset = layerOffset + (nodeOrd * thisLayerNodeSide);
+                long nodeOffset = layerOffset + (level == 0 ? l0Layout.offset(nodeOrd) : nodeOrd * layerUpperNodeSize);
                 reader.seek(nodeOffset);
                 int nodeId = reader.readInt();
                 if (nodeId != -1) {
@@ -458,10 +461,9 @@ public class OnDiskGraphIndex implements ImmutableGraphIndex, AutoCloseable, Acc
         if (maxNode < minNode) {
             return;
         }
-        long blockBytes = Integer.BYTES + inlineBlockSize
-                + (long) Integer.BYTES * (layerInfo.get(0).degree + 1);
-        long start = neighborsOffset + blockBytes * minNode;
-        readerSupplier.prefetch(start, blockBytes * (maxNode - minNode + 1));
+        long start = neighborsOffset + l0Layout.offset(minNode);
+        long end = neighborsOffset + l0Layout.offset(maxNode) + l0Layout.recordBytes;
+        readerSupplier.prefetch(start, end - start);
     }
 
     // re-declared to specify type
@@ -571,14 +573,7 @@ public class OnDiskGraphIndex implements ImmutableGraphIndex, AutoCloseable, Acc
         }
 
         private long baseNodeOffsetFor(int node) {
-            int degree = layerInfo.get(0).degree;
-
-            // skip node ID + inline features
-            long skipInline = Integer.BYTES + inlineBlockSize;
-            long blockBytes = skipInline + (long) Integer.BYTES * (degree + 1);
-
-            long offsetWithinLayer = blockBytes * node;
-            return neighborsOffset + offsetWithinLayer;
+            return neighborsOffset + l0Layout.offset(node);
         }
 
 

@@ -100,6 +100,18 @@ public class SearchParameters extends CommonParameters {
      * calling threads; queued ASH search uses this many workers to prepare and execute queries.
      */
     public List<Object> workers;
+    /** Schema 3: direct (default) or queued, for every compression in this search. */
+    public String queryExecution;
+    /**
+     * Schema 3, queued only: queries admitted per worker, counting the one it is searching. The queue holds this
+     * times the worker count, never less than one batch. Defaults to the larger of 8 and the batch size.
+     */
+    public Integer requestsPerWorker;
+
+    /** direct unless the YAML selects queued. */
+    public String queryExecution() {
+        return queryExecution == null ? "direct" : queryExecution;
+    }
 
     /** One resolved count per sweep value, or null when the YAML leaves it to the platform default. */
     public List<Integer> resolvedWorkers() {
@@ -116,6 +128,19 @@ public class SearchParameters extends CommonParameters {
         }
         validateCompression("search", true);
         resolvedWorkers();
+        if (!List.of("direct", "queued").contains(queryExecution())) {
+            throw new IllegalArgumentException("search.queryExecution must be direct or queued");
+        }
+        if (requestsPerWorker != null && !"queued".equals(queryExecution())) {
+            throw new IllegalArgumentException("search.requestsPerWorker requires queued queryExecution");
+        }
+        if (requestsPerWorker != null && requestsPerWorker <= 0) {
+            throw new IllegalArgumentException("search.requestsPerWorker must be positive");
+        }
+        if (!"queued".equals(queryExecution()) && compression != null
+                && compression.stream().anyMatch(entry -> entry != null && entry.hasMaxBatchSize())) {
+            throw new IllegalArgumentException("ASH maxBatchSize requires search.queryExecution: queued");
+        }
         if (topKOverquery == null || topKOverquery.isEmpty() || useSearchPruning == null || useSearchPruning.isEmpty()
                 || useSearchPruning.stream().anyMatch(Objects::isNull)) {
             throw new IllegalArgumentException("search.topKOverquery and search.useSearchPruning must be set");

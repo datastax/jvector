@@ -33,12 +33,12 @@ search:
   topKOverquery:
     10: [1.0, 2.0]
   useSearchPruning: [No]
+  queryExecution: queued
   workers: [1, 8]
   compression:
     - type: ASH
       parameters:
         queryProjection: auto
-        queryExecution: queued
         maxBatchSize: 8
         encodedBits: 808
         optimizer: ITQ

@@ -107,8 +107,15 @@ final class FeatureWriteContext {
         return metrics == null ? compute.get() : metrics.index(quantType).timeCompute(compute);
     }
 
+    /** Set when the configuration requests page alignment, so the build reports the resulting layout. */
+    boolean reportRecordLayout;
+
     RandomAccessOnDiskGraphIndexWriter buildWriter() throws IOException {
-        return writer.build();
+        var built = writer.build();
+        if (reportRecordLayout) {
+            System.out.println("Page alignment " + built.getFeatureSet() + ": " + built.describeRecordLayout());
+        }
+        return built;
     }
 
     Map<FeatureId, IntFunction<Feature.State>> completedSuppliers(ImmutableGraphIndex.View view) {

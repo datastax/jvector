@@ -16,6 +16,7 @@
 
 package io.github.jbellis.jvector.vector;
 
+import io.github.jbellis.jvector.quantization.ASHQueryProjection;
 import io.github.jbellis.jvector.util.RamUsageEstimator;
 import io.github.jbellis.jvector.vector.cnative.LibraryLoader;
 import java.lang.foreign.FunctionDescriptor;
@@ -86,8 +87,8 @@ final class NativeASHFP32BatchProjection implements VectorUtilSupport.AshProject
     public void project(float[] input, float[] output) { fallback.project(input, output); }
 
     @Override
-    public VectorUtilSupport.AshProjection forQueryScoring() {
-        var query = fallback.forQueryScoring();
+    public VectorUtilSupport.AshProjection forQueryScoring(ASHQueryProjection precision) {
+        var query = fallback.forQueryScoring(precision);
         // No new representation means the same backing. Preserve the owning view's
         // identity so model accounting does not charge the FP32 matrix twice.
         return query == fallback ? this : query;

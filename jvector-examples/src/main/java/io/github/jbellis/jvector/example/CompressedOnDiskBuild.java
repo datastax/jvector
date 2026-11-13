@@ -216,7 +216,8 @@ final class CompressedOnDiskBuild implements IndexBuildStrategy {
                 } else {
                     graphPath = outputDir.resolve("graph" + n++);
                 }
-                var ctx = FeatureProviders.configureWriter(features, builder.getGraph(), graphPath, floatVectors, pq, ash, inputMean, constructionMetrics);
+                var ctx = FeatureProviders.configureWriter(features, builder.getGraph(), graphPath, floatVectors, pq, ash,
+                        inputMean, constructionMetrics, null, GraphBuilderFactory.constructionThreads(build), build.pageAlignment);
                 writers.put(features, ctx.buildWriter());
                 contexts.put(features, ctx);
             }
@@ -306,7 +307,8 @@ final class CompressedOnDiskBuild implements IndexBuildStrategy {
                 var ctx = FeatureProviders.configureWriter(features, graph, path, vectors,
                         searchCodes instanceof PQVectors ? (PQVectors) searchCodes : null,
                         searchCodes instanceof ASHVectors ? (ASHVectors) searchCodes : null,
-                        inputMean, constructionMetrics, build.writerMode, GraphBuilderFactory.constructionThreads(build));
+                        inputMean, constructionMetrics, build.writerMode, GraphBuilderFactory.constructionThreads(build),
+                        build.pageAlignment);
                 start = System.nanoTime();
                 try (var progress = PhaseProgress.timed("Index write " + features);
                      var input = new FinalWriteVectors(vectors);

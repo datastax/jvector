@@ -16,6 +16,7 @@
 
 package io.github.jbellis.jvector.vector;
 
+import io.github.jbellis.jvector.quantization.ASHQueryProjection;
 import java.lang.foreign.Arena;
 import java.lang.foreign.FunctionDescriptor;
 import java.lang.foreign.Linker;
@@ -196,21 +197,19 @@ final class NativeASHProjection implements VectorUtilSupport.AshProjection {
 
     /** Query-only selection; the original FP32 matrix and encoding path are retained. */
     @Override
-    public VectorUtilSupport.AshProjection forQueryScoring() {
-        String mode = System.getProperty("jvector.ash.queryProjection", "auto");
-        switch (mode) {
-            case "fp32": return this;
-            case "int8": return NativeASHInt8Projection.prepare(matrix, rows, columns);
-            case "auto":
+    public VectorUtilSupport.AshProjection forQueryScoring(ASHQueryProjection precision) {
+        switch (precision) {
+            case FP32: return this;
+            case INT8: return NativeASHInt8Projection.prepare(matrix, rows, columns);
+            case AUTO:
                 // INT8 where an integer dot-product backend exists, else FP16, else this FP32 projection.
                 try {
                     return NativeASHInt8Projection.prepare(matrix, rows, columns);
                 } catch (UnsupportedOperationException unavailable) {
                     return fp16WithFallback();
                 }
-            case "fp16": return NativeASHFP16Projection.prepare(matrix, rows, columns, this, true);
-            default: throw new IllegalArgumentException(
-                    "jvector.ash.queryProjection must be auto, fp32, fp16 or int8: " + mode);
+            case FP16: return NativeASHFP16Projection.prepare(matrix, rows, columns, this, true);
+            default: throw new AssertionError(precision);
         }
     }
 

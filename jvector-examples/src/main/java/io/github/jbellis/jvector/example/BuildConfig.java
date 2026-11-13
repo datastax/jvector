@@ -46,6 +46,8 @@ public final class BuildConfig {
     /** Explicit index settings for schema 3. Legacy callers leave indexType unset. */
     public final String indexType;
     public final String writerMode;
+    /** Page alignment for on-disk base-layer records in bytes, or null for unaligned records. */
+    public final Integer pageAlignment;
     public final String rerankingType;
     public final String ashConstructionMode;
     /** Construction threads for training, encoding, insertion and writing; null for the platform default. */
@@ -61,6 +63,7 @@ public final class BuildConfig {
         this.buildCompressor = b.buildCompressor;
         this.indexType = b.indexType;
         this.writerMode = b.writerMode;
+        this.pageAlignment = b.pageAlignment;
         this.rerankingType = b.rerankingType;
         this.ashConstructionMode = b.ashConstructionMode;
         this.workers = b.workers;
@@ -83,6 +86,7 @@ public final class BuildConfig {
         params.put("refineFinalGraph", refineFinalGraph);
         if (indexType != null) params.put("type", indexType);
         if (writerMode != null) params.put("writerMode", writerMode);
+        if (pageAlignment != null) params.put("pageAlignment", pageAlignment);
         if (rerankingType != null) params.put("reranking", rerankingType);
         if (ashConstructionMode != null) params.put("ashConstruction", ashConstructionMode);
         if (workers != null) params.put("constructionWorkers", workers);
@@ -103,6 +107,7 @@ public final class BuildConfig {
         private Function<DataSet, CompressorParameters> buildCompressor;
         private String indexType;
         private String writerMode;
+        private Integer pageAlignment;
         private String rerankingType;
         private String ashConstructionMode;
         private Integer workers;
@@ -118,6 +123,7 @@ public final class BuildConfig {
         public Builder buildCompressor(Function<DataSet, CompressorParameters> buildCompressor) { this.buildCompressor = buildCompressor; return this; }
         public Builder indexType(String indexType) { this.indexType = indexType; return this; }
         public Builder writerMode(String writerMode) { this.writerMode = writerMode; return this; }
+        public Builder pageAlignment(Integer pageAlignment) { this.pageAlignment = pageAlignment; return this; }
         public Builder rerankingType(String rerankingType) { this.rerankingType = rerankingType; return this; }
         public Builder ashConstructionMode(String mode) { this.ashConstructionMode = mode; return this; }
         public Builder workers(Integer workers) { this.workers = workers; return this; }
