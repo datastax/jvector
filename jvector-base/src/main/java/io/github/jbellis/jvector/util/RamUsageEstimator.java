@@ -61,6 +61,14 @@ public final class RamUsageEstimator {
   /** No instantiation. */
   private RamUsageEstimator() {}
 
+  /** Shallow instance sizes are computed once per class from its declared fields. */
+  private static final ClassValue<Long> SHALLOW_SIZES = new ClassValue<>() {
+    @Override
+    protected Long computeValue(Class<?> type) {
+      return calculateShallowSize(type);
+    }
+  };
+
   /** True, iff compressed references (oops) are enabled by this JVM */
   public static final boolean COMPRESSED_REFS_ENABLED;
 
@@ -104,6 +112,12 @@ public final class RamUsageEstimator {
 
   static final int INTEGER_SIZE, LONG_SIZE, STRING_SIZE;
 
+  /**
+   * HotSpot rounds the array header up to a heap word before JDK 23; from JDK 23 on
+   * (JDK-8139457) elements start at the first offset aligned to their own width.
+   */
+  private static final boolean RELAXED_ARRAY_ELEMENT_ALIGNMENT = Runtime.version().feature() >= 23;
+
   static final String MANAGEMENT_FACTORY_CLASS = "java.lang.management.ManagementFactory";
   static final String HOTSPOT_BEAN_CLASS = "com.sun.management.HotSpotDiagnosticMXBean";
 
@@ -113,6 +127,8 @@ public final class RamUsageEstimator {
       // Try to get compressed oops and object alignment (the default seems to be 8 on Hotspot);
       // (this only works on 64 bit, on 32 bits the alignment and reference size is fixed):
       boolean compressedOops = false;
+      boolean compressedClassPointers = false;
+      boolean compactHeaders = false;
       int objectAlignment = 8;
       boolean isHotspot = false;
       try {
@@ -133,6 +149,21 @@ public final class RamUsageEstimator {
                     vmOption.getClass().getMethod("getValue").invoke(vmOption).toString());
           } catch (@SuppressWarnings("unused") ReflectiveOperationException | RuntimeException e) {
             isHotspot = false;
+          }
+          try {
+            final Object vmOption = getVMOptionMethod.invoke(hotSpotBean, "UseCompressedClassPointers");
+            compressedClassPointers = Boolean.parseBoolean(
+                vmOption.getClass().getMethod("getValue").invoke(vmOption).toString());
+          } catch (ReflectiveOperationException | RuntimeException e) {
+            isHotspot = false;
+          }
+          try {
+            // Absent before JDK 24. Class pointers and object references are independent options.
+            final Object vmOption = getVMOptionMethod.invoke(hotSpotBean, "UseCompactObjectHeaders");
+            compactHeaders = Boolean.parseBoolean(
+                vmOption.getClass().getMethod("getValue").invoke(vmOption).toString());
+          } catch (ReflectiveOperationException | RuntimeException e) {
+            // Older HotSpot releases use the conventional mark-word/class-pointer header.
           }
           try {
             final Object vmOption = getVMOptionMethod.invoke(hotSpotBean, "ObjectAlignmentInBytes");
@@ -163,10 +194,8 @@ public final class RamUsageEstimator {
       NUM_BYTES_OBJECT_ALIGNMENT = objectAlignment;
       // reference size is 4, if we have compressed oops:
       NUM_BYTES_OBJECT_REF = COMPRESSED_REFS_ENABLED ? 4 : 8;
-      // "best guess" based on reference size:
-      NUM_BYTES_OBJECT_HEADER = 8 + NUM_BYTES_OBJECT_REF;
-      // array header is NUM_BYTES_OBJECT_HEADER + NUM_BYTES_INT, but aligned (object alignment):
-      NUM_BYTES_ARRAY_HEADER = (int) alignObjectSize(NUM_BYTES_OBJECT_HEADER + Integer.BYTES);
+      NUM_BYTES_OBJECT_HEADER = compactHeaders ? 8 : 8 + (compressedClassPointers ? 4 : 8);
+      NUM_BYTES_ARRAY_HEADER = arrayHeaderBytes(1);
     } else {
       COMPRESSED_REFS_ENABLED = false;
       NUM_BYTES_OBJECT_ALIGNMENT = 8;
@@ -186,6 +215,19 @@ public final class RamUsageEstimator {
       // key + value *
       // hash tables need to be oversized to avoid collisions, assume 2x capacity
       (2L * NUM_BYTES_OBJECT_REF) * 2;
+
+  /**
+   * Offset of the first element of an array whose elements are {@code elementSize} bytes wide:
+   * the object header plus the length field, rounded up to a heap word on 64-bit HotSpot before
+   * JDK 23 and only to the element width from JDK 23 on. {@link #NUM_BYTES_ARRAY_HEADER} is the
+   * value for byte arrays.
+   */
+  public static int arrayHeaderBytes(int elementSize) {
+    int unaligned = NUM_BYTES_OBJECT_HEADER + Integer.BYTES;
+    if (!Constants.JRE_IS_64BIT) return unaligned;
+    int alignment = RELAXED_ARRAY_ELEMENT_ALIGNMENT ? elementSize : 8;
+    return (unaligned + alignment - 1) / alignment * alignment;
+  }
 
   /** Aligns an object size to be the next multiple of {@link #NUM_BYTES_OBJECT_ALIGNMENT}. */
   public static long alignObjectSize(long size) {
@@ -221,32 +263,32 @@ public final class RamUsageEstimator {
 
   /** Returns the size in bytes of the char[] object. */
   public static long sizeOf(char[] arr) {
-    return alignObjectSize((long) NUM_BYTES_ARRAY_HEADER + (long) Character.BYTES * arr.length);
+    return alignObjectSize((long) arrayHeaderBytes(Character.BYTES) + (long) Character.BYTES * arr.length);
   }
 
   /** Returns the size in bytes of the short[] object. */
   public static long sizeOf(short[] arr) {
-    return alignObjectSize((long) NUM_BYTES_ARRAY_HEADER + (long) Short.BYTES * arr.length);
+    return alignObjectSize((long) arrayHeaderBytes(Short.BYTES) + (long) Short.BYTES * arr.length);
   }
 
   /** Returns the size in bytes of the int[] object. */
   public static long sizeOf(int[] arr) {
-    return alignObjectSize((long) NUM_BYTES_ARRAY_HEADER + (long) Integer.BYTES * arr.length);
+    return alignObjectSize((long) arrayHeaderBytes(Integer.BYTES) + (long) Integer.BYTES * arr.length);
   }
 
   /** Returns the size in bytes of the float[] object. */
   public static long sizeOf(float[] arr) {
-    return alignObjectSize((long) NUM_BYTES_ARRAY_HEADER + (long) Float.BYTES * arr.length);
+    return alignObjectSize((long) arrayHeaderBytes(Float.BYTES) + (long) Float.BYTES * arr.length);
   }
 
   /** Returns the size in bytes of the long[] object. */
   public static long sizeOf(long[] arr) {
-    return alignObjectSize((long) NUM_BYTES_ARRAY_HEADER + (long) Long.BYTES * arr.length);
+    return alignObjectSize((long) arrayHeaderBytes(Long.BYTES) + (long) Long.BYTES * arr.length);
   }
 
   /** Returns the size in bytes of the double[] object. */
   public static long sizeOf(double[] arr) {
-    return alignObjectSize((long) NUM_BYTES_ARRAY_HEADER + (long) Double.BYTES * arr.length);
+    return alignObjectSize((long) arrayHeaderBytes(Double.BYTES) + (long) Double.BYTES * arr.length);
   }
 
   /** Returns the size in bytes of the String[] object. */
@@ -297,7 +339,7 @@ public final class RamUsageEstimator {
       return size;
     }
     // assume array-backed collection and add per-object references
-    size += NUM_BYTES_ARRAY_HEADER + collection.size() * NUM_BYTES_OBJECT_REF;
+    size += arrayHeaderBytes(NUM_BYTES_OBJECT_REF) + collection.size() * NUM_BYTES_OBJECT_REF;
     for (Object o : collection) {
       size += sizeOfObject(o, depth, defSize);
     }
@@ -365,7 +407,7 @@ public final class RamUsageEstimator {
   // Use this method instead of #shallowSizeOf(Object) to avoid costly reflection
   public static long shallowSizeOf(Object[] arr) {
     return alignObjectSize(
-        (long) NUM_BYTES_ARRAY_HEADER + (long) NUM_BYTES_OBJECT_REF * arr.length);
+        (long) arrayHeaderBytes(NUM_BYTES_OBJECT_REF) + (long) NUM_BYTES_OBJECT_REF * arr.length);
   }
 
   /**
@@ -398,6 +440,15 @@ public final class RamUsageEstimator {
       throw new IllegalArgumentException("This method does not work with array classes.");
     if (clazz.isPrimitive()) return primitiveSizes.get(clazz);
 
+    return SHALLOW_SIZES.get(clazz);
+  }
+
+  /**
+   * Header plus the widths of all instance fields, aligned. HotSpot (JDK 15 and later) packs
+   * fields largest-first and lets subclass fields fill superclass gaps, so this matches its
+   * instance sizes for ordinary classes; older layouts can pad superclass boundaries.
+   */
+  private static long calculateShallowSize(Class<?> clazz) {
     long size = NUM_BYTES_OBJECT_HEADER;
 
     // Walk type hierarchy
@@ -428,17 +479,9 @@ public final class RamUsageEstimator {
 
   /** Return shallow size of any <code>array</code>. */
   private static long shallowSizeOfArray(Object array) {
-    long size = NUM_BYTES_ARRAY_HEADER;
-    final int len = Array.getLength(array);
-    if (len > 0) {
-      Class<?> arrayElementClazz = array.getClass().getComponentType();
-      if (arrayElementClazz.isPrimitive()) {
-        size += (long) len * primitiveSizes.get(arrayElementClazz);
-      } else {
-        size += (long) NUM_BYTES_OBJECT_REF * len;
-      }
-    }
-    return alignObjectSize(size);
+    Class<?> arrayElementClazz = array.getClass().getComponentType();
+    int elementSize = arrayElementClazz.isPrimitive() ? primitiveSizes.get(arrayElementClazz) : NUM_BYTES_OBJECT_REF;
+    return alignObjectSize((long) arrayHeaderBytes(elementSize) + (long) elementSize * Array.getLength(array));
   }
 
   /**
