@@ -26,7 +26,10 @@ For query throughput and latency on Intel Ice Lake:
 
 ## Available settings
 
-Set `jvector.ash.queryProjection` before the model's first query use:
+Set the precision per model in code with
+`AsymmetricHashing.setQueryOptions(ASHQueryProjection, maxBatchSize)`, or for
+every model in the JVM with `jvector.ash.queryProjection`. Either must take
+effect before the model's first query:
 
 | Setting | Behavior |
 |---|---|
@@ -50,7 +53,8 @@ Explicit FP16 and INT8 settings fail clearly if the required backend is unavaila
 when a virtual machine does not expose the needed hardware features.
 
 The model caches its query-projection view on first use. Changing the property
-after initialization does not reconfigure an existing view.
+afterwards does not reconfigure an existing view, and `setQueryOptions` throws
+once the view exists.
 
 ## BenchYAML runs
 

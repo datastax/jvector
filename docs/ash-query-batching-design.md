@@ -25,8 +25,9 @@ For ASH, C is the smaller of the JVM processor limit and the existing physical
 core budget, with a minimum of one. The processor has C direct slots and
 L = max(1, floor(C / 4)) combining contexts. Capacity follows the CPU budget,
 not a caller-thread count that the library does not own. Neither value is learned
-or matrix-specific. The sole optional ASH policy property is
-`jvector.ash.queryBatchSize` (default 8, 1 disables coordination).
+or matrix-specific. The sole optional ASH policy setting is the maximum batch:
+`AsymmetricHashing.setQueryOptions` per model, or the `jvector.ash.queryBatchSize`
+property as the default (8; 1 disables coordination).
 
 The recommended caller-side worker capacity is 4C for every model. With eight
 allocated physical cores this gives 32 caller workers and two combining contexts.

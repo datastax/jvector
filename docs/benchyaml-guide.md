@@ -22,7 +22,10 @@ reranking optionally rescores the candidates.
   which measurements to compute and which to display or log.
 
 Each index-parameter file sets `yamlSchemaVersion: 3`, the current
-`onDiskIndexVersion`, and its `dataset` name.
+`onDiskIndexVersion`, and its `dataset` name. An optional top-level
+`useDatasetPrefetching: true` streams base vectors in order during construction
+instead of loading them all into memory; see
+[Batched input vector access](batched-vector-access.md#dataset-streaming-and-caches).
 
 See [How to run benchmarks](benchmarking.md) for dataset setup and commands.
 
@@ -37,6 +40,7 @@ Each `compression` list entry has a `type` and its own settings.
 | --- | --- | --- |
 | `type` | `inMemory`, `onDisk` | `inMemory` keeps the graph in memory for search. `onDisk` serializes the completed graph and reopens it for search. |
 | `writerMode` | `sequential`, `parallel` | Selects the writer after graph cleanup for `onDisk`. Defaults to `parallel`. |
+| `pageAlignment` | Power of two from 512 to 1048576 | Optional, `onDisk` only. Places base-layer node records so none crosses a page boundary of this size, typically `4096`; see [Page-aligned records](larger-than-memory-indexes.md#page-aligned-records). Omitted, records are packed back to back. Part of the saved-index identity. |
 | `useSavedIndexIfExists` | `Yes`, `No` | Controls reuse of a compatible `onDisk` index. `Yes` saves each built index in the working directory's `index_cache` and reuses it on later runs; a cache hit skips fresh construction and serialization measurements. Saved indexes are never deleted automatically, so starting-point configurations use `No`; recipes that query an index from a later JVM, such as the ASH/PQ comparison, use `Yes`. |
 | `workers` | Positive integer or `max` | Optional. Threads for quantizer training, encoding, graph insertion and the parallel writer. `max` is the platform's physical core count, which is also the default. |
 | `outDegree` | Positive integers | Maximum final neighborhood degree, also called M. |
@@ -75,7 +79,9 @@ reports thread counts per case in the CSV.
 | --- | --- | --- |
 | `topKOverquery` | Map of positive integer K to lists of finite multipliers ≥ 1 | Required for search. The integer part of K × multiplier is the candidate budget. Return up to K results, with a second scoring pass when configured. |
 | `useSearchPruning` | List of `Yes` and `No` values | Enables traversal pruning for supported scorers and similarity functions. |
-| `workers` | List of positive integers or `max` | Optional sweep. Direct search uses this many calling threads; queued ASH search uses this many workers to prepare and execute queries. Each value queries the same index, so `[1, 8]` reports 1 and 8 workers from one build. Omitted, the JVM-wide settings apply. |
+| `workers` | List of positive integers or `max` | Optional sweep. Direct search uses this many calling threads; queued search uses this many workers to prepare and execute queries. Each value queries the same index, so `[1, 8]` reports 1 and 8 workers from one build. Omitted, the JVM-wide settings apply. |
+| `queryExecution` | `direct`, `queued` | `direct` runs each search on a calling thread. `queued` sends searches to a fixed pool of workers through a bounded queue and, for ASH, prepares waiting queries together. Applies to every compression entry. Defaults to `direct`. |
+| `requestsPerWorker` | Positive integer | Optional, `queued` only. Queries admitted per worker, counting the one it is searching; the queue holds this many times the worker count. Defaults to the larger of 8 and the ASH `maxBatchSize`. Use `1` when search waits on storage, so queries do not queue behind busy workers. |
 | `compression[].type` | `None`, `ASH`, `PQ`, `BQ` | Selects the traversal representation. `None` scores source vectors. |
 | `compression[].parameters` | [Quantizer parameters](#quantizer-parameters) | Supplies encoding settings for traversal. Reuse matching construction models and codes where possible. |
 
@@ -88,13 +94,13 @@ vectors are the sole vector feature.
 ### ASH query parameters
 
 Place `queryProjection` in the `parameters` map of an ASH compression entry.
-Place `queryExecution` and `maxBatchSize` in that map on an ASH **search** entry.
+Place `maxBatchSize` in that map on an ASH **search** entry; it requires
+`search.queryExecution: queued`.
 
 | Field | Values | Description |
 | --- | --- | --- |
 | `queryProjection` | `auto`, `fp32`, `fp16`, `int8` | Optional. `auto` is the default and selects INT8 where an integer dot-product backend exists, then FP16 where supported, with FP32 fallback. `fp32` selects FP32 projection. `fp16` and `int8` require their selected paths. The mode applies to ASH search and asymmetric construction scoring. Explicit ASH settings in one JVM must agree. Entries that omit it inherit the JVM mode, which defaults to `auto`. The `jvector.ash.queryProjection` JVM property overrides YAML. |
-| `queryExecution` | `direct`, `queued` | `direct` runs searches on the calling threads. `queued` sends searches to workers and batches query preparation when supported. Defaults to `direct`. |
-| `maxBatchSize` | Positive integer | Caps the number of queries prepared together in queued mode. Defaults to 8. The value must fit the executor limits at the selected worker count. |
+| `maxBatchSize` | Positive integer | Caps the number of queued queries whose projections are prepared together. Defaults to 8. Batching saves CPU when search is compute-bound; when search waits on storage, `1` avoids holding queries for a batch. |
 
 FP16 projection uses FP32 accumulation and output. INT8 projection uses integer
 accumulation and FP32 output. Fully symmetric construction scores encoded
@@ -104,8 +110,8 @@ for provider and hardware requirements.
 ### Validate the index and scorer
 
 Grid validates the selected scorer, layout, similarity function, and precision
-before training or construction. Disk writer, cache, and fused layout settings
-apply to `onDisk` cases. Fused disk search requires ASH or PQ search compression.
+before training or construction. Disk writer, page alignment, cache, and fused
+layout settings apply to `onDisk` cases. Fused disk search requires ASH or PQ search compression.
 
 With `reranking.type: None` or an omitted reranker, search returns up to K results
 ordered by traversal score, including compressed scores where supported. If the
@@ -164,6 +170,7 @@ search:
   topKOverquery:
     10: [1.0, 2.0]
   useSearchPruning: [No]
+  queryExecution: queued
   compression:
     - type: ASH
       parameters:
@@ -172,13 +179,13 @@ search:
         bitsPerDimension: 2
         landmarkCount: 1
         queryProjection: fp16
-        queryExecution: queued
         maxBatchSize: 8
 ```
 
 For a source-vector memory case, select `inMemory`, use `None` compression in
 both sections, and omit the disk settings. Use `reranking.type: None` to
-measure search with traversal scores alone.
+measure search with traversal scores alone. For an index larger than memory,
+see the [larger-than-memory example](../jvector-examples/yaml-configs/index-parameters/larger-than-memory).
 
 ## Related guides
 
@@ -187,5 +194,7 @@ measure search with traversal scores alone.
   compression budgets, machine setup, and measurement procedure.
 - [ASH configuration and defaults](ash-configuration.md) covers model and
   runtime settings.
+- [Building and serving larger-than-memory indexes](larger-than-memory-indexes.md)
+  covers sizing, page alignment and query settings for indexes served from disk.
 - [Deferred batch serialization](deferred-batch-writer.md) explains writer
   batching and feature production.

@@ -24,6 +24,7 @@ prints the pipeline each configuration selects before it runs.
 | [flush-fused-ash-nvq](flush-fused-ash-nvq) | onDisk: build None -> search fused ASH -> rerank NVQ | The database write path: an in-memory index (for example a memtable) is flushed to an on-disk index. |
 | [compressed-build-fused-ash-nvq](compressed-build-fused-ash-nvq) | onDisk: build ASH symmetric -> search fused ASH -> rerank NVQ | Ingest under a memory limit: construction scores compact codes instead of source vectors. |
 | [flush-fused-pq-nvq](flush-fused-pq-nvq) | onDisk: build None -> search fused PQ -> rerank NVQ | The same write path as flush-fused-ash-nvq with PQ codes, for comparison and compatibility. |
+| [larger-than-memory](larger-than-memory) | onDisk: build ASH symmetric -> search fused ASH -> rerank NVQ | Indexes larger than memory: streamed construction, page-aligned records, and queued queries read from disk. |
 | [on-disk-ash-fp32](on-disk-ash-fp32) | onDisk: build ASH -> search ASH -> rerank FP32 | Indexes too large for memory, where compact codes stay resident and full vectors are read only for rescoring. |
 | [on-disk-pq-fp32](on-disk-pq-fp32) | onDisk: build PQ -> search PQ -> rerank FP32 | The same layout as on-disk-ash-fp32 with PQ codes. |
 | [on-disk-fp](on-disk-fp) | onDisk: build None -> search None -> rerank None | Lower-dimensional data stored on disk, and tuning graph degree, build width, hierarchy and pruning. |

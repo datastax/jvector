@@ -130,10 +130,20 @@ not build them.
 
 | JVM property | Default | Optional values and definition |
 | --- | --- | --- |
-| `jvector.ash.queryProjection` | `auto` | `auto`: prefer INT8 where an integer dot-product backend exists, then optimized FP16, falling back to FP32. `fp32`: FP32. `fp16`: require optimized FP16 with FP32 accumulation/output. `int8`: require INT8 projection with integer accumulation and FP32 output. Explicit unsupported precisions fail; `auto` never selects INT8. |
+| `jvector.ash.queryProjection` | `auto` | `auto`: INT8 where an integer dot-product backend exists, then optimized FP16, falling back to FP32. `fp32`: FP32. `fp16`: require optimized FP16 with FP32 accumulation/output. `int8`: require INT8 projection with integer accumulation and FP32 output. Explicit unsupported precisions fail. Default for models without query options set in code. |
 | `jvector.ash.singleKernel` | `auto` | `auto`, `scalar`, `simd`; single-vector ASH scoring kernels, subject to provider/format support. |
 | `jvector.ash.blockKernel` | `auto` | `auto`, `scalar`, `simd`; blocked/fused ASH scoring kernels, subject to provider/format support. |
-| `jvector.ash.queryBatchSize` | `8` | Positive integer below `Integer.MAX_VALUE`; maximum opportunistic batch for model-owned synchronous query preparation. Separate from the queued batch limit below. |
+| `jvector.ash.queryBatchSize` | `8` | Positive integer below `Integer.MAX_VALUE`; maximum opportunistic batch for model-owned synchronous query preparation; `1` disables combining. Separate from the queued batch limit below. Default for models without query options set in code. |
+
+To choose these per model in code, call `setQueryOptions` before the model
+projects its first query, for example right after opening an index. Later calls
+throw `IllegalStateException`, because the prepared projection is fixed for the
+model's lifetime.
+
+```java
+var ash = ((FusedASH) index.getFeatures().get(FeatureId.FUSED_ASH)).getASH();
+ash.setQueryOptions(ASHQueryProjection.AUTO, 1);  // precision, maximum batch
+```
 
 See [Choosing ASH query-projection precision](ash-projection-precision.md) for
 processor guidance and FP16/INT8 requirements. Under `symmetric-all`, query
@@ -157,12 +167,23 @@ precision. See the [precision guide](ash-projection-precision.md#benchyaml-runs)
 | --- | --- | --- |
 | `jvector.vectorization_provider` | Automatic selection | `native`, `panama`, `default` (scalar). Supported Java 22+ runtimes prefer native, with existing fallbacks. Explicit `native` requires successful loading. |
 | `jvector.enable_native_vectorization` | `true` | `true` / `false`; automatic native selection. Explicit provider selection overrides it. Deprecated `jvector.experimental.enable_native_vectorization` is a lower-precedence alias. |
-| `jvector.physical_core_count` | OS topology detection bounded by available processors; fallback heuristic | Positive physical-core budget for JVector's bounded pool and queued workers. Construction and queries can use separate budgets/processes. |
+| `jvector.physical_core_count` | OS topology detection bounded by available processors; fallback heuristic | Positive thread budget for JVector's bounded pool and queued workers. Construction and queries can use separate budgets/processes; see [Thread budgets](#thread-budgets). |
 | `-XX:ActiveProcessorCount` | JVM/container detection | Positive processor count exposed to the JVM; coordinate with allocated physical cores. Does not set affinity. |
 | `--add-modules=jdk.incubator.vector` | Not added by the application | Enables the Vector API module needed by SIMD providers on supported runtimes. |
 | `--enable-native-access=ALL-UNNAMED` | JVM native-access policy | Native access for classpath deployments. Named-module deployments should enable the relevant module. |
 | `-Xms`, `-Xmx` | JVM ergonomics | Initial / maximum heap; account for resident input, model and construction memory. |
 | `-ea`, `-da` | Assertions normally disabled | Enable / disable Java assertions; independent of numerical precision. |
+
+### Thread budgets
+
+Graph insertion mostly waits on memory, so a second hardware thread per core
+fills those stalls: give construction every hardware thread, for example
+`-Djvector.physical_core_count=16 -XX:ActiveProcessorCount=16` on 8 cores with
+two threads each, or pass a pool of that size to the builder. Builds of millions
+of vectors gain the most; recall and the built graph's search speed do not
+change. Compute-bound search runs best with one worker per physical core. Search
+that waits on storage needs more queries in flight than cores; see
+[Building and serving larger-than-memory indexes](larger-than-memory-indexes.md#serving-queries).
 
 ### BLAS threads
 
@@ -192,7 +213,8 @@ writer selection, compression, and reranking.
 
 ## Query delivery and measurement controls
 
-Set BenchYAML query delivery and batch limits in the
+Set BenchYAML query delivery in the [search section](benchyaml-guide.md#search)
+(`queryExecution`, `requestsPerWorker`) and the ASH batch limit in the
 [ASH search parameters](benchyaml-guide.md#ash-query-parameters). Database
 integrations select their own admission policy and executors. See
 [Integrating ASH queries into a database](ash-query-integration.md).

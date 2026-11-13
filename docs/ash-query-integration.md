@@ -20,7 +20,9 @@ requested and effective precision columns in `experiments.csv`.
 
 ## Recommended asynchronous allocation
 
-Use these defaults for the search CPU budget assigned by the database:
+Use these defaults for the search CPU budget assigned by the database when the
+index is resident in memory, so search is limited by CPU. For an index served
+from storage, see [Indexes served from storage](#indexes-served-from-storage).
 
 * At most **C** execution workers, shared across the indexes competing for those
   cores. Producers do not need a worker thread for every submitted query.
@@ -52,6 +54,26 @@ JVector the allocation before initialization using `jvector.physical_core_count`
 use `-XX:ActiveProcessorCount` consistently when appropriate. Neither property
 pins threads. Use the database's scheduler, OS affinity or container controls,
 and place query execution and index memory together on NUMA systems.
+
+### Indexes served from storage
+
+When the index is larger than memory, each search spends most of its time
+waiting for node reads, one after another, and the CPU is mostly idle. Then:
+
+* Run more searches at once than there are cores, so other searches proceed
+  while some wait on reads. Throughput rises with workers until the device
+  reaches its random-read limit; past that, added workers only add latency.
+* Admit one request per worker (admission = workers). Requests waiting behind a
+  busy worker add their whole wait to latency and add no throughput.
+* Use a maximum preparation batch of 1. Projection batching saves microseconds of
+  CPU, and holding queries for a batch costs more than that.
+* Set the query options on the model in code with
+  `AsymmetricHashing.setQueryOptions(precision, 1)` if synchronous searches
+  share the model, so they do not combine either.
+
+[Building and serving larger-than-memory indexes](larger-than-memory-indexes.md#serving-queries)
+shows how to choose the worker count from the device's read rate and the reads
+each query makes.
 
 For an integration retaining only synchronous searches, the caller
 recommendation is 4C bounded caller threads, with the same physical CPU budget.

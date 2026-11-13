@@ -120,6 +120,8 @@ Start with the HelloASHWorld programs above, then:
   admission and batched query projection.
 - [Choosing ASH query-projection precision](./docs/ash-projection-precision.md): FP16, FP32 or INT8
   by processor.
+- [Building and serving larger-than-memory indexes](./docs/larger-than-memory-indexes.md): sizing,
+  streamed construction, page-aligned records and query settings for indexes served from disk.
 
 ASH scores dot product only, so use `DOT_PRODUCT` with normalized vectors for cosine similarity.
 Fused ASH requires on-disk format version 7, which earlier JVector releases cannot read. Training
