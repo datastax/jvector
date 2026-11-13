@@ -851,10 +851,10 @@ public class Grid {
 
         private final ExplicitThreadLocal<GraphSearcher> searchers = ExplicitThreadLocal.withInitial(() -> {
             var searcher = new GraphSearcher(index);
-            // Benchmark knobs: jvector.bench.adaptive=false turns adaptive stopping off; jvector.bench.adaptiveGamma
-            // sets its margin.
+            // Benchmark knobs for the experimental adaptive stopping, off by default as in the library:
+            // jvector.bench.adaptive=true turns it on; jvector.bench.adaptiveGamma sets its margin.
             String gamma = System.getProperty("jvector.bench.adaptiveGamma");
-            boolean adaptive = Boolean.parseBoolean(System.getProperty("jvector.bench.adaptive", "true"));
+            boolean adaptive = Boolean.parseBoolean(System.getProperty("jvector.bench.adaptive", "false"));
             if (gamma != null) searcher.useAdaptiveTermination(adaptive, Float.parseFloat(gamma));
             else searcher.useAdaptiveTermination(adaptive);
             return searcher;

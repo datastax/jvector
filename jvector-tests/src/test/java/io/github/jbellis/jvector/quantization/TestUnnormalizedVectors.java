@@ -193,6 +193,7 @@ public class TestUnnormalizedVectors {
         }
         try (var searcher = new GraphSearcher(graph); var adaptive = new GraphSearcher(graph)) {
             searcher.useAdaptiveTermination(false);
+            adaptive.useAdaptiveTermination(true);
             for (var q : queries) {
                 var sf = scorerFor.apply(q);
                 scan.add(topK(sf::similarityTo));

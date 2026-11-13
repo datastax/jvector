@@ -46,7 +46,7 @@ public final class DefaultSearchScoreProvider implements SearchScoreProvider {
      * or `ScoringView.rerankerFor`.
      * <p>
      * Searches with this provider stop by the standard rule, since it cannot tell what its scores measure; use
-     * {@link #forSimilarity} to let top-K searches stop adaptively where the similarity function supports it.
+     * {@link #forSimilarity} to let top-K searches stop adaptively where the searcher enables it.
      */
     public DefaultSearchScoreProvider(ScoreFunction scoreFunction, ScoreFunction.ExactScoreFunction reranker) {
         this(scoreFunction, reranker, null);
@@ -75,9 +75,10 @@ public final class DefaultSearchScoreProvider implements SearchScoreProvider {
     }
 
     /**
-     * A provider for scores of {@code similarity} whose top-K searches stop adaptively. Dot-product searches need
-     * the score function's {@link ScoreFunction#dotProductBound} and keep the standard rule without one.
-     * {@link io.github.jbellis.jvector.graph.GraphSearcher#useAdaptiveTermination} turns adaptive stopping off.
+     * A provider for scores of {@code similarity} whose top-K searches stop adaptively when the searcher enables the
+     * experimental adaptive stopping ({@link io.github.jbellis.jvector.graph.GraphSearcher#useAdaptiveTermination}).
+     * Dot-product searches need the score function's {@link ScoreFunction#dotProductBound} and keep the standard rule
+     * without one.
      */
     public static DefaultSearchScoreProvider forSimilarity(ScoreFunction scoreFunction,
                                                            ScoreFunction.ExactScoreFunction reranker,
@@ -108,8 +109,8 @@ public final class DefaultSearchScoreProvider implements SearchScoreProvider {
     }
 
     /**
-     * A SearchScoreProvider for a single-pass search based on exact similarity, stopping adaptively where
-     * {@code vsf} supports it (see {@link #forSimilarity}).
+     * A SearchScoreProvider for a single-pass search based on exact similarity, which may stop adaptively where the
+     * searcher enables it (see {@link #forSimilarity}).
      * Generally only suitable when your RandomAccessVectorValues is entirely in-memory,
      * e.g. during construction.
      */

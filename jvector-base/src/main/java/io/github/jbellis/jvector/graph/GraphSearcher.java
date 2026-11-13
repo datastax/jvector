@@ -66,7 +66,7 @@ public class GraphSearcher implements Closeable {
 
     private boolean pruneSearch;
     private boolean boundCandidates = true;
-    private boolean adaptiveTerminationEnabled = true;
+    private boolean adaptiveTerminationEnabled = false;
     private float adaptiveTerminationGamma = AdaptiveTermination.DEFAULT_GAMMA;
     private final AdaptiveTermination adaptiveTermination = new AdaptiveTermination();
     // The best rerankK accepted nodes scored so far in the current layer search, worst on top.
@@ -161,11 +161,13 @@ public class GraphSearcher implements Closeable {
     }
 
     /**
-     * Enable or disable adaptive stopping for top-K searches whose score providers name their similarity function
-     * ({@link SearchScoreProvider#adaptiveSimilarity}) or whose score functions require it. Enabled by default. A search
-     * that stops adaptively expands at least what the standard rule would and at most what a standard search with
-     * twice the beam would.
+     * Experimental: enable or disable adaptive stopping for top-K searches whose score providers name their similarity
+     * function ({@link SearchScoreProvider#adaptiveSimilarity}) or whose score functions require it. Disabled by
+     * default. A search that stops adaptively expands at least what the standard rule would and at most what a
+     * standard search with twice the beam would. With compressed scores and reranking, raising the overquery has so
+     * far given more recall at the same throughput.
      */
+    @Experimental
     public void useAdaptiveTermination(boolean enabled) {
         adaptiveTerminationEnabled = enabled;
     }
@@ -175,6 +177,7 @@ public class GraphSearcher implements Closeable {
      * search stops when the best unexpanded candidate is more than {@code 1 + gamma} times as far from the query as
      * the k-th best result found. The default is about 0.005.
      */
+    @Experimental
     public void useAdaptiveTermination(boolean enabled, float gamma) {
         AdaptiveTermination.validateGamma(gamma);
         adaptiveTerminationEnabled = enabled;
@@ -466,8 +469,7 @@ public class GraphSearcher implements Closeable {
         try {
             assert approximateResults.size() == 0; // should be cleared by setEntryPointsFromPreviousLayer
             approximateResults.setMaxSize(rerankK);
-            // ASH score functions require adaptive stopping whatever provider wraps them; only
-            // useAdaptiveTermination(false) turns it off.
+            // When enabled, ASH score functions stop adaptively whatever provider wraps them.
             boolean adaptive = adaptiveTerminationEnabled && level == 0 && threshold == 0.0f && rerankK > 0
                     && startAdaptiveTermination(scoreProvider, rerankK);
             // Bounded candidates: a scored node is expanded only while it ranks among the best rerankK accepted

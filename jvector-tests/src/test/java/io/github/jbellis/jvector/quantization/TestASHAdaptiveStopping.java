@@ -40,7 +40,10 @@ import static org.junit.Assert.assertArrayEquals;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertTrue;
 
-/** ASH searches stop adaptively whatever provider wraps their scores; only the searcher's switch turns it off. */
+/**
+ * Adaptive stopping is experimental and off by default. Enabled on the searcher, ASH searches stop adaptively whatever
+ * provider wraps their scores; otherwise they stop by the standard rule.
+ */
 public class TestASHAdaptiveStopping {
     @Test
     public void ashScoresAlwaysStopAdaptivelyUnlessTheSearcherSaysOtherwise() throws Exception {
@@ -74,6 +77,11 @@ public class TestASHAdaptiveStopping {
                 ScoreFunction.ApproximateScoreFunction unmarked = asf::similarityTo;
                 var standard = search(graph, new DefaultSearchScoreProvider(unmarked), true);
                 assertSame(standard, search(graph, new DefaultSearchScoreProvider(asf, null, VectorSimilarityFunction.DOT_PRODUCT), false));
+                // A searcher that does not enable it stops by the standard rule.
+                try (var searcher = new GraphSearcher(graph)) {
+                    assertSame(standard, searcher.search(new DefaultSearchScoreProvider(asf, null, VectorSimilarityFunction.DOT_PRODUCT),
+                            10, 10, 0.0f, 0.0f, Bits.ALL));
+                }
             }
         }
     }

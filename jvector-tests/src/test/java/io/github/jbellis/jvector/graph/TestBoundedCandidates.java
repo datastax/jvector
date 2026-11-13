@@ -52,6 +52,9 @@ public class TestBoundedCandidates {
                         dimension, 16, 60, 1.2f, 1.2f, hierarchy);
                 var graph = builder.build(vectors);
                 try (var bounded = new GraphSearcher(graph); var unbounded = new GraphSearcher(graph)) {
+                    // Adaptive stopping is experimental and off by default; enabled here so its bar is covered too.
+                    bounded.useAdaptiveTermination(true);
+                    unbounded.useAdaptiveTermination(true);
                     unbounded.boundCandidates(false);
                     for (int q = 0; q < 40; q++) {
                         var query = TestUtil.randomVector(random, dimension);

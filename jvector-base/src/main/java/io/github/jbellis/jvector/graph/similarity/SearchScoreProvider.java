@@ -29,8 +29,9 @@ public interface SearchScoreProvider {
 
     /**
      * The similarity function whose scores {@link #scoreFunction} returns, when top-K searches with this provider may
-     * stop adaptively; null keeps the standard rule. Score functions that require adaptive stopping
-     * ({@link ScoreFunction#requiresAdaptiveTermination}) score DOT_PRODUCT and stop adaptively regardless.
+     * stop adaptively; null keeps the standard rule. Adaptive stopping is experimental and applies only where the
+     * searcher enables it ({@code GraphSearcher.useAdaptiveTermination}). Score functions that require adaptive
+     * stopping ({@link ScoreFunction#requiresAdaptiveTermination}) score DOT_PRODUCT and stop adaptively regardless.
      */
     default VectorSimilarityFunction adaptiveSimilarity() { return null; }
 
