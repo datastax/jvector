@@ -2,9 +2,14 @@
 
 ## On-disk format version 7
 - Version 7 of the on-disk graph format adds one feature, fused ASH (`FeatureId.FUSED_ASH`): ASH codes
-  stored in the graph alongside each node's neighbors. Apart from that feature, a version 7 file has
-  the version 6 layout. ASH models (`AsymmetricHashing`, `ASHVectors`) also require version 7 or later
-  when they are written or loaded.
+  stored in the graph alongside each node's neighbors. It also stores the largest vector length that
+  adaptive dot-product stopping needs: one float at the end of each serialized PQ model, and of the
+  inline-vector and separated-vector feature headers. Otherwise a version 7 file has the version 6 layout.
+  ASH models (`AsymmetricHashing`, `ASHVectors`) also require version 7 or later when they are written or
+  loaded.
+- Dot-product searches over indexes and PQ models written before version 7 stop by the standard rule,
+  since their largest vector length is unknown; rewriting them at version 7 does not change that for codes
+  encoded before, so a PQ model loaded from an older format keeps it unknown.
 - JVector 4.0.x reads formats up to 6 and rejects version 7 files. `OnDiskGraphIndex.CURRENT_VERSION`,
   the default for `OnDiskGraphIndexWriter.Builder` and for `CompressedVectors.write(out)`, is now 7.
 - To keep a rollback to 4.0.x possible, pass the version explicitly until every reader runs 4.1:
