@@ -96,7 +96,7 @@ final class CompressedOnDiskBuild implements IndexBuildStrategy {
     @Override
     public BuiltIndexes build(List<? extends Set<FeatureId>> featureSets, BuildConfig build, DataSet ds) throws IOException {
         Map<Set<FeatureId>, ImmutableGraphIndex> indexes = new LinkedHashMap<>();
-        Map<Set<FeatureId>, Long> fileSizes = new LinkedHashMap<>();
+        Map<Set<FeatureId>, Path> files = new LinkedHashMap<>();
 
         // If cache is disabled, we use the (tmp) workDirectory as the output
         Path outputDir = cache.isEnabled() ? cache.cacheDir().toAbsolutePath() : workDirectory;
@@ -120,7 +120,7 @@ final class CompressedOnDiskBuild implements IndexBuildStrategy {
                 if (cached.isPresent()) {
                     System.out.printf("%s: Using cached graph index for %s%n", key.datasetName, fs);
                     indexes.put(fs, cached.get());
-                    try { fileSizes.put(fs, Files.size(cache.resolve(key).finalPath)); } catch (IOException ignored) {}
+                    files.put(fs, cache.resolve(key).finalPath);
                 } else {
                     missing.add(fs);
                     if (cache.isEnabled()) {
@@ -136,8 +136,8 @@ final class CompressedOnDiskBuild implements IndexBuildStrategy {
             }
 
             Double buildTimeS = missing.isEmpty() ? null
-                    : buildMissing(missing, build, ds, outputDir, handles, indexes, fileSizes);
-            return new BuiltIndexes(indexes, fileSizes, buildTimeS);
+                    : buildMissing(missing, build, ds, outputDir, handles, indexes, files);
+            return new BuiltIndexes(indexes, files, buildTimeS);
         } catch (IOException | RuntimeException e) {
             // A failed build must release cached readers and discard uncommitted writes.
             for (var handle : handles.values()) {
@@ -159,7 +159,7 @@ final class CompressedOnDiskBuild implements IndexBuildStrategy {
                                 Path outputDir,
                                 Map<Set<FeatureId>, OnDiskGraphIndexCache.WriteHandle> handles,
                                 Map<Set<FeatureId>, ImmutableGraphIndex> indexes,
-                                Map<Set<FeatureId>, Long> fileSizes) throws IOException
+                                Map<Set<FeatureId>, Path> files) throws IOException
     {
         Files.createDirectories(outputDir);
 
@@ -167,7 +167,7 @@ final class CompressedOnDiskBuild implements IndexBuildStrategy {
             buildCompressor = buildCodec == null ? null : GraphBuilderFactory.inConstructionPool(build, buildCodec::get);
             double seconds = buildAndFlush(featureSets, build, ds, outputDir, handles);
             long reopenStart = System.nanoTime();
-            reopen(featureSets, outputDir, handles, indexes, fileSizes);
+            reopen(featureSets, outputDir, handles, indexes, files);
             if (constructionMetrics != null) constructionMetrics.reopenTimeS = (System.nanoTime() - reopenStart) / 1e9;
             return seconds;
         }
@@ -276,7 +276,7 @@ final class CompressedOnDiskBuild implements IndexBuildStrategy {
                 (System.nanoTime()-cleanupEnd)/1e9);
         System.out.format("Build and write %s in %ss%n", featureSets, totalTime);
 
-        reopen(featureSets, outputDir, handles, indexes, fileSizes);
+        reopen(featureSets, outputDir, handles, indexes, files);
         return totalTime;
     }
 
@@ -330,7 +330,7 @@ final class CompressedOnDiskBuild implements IndexBuildStrategy {
     private static void reopen(List<Set<FeatureId>> featureSets, Path outputDir,
                                Map<Set<FeatureId>, OnDiskGraphIndexCache.WriteHandle> handles,
                                Map<Set<FeatureId>, ImmutableGraphIndex> indexes,
-                               Map<Set<FeatureId>, Long> fileSizes) throws IOException {
+                               Map<Set<FeatureId>, Path> files) throws IOException {
         // Commit the index to cache atomically
         for (var entry : handles.entrySet()) {
             System.out.printf("Committing %s build to graph index cache...%n", entry.getKey());
@@ -345,7 +345,7 @@ final class CompressedOnDiskBuild implements IndexBuildStrategy {
                     : outputDir.resolve("graph" + n++);
 
             indexes.put(features, OnDiskGraphIndex.load(ReaderSupplierFactory.open(loadPath)));
-            fileSizes.put(features, Files.size(loadPath));
+            files.put(features, loadPath);
         }
     }
 

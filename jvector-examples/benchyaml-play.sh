@@ -136,6 +136,6 @@ exec env -u JAVA_TOOL_OPTIONS -u JDK_JAVA_OPTIONS -u _JAVA_OPTIONS \
   -Dstdout.encoding=UTF-8 -Dstderr.encoding=UTF-8 \
   -Djvector.vectorization_provider=native -Djvector.parallel_writer=true \
   "-Djvector.physical_core_count=$cores" \
-  -Djvector.bench.verifyConcurrentResults=true -Djvector.bench.throughputMinSeconds=3.0 \
+  -Djvector.bench.verifyConcurrentResults=true \
   "-Djvector.bench.sourceRef=$SOURCE_REF" "-Djvector.bench.runConfig=$run_config" \
   -cp "$JAR" io.github.jbellis.jvector.example.BenchYAML "$index"

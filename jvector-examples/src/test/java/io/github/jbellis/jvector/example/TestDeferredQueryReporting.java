@@ -170,7 +170,8 @@ public class TestDeferredQueryReporting {
             }
             var first = samples.metrics();
             var second = samples.metrics();
-            assertEquals(4, first.size());
+            // Mean and p50, p95, p99 and p99.9 response times, then the mean batch size.
+            assertEquals(6, first.size());
             for (int i = 0; i < first.size(); i++) {
                 assertEquals(0, first.get(i).getValue(), 0);
                 assertEquals(first.get(i).getValue(), second.get(i).getValue(), 0);

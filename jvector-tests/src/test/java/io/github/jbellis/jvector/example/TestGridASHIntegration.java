@@ -20,6 +20,8 @@ import io.github.jbellis.jvector.example.benchmarks.datasets.SimpleDataSet;
 import io.github.jbellis.jvector.example.reporting.RunArtifacts;
 import io.github.jbellis.jvector.example.util.CompressorParameters;
 import io.github.jbellis.jvector.example.util.OnDiskGraphIndexCache;
+import io.github.jbellis.jvector.example.yaml.BenchmarkSelection;
+import io.github.jbellis.jvector.example.yaml.Measurement;
 import io.github.jbellis.jvector.example.yaml.MetricSelection;
 import io.github.jbellis.jvector.example.yaml.RunConfig;
 import io.github.jbellis.jvector.example.yaml.MultiConfig;
@@ -239,7 +241,8 @@ public class TestGridASHIntegration {
         }, new ConstructionMetrics(true), null, "schema3:None").build(features, build, data);
         try (var index = reused.indexes.get(featureSet)) {
             assertNull(reused.buildTimeS);
-            assertEquals(fresh.fileSizes, reused.fileSizes);
+            assertEquals(fresh.files, reused.files);
+            assertEquals(fresh.fileSize(featureSet), reused.fileSize(featureSet));
             assertEquals(data.getBaseRavv().size(), index.size(0));
         }
     }
@@ -275,6 +278,45 @@ public class TestGridASHIntegration {
         } finally {
             Files.deleteIfExists(Path.of("compressor_cache").resolve(params.idStringFor(data)));
         }
+    }
+
+    @Test(timeout = 120_000)
+    public void measurementSettingsTimeOneColdPass() throws Exception {
+        var data = schema3Data();
+        var config = schema3Config("onDisk", "parallel", false, "None", "- type: None");
+        boolean linux = System.getProperty("os.name").equals("Linux");
+        var run = csvRunConfig();
+        run.benchmarks = Map.of("throughput", List.of("AVG"), "accuracy", List.of("recall"));
+        run.measurement = new Measurement();
+        run.measurement.evictIndex = linux;
+        run.measurement.throughput = new Measurement.Throughput();
+        run.measurement.throughput.warmup = "base";
+        run.measurement.throughput.untilCompiled = true;
+        run.measurement.throughput.passes = 1;
+        run.measurement.throughput.minSeconds = 0.0;
+        run.console = new BenchmarkSelection();
+        run.console.benchmarks = run.benchmarks;
+        run.console.metrics = new MetricSelection();
+        run.console.metrics.put("execution", List.of("response_p50_ms", "response_p999_ms", "page_reads_per_query"));
+        var console = new ByteArrayOutputStream();
+        var stdout = System.out;
+        try {
+            Grid.setMeasurement(run.measurement);
+            var artifacts = RunArtifacts.open(run, List.of(config));
+            System.setOut(new PrintStream(console, true, StandardCharsets.UTF_8));
+            Grid.run(data, GridSpec.fromConfig(config), artifacts);
+        } finally {
+            System.setOut(stdout);
+            Grid.setMeasurement(null);
+        }
+        var output = console.toString(StandardCharsets.UTF_8);
+        // One timed pass, with direct execution reporting its search times.
+        assertTrue(output, output.contains("(of 1)"));
+        // Column headers wrap, so their units print on the next line.
+        assertTrue(output, output.contains("Loaded p50"));
+        assertTrue(output, output.contains("Loaded p99.9"));
+        assertEquals(output, linux, output.contains("index evicted from the page cache"));
+        assertEquals(output, linux, output.contains("Page reads"));
     }
 
     @Test

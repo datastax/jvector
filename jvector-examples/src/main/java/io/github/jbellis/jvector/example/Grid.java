@@ -19,6 +19,7 @@ package io.github.jbellis.jvector.example;
 import io.github.jbellis.jvector.disk.BufferedRandomAccessWriter;
 import io.github.jbellis.jvector.disk.ReaderSupplierFactory;
 import io.github.jbellis.jvector.example.benchmarks.AccuracyBenchmark;
+import io.github.jbellis.jvector.example.yaml.Measurement;
 import io.github.jbellis.jvector.example.benchmarks.CountBenchmark;
 import io.github.jbellis.jvector.example.benchmarks.LatencyBenchmark;
 import io.github.jbellis.jvector.example.benchmarks.QueryBenchmark;
@@ -339,7 +340,8 @@ public class Grid {
                 indexBuildTimes.put(ds.getName(), indexBuildTimeS);
             }
             var indexes = inConfiguredOrder(built.indexes, featureSets);
-            var indexFileSizes = built.fileSizes;
+            // Each index file is evicted once, before its first search, when the run asks for cold searches.
+            var evictedFiles = new HashSet<Path>();
 
             // Capture post-build memory and disk state
             diagnostics.capturePostPhaseSnapshot("Graph Build");
@@ -359,7 +361,11 @@ public class Grid {
             try {
                 for (var cpSupplier : search.searchCompressors) {
                     indexes.forEach((features, index) -> {
-                        constructionMetrics.indexFileSizeBytes = indexFileSizes.get(features);
+                        constructionMetrics.indexFileSizeBytes = built.fileSize(features);
+                        var indexFile = built.files.get(features);
+                        if (measurement != null && measurement.evictIndex() && indexFile != null && evictedFiles.add(indexFile)) {
+                            evictFromPageCache(ds.getName(), indexFile);
+                        }
                         final Set<FeatureId> featureSetForIndex = index instanceof OnDiskGraphIndex ? ((OnDiskGraphIndex) index).getFeatureSet() : Set.of();
 
                         // Per (index, cpSupplier) config, so an index without search compression never reports
@@ -415,7 +421,7 @@ public class Grid {
                                 var ctx = new SearchContext(ds, build, search, features, featureSetForIndex,
                                         buildCompressorString, cpSupplier,
                                         traversal == null ? "None" : traversal.toString(),
-                                        indexBuildTimeS, indexFileSizes.get(features), buildSnapshot,
+                                        indexBuildTimeS, built.fileSize(features), buildSnapshot,
                                         queryParameters(cs), cs.ashQueryProjectionModel());
                                 testConfiguration(cs, ctx, constructionMetrics, workDirectory, benchmarks, listeners);
                             } catch (Exception e) {
@@ -477,6 +483,32 @@ public class Grid {
         if (!value.equalsIgnoreCase("true") && !value.equalsIgnoreCase("false"))
             throw new IllegalArgumentException("jvector.parallel_writer must be true or false");
         GraphIndexBuilderConfig.getInstance().setParallelBuild(Boolean.parseBoolean(value));
+    }
+
+    /** Run YAML measurement settings for this invocation; null keeps the built-in behavior. */
+    private static Measurement measurement;
+
+    public static void setMeasurement(Measurement settings) {
+        measurement = settings;
+    }
+
+    /** Drops an index file from the page cache; pages the open index has already touched stay resident. */
+    private static void evictFromPageCache(String dataset, Path indexFile) {
+        try {
+            var residency = ColdFileCache.evict(indexFile);
+            System.out.printf("%s: index evicted from the page cache (%,d of %,d pages still resident)%n",
+                    dataset, residency.residentPages, residency.totalPages);
+        } catch (IOException e) {
+            throw new UncheckedIOException("measurement.evictIndex could not evict " + indexFile, e);
+        }
+    }
+
+    /** The throughput benchmark with the run's warmup and timed-pass settings. */
+    private static ThroughputBenchmark throughputBenchmark() {
+        var settings = measurement == null || measurement.throughput == null
+                ? new Measurement.Throughput() : measurement.throughput;
+        return ThroughputBenchmark.createEmpty(settings.warmupPasses(), settings.passes())
+                .withMeasurement(settings.warmup(), settings.untilCompiled(), settings.minSeconds());
     }
 
     public static void setDiagnosticLevel(int diagLevel) {
@@ -555,8 +587,7 @@ public class Grid {
     private static List<QueryBenchmark> setupBenchmarks(Map<String, List<String>> benchmarkSpec) {
         if (benchmarkSpec == null || benchmarkSpec.isEmpty()) {
             return List.of(
-                    ThroughputBenchmark.createEmpty(3, 3)
-                            .displayAvgQps(),
+                    throughputBenchmark().displayAvgQps(),
                     LatencyBenchmark.createDefault(),
                     CountBenchmark.createDefault(),
                     AccuracyBenchmark.createDefault()
@@ -572,7 +603,7 @@ public class Grid {
                 continue;
             }
             if (benchType.equals("throughput")) {
-                var bench = ThroughputBenchmark.createEmpty(3, 3);
+                var bench = throughputBenchmark();
                 for (var stat : benchmarkSpec.get(benchType)) {
                     if (stat.equals("AVG")) {
                         bench = bench.displayAvgQps();

@@ -19,7 +19,8 @@ reranking optionally rescores the candidates.
   [Dataset metadata](../jvector-examples/yaml-configs/dataset-metadata.yml)
   supplies the similarity function. Vector types come from the dataset.
 - [Run configuration](../jvector-examples/yaml-configs/run-config.yml) selects
-  which measurements to compute and which to display or log.
+  which measurements to compute, how to measure them, and which to display or
+  log; see [Run configuration](#run-configuration).
 
 Each index-parameter file sets `yamlSchemaVersion: 3`, the current
 `onDiskIndexVersion`, and its `dataset` name. An optional top-level
@@ -122,6 +123,44 @@ NVQ scoring feature.
 Grid rejects settings that do not apply to the case. Search type `None` scores
 with full-precision vectors, so it requires `reranking.type: None`. Explicit precision
 requests require support on the selected provider and machine.
+
+## Run configuration
+
+The run YAML applies to every index configuration in an invocation. Select it
+with `-Djvector.bench.runConfig=<path>`. Its sections, in order:
+
+| Section | Purpose |
+| --- | --- |
+| `benchmarks` | The benchmarks to compute and the stats from each: `throughput` (`AVG`, `MEDIAN`, `MAX` queries per second), `latency` (`AVG`, `STD`, `P999` for one query at a time), `count` (`visited`, `expanded`, `expanded base layer` nodes per query) and `accuracy` (`recall`, `MAP`). |
+| `measurement` | Optional. How the benchmarks run; see below. |
+| `console` | The benchmark stats and named metrics to print. |
+| `logging` | Optional. The directory, run identifier, stats and metrics for `experiments.csv`. |
+
+`measurement` settings, each optional:
+
+| Field | Values | Description |
+| --- | --- | --- |
+| `evictIndex` | `true`, `false` | Cold index: drops each on-disk index file from the page cache before its first search, so search reads it from storage. Pages the open index has already read stay cached. Linux only. Defaults to `false`. |
+| `throughput.warmup` | `random`, `base`, `none` | Warmup queries. `random` uses random vectors; `base` uses base vectors sampled from the dataset, which follow the data without favoring the measured queries. Defaults to `random`. |
+| `throughput.warmupPasses` | Integer ≥ 0 | Warmup passes over the query count. Defaults to 3. |
+| `throughput.untilCompiled` | `true`, `false` | Continues warming, up to 10 passes, until a pass adds little JIT compilation, so timed passes run compiled code. Defaults to `false`. |
+| `throughput.passes` | Integer ≥ 1 | Timed passes; the throughput stats summarize them. With `1` and `minSeconds: 0`, each held-out query runs once (cold queries) in the first search case. Defaults to 3. |
+| `throughput.minSeconds` | Number ≥ 0 | A timed pass repeats the queries until it has run this long; `0` runs them once. Defaults to 1.0. |
+
+Named metrics under `console.metrics` and `logging.metrics` come in categories:
+`system` (heap use), `disk` (index files), `construction` (build phases) and
+`execution`. The `execution` metrics describe the throughput benchmark's timed
+passes: `response_mean_ms` and the `response_p50_ms`, `response_p95_ms`,
+`response_p99_ms` and `response_p999_ms` percentiles of each query's time (with
+queued execution, from submission to completion; with direct execution, the
+search itself); `mean_batch_size` for queued ASH preparation; and, on Linux,
+`page_reads_per_query`, the process's major page faults per query, which counts
+pages read from storage.
+
+[The default run configuration](../jvector-examples/yaml-configs/run-config.yml)
+prints one short table for a first run.
+[The larger-than-memory run configuration](../jvector-examples/yaml-configs/run-config-larger-than-memory.yml)
+measures queries that read the index from storage.
 
 ## Quantizer parameters
 

@@ -62,8 +62,9 @@ runs and Serial for the 1-core runs, because `ActiveProcessorCount=1`.
 
 **JVector system properties.** `-Djvector.vectorization_provider=native
 -Djvector.parallel_writer=true -Djvector.physical_core_count=<cores>
--Djvector.bench.queryThreads=<4 × cores> -Djvector.bench.verifyConcurrentResults=true
--Djvector.bench.throughputMinSeconds=3.0`. ASH construction scoring is
+-Djvector.bench.queryThreads=<4 × cores> -Djvector.bench.verifyConcurrentResults=true`,
+with timed throughput passes of at least 3 s (`measurement.throughput.minSeconds: 3.0`
+in the study's run configurations). ASH construction scoring is
 symmetric-all, the default; no other ASH properties are set.
 
 **Native thread pools.** `MKL_NUM_THREADS`, `OMP_NUM_THREADS`,

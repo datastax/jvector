@@ -153,7 +153,7 @@ JAVA_ARGS=(--add-modules=jdk.incubator.vector --enable-native-access=ALL-UNNAMED
   -da -Xms2g "-Xmx${JVECTOR_BENCH_HEAP:-128g}" "-XX:ActiveProcessorCount=$CORES"
   -Djvector.vectorization_provider=native -Djvector.parallel_writer=true
   "-Djvector.physical_core_count=$CORES" "-Djvector.bench.queryThreads=$((4 * CORES))"
-  -Djvector.bench.verifyConcurrentResults=true -Djvector.bench.throughputMinSeconds=3.0
+  -Djvector.bench.verifyConcurrentResults=true
   "-Djvector.bench.sourceRef=$SOURCE_REF" "-Djvector.bench.runConfig=$RUN_CONFIG"
   -cp "$JAR" io.github.jbellis.jvector.example.BenchYAML "$CONFIG")
 LAUNCH=(numactl "--physcpubind=$CPU_LIST" "${MEMORY_ARGS[@]}" "$JAVA_BIN" "${JAVA_ARGS[@]}")

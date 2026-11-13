@@ -9,6 +9,9 @@ benchmarks:
   latency: [AVG, STD, P999]
   accuracy: [recall]
   count: [visited]
+measurement:
+  throughput:
+    minSeconds: 3.0   # Each timed pass repeats the queries for at least 3 s.
 console:
   benchmarks:
     throughput: [AVG]

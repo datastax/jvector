@@ -223,14 +223,15 @@ integrations select their own admission policy and executors. See
 | --- | --- | --- |
 | `jvector.bench.queryThreads` | `0` | Direct caller count: `0` uses common pool, `1` is serial, larger positive values use a dedicated caller pool. Does not set queued worker count. |
 | `jvector.bench.verifyConcurrentResults` | `false` | `true` / `false`; validate concurrent results against reference results. |
-| `jvector.bench.throughputMinSeconds` | `1.0` | Minimum throughput sample duration in seconds. |
 | `jvector.bench.runConfig` | `jvector-examples/yaml-configs/run-config.yml` | Run YAML path for measured benchmarks, console and CSV fields. |
 | `jvector.bench.sourceRef` | Unset | Source identity for provenance; no numerical effect. |
 
 Run YAML `benchmarks`, `console` and `logging` select computed/reported throughput,
-recall, latency and visit counts. Construction separately reports quantizer
-training, encoding, NVQ training and graph/write. Queued execution can also
-report loaded response times and mean batch size. Unloaded latency and loaded
+recall, latency and visit counts, and `measurement` sets warmup, timed passes and
+the page cache state; see [Run configuration](benchyaml-guide.md#run-configuration).
+Construction separately reports quantizer training, encoding, NVQ training and
+graph/write. The throughput benchmark can also report per-query response times,
+page reads per query and, for queued execution, mean batch size. Unloaded latency and loaded
 response time describe different measurements. Independent build/query JVM
 repetitions are launch choices, not model defaults; preserve individual CSVs.
 

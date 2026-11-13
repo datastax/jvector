@@ -285,10 +285,6 @@ public final class QueuedQueryExecution implements AutoCloseable {
 
         /** Sorting and formatting occur only when the owner requests reporting. */
         public List<Metric> metrics() {
-            long[] times = responseTimes.toLongArray();
-            Arrays.sort(times);
-            double sum = 0;
-            for (long time : times) sum += time;
             long groups = 0, queries = 0;
             for (int i = 1; i < histogram.length; i++) {
                 groups += histogram[i];
@@ -299,16 +295,10 @@ public final class QueuedQueryExecution implements AutoCloseable {
                 System.out.printf("QUERY_BATCHES queries=%d groups=%d mean=%.4f histogram=%s%n",
                         queries, groups, meanBatch, Arrays.toString(histogram));
             }
-            return List.of(
-                    Metric.of("search.execution.response_mean_ms", "Loaded mean (ms)", ".3f", times.length == 0 ? 0 : sum / times.length / 1e6),
-                    Metric.of("search.execution.response_p95_ms", "Loaded p95 (ms)", ".3f", percentile(times, .95)),
-                    Metric.of("search.execution.response_p99_ms", "Loaded p99 (ms)", ".3f", percentile(times, .99)),
-                    Metric.of("search.execution.mean_batch_size", "Mean batch", ".3f", meanBatch));
+            var metrics = new java.util.ArrayList<>(ResponseTimeMetrics.of(responseTimes.toLongArray()));
+            metrics.add(Metric.of("search.execution.mean_batch_size", "Mean batch", ".3f", meanBatch));
+            return metrics;
         }
-    }
-
-    private static double percentile(long[] sorted, double p) {
-        return sorted.length == 0 ? 0 : sorted[Math.min(sorted.length - 1, (int) Math.ceil(sorted.length * p) - 1)] / 1e6;
     }
 
     @Override

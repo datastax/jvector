@@ -68,11 +68,14 @@ will build and benchmark four graphs, one for each combination of M and ef in {(
 
 This file contains configurations for
 - Specifying the measurements you want to report, like QPS, latency and recall
+- Specifying how they are measured, such as warmup, timed passes and the page cache state
 - Specifying where to output these measurements, i.e. to the console, or to a file, or both.
 
 The configurations in this file are "run-level", meaning that they are shared across all the datasets being benchmarked.
+Select another file with `-Djvector.bench.runConfig=<path>`.
 
-See `run-config.yml` for a full list of all options.
+See [Run configuration](benchyaml-guide.md#run-configuration) for every option, `run-config.yml` for the
+default, and `run-config-larger-than-memory.yml` for measuring an index served from storage.
 
 ## Running `bench` from the command line
 

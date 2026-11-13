@@ -46,6 +46,9 @@ public class RunConfig {
     /** Benchmark computation policy (what is computed). */
     public Map<String, List<String>> benchmarks;
 
+    /** How benchmarks run (warmup, timed passes, page cache); null keeps the built-in behavior. */
+    public Measurement measurement;
+
     /** Console selection (subset + extra metrics). */
     public BenchmarkSelection console;
 
@@ -69,6 +72,7 @@ public class RunConfig {
             Yaml yaml = new Yaml();
             RunConfig config = yaml.loadAs(inputStream, RunConfig.class);
             if (config == null) throw new IllegalArgumentException("Empty run configuration: " + configFile);
+            if (config.measurement != null) config.measurement.validate();
             return config;
         } catch (FileNotFoundException failure) {
             throw failure;

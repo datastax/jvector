@@ -19,14 +19,19 @@ The configuration combines the settings that matter at this scale:
   counts. Each worker waits on its own disk reads, so more workers than cores raise throughput until the
   device reaches its read limit; past that, added workers only add latency.
 
-BenchYAML repeats its query set, so after the first pass the pages those queries touch are cached. To
-measure queries that read from disk, clear the operating system page cache before the run and size the
-index well beyond memory.
+To measure cold queries on a cold index, use the
+[larger-than-memory run configuration](../../run-config-larger-than-memory.yml): it evicts the index from
+the page cache before its first search (cold index), warms the JIT with dataset vectors rather than the
+measured queries, and times one pass in which each held-out query runs once (cold queries). Later search
+cases in the same JVM repeat those queries on a warmer index, so for a cold measurement of each worker count,
+set one value in `search.workers` and run each in its own JVM.
 
 Run from the repository root:
 
 ```bash
-java -cp "$BENCH_JAR" io.github.jbellis.jvector.example.BenchYAML jvector-examples/yaml-configs/index-parameters/larger-than-memory/mpnet-10m.yml
+java -Djvector.bench.runConfig=jvector-examples/yaml-configs/run-config-larger-than-memory.yml \
+  -cp "$BENCH_JAR" io.github.jbellis.jvector.example.BenchYAML \
+  jvector-examples/yaml-configs/index-parameters/larger-than-memory/mpnet-10m.yml
 ```
 
 See [Building and serving larger-than-memory indexes](../../../../docs/larger-than-memory-indexes.md) for

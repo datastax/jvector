@@ -139,12 +139,23 @@ ownership; [ASH configuration and defaults](ash-configuration.md) lists the JVM 
 
 ## Measuring
 
-The page cache decides what a measurement shows. A query set that repeats reads pages its earlier passes
-cached, and runs at memory speed. To measure queries that read from disk, clear the page cache before
-each run, warm the JVM with queries that do not favor the measured ones (for example, a sample of base
-vectors), and time the first pass over queries the process has not run. Report latency percentiles from
-that same pass.
+Two independent conditions decide what a measurement shows:
 
-In BenchYAML, the corresponding settings are `useDatasetPrefetching`, `construction.pageAlignment`,
+- **Cold queries:** held-out queries, each presented once to a JVM whose JIT compilation has already settled
+  on other inputs. A query set that repeats finds the pages its earlier passes cached and runs at memory
+  speed, which a service does not see for new queries.
+- **Cold index:** the index starts outside the page cache, so search reads it from storage. Warmup then
+  caches the pages it touches, so it should use inputs that favor no measured query, such as a sample of
+  base vectors.
+
+For an index served from disk, measure cold queries on a cold index: evict the index, warm the JVM with base
+vectors until compilation settles, and time one pass over the held-out queries. Report latency percentiles
+and page reads from that same pass.
+
+In BenchYAML, the index configuration sets `useDatasetPrefetching`, `construction.pageAlignment`,
 `search.workers`, `search.queryExecution: queued`, `search.requestsPerWorker` and the ASH
-`maxBatchSize`; see the [BenchYAML Guide](benchyaml-guide.md).
+`maxBatchSize`, and the
+[larger-than-memory run configuration](../jvector-examples/yaml-configs/run-config-larger-than-memory.yml)
+sets the measurement: `evictIndex`, base-vector warmup until compiled, one timed pass, and the response-time
+and page-read metrics. Only the first search case in a JVM gives cold queries; later cases repeat them on a
+warmer index, so for a cold measurement of each worker count, run each in its own JVM. See [Run configuration](benchyaml-guide.md#run-configuration).

@@ -27,9 +27,36 @@ import java.util.Optional;
 final class ColdFileCache {
     private ColdFileCache() {}
 
+    /** Pages of a file still in the page cache after eviction, out of its total. */
+    static final class Residency {
+        final long residentPages;
+        final long totalPages;
+
+        private Residency(long residentPages, long totalPages) {
+            this.residentPages = residentPages;
+            this.totalPages = totalPages;
+        }
+    }
+
+    /** Evicts {@code file} and fails unless none of its pages remain cached. */
     static void evictAndVerify(Path file) throws IOException {
+        var residency = evict(file);
+        if (residency.residentPages != 0) throw new IOException("Cold-cache check failed: " + residency.residentPages + "/"
+                + residency.totalPages + " input pages remain resident; stop other readers or choose --cache uncontrolled");
+        System.out.printf("Cold cache verified: 0/%,d input pages resident%n", residency.totalPages);
+    }
+
+    /**
+     * Writes back and drops {@code file}'s pages from the page cache, then reports how many remain: pages that a
+     * process has mapped and touched stay resident.
+     */
+    static Residency evict(Path file) throws IOException {
         if (!System.getProperty("os.name").equals("Linux") || !System.getProperty("os.arch").matches("amd64|aarch64"))
-            throw new IOException("Cold file-cache verification requires 64-bit Linux; use --cache uncontrolled explicitly elsewhere");
+            throw new IOException("File cache eviction requires 64-bit Linux");
+        // Dirty pages cannot be dropped, so write back first.
+        try (var channel = java.nio.channels.FileChannel.open(file, java.nio.file.StandardOpenOption.READ)) {
+            channel.force(true);
+        }
         try (var nativeCalls = new NativeCalls()) {
             var open = nativeCalls.function("open", "JAVA_INT", "ADDRESS", "JAVA_INT");
             var close = nativeCalls.function("close", "JAVA_INT", "JAVA_INT");
@@ -39,7 +66,7 @@ final class ColdFileCache {
             var munmap = nativeCalls.function("munmap", "JAVA_INT", "ADDRESS", "JAVA_LONG");
             var getpagesize = nativeCalls.function("getpagesize", "JAVA_INT");
             int fd = (int) open.invokeWithArguments(nativeCalls.string(file.toAbsolutePath().toString()), 0);
-            if (fd < 0) throw new IOException("Cannot open input for cache eviction: " + file);
+            if (fd < 0) throw new IOException("Cannot open file for cache eviction: " + file);
             try {
                 int error = (int) advise.invokeWithArguments(fd, 0L, 0L, 4); // POSIX_FADV_DONTNEED
                 if (error != 0) throw new IOException("posix_fadvise failed: " + error);
@@ -53,10 +80,7 @@ final class ColdFileCache {
                 try {
                     if ((int) mincore.invokeWithArguments(mapping, length, resident) != 0)
                         throw new IOException("mincore residency check failed");
-                    long remaining = nativeCalls.residentPages(resident, pages);
-                    if (remaining != 0) throw new IOException("Cold-cache check failed: " + remaining + "/" + pages
-                            + " input pages remain resident; stop other readers or choose --cache uncontrolled");
-                    System.out.printf("Cold cache verified: 0/%,d input pages resident%n", pages);
+                    return new Residency(nativeCalls.residentPages(resident, pages), pages);
                 } finally {
                     if ((int) munmap.invokeWithArguments(mapping, length) != 0) throw new IOException("Residency mapping cleanup failed");
                 }
@@ -64,7 +88,7 @@ final class ColdFileCache {
                 if ((int) close.invokeWithArguments(fd) != 0) throw new IOException("Cache-check descriptor cleanup failed");
             }
         } catch (IOException e) { throw e; }
-        catch (Throwable e) { throw new IOException("Cold cache requires JDK 23+ with --enable-native-access=ALL-UNNAMED", e); }
+        catch (Throwable e) { throw new IOException("File cache eviction requires JDK 23+ with --enable-native-access=ALL-UNNAMED", e); }
     }
 
     // Resolve FFM only for cold-cache setup, so ordinary examples retain their Java 11 target.

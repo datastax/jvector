@@ -36,7 +36,8 @@ search:
   topKOverquery:
     10: [1.0, 2.0, 4.0, 10.0]
   useSearchPruning: [No]
-  workers: [8, 16, 32, 64]   # Queries in flight: disk-bound search needs more than one per core.
+  workers: [8, 16, 32, 64]   # Queries in flight; disk-bound search needs more than one per core.
+                             # Only the first value gives cold queries; run one value per JVM for each.
   queryExecution: queued
   requestsPerWorker: 1       # No queue behind busy workers, so latency is the search itself.
   compression:

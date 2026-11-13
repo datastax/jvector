@@ -107,6 +107,7 @@ public class BenchYAML {
         try {
             RunConfig runCfg = RunConfig.loadDefault();
             artifacts = RunArtifacts.open(runCfg, allConfigs);
+            Grid.setMeasurement(runCfg.measurement);
         } catch (java.io.FileNotFoundException e) {
             if (System.getProperty("jvector.bench.runConfig") != null) throw e;
             // Legacy yamlSchemaVersion "0" behavior: no run-config.yml
