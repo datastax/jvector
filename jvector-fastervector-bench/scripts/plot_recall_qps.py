@@ -30,27 +30,32 @@ def main():
     g = pd.read_csv(a.graph_csv)
     ivf = pd.read_csv(a.ivf_csv)
 
-    # (label, recall, qps, knob values, knob name, color key, dashed): one color per graph build or
-    # IVF nlist, so the same IVF build through jvector (solid) and fvec-bench (dashed) shares a hue
+    # (label, recall, qps, knob values, knob name, color key, line style): one color per graph build
+    # or IVF nlist, so the same IVF build through jvector (solid) and fvec-bench (dashed) shares a hue
     curves = []
     for (m, ef, comp), d in g.groupby(["M", "efConstruction", "build_compressor"]):
         d = d.sort_values("overquery")
         curves.append((f"graph M={m} ef={ef}, fused PQ + NVQ rerank",
                        d[a.recall], d["search.throughput.avg_qps"], d["overquery"], "oq",
-                       ("graph", m, ef, comp), False))
+                       ("graph", m, ef, comp), "-"))
     for (nlist, sf), d in ivf.groupby(["nlist", "storageFactor"]):
         d = d.sort_values("nprobe")
         curves.append((f"IVF-ASH nlist={nlist} sf={sf}",
                        d[a.recall], d[a.ivf_qps_column], d["nprobe"], "np",
-                       ("ivf", nlist), False))
+                       ("ivf", nlist), "-"))
     for path in a.fvec:
         f = pd.read_csv(path)
         f = f[f["mode"] == "throughput"]
-        for (nc, qd, bits, storage), d in f.groupby(["ncentroids", "quantized_dim", "ashbits", "storage"]):
+        f["ssd_prod_qd"] = f["ssd_prod_qd"].fillna(-1).astype(int)
+        for (nc, qd, bits, storage, pq), d in f.groupby(["ncentroids", "quantized_dim", "ashbits", "storage",
+                                                          "ssd_prod_qd"]):
             d = d.sort_values("nprobe")
-            curves.append((f"fvec-bench nlist={nc} q{qd} b{bits} {storage.split('-')[0]}",
+            medium = storage + (f" prod_qd {pq}" if pq >= 0 else "")
+            # dashed, or dotted for the classic producer (prod_qd 0), which the C API doesn't use
+            style = ":" if pq == 0 else "--"
+            curves.append((f"fvec-bench nlist={nc} q{qd} b{bits} {medium}",
                            d["recall"], d["qps_mean"], d["nprobe"], "np",
-                           ("ivf", nc), True))
+                           ("ivf", nc), style))
 
     plt.rcParams.update({"font.size": 10, "axes.edgecolor": MUTED, "axes.labelcolor": INK,
                          "xtick.color": MUTED, "ytick.color": MUTED})
@@ -59,9 +64,9 @@ def main():
     fig.patch.set_facecolor("#fcfcfb")
 
     keys = list(dict.fromkeys(c[5] for c in curves))
-    for label, r, q, knob, kname, key, dashed in curves:
+    for label, r, q, knob, kname, key, style in curves:
         i = keys.index(key)
-        ax.plot(r, q, color=SERIES[i % len(SERIES)], lw=2, ls="--" if dashed else "-",
+        ax.plot(r, q, color=SERIES[i % len(SERIES)], lw=2, ls=style,
                 marker=MARKERS[i % len(MARKERS)], ms=6,
                 markeredgecolor="#fcfcfb", markeredgewidth=1.5, label=label, zorder=3)
         # label the knob at the ends and every other point, not every point

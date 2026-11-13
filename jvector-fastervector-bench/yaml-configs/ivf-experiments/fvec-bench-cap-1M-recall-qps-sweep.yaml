@@ -8,7 +8,7 @@
 #
 #   storageFactor 1.0 -> quant_dim = dim * 1.0 / ASH_BITS = 768, ash_bits 2, ITQ
 #   one ssdPaths entry -> one device file; stripe 64 KiB, 4-byte ids, queue depth 64
-#   search: prefetch on, one io thread per search thread
+#   search: prefetch on, one io thread per search thread, prefetch window 512, prod_qd 8
 #
 # Run from a fastervector checkout, with the store on the disk the jvector run used:
 #
@@ -46,6 +46,10 @@ config:
         io_queue_depth: 64
         prefetch: [ 1 ]
         io_threads: [ threads ]
+        prefetch_window: [ 512 ]
+        # The C API's deep-queue producer is 8; fvec-bench's default is 0, the classic producer,
+        # which the first run used by mistake. 0 is kept as a second curve to show the difference.
+        prod_qd: [ 8, 0 ]
 
     criterion:
       sample_size: 10
