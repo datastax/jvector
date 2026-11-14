@@ -285,10 +285,12 @@ public class TestGridASHIntegration {
         var data = schema3Data();
         var config = schema3Config("onDisk", "parallel", false, "None", "- type: None");
         boolean linux = System.getProperty("os.name").equals("Linux");
+        // Eviction calls the OS through the foreign function API, which needs JDK 23+.
+        boolean evict = linux && Runtime.version().feature() >= 23;
         var run = csvRunConfig();
         run.benchmarks = Map.of("throughput", List.of("AVG"), "accuracy", List.of("recall"));
         run.measurement = new Measurement();
-        run.measurement.evictIndex = linux;
+        run.measurement.evictIndex = evict;
         run.measurement.throughput = new Measurement.Throughput();
         run.measurement.throughput.warmup = "base";
         run.measurement.throughput.untilCompiled = true;
@@ -315,7 +317,7 @@ public class TestGridASHIntegration {
         // Column headers wrap, so their units print on the next line.
         assertTrue(output, output.contains("Loaded p50"));
         assertTrue(output, output.contains("Loaded p99.9"));
-        assertEquals(output, linux, output.contains("index evicted from the page cache"));
+        assertEquals(output, evict, output.contains("index evicted from the page cache"));
         assertEquals(output, linux, output.contains("Page reads"));
     }
 
