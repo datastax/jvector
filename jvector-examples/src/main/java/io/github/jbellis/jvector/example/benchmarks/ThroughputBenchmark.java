@@ -26,9 +26,18 @@ import io.github.jbellis.jvector.example.benchmarks.diagnostics.BenchmarkDiagnos
 import io.github.jbellis.jvector.example.benchmarks.diagnostics.DiagnosticLevel;
 
 import java.io.IOException;
+import java.lang.management.ManagementFactory;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
+import java.util.Objects;
+import java.util.SplittableRandom;
+import java.util.concurrent.ConcurrentLinkedQueue;
+import java.util.function.IntFunction;
+import java.util.function.Consumer;
+import java.util.function.Supplier;
 import java.util.concurrent.ThreadLocalRandom;
 import java.util.concurrent.atomic.LongAdder;
 import java.util.stream.IntStream;
@@ -52,6 +61,14 @@ public class ThroughputBenchmark extends AbstractQueryBenchmark {
     private String formatMedianQps;
     private String formatMaxQps;
     private DiagnosticLevel diagnosticLevel;
+    private WarmupQueries warmupQueries = WarmupQueries.RANDOM;
+    private boolean warmupUntilCompiled;
+    private double minSeconds = 1.0;
+
+    /** A warmup pass that adds at most this much JIT compilation counts as compiled. */
+    private static final long COMPILED_JIT_MS = 50;
+    /** Warmup passes run at most this many times while waiting for compilation to settle. */
+    private static final int MAX_WARMUP_PASSES = 10;
 
     VectorTypeSupport vts = VectorizationProvider.getInstance().getVectorTypeSupport();
 
@@ -115,6 +132,26 @@ public class ThroughputBenchmark extends AbstractQueryBenchmark {
     }
 
     /**
+     * Configures warmup and timed passes.
+     *
+     * @param warmupQueries  the queries to warm up with; base vectors are sampled with a fixed seed per pass
+     * @param untilCompiled  keep warming past the configured passes, up to 10, until a pass adds at most 50 ms of
+     *                       JIT compilation
+     * @param minSeconds     minimum seconds per timed pass; a pass repeats the query set until it has run this
+     *                       long (default 1.0; 0 runs the query set once)
+     */
+    public ThroughputBenchmark withMeasurement(WarmupQueries warmupQueries, boolean untilCompiled, double minSeconds) {
+        if (!Double.isFinite(minSeconds) || minSeconds < 0)
+            throw new IllegalArgumentException("Minimum seconds per pass must be finite and nonnegative: " + minSeconds);
+        if (warmupQueries == WarmupQueries.NONE && untilCompiled)
+            throw new IllegalArgumentException("Warming until compiled requires warmup queries");
+        this.warmupQueries = Objects.requireNonNull(warmupQueries, "warmupQueries");
+        this.warmupUntilCompiled = untilCompiled;
+        this.minSeconds = minSeconds;
+        return this;
+    }
+
+    /**
      * Configure the diagnostic level for this benchmark
      */
     public ThroughputBenchmark withDiagnostics(DiagnosticLevel level) {
@@ -135,33 +172,126 @@ public class ThroughputBenchmark extends AbstractQueryBenchmark {
             boolean usePruning,
             int queryRuns) {
 
+        return runWithReporting(cs, topK, rerankK, usePruning, queryRuns, null);
+    }
+
+    @Override
+    public List<Metric> runBenchmark(
+            ConfiguredSystem cs, int topK, int rerankK, boolean usePruning,
+            int queryRuns, Consumer<Supplier<List<Metric>>> deferredReports) {
+        return runWithReporting(cs, topK, rerankK, usePruning, queryRuns,
+                Objects.requireNonNull(deferredReports, "deferredReports"));
+    }
+
+    private List<Metric> runWithReporting(
+            ConfiguredSystem cs, int topK, int rerankK, boolean usePruning,
+            int queryRuns, Consumer<Supplier<List<Metric>>> deferredReports) {
+        if (cs.usesQueuedExecution()) return runConfiguredBenchmark(cs, topK, rerankK, usePruning, queryRuns, deferredReports);
+        int threads = cs.directCallerThreads();
+        if (threads > 1) {
+            var pool = new java.util.concurrent.ForkJoinPool(threads);
+            try {
+                return pool.submit(() -> runConfiguredBenchmark(cs, topK, rerankK, usePruning, queryRuns, deferredReports)).join();
+            } finally {
+                pool.shutdown();
+            }
+        }
+        return runConfiguredBenchmark(cs, topK, rerankK, usePruning, queryRuns, deferredReports);
+    }
+
+    /**
+     * {@code count} base vectors drawn uniformly from the whole dataset, with a fixed seed for each warmup pass, so
+     * every configuration warms the same index pages.
+     */
+    private static VectorFloat<?>[] baseSample(ConfiguredSystem cs, int count, int pass) {
+        var base = cs.getDataSet().getBaseVectors();
+        var random = new SplittableRandom(0x5EED_0000L + pass);
+        var sample = new VectorFloat<?>[count];
+        for (int i = 0; i < count; i++) sample[i] = base.get(random.nextInt(base.size())).copy();
+        return sample;
+    }
+
+    /** Major page faults of this process so far, each a page read from storage; -1 where Linux /proc is absent. */
+    private static long majorFaults() {
+        try {
+            String stat = Files.readString(Path.of("/proc/self/stat"));
+            // Fields after the command name, which may contain spaces: majflt is the tenth.
+            return Long.parseLong(stat.substring(stat.lastIndexOf(')') + 2).split(" ")[9]);
+        } catch (IOException | RuntimeException unavailable) {
+            return -1;
+        }
+    }
+
+    private VectorFloat<?> randomQuery(int dim) {
+        VectorFloat<?> query = vts.createFloatVector(dim);
+        for (int j = 0; j < dim; j++) query.set(j, ThreadLocalRandom.current().nextFloat());
+        VectorUtil.l2normalize(query);
+        return query;
+    }
+
+    private static IntStream queryStream(ConfiguredSystem cs, int count) {
+        IntStream stream = IntStream.range(0, count);
+        return cs.directCallerThreads() == 1 ? stream : stream.parallel();
+    }
+
+    private List<Metric> runConfiguredBenchmark(ConfiguredSystem cs, int topK, int rerankK,
+                                                boolean usePruning, int queryRuns,
+                                                Consumer<Supplier<List<Metric>>> deferredReports) {
+
         if (!(computeAvgQps || computeMedianQps || computeMaxQps)) {
             throw new RuntimeException("At least one metric must be displayed");
         }
-        try (BenchmarkDiagnostics diagnostics = new BenchmarkDiagnostics(diagnosticLevel)) {
+        try (BenchmarkDiagnostics diagnostics = new BenchmarkDiagnostics(diagnosticLevel);
+             QueuedQueryExecution queued = cs.usesQueuedExecution()
+                     ? new QueuedQueryExecution(cs, topK, rerankK, usePruning) : null) {
+        if (Boolean.getBoolean("jvector.bench.verifyConcurrentResults")) {
+            int count = cs.getDataSet().getQueryVectors().size();
+            if (queued != null) {
+                queued.verifyConcurrentResults(count, cs.getDataSet().getQueryVectors()::get);
+            } else {
+                // Direct callers may naturally combine projections too. Keep
+                // the prepared provider fixed while checking per-thread search
+                // reuse; comparing GEMV with GEMM would test rounding instead.
+                queryStream(cs, count).forEach(i ->
+                        QueryExecutor.verifyConcurrentQuery(cs, topK, rerankK, usePruning, i));
+            }
+            if (diagnosticLevel != DiagnosticLevel.NONE) {
+                diagnostics.console(String.format(java.util.Locale.ROOT,
+                        "[Validation] Passed concurrent-result checks for %,d queries (topK=%d, rerankK=%d)",
+                        count, topK, rerankK));
+            }
+        }
+
 
             int totalQueries = cs.getDataSet().getQueryVectors().size();
             int dim = cs.getDataSet().getDimension();
 
-            // Warmup Phase with diagnostics
-            double[] warmupQps = new double[numWarmupRuns];
-            for (int warmupRun = 0; warmupRun < numWarmupRuns; warmupRun++) {
+            // Warmup, optionally continuing until JIT compilation settles.
+            var compiler = ManagementFactory.getCompilationMXBean();
+            boolean jitTimed = compiler != null && compiler.isCompilationTimeMonitoringSupported();
+            if (warmupUntilCompiled && !jitTimed)
+                throw new IllegalStateException("untilCompiled requires JIT compilation time, which this JVM does not report");
+            int warmupPasses = warmupQueries == WarmupQueries.NONE ? 0 : numWarmupRuns;
+            int maxWarmupPasses = warmupUntilCompiled ? Math.max(warmupPasses, MAX_WARMUP_PASSES) : warmupPasses;
+            var warmupQpsList = new ArrayList<Double>();
+            long lastPassJitMs = Long.MAX_VALUE;
+            for (int warmupRun = 0; warmupRun < maxWarmupPasses; warmupRun++) {
+                if (warmupRun >= warmupPasses && lastPassJitMs <= COMPILED_JIT_MS) break;
                 String warmupPhase = "Warmup-" + warmupRun;
+                VectorFloat<?>[] baseQueries = warmupQueries == WarmupQueries.BASE ? baseSample(cs, totalQueries, warmupRun) : null;
+                IntFunction<VectorFloat<?>> warmupQuery =
+                        baseQueries != null ? k -> baseQueries[k] : k -> randomQuery(dim);
+                long jitBefore = jitTimed ? compiler.getTotalCompilationTime() : 0;
+                long passStart = System.nanoTime();
 
-                warmupQps[warmupRun] = diagnostics.monitorPhaseWithQueryTiming(warmupPhase, (recorder) -> {
-                    IntStream.range(0, totalQueries)
-                            .parallel()
+                diagnostics.monitorPhaseWithQueryTiming(warmupPhase, (recorder) -> {
+                    if (queued != null) {
+                        SINK += queued.runPass(totalQueries, warmupQuery, recorder, false).visited();
+                    } else queryStream(cs, totalQueries)
                             .forEach(k -> {
                                 long queryStart = System.nanoTime();
-
-                                // Generate a random vector
-                                VectorFloat<?> randQ = vts.createFloatVector(dim);
-                                for (int j = 0; j < dim; j++) {
-                                    randQ.set(j, ThreadLocalRandom.current().nextFloat());
-                                }
-                                VectorUtil.l2normalize(randQ);
                                 SearchResult sr = QueryExecutor.executeQuery(
-                                        cs, topK, rerankK, usePruning, randQ);
+                                        cs, topK, rerankK, usePruning, warmupQuery.apply(k));
                                 SINK += sr.getVisitedCount();
 
                                 long queryEnd = System.nanoTime();
@@ -171,11 +301,19 @@ public class ThroughputBenchmark extends AbstractQueryBenchmark {
                     return totalQueries / 1.0; // Return QPS placeholder
                 });
 
-                diagnostics.console("Warmup Run " + warmupRun + ": " + warmupQps[warmupRun] + " QPS\n");
+                lastPassJitMs = jitTimed ? compiler.getTotalCompilationTime() - jitBefore : 0;
+                double warmupPassQps = totalQueries / ((System.nanoTime() - passStart) / 1e9);
+                warmupQpsList.add(warmupPassQps);
+                diagnostics.console("Warmup Run " + warmupRun + ": " + warmupPassQps + " QPS\n");
             }
+            if (warmupUntilCompiled && lastPassJitMs > COMPILED_JIT_MS) {
+                System.out.printf("WARNING: JIT compilation had not settled after %d warmup passes (%d ms in the last)%n",
+                        maxWarmupPasses, lastPassJitMs);
+            }
+            double[] warmupQps = warmupQpsList.stream().mapToDouble(Double::doubleValue).toArray();
 
             // Analyze warmup effectiveness
-            if (numWarmupRuns > 1) {
+            if (warmupQps.length > 1) {
                 double warmupVariance = StatUtils.variance(warmupQps);
                 double warmupMean = StatUtils.mean(warmupQps);
                 double warmupCV = Math.sqrt(warmupVariance) / warmupMean * 100;
@@ -188,7 +326,13 @@ public class ThroughputBenchmark extends AbstractQueryBenchmark {
                 }
             }
 
+            long minSampleNanos = (long) (minSeconds * 1e9);
             double[] qpsSamples = new double[numTestRuns];
+            if (queued != null) queued.beginMeasurements();
+            // Direct searches record their own times; queued execution records response times itself.
+            var directTimes = queued == null ? new ConcurrentLinkedQueue<Long>() : null;
+            var timedQueries = new LongAdder();
+            long faultsBefore = majorFaults();
             for (int testRun = 0; testRun < numTestRuns; testRun++) {
                 String testPhase = "Test-" + testRun;
 
@@ -205,30 +349,44 @@ public class ThroughputBenchmark extends AbstractQueryBenchmark {
                 });
 
                 // Test Phase with detailed monitoring
-                qpsSamples[testRun] = diagnostics.monitorPhaseWithQueryTiming(testPhase, (recorder) -> {
+                qpsSamples[testRun] = diagnostics.monitorPhaseWithQueryTiming(testPhase, (passRecorder) -> {
+                    BenchmarkDiagnostics.QueryTimeRecorder recorder = directTimes == null ? passRecorder
+                            : nanos -> { passRecorder.recordTime(nanos); directTimes.add(nanos); };
                     LongAdder visitedAdder = new LongAdder();
                     long startTime = System.nanoTime();
 
-                    IntStream.range(0, totalQueries)
-                            .parallel()
-                            .forEach(i -> {
-                                long queryStart = System.nanoTime();
+                    long completedQueries = 0;
+                    do {
+                        if (queued != null) {
+                            visitedAdder.add(queued.runPass(totalQueries,
+                                    cs.getDataSet().getQueryVectors()::get, recorder, false).visited());
+                        } else queryStream(cs, totalQueries)
+                                .forEach(i -> {
+                                    long queryStart = System.nanoTime();
 
-                                SearchResult sr = QueryExecutor.executeQuery(
-                                        cs, topK, rerankK, usePruning, i);
-                                // "Use" the result to prevent optimization
-                                visitedAdder.add(sr.getVisitedCount());
+                                    SearchResult sr = QueryExecutor.executeQuery(
+                                            cs, topK, rerankK, usePruning, i);
+                                    // "Use" the result to prevent optimization
+                                    visitedAdder.add(sr.getVisitedCount());
 
-                                long queryEnd = System.nanoTime();
-                                recorder.recordTime(queryEnd - queryStart);
-                            });
+                                    long queryEnd = System.nanoTime();
+                                    recorder.recordTime(queryEnd - queryStart);
+                                });
 
+                        completedQueries += totalQueries;
+                    } while (System.nanoTime() - startTime < minSampleNanos);
+                    SINK += visitedAdder.sum();
+                    timedQueries.add(completedQueries);
                     double elapsedSec = (System.nanoTime() - startTime) / 1e9;
-                    return totalQueries / elapsedSec;
+                    if (diagnosticLevel != DiagnosticLevel.NONE) {
+                        diagnostics.console(String.format(java.util.Locale.ROOT,
+                                "[%s] Completed %,d queries in %.3f s (%,.1f QPS)",
+                                testPhase, completedQueries, elapsedSec, completedQueries / elapsedSec));
+                    }
+                    return completedQueries / elapsedSec;
                 });
-
-                diagnostics.console("Test Run " + testRun + ": " + qpsSamples[testRun] + " QPS\n");
             }
+            long pageReads = faultsBefore < 0 ? -1 : majorFaults() - faultsBefore;
 
             // Performance variance analysis
             Arrays.sort(qpsSamples);
@@ -261,15 +419,18 @@ public class ThroughputBenchmark extends AbstractQueryBenchmark {
                         formatAvgQps,
                         avgQps));
 
-                list.add(Metric.of("search.throughput.stddev_qps",
-                        "± Std Dev",
-                        formatAvgQps,
-                        stdDevQps));
+                // Spread across passes is meaningful only with more than one pass.
+                if (numTestRuns > 1) {
+                    list.add(Metric.of("search.throughput.stddev_qps",
+                            "± Std Dev",
+                            formatAvgQps,
+                            stdDevQps));
 
-                list.add(Metric.of("search.throughput.cv_pct",
-                        "CV %",
-                        ".1f",
-                        coefficientOfVariation));
+                    list.add(Metric.of("search.throughput.cv_pct",
+                            "CV %",
+                            ".1f",
+                            coefficientOfVariation));
+                }
             }
             if (computeMedianQps) {
                 list.add(Metric.of("search.throughput.median_qps",
@@ -288,6 +449,21 @@ public class ThroughputBenchmark extends AbstractQueryBenchmark {
                         formatMaxQps,
                         minQps));
             }
+            // Execution metrics describe the timed passes; sorting waits until they are reported.
+            var samples = queued != null ? queued.finishMeasurements() : null;
+            long[] times = directTimes == null ? null : directTimes.stream().mapToLong(Long::longValue).toArray();
+            long queriesTimed = timedQueries.sum();
+            double pageReadsPerQuery = pageReads < 0 || queriesTimed == 0 ? Double.NaN : (double) pageReads / queriesTimed;
+            Supplier<List<Metric>> execution = () -> {
+                var metrics = new ArrayList<>(samples != null ? samples.metrics() : ResponseTimeMetrics.of(times));
+                if (!Double.isNaN(pageReadsPerQuery)) {
+                    metrics.add(Metric.of("search.execution.page_reads_per_query", "Page reads (per query)", ".1f",
+                            pageReadsPerQuery));
+                }
+                return metrics;
+            };
+            if (deferredReports == null) list.addAll(execution.get());
+            else deferredReports.accept(execution);
             return list;
         }
         catch (IOException e) {

@@ -18,6 +18,7 @@
 #include <float.h>
 #include <math.h>
 #include <cstring>
+#include <algorithm>
 #include "jvector_simd.h"
 #include "hwy/highway.h"
 #include "assert_hwy_targets.h"
@@ -380,6 +381,10 @@ HWY_INLINE float L2SquareDistance(const float *a,
 }
 
 namespace JV_ISA {
+
+#include "ash_neighborhood-inl.h"
+#include "ash_projection-inl.h"
+#include "ash_symmetric-inl.h"
 
 HWY_FLATTEN float cosine_f32(
         const float *a, size_t aoffset, const float *b, size_t boffset, size_t length)

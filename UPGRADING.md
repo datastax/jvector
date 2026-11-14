@@ -1,3 +1,41 @@
+# Upgrading from 4.0.x to 4.1.x
+
+## On-disk format version 7
+- Version 7 of the on-disk graph format adds two features: fused ASH (`FeatureId.FUSED_ASH`), ASH codes
+  stored in the graph alongside each node's neighbors, and page alignment (`FeatureId.PAGE_ALIGNMENT`),
+  written only when a graph writer builder is given `withPageAlignment(pageBytes)`. It also stores the largest vector length that
+  adaptive dot-product stopping needs: one float at the end of each serialized PQ model, and of the
+  inline-vector and separated-vector feature headers. Otherwise a version 7 file has the version 6 layout.
+  ASH models (`AsymmetricHashing`, `ASHVectors`) also require version 7 or later when they are written or
+  loaded.
+- Dot-product searches over indexes and PQ models written before version 7 stop by the standard rule,
+  since their largest vector length is unknown; rewriting them at version 7 does not change that for codes
+  encoded before, so a PQ model loaded from an older format keeps it unknown.
+- JVector 4.0.x reads formats up to 6 and rejects version 7 files. `OnDiskGraphIndex.CURRENT_VERSION`,
+  the default for `OnDiskGraphIndexWriter.Builder` and for `CompressedVectors.write(out)`, is now 7.
+- To keep a rollback to 4.0.x possible, pass the version explicitly until every reader runs 4.1:
+  `withVersion(6)` on graph writer builders and `write(out, 6)` for compressors and compressed vectors.
+  Versions 6 and below still write inline vectors, NVQ, separated vectors and fused PQ exactly as before,
+  and 4.0.x reads them. A version 6 writer rejects fused ASH and page alignment, and ASH models reject
+  version 6.
+- `OnDiskGraphIndexCompactor` always writes `CURRENT_VERSION`; it has no option to write an older version.
+  It does not compact page-aligned indexes.
+
+## New features
+- Asymmetric Hashing (ASH) quantization, stored separately or fused into the graph (format version 7), with
+  native FP16, FP32 and INT8 query projection and bounded queued query execution. See
+  [ASH configuration and defaults](docs/ash-configuration.md) and
+  [Integrating ASH queries into a database](docs/ash-query-integration.md).
+- `AsymmetricHashing.setQueryOptions(ASHQueryProjection, maxBatchSize)` sets a model's query projection
+  precision and batch size in code; the `jvector.ash.queryProjection` and `jvector.ash.queryBatchSize`
+  properties remain the defaults.
+- Page-aligned base-layer records for on-disk indexes: `withPageAlignment(pageBytes)` on graph writer
+  builders places records so none crosses a page boundary, so serving a larger-than-memory index reads
+  fewer pages per node. See
+  [Building and serving larger-than-memory indexes](docs/larger-than-memory-indexes.md).
+- JVector sets the native BLAS thread count for ASH training: one thread by default, or the size of the
+  executor passed to `AsymmetricHashing.initialize(..., ForkJoinPool executor)`.
+
 # Upgrading from 3.0.x to 4.0.x
 
 ## New features

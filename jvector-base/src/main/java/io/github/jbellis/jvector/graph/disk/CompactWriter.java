@@ -51,6 +51,7 @@ final class CompactWriter implements AutoCloseable {
     private final RandomAccessWriter writer;
     private final int recordSize;
     private final long startOffset;
+    private final InlineVectors inlineVectorFeature;
     private final int headerSize;
     private final Header header;
     private final FusedFeature fusedFeature;
@@ -111,7 +112,7 @@ final class CompactWriter implements AutoCloseable {
         this.entryNodePqCode = null;
 
         Map<FeatureId, Feature> featureMap = new LinkedHashMap<>();
-        InlineVectors inlineVectorFeature = new InlineVectors(dimension);
+        this.inlineVectorFeature = new InlineVectors(dimension);
         featureMap.put(FeatureId.INLINE_VECTORS, inlineVectorFeature);
         if (fusedFeature != null) {
             featureMap.put(fusedFeature.id(), fusedFeature);
@@ -310,6 +311,8 @@ final class CompactWriter implements AutoCloseable {
         for(int i = 0; i < vec.length(); ++i) {
             bwriter.writeFloat(vec.get(i));
         }
+        // The footer's copy of the header, which loading reads, then stores the largest length written.
+        inlineVectorFeature.recordWritten(vec);
 
         // write fused PQ
         // since we build a graph in a streaming way,

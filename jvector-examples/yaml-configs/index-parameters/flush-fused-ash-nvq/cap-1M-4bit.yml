@@ -1,0 +1,35 @@
+# CAP-1M at 16X nominal compression. Build the graph with source FP32 vectors,
+# then write fused 4-bit ASH traversal codes and NVQ reranking vectors to disk.
+yamlSchemaVersion: 3
+onDiskIndexVersion: 7
+dataset: cap-1M
+
+construction:
+  type: onDisk
+  writerMode: sequential
+  outDegree: [32]
+  efConstruction: [100]
+  neighborOverflow: [1.2f]
+  addHierarchy: [Yes]
+  refineFinalGraph: [Yes]
+  fusedGraph: [Yes]
+  compression:
+    - type: None
+  reranking:
+    type: NVQ
+  useSavedIndexIfExists: No
+
+search:
+  topKOverquery:
+    10: [1.0, 2.0]
+  useSearchPruning: [No]
+  queryExecution: queued
+  compression:
+    - type: ASH
+      parameters:
+        encodedBits: 3112
+        optimizer: ITQ
+        landmarkCount: 1
+        bitsPerDimension: 4
+        queryProjection: fp16
+        maxBatchSize: 8

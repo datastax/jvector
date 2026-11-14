@@ -23,6 +23,35 @@ import io.github.jbellis.jvector.vector.types.VectorFloat;
 
 public class QueryExecutor {
     /**
+     * Outside measurement, checks repeated searches on each caller's owned
+     * searcher using one prepared provider. Concurrent callers may form native
+     * projection batches; their floating-point reduction can differ slightly
+     * from a separate singleton preparation. Kernel-oracle and recall checks
+     * validate that numerical work independently.
+     */
+    public static void verifyConcurrentQuery(ConfiguredSystem cs, int topK, int rerankK,
+            boolean usePruning, int ordinal) {
+        var searcher = cs.getSearcher();
+        searcher.usePruning(usePruning);
+        var query = cs.getDataSet().getQueryVectors().get(ordinal);
+        var provider = cs.scoreProviderFor(query, searcher.getView());
+        var expected = searcher.search(provider, topK, rerankK, 0.0f, 0.0f, Bits.ALL);
+        var actual = searcher.search(provider, topK, rerankK, 0.0f, 0.0f, Bits.ALL);
+        if (!java.util.Arrays.equals(expected.getNodes(), actual.getNodes())
+                || expected.getVisitedCount() != actual.getVisitedCount())
+            throw new IllegalStateException("Concurrent prepared query mismatch at " + ordinal);
+    }
+
+    /** Executes only traversal/reranking after a caller has prepared the query. */
+    public static SearchResult executePreparedQuery(ConfiguredSystem cs, int topK, int rerankK,
+            boolean usePruning, io.github.jbellis.jvector.graph.similarity.PreparedQuery prepared) {
+        var searcher = cs.getSearcher();
+        searcher.usePruning(usePruning);
+        var view = (io.github.jbellis.jvector.graph.ImmutableGraphIndex.ScoringView) searcher.getView();
+        return searcher.search(view.scoreProviderFor(prepared, true), topK, rerankK, 0.0f, 0.0f, Bits.ALL);
+    }
+
+    /**
      * Executes the query at index i using the given parameters.
      *
      * @param cs         Configured system that contains the query vectors.

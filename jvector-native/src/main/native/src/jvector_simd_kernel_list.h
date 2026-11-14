@@ -31,6 +31,25 @@
 #ifndef JVECTOR_SIMD_KERNEL_LIST_H
 #define JVECTOR_SIMD_KERNEL_LIST_H
 
+// ASH C=1 ABI contract:
+//   codes: ceil(capacity/B) complete blocks, each ceil(groups/2)*B + 5*B bytes.
+//   lut:   groups*16 read-only floats, out: capacity writable floats, no aliasing.
+//   groups/capacity are positive, B is 8/16/32. Inputs use FusedASHLayout bytes.
+//   Return 0 on success, 1 for a nonzero landmark, 2 for an invalid shape/pointer.
+//   Output may be partially written on error. No allocation, pointer retention,
+//   callbacks, or blocking are permitted: ordinary graph calls use critical FFM.
+
+// ASH preparation/symmetric ABI contracts (all pointers are borrowed synchronously):
+//   project: positive rows/cols, row-major matrix[rows*cols], query[cols], out[rows].
+//   batch: nonnegative count; input[count*cols] and out[count*rows] are row-major.
+//          Matrix is tiled in output groups of 32, each [cols][tileRows]; the
+//          last tile is not padded. FP32, no batch-size cap or internal threads.
+//   pair: nonnegative dimensions, bits in {1,2,4}; binary uint64 words for bits=1,
+//         canonical little-endian packed bytes otherwise. Padding bits are ignored.
+//   LUT: nonnegative groups/count, positive stride, 0 <= lane <= lane+count <= stride;
+//        codes[ceil(groups/2)*stride], lut[groups*32] signed shorts, out[count].
+//   Writable outputs must not alias read-only inputs. Callers validate buffer sizes.
+
 // clang-format off
 #define JVECTOR_SIMD_KERNEL_LIST \
     /* Vector similarity */ \
@@ -60,6 +79,20 @@
     KERNEL_ENTRY(void, calculate_partial_sums_dot_f32, (const float *codebook, int codebookIndex, size_t size, int clusterCount, const float *query, int queryOffset, float *partialSums), (codebook, codebookIndex, size, clusterCount, query, queryOffset, partialSums)) \
     KERNEL_ENTRY(void, calculate_partial_sums_euclidean_f32, (const float *codebook, int codebookIndex, size_t size, int clusterCount, const float *query, int queryOffset, float *partialSums), (codebook, codebookIndex, size, clusterCount, query, queryOffset, partialSums)) \
     KERNEL_ENTRY(void, calculate_partial_sums_self_magnitude_f32, (const float *codebook, int codebookIndex, size_t size, int clusterCount, float *partialSums), (codebook, codebookIndex, size, clusterCount, partialSums)) \
+    /* ASH preparation and exact packed construction scoring; synchronous leaf calls. */ \
+    KERNEL_ENTRY(void, ash_project_f32, (const float *matrix, const float *query, int rows, int cols, float *out), (matrix, query, rows, cols, out)) \
+    KERNEL_ENTRY(void, ash_project_batch_f32, (const float *matrix, const float *inputs, int rows, int cols, int count, float *out), (matrix, inputs, rows, cols, count, out)) \
+    KERNEL_ENTRY(float, ash_symmetric_dot, (const void *a, const void *b, int dimensions, int bits), (a, b, dimensions, bits)) \
+    KERNEL_ENTRY(void, ash_symmetric_dot_rows, (const void *query, const void *rows, int stride, int count, int dimensions, int bits, float *out), (query, rows, stride, count, dimensions, bits, out)) \
+    KERNEL_ENTRY(void, ash_symmetric_lut_i16, (const unsigned char *codes, const int16_t *lut, int groups, int stride, int lane, int count, float *out), (codes, lut, groups, stride, lane, count, out)) \
+    /* Canonical ASH dot using the prepared query LUT. */ \
+    KERNEL_ENTRY(float, ash_canonical_lut_dot_f32, (const unsigned char *code, const float *lut, int groups), (code, lut, groups)) \
+    /* Contiguous canonical 4-bit dot; avoids the 16x larger query LUT. */ \
+    KERNEL_ENTRY(float, ash_projection_dot_4bit_f32, (const float *query, const unsigned char *code, int dimensions), (query, code, dimensions)) \
+    /* Whole-neighborhood C=1 ASH, one downcall including headers and similarity. */ \
+    KERNEL_ENTRY(int, ash_score_neighborhood_c1_f32, (const unsigned char *codes, const float *lut, float landmarkDot, int groups, int blockSize, int capacity, float *out), (codes, lut, landmarkDot, groups, blockSize, capacity, out)) \
+    /* Whole-neighborhood C=1 ASH for offset-binary codes (3, 5-9 bits) with an INT8 query. */ \
+    KERNEL_ENTRY(int, ash_score_neighborhood_i8_c1, (const unsigned char *codes, const int8_t *q, float invScale, float center, float landmarkDot, int bits, int units, int blockSize, int capacity, float *out), (codes, q, invScale, center, landmarkDot, bits, units, blockSize, capacity, out)) \
     /* NVQ kernels */ \
     KERNEL_ENTRY(void, nvq_quantize_8bit, (const float *vector, size_t length, float alpha, float x0, float minValue, float maxValue, unsigned char *destination), (vector, length, alpha, x0, minValue, maxValue, destination)) \
     KERNEL_ENTRY(float, nvq_loss, (const float *vector, size_t length, float alpha, float x0, float minValue, float maxValue, int nBits), (vector, length, alpha, x0, minValue, maxValue, nBits)) \

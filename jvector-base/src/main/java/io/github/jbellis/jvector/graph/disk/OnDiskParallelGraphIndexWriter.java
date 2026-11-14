@@ -183,7 +183,8 @@ public class OnDiskParallelGraphIndexWriter extends RandomAccessOnDiskGraphIndex
                 inlineFeatures,
                 config,
                 filePath,
-                parallelExecutor)) {
+                parallelExecutor,
+                l0Layout)) {
 
             parallelWriter.writeL0Records(
                 ordinalMapper,
@@ -196,7 +197,7 @@ public class OnDiskParallelGraphIndexWriter extends RandomAccessOnDiskGraphIndex
             maxOrdinalWritten = ordinalMapper.maxOrdinal();
 
             // Calculate end offset
-            long endOffset = baseOffset + (long) (ordinalMapper.maxOrdinal() + 1) * parallelWriter.getRecordSize();
+            long endOffset = baseOffset + l0Layout.totalBytes(ordinalMapper.maxOrdinal() + 1L);
             
             // CRITICAL: After parallel writes via AsynchronousFileChannel, we must invalidate
             // the BufferedRandomAccessWriter's buffer cache. The parallel writes bypassed the

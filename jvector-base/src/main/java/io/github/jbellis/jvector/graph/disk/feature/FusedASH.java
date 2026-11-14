@@ -1,0 +1,368 @@
+/*
+ * Copyright DataStax, Inc.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ * http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+package io.github.jbellis.jvector.graph.disk.feature;
+
+import io.github.jbellis.jvector.annotations.Experimental;
+import io.github.jbellis.jvector.disk.IndexWriter;
+import io.github.jbellis.jvector.disk.RandomAccessReader;
+import io.github.jbellis.jvector.graph.ImmutableGraphIndex;
+import io.github.jbellis.jvector.graph.disk.CommonHeader;
+import io.github.jbellis.jvector.graph.disk.CompactionContext;
+import io.github.jbellis.jvector.graph.disk.OnDiskGraphIndex;
+import io.github.jbellis.jvector.graph.disk.QuantizationCompactionStrategy;
+import io.github.jbellis.jvector.graph.similarity.ScoreFunction;
+import io.github.jbellis.jvector.quantization.ASHVectors;
+import io.github.jbellis.jvector.quantization.AsymmetricHashing;
+import io.github.jbellis.jvector.quantization.FusedASHDecoder;
+import io.github.jbellis.jvector.quantization.FusedASHLayout;
+import io.github.jbellis.jvector.quantization.VectorCompressor;
+import io.github.jbellis.jvector.util.RamUsageEstimator;
+import io.github.jbellis.jvector.vector.VectorSimilarityFunction;
+import io.github.jbellis.jvector.vector.types.ByteSequence;
+import io.github.jbellis.jvector.vector.types.VectorFloat;
+
+import java.io.IOException;
+import java.io.UncheckedIOException;
+import java.util.Arrays;
+import java.util.function.IntFunction;
+import java.util.function.Supplier;
+
+/**
+ * Fuses ASH-encoded neighbors into an {@link OnDiskGraphIndex} for block-oriented
+ * graph-neighborhood scoring.
+ *
+ * <p>Unlike regular {@link ASHVectors}, this feature stores each node's layer-0
+ * neighbor codes in a neighborhood-local block layout. The decoder reads and
+ * scores the whole neighborhood in {@code enableSimilarityToNeighbors(origin)},
+ * then {@code similarityToNeighbor(origin, i)} is a cheap score lookup.</p>
+ *
+ * <p>The fused layout supports only {@code bitsPerDimension in {1,2,4}} because
+ * it is based on 4-bit projection groups and a 16-entry query LUT per group.
+ * Core standalone ASH may support additional bit widths, but those are not part
+ * of the fused graph hot path.</p>
+ */
+@Experimental
+public class FusedASH extends AbstractFeature implements FusedFeature {
+    private static final long INLINE_SOURCE_BYTES = RamUsageEstimator.shallowSizeOfInstance(FusedASHInlineSource.class);
+    private final int maxDegree;
+    private final int blockSize;
+    private final AsymmetricHashing ash;
+    private final int featureSize;
+
+    private final Supplier<FusedASHDecoder.QueryScratch> queryScratchFactory;
+    private final ThreadLocal<byte[]> writeScratch;
+    private final ThreadLocal<AsymmetricHashing.QuantizedVector[]> packingRefs;
+    // Reusable per-thread copies of neighbor codes read from compact ASHVectors storage.
+    private final ThreadLocal<AsymmetricHashing.QuantizedVector[]> neighborCopies;
+
+    public FusedASH(int maxDegree, AsymmetricHashing ash) {
+        this(maxDegree, ash, FusedASHLayout.chooseBlockSize(maxDegree));
+    }
+
+    public FusedASH(int maxDegree, AsymmetricHashing ash, int blockSize) {
+        if (maxDegree <= 0) {
+            throw new IllegalArgumentException("maxDegree must be > 0");
+        }
+        if (ash == null) {
+            throw new NullPointerException("ash");
+        }
+        FusedASHLayout.validateBitsPerDimension(ash.bitsPerDimension);
+        FusedASHLayout.validateBlockSize(blockSize);
+
+        this.maxDegree = maxDegree;
+        this.ash = ash;
+        this.blockSize = blockSize;
+        this.featureSize = FusedASHLayout.featureSize(
+                maxDegree,
+                ash.quantizedDim,
+                ash.bitsPerDimension,
+                blockSize);
+
+        this.queryScratchFactory = () -> new FusedASHDecoder.QueryScratch(ash, maxDegree, blockSize);
+        this.writeScratch = ThreadLocal.withInitial(() -> new byte[featureSize]);
+        this.packingRefs = ThreadLocal.withInitial(() -> new AsymmetricHashing.QuantizedVector[maxDegree]);
+        this.neighborCopies = ThreadLocal.withInitial(() -> {
+            var copies = new AsymmetricHashing.QuantizedVector[maxDegree];
+            for (int i = 0; i < maxDegree; i++)
+                copies[i] = AsymmetricHashing.QuantizedVector.createEmpty(ash.quantizedDim, ash.bitsPerDimension);
+            return copies;
+        });
+    }
+
+    @Override
+    public FeatureId id() {
+        return FeatureId.FUSED_ASH;
+    }
+
+    public AsymmetricHashing getASH() {
+        return ash;
+    }
+
+    // ASH uses QuantizedVector codes and a block-packed layout that the current
+    // byte-sequence compaction pipeline does not support.
+    @Override
+    public int codeSize() {
+        throw new UnsupportedOperationException("FusedASH compaction is not supported yet");
+    }
+
+    @Override
+    public VectorCompressor<ByteSequence<?>> getCompressor() {
+        throw new UnsupportedOperationException("FusedASH compaction is not supported yet");
+    }
+
+    @Override
+    public FusedFeature withCompressor(VectorCompressor<ByteSequence<?>> newCompressor, int maxDegree) {
+        throw new UnsupportedOperationException("FusedASH compaction is not supported yet");
+    }
+
+    @Override
+    public QuantizationCompactionStrategy createCompactionStrategy(CompactionContext ctx) {
+        throw new UnsupportedOperationException("FusedASH compaction is not supported yet");
+    }
+
+    public int blockSize() {
+        return blockSize;
+    }
+
+    @Override
+    public int headerSize() {
+        return ash.compressorSize() + Integer.BYTES; // blockSize
+    }
+
+    @Override
+    public int featureSize() {
+        return featureSize;
+    }
+
+    static FusedASH load(CommonHeader header, RandomAccessReader reader) {
+        try {
+            AsymmetricHashing ash = AsymmetricHashing.load(reader);
+            int blockSize = reader.readInt();
+            return new FusedASH(header.layerInfo.get(0).degree, ash, blockSize);
+        } catch (IOException e) {
+            throw new UncheckedIOException(e);
+        }
+    }
+
+    @Deprecated
+    @Override
+    public void writeHeader(IndexWriter out) throws IOException {
+        writeHeader(out, OnDiskGraphIndex.CURRENT_VERSION);
+    }
+
+    @Override
+    public void writeHeader(IndexWriter out, int version) throws IOException {
+        ash.write(out, version);
+        out.writeInt(blockSize);
+    }
+
+    /**
+     * Writes a fused, block-packed ASH payload for {@code state.nodeId}'s layer-0
+     * neighbors. Neighbor lanes are stored in graph neighbor iterator order and
+     * padded with zeros up to {@code maxDegree}.
+     */
+    @Override
+    public void writeInline(IndexWriter out, Feature.State state_) throws IOException {
+        var state = (FusedASH.State) state_;
+        byte[] scratch = writeScratch.get();
+        Arrays.fill(scratch, (byte) 0);
+
+        var refs = ash.bitsPerDimension == 1 ? null : packingRefs.get();
+        var copies = state.vectors == null ? null : neighborCopies.get();
+        var neighbors = state.view.getNeighborsIterator(0, state.nodeId);
+        int count = 0;
+        try {
+            while (neighbors.hasNext()) {
+                int node = neighbors.nextInt();
+                if (count >= maxDegree) {
+                    throw new IOException("Node " + state.nodeId + " has more than maxDegree=" + maxDegree + " neighbors");
+                }
+
+                AsymmetricHashing.QuantizedVector compressed;
+                if (copies != null) {
+                    // Copy out of the compact store; no allocation per neighbor.
+                    compressed = copies[count];
+                    state.vectors.copyTo(node, compressed);
+                } else {
+                    compressed = state.compressedVectorFunction.apply(node);
+                }
+                if (ash.bitsPerDimension == 1) {
+                    packForFused(scratch, count, compressed);
+                } else {
+                    refs[count] = compressed;
+                }
+                count++;
+            }
+
+            if (ash.bitsPerDimension != 1) {
+                for (int first = 0; first < count; first += blockSize) {
+                    int offset = FusedASHLayout.blockOffset(first / blockSize, ash.quantizedDim, ash.bitsPerDimension, blockSize);
+                    io.github.jbellis.jvector.quantization.FusedASHBlockPacker.pack(scratch, offset, refs, first,
+                            Math.min(blockSize, count - first), ash.quantizedDim, ash.bitsPerDimension, blockSize);
+                }
+
+            }
+        } finally {
+            // Do not retain vectors if a supplier or packing operation fails.
+            if (refs != null) {
+                Arrays.fill(refs, 0, count, null);
+            }
+        }
+        writeBytes(out, scratch, featureSize);
+    }
+
+    private void packForFused(byte[] dest, int neighborIndex, AsymmetricHashing.QuantizedVector vector) {
+        int blockIndex = neighborIndex / blockSize;
+        int lane = neighborIndex % blockSize;
+        int blockOffset = FusedASHLayout.blockOffset(
+                blockIndex,
+                ash.quantizedDim,
+                ash.bitsPerDimension,
+                blockSize);
+
+        // The canonical vector already stores the projection-mode offset used by FusedASH scoring.
+        FusedASHLayout.packForFused(dest, blockOffset, lane, vector, ash, blockSize);
+    }
+
+    private static void writeBytes(IndexWriter out, byte[] bytes, int length) throws IOException {
+        out.write(bytes, 0, length);
+    }
+
+    public ScoreFunction.ApproximateScoreFunction approximateScoreFunctionFor(
+            VectorFloat<?> queryVector,
+            VectorSimilarityFunction vsf,
+            OnDiskGraphIndex.View view,
+            ScoreFunction.ExactScoreFunction esf) {
+
+        var neighborhoods = new PackedNeighborhoods(view);
+        var hierarchyCachedFeatures = view.getInlineSourceFeatures();
+
+        return FusedASHDecoder.newDecoder(
+                neighborhoods,
+                ash,
+                hierarchyCachedFeatures,
+                source -> ((FusedASHInlineSource) source).getVector(),
+                queryVector,
+                view.getOrCreateFeatureScratch(id(), FusedASHDecoder.QueryScratch.class, queryScratchFactory),
+                blockSize,
+                vsf);
+    }
+
+    /** Bind preparation to the view while retaining the established decoder lifetime checks. */
+    public ScoreFunction.ApproximateScoreFunction approximateScoreFunctionFor(
+            io.github.jbellis.jvector.graph.similarity.PreparedQuery query,
+            OnDiskGraphIndex.View view) {
+        return FusedASHDecoder.newDecoder(new PackedNeighborhoods(view), ash,
+                view.getInlineSourceFeatures(), source -> ((FusedASHInlineSource) source).getVector(),
+                query, view.getOrCreateFeatureScratch(id(), FusedASHDecoder.QueryScratch.class,
+                        queryScratchFactory), blockSize);
+    }
+
+    @Override
+    public void writeSourceFeature(IndexWriter out, Feature.State state_) throws IOException {
+        var state = (FusedASH.State) state_;
+        var compressed = state.compressedVectorFunction.apply(state.nodeId);
+        compressed.write(out, ash.quantizedDim, ash.bitsPerDimension);
+    }
+
+    @Override
+    public InlineSource loadSourceFeature(RandomAccessReader in) throws IOException {
+        var vector = AsymmetricHashing.QuantizedVector.load(in, ash.quantizedDim, ash.bitsPerDimension);
+        return new FusedASHInlineSource(vector);
+    }
+
+    public class FusedASHInlineSource implements InlineSource {
+        private final AsymmetricHashing.QuantizedVector vector;
+
+        FusedASHInlineSource(AsymmetricHashing.QuantizedVector vector) {
+            this.vector = vector;
+        }
+
+        public AsymmetricHashing.QuantizedVector getVector() {
+            return vector;
+        }
+
+        @Override
+        public long ramBytesUsed() {
+            return INLINE_SOURCE_BYTES + vector.ramBytesUsed();
+        }
+    }
+
+    public class PackedNeighborhoods implements FusedASHDecoder.PackedNeighborhoods {
+        private final OnDiskGraphIndex.View view;
+
+        PackedNeighborhoods(OnDiskGraphIndex.View view) {
+            this.view = view;
+        }
+
+        @Override
+        public void readInto(int origin, byte[] dest) {
+            if (dest.length < featureSize) {
+                throw new IllegalArgumentException("Destination buffer is smaller than FusedASH feature size");
+            }
+
+            try {
+                view.getPackedNeighbors(origin, FeatureId.FUSED_ASH, reader -> {
+                    try {
+                        reader.readFully(dest);
+                    } catch (IOException e) {
+                        throw new RuntimeException(e);
+                    }
+                });
+            } catch (IOException e) {
+                throw new RuntimeException(e);
+            }
+        }
+
+        @Override
+        public int maxDegree() {
+            return maxDegree;
+        }
+
+        @Override
+        public int featureSize() {
+            return featureSize;
+        }
+    }
+
+    public static class State implements Feature.State {
+        public final ImmutableGraphIndex.View view;
+        public final IntFunction<AsymmetricHashing.QuantizedVector> compressedVectorFunction;
+        public final int nodeId;
+        /** When non-null, neighbor codes are copied from here into reusable storage instead. */
+        final ASHVectors vectors;
+
+        public State(ImmutableGraphIndex.View view, ASHVectors ashVectors, int nodeId) {
+            this(view, ashVectors::get, nodeId, ashVectors);
+        }
+
+        public State(
+                ImmutableGraphIndex.View view,
+                IntFunction<AsymmetricHashing.QuantizedVector> compressedVectorFunction,
+                int nodeId) {
+            this(view, compressedVectorFunction, nodeId, null);
+        }
+
+        private State(ImmutableGraphIndex.View view, IntFunction<AsymmetricHashing.QuantizedVector> compressedVectorFunction,
+                      int nodeId, ASHVectors vectors) {
+            this.view = view;
+            this.compressedVectorFunction = compressedVectorFunction;
+            this.nodeId = nodeId;
+            this.vectors = vectors;
+        }
+    }
+}

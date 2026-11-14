@@ -89,7 +89,8 @@ public final class SearchSelection {
 
         // Warn for missing exact keys
         for (String k : resolved.keys()) {
-            if (!present.contains(k) && warnedMissingKeys.add(k)) {
+            if (!present.contains(k) && !SearchReportingCatalog.CONDITIONAL_KEYS.contains(k)
+                    && warnedMissingKeys.add(k)) {
                 System.err.println("WARNING: selected " + purpose + " output not available; skipping "
                         + resolved.selectorForKey(k) + " (" + k + ")");
             }

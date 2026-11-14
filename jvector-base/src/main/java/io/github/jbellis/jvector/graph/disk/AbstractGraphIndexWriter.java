@@ -22,6 +22,7 @@ import io.github.jbellis.jvector.graph.disk.feature.Feature;
 import io.github.jbellis.jvector.graph.disk.feature.FeatureId;
 import io.github.jbellis.jvector.graph.disk.feature.InlineVectors;
 import io.github.jbellis.jvector.graph.disk.feature.NVQ;
+import io.github.jbellis.jvector.graph.disk.feature.PageAlignment;
 import io.github.jbellis.jvector.graph.disk.feature.SeparatedFeature;
 import io.github.jbellis.jvector.graph.disk.feature.SeparatedNVQ;
 import io.github.jbellis.jvector.graph.disk.feature.SeparatedVectors;
@@ -30,6 +31,7 @@ import org.agrona.collections.Int2IntHashMap;
 
 import java.io.IOException;
 import java.util.EnumMap;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -60,6 +62,10 @@ public abstract class AbstractGraphIndexWriter<T extends IndexWriter> implements
     volatile int maxOrdinalWritten = -1;
     final List<Feature> inlineFeatures;
     final GraphIndexFormat graphIndexFormat;
+    /** Placement of base-layer records. */
+    final L0Layout l0Layout;
+    /** Why a requested page alignment was not applied, or null. */
+    String alignmentNote;
 
     AbstractGraphIndexWriter(T out,
                              int version,
@@ -78,7 +84,10 @@ public abstract class AbstractGraphIndexWriter<T extends IndexWriter> implements
         this.dimension = dimension;
 
         this.featureMap = graphIndexFormat.orderFeatures(features);
-        this.inlineFeatures = this.featureMap.values().stream().filter(f -> !(f instanceof SeparatedFeature)).collect(Collectors.toList());
+        // Page alignment places records but adds no bytes to them, so it is not an inline feature.
+        this.inlineFeatures = this.featureMap.values().stream()
+                .filter(f -> !(f instanceof SeparatedFeature) && f.id() != FeatureId.PAGE_ALIGNMENT)
+                .collect(Collectors.toList());
 
         long fusedFeaturesCount = this.inlineFeatures.stream().filter(Feature::isFused).count();
         if (fusedFeaturesCount > 1) {
@@ -93,6 +102,17 @@ public abstract class AbstractGraphIndexWriter<T extends IndexWriter> implements
         var ch = new CommonHeader(version, dimension, 0, layerInfo, 0);
         var placeholderHeader = new Header(ch, featureMap);
         this.headerSize = placeholderHeader.size();
+        int recordBytes = L0Layout.recordBytes(inlineFeatures.stream().mapToInt(Feature::featureSize).sum(), graph.getDegree(0));
+        var alignment = (PageAlignment) featureMap.get(FeatureId.PAGE_ALIGNMENT);
+        this.l0Layout = alignment == null ? L0Layout.unaligned(recordBytes) : L0Layout.aligned(recordBytes, alignment.pageBytes());
+    }
+
+    /**
+     * Describes how base-layer records are placed: their size and, for page-aligned indexes, how many share a
+     * page and how much padding that adds; or why a requested alignment was not applied.
+     */
+    public String describeRecordLayout() {
+        return alignmentNote == null ? l0Layout.toString() : l0Layout + "; " + alignmentNote;
     }
 
     /**
@@ -112,7 +132,7 @@ public abstract class AbstractGraphIndexWriter<T extends IndexWriter> implements
     }
 
     WriteContext createContext(long startOffset) {
-        return new WriteContext(graph, ordinalMapper, featureMap, inlineFeatures, startOffset, headerSize, dimension);
+        return new WriteContext(graph, ordinalMapper, featureMap, inlineFeatures, startOffset, headerSize, dimension, l0Layout);
     }
 
     long featureOffsetForOrdinal(long startOffset, int ordinal) {
@@ -194,6 +214,7 @@ public abstract class AbstractGraphIndexWriter<T extends IndexWriter> implements
         final T out;
         OrdinalMapper ordinalMapper;
         int version;
+        int pageAlignment;
 
         /**
          * Constructs a Builder.
@@ -218,6 +239,28 @@ public abstract class AbstractGraphIndexWriter<T extends IndexWriter> implements
             }
 
             this.version = version;
+            return this;
+        }
+
+        /**
+         * Places base-layer node records so that none crosses a {@code pageBytes} boundary, counted from the start
+         * of the index, so reading one node from disk reads only the pages its record needs. Records that fit in a
+         * page are packed as many per page as fit; larger records each start on a page and are padded to whole
+         * pages, but only when their last page would be at least half full, since otherwise the padding costs more
+         * space than the page reads it saves (the index is then written unaligned; {@link #build()} still
+         * succeeds and {@link AbstractGraphIndexWriter#describeRecordLayout()} says why). The header is padded to
+         * whole pages. This helps indexes served from disk, where each page read costs a device read; it does not
+         * change search results. Requires format version 7 or later.
+         *
+         * @param pageBytes the page size in bytes, a power of two from 512 to 1 MiB; 4096 matches common
+         *                  operating-system page and SSD sector sizes
+         * @return this builder
+         */
+        public Builder<K, T> withPageAlignment(int pageBytes) {
+            if (pageBytes < 512 || pageBytes > (1 << 20) || Integer.bitCount(pageBytes) != 1) {
+                throw new IllegalArgumentException("Page alignment must be a power of two from 512 to 1048576: " + pageBytes);
+            }
+            this.pageAlignment = pageBytes;
             return this;
         }
 
@@ -272,7 +315,34 @@ public abstract class AbstractGraphIndexWriter<T extends IndexWriter> implements
             if (ordinalMapper == null) {
                 ordinalMapper = new OrdinalMapper.MapMapper(sequentialRenumbering(graphIndex));
             }
-            return reallyBuild(dimension);
+            if (features.containsKey(FeatureId.PAGE_ALIGNMENT)) {
+                throw new IllegalArgumentException("Use withPageAlignment instead of adding PAGE_ALIGNMENT directly");
+            }
+            String note = null;
+            if (pageAlignment > 0) {
+                if (!format.supportsFeature(FeatureId.PAGE_ALIGNMENT)) {
+                    throw new IllegalArgumentException("Page alignment requires format version 7 or later; version " + version + " does not support it");
+                }
+                int inlineBytes = features.values().stream()
+                        .filter(f -> !(f instanceof SeparatedFeature))
+                        .mapToInt(Feature::featureSize).sum();
+                int recordBytes = L0Layout.recordBytes(inlineBytes, graphIndex.getDegree(0));
+                if (L0Layout.alignmentPays(recordBytes, pageAlignment)) {
+                    features.put(FeatureId.PAGE_ALIGNMENT, new PageAlignment(pageAlignment, 0));
+                    var layerInfo = CommonHeader.LayerInfo.fromGraph(graphIndex, ordinalMapper);
+                    var common = new CommonHeader(version, dimension, 0, layerInfo, 0);
+                    int unpadded = new Header(common, format.orderFeatures(features)).size();
+                    int headerPad = (pageAlignment - unpadded % pageAlignment) % pageAlignment;
+                    features.put(FeatureId.PAGE_ALIGNMENT, new PageAlignment(pageAlignment, headerPad));
+                } else {
+                    note = String.format("%d-byte page alignment not applied: the last of the record's pages would be"
+                            + " under half full, so padding would cost more space than the page reads it saves",
+                            pageAlignment);
+                }
+            }
+            K writer = reallyBuild(dimension);
+            writer.alignmentNote = note;
+            return writer;
         }
 
         /**

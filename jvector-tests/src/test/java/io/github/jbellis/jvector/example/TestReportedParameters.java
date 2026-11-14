@@ -64,7 +64,8 @@ public class TestReportedParameters {
         assertEquals(List.of("schema_version", "run_id", "run_uuid", "system_id", "dataset_name",
                         "M", "efConstruction", "neighborOverflow", "addHierarchy", "refineFinalGraph",
                         "feature_set", "build_compressor", "search_compressor",
-                        "usePruning", "topK", "overquery", "rerankK"),
+                        "usePruning", "topK", "overquery", "rerankK",
+                        "ash_query_projection_requested", "ash_query_projection_effective"),
                 ExperimentsSchemaV1.fixedColumns());
     }
 

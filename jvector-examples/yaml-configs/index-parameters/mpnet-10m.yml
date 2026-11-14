@@ -1,0 +1,38 @@
+# MPNet-10M: ASH(b=2,d=384), nominal 32x compression.
+# Fused graph scoring and NVQ reranking.
+yamlSchemaVersion: 3
+onDiskIndexVersion: 7
+dataset: mpnet-10m
+
+construction:
+  type: onDisk
+  outDegree: [32]
+  efConstruction: [100]
+  neighborOverflow: [1.2f]
+  addHierarchy: [Yes]
+  refineFinalGraph: [Yes]
+  fusedGraph: [Yes]
+  compression:
+    - type: ASH
+      parameters:
+        compressionRatio: 32
+        optimizer: ITQ
+        landmarkCount: 1
+        bitsPerDimension: 2
+  reranking:
+    type: NVQ
+  # Saved indexes consume disk space, so reuse is opt-in. Set Yes to query a
+  # compatible index saved by an earlier run in the same working directory.
+  useSavedIndexIfExists: No
+
+search:
+  topKOverquery:
+    10: [1.0]
+  useSearchPruning: [No]
+  compression:
+    - type: ASH
+      parameters:
+        compressionRatio: 32
+        optimizer: ITQ
+        landmarkCount: 1
+        bitsPerDimension: 2

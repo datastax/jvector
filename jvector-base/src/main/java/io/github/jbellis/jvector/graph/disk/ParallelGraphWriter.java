@@ -74,6 +74,7 @@ class ParallelGraphWriter implements AutoCloseable {
     private final ExplicitThreadLocal<ByteBuffer> bufferPerThread;
     private final CopyOnWriteArrayList<ImmutableGraphIndex.View> allViews = new CopyOnWriteArrayList<>();
     private final int recordSize;
+    private final L0Layout layout;
     private final Path filePath;
     private final int taskMultiplier;
     private static final AtomicInteger threadCounter = new AtomicInteger(0);
@@ -152,6 +153,17 @@ class ParallelGraphWriter implements AutoCloseable {
                                Config config,
                                Path filePath,
                                ExecutorService externalExecutor) {
+        this(writer, graph, inlineFeatures, config, filePath, externalExecutor, null);
+    }
+
+    /** As above, placing records by {@code layout}; null packs them back to back. */
+    ParallelGraphWriter(RandomAccessWriter writer,
+                        ImmutableGraphIndex graph,
+                        List<Feature> inlineFeatures,
+                        Config config,
+                        Path filePath,
+                        ExecutorService externalExecutor,
+                        L0Layout layout) {
         this.writer = writer;
         this.graph = graph;
         this.filePath = Objects.requireNonNull(filePath);
@@ -159,7 +171,11 @@ class ParallelGraphWriter implements AutoCloseable {
         // Validate buffer size before creating a pool that would otherwise need cleanup.
         this.recordSize = Math.addExact(Integer.BYTES * (2 + graph.getDegree(0)),
                 inlineFeatures.stream().mapToInt(Feature::featureSize).sum());
-        final int bufferSize = Math.multiplyExact(recordSize, config.recordsPerBatch);
+        this.layout = layout != null ? layout : L0Layout.unaligned(recordSize);
+        if (this.layout.recordBytes != recordSize) throw new IllegalArgumentException("Layout record size must match the features");
+        // A batch must hold at least one whole page group, so every padded record fits with its padding.
+        final int bufferSize = Math.max(Math.multiplyExact(recordSize, config.recordsPerBatch),
+                Math.multiplyExact(this.layout.groupBytes, 2));
         if (externalExecutor != null) {
             this.executor = externalExecutor;
             this.ownsExecutor = false;
@@ -267,7 +283,7 @@ class ParallelGraphWriter implements AutoCloseable {
                                     view,
                                     inlineFeatures,
                                     featureStateSuppliers,
-                                    recordSize,
+                                    layout,
                                     baseOffset,               // Base offset (task calculates per-ordinal offsets)
                                     channel,                  // Async file channel for position-based writes
                                     buffer,                   // Thread-local buffer

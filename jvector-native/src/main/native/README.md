@@ -41,8 +41,12 @@ aarch64-cross.ini             - Meson cross-compile file: build aarch64 from an 
 x86_64-cross.ini              - Meson cross-compile file: build x86_64 from an aarch64 host
 jextract_generate_bindings.sh - Generate Java bindings from native headers using jextract
 build_native_lib.sh           - Build the native library (native arch + optional cross-compile)
-third_party/highway/          - Google Highway header-only library (git submodule)
+subprojects/highway.wrap      - Google Highway revision, fetched by Meson and used header-only
 ```
+
+The optional oneDNN add-on (`libjvector_ash_fp16`) is a separate Meson project in
+[`../onednn`](../onednn), with its own `meson.build` and `subprojects/onednn.wrap`.
+libjvector never depends on it.
 
 ---
 
@@ -58,7 +62,12 @@ third_party/highway/          - Google Highway header-only library (git submodul
 | clang++ (AArch64) | Clang any recent | NEON tier always built; SVE/SVE2 require **Clang ≥ 22** — older Clang produces a NEON-only build with a warning |
 | [Meson](https://mesonbuild.com/) | 0.55 | `pip install meson` |
 | [Ninja](https://ninja-build.org/) | any | `sudo apt install ninja-build` |
-| Git submodules | — | `git submodule update --init` (needed once) |
+| CMake (oneDNN add-on only) | 3.13+ | `sudo apt install cmake`; needed in addition to Meson and Ninja |
+| JDK (native ASH) | 22+ | Final FFM API; build and run the native provider with supported native-access settings |
+
+Meson fetches Google Highway at the revision pinned in `subprojects/highway.wrap`
+on the first `meson setup`; no Git submodule is needed. Offline builds can
+populate `subprojects/highway` with that revision beforehand.
 
 > **AArch64 compiler note:** On Clang < 22, the SVE and SVE2 tiers are
 > automatically skipped at configure time (`meson setup` prints a warning).
@@ -66,12 +75,25 @@ third_party/highway/          - Google Highway header-only library (git submodul
 > runtime even on SVE2-capable hardware (e.g. Graviton 4).  Upgrade to
 > Clang ≥ 22 or use GCC to get full SVE/SVE2 acceleration.
 
+For ASH, the oneDNN add-on is the preferred projection implementation for FP32
+encoding batches and FP16/INT8 queries where supported. It is built from the pinned
+source and bundled; users do not need a separately installed `libdnnl`. Building
+oneDNN takes a few minutes, so it is off by default and enabled with
+`-Dnative.onednn=true` (Maven) or `true` as the script's third argument; CI and
+the release profile enable it. A first online build needs access to the source URL
+in `../onednn/subprojects/onednn.wrap`; offline builds can populate that exact
+revision beforehand. On Ubuntu, install the native build prerequisites with:
+
+```bash
+sudo apt-get install g++ meson ninja-build cmake
+```
+
 ### Build steps
 
 Run the build script from this directory:
 
 ```bash
-bash src/build_native_lib.sh [buildtype] [crossarch]
+bash src/build_native_lib.sh [buildtype] [crossarch] [onednn]
 ```
 
 Parameters (all optional):
@@ -80,15 +102,24 @@ Parameters (all optional):
 |-----------|---------|-------------|
 | `buildtype` | `release` | `release`, `debug`, or `debugoptimized` |
 | `crossarch` | `false` | Set to `true` to also cross-compile for the other arch |
+| `onednn` | `false` | Set to `true` to also build and bundle the oneDNN add-on (FP32 batch and FP16/INT8 query projection) |
+
+To include oneDNN:
+
+```bash
+bash src/build_native_lib.sh release false true
+```
 
 The script:
 1. Detects the host arch via `uname -m` (x86_64 or aarch64).
-2. Verifies prerequisites (g++, meson, ninja, Highway submodule).
+2. Verifies prerequisites (g++, meson, ninja; cmake when oneDNN is on).
 3. Always builds the **native arch** library into `target/meson-build-<arch>/`.
 4. If `crossarch=true`, also cross-compiles the **other arch** library into
    `target/meson-build-<other-arch>/` using the bundled cross-compile file.
 5. Copies each built `.so` to `jvector-native/target/meson-build/libjvector-<arch>.so`
    (relative to the repository root), which Maven includes as a resource.
+6. If `onednn=true`, builds the separate `../onednn` project into
+   `target/meson-build-onednn-<arch>/` and copies `libjvector_ash_fp16-<arch>.so` beside it.
    The script does not strip or split debug symbols.
 
 To install all required dependencies automatically and then build, pass `--auto-install-deps` as the first argument:
@@ -100,6 +131,12 @@ bash src/build_native_lib.sh --auto-install-deps
 This is the easiest way to get started on a fresh Ubuntu machine. For other
 distributions the script will print an error indicating which install commands
 need to be added.
+
+The build is quiet by default. A first build prints one line when each library starts and one
+when it finishes; a later build prints a finish line only for a library it actually rebuilt.
+Meson and Ninja output goes to `target/meson-build-<arch>.setup.log` and `.compile.log` and is
+printed only if a step fails. Set `JVECTOR_NATIVE_BUILD_VERBOSE=1` to print everything,
+including each command the script runs.
 
 ### Cross-compilation
 
@@ -144,8 +181,8 @@ The cross-compile file used for each direction lives in this directory:
 
 | File | Direction |
 |------|-----------|
-| [`aarch64-cross.ini`](../aarch64-cross.ini) | x86_64 host → aarch64 target |
-| [`x86_64-cross.ini`](../x86_64-cross.ini) | aarch64 host → x86_64 target |
+| [`aarch64-cross.ini`](aarch64-cross.ini) | x86_64 host → aarch64 target |
+| [`x86_64-cross.ini`](x86_64-cross.ini) | aarch64 host → x86_64 target |
 
 Meson reads the cross file (via `--cross-file`) and sets
 `host_machine.cpu_family` to the target arch, which causes `meson.build` to
@@ -153,7 +190,15 @@ select the correct ISA variant list (x86 tiers vs AArch64 tiers) automatically.
 
 ### Building with Maven
 
-From the project root, you can build the native module using Maven:
+From the project root, the recommended ASH build includes oneDNN:
+
+```bash
+mvn -pl jvector-native -am package -Dnative.onednn=true
+```
+
+It requires the CMake prerequisite above. The commands below build only the
+Highway library; append `-Dnative.onednn=true` to include oneDNN. The `release`
+profile turns it on.
 
 **Native arch only — release (default):**
 ```bash
@@ -434,7 +479,7 @@ An unrecognised value is silently ignored and full CPU detection is used.
 ## Adding a new SIMD kernel
 
 The kernel registry is driven by the X-macro file
-[`jvector_simd_kernel_list.h`](jvector_simd_kernel_list.h). A single entry
+[`jvector_simd_kernel_list.h`](src/jvector_simd_kernel_list.h). A single entry
 there auto-generates:
 
 - the public C declaration in `jvector_simd.h` (exported to Java via FFM)
@@ -679,7 +724,7 @@ if (max_isa != MaxIsa::SSE42 && max_isa != MaxIsa::AVX2
 }
 ```
 
-If the required CPUID bits are not yet in [`jvector_cpu_features.h`](jvector_cpu_features.h),
+If the required CPUID bits are not yet in [`jvector_cpu_features.h`](src/jvector_cpu_features.h),
 add them to the `CpuFeature` enum and populate them in
 `populate_cpu_features()`.
 
@@ -709,7 +754,7 @@ HWY_FLATTEN float my_kernel(const float *a, size_t length)
 
 Add a `JV_REQUIRE_HWY_*` guard so the build fails loudly if the compiler selects
 the wrong Highway target for this translation unit. The existing checks for
-`JV_REQUIRE_HWY_AVX3` and `JV_REQUIRE_HWY_AVX2` in [`assert_hwy_targets.h`](assert_hwy_targets.h)
+`JV_REQUIRE_HWY_AVX3` and `JV_REQUIRE_HWY_AVX2` in [`assert_hwy_targets.h`](src/assert_hwy_targets.h)
 show the pattern — add an `#elif` block for the new tier:
 
 ```cpp
@@ -824,3 +869,165 @@ When changing the native interface:
    including `jvector_supports_abi`, where the inspection tools are available.
    Export inspection complements the runtime tests; it does not establish ABI
    support by itself.
+
+
+<a id="ash-fp16-query-projection"></a>
+## ASH query projection
+
+ASH base-vector encoding retains FP32: batch projection prefers oneDNN and
+single-vector projection uses Highway. Training uses the BLAS/LAPACK provider.
+Query scoring can prepare a separate immutable FP16 or explicit INT8 view of
+the same trained projection matrix. Model and graph formats do not change.
+
+Use [Choosing ASH query-projection precision](../../../../docs/ash-projection-precision.md)
+for processor-family recommendations, settings and when selection takes effect.
+This section describes native build, arithmetic, ownership and diagnostics.
+
+### FP16 behavior
+
+FP16 uses FP16 operands with strict FP32 accumulation/output. The existing
+`auto` policy prefers optimized FP16 and retains its FP32 fallback. An individual
+query outside the finite FP16 range uses FP32 in automatic mode. Required `fp16`
+accepts only finite matrix/query values with magnitude at most 65504; underflow
+and rounding follow IEEE binary16 arithmetic. Input shape/aliasing errors,
+allocation failures and execution errors are reported rather than hidden.
+
+### INT8 behavior
+
+Required `int8` prepares symmetric signed weights per output row and quantizes
+each query independently. oneDNN computes unsigned-input/signed-weight products
+with signed 32-bit accumulation. Correcting the input offset and dequantizing
+produces FP32 output. Scales, quantization and rescaling use FP32 arithmetic. A nonzero operand whose
+scale rounds to zero is rejected before integer conversion. Nonfinite operands
+are rejected; output rescaling retains ordinary FP32 overflow behavior.
+
+On x86, only the INT8 quantization and batch-projection functions use an AVX2
+compiler target. The generic model-creation guard runs first and requires a
+qualified VNNI/AMX backend, whose ISA includes AVX2. This keeps rounding in native
+instructions without changing FP16/FP32 or library-wide compiler settings.
+
+The qualified VNNI/AMX kernels preserve full-range integer dot products. Legacy
+kernels can saturate at a 16-bit intermediate; INT8 rejects them rather than
+silently changing the quantization range. Both the effective oneDNN ISA and the
+selected primitive are checked. CPU vendor names do not control dispatch.
+The 65535-column bound prevents signed 32-bit accumulation overflow.
+
+Explicit INT8 reports unsupported backends without substituting another
+precision. The loader validates the existing add-on ABI before binding its
+symbols. Invalid operands, numeric range failures, allocation failures and
+unexpected execution failures retain distinct error categories across FFM.
+
+### Recommended oneDNN build and package
+
+Native Maven and direct-script builds include oneDNN when asked to
+(`-Dnative.onednn=true`, or `true` as the script's third argument) on the supported
+Linux platforms; the `release` profile and CI turn it on. Use JDK 22 or newer. It is
+**automatically preferred** for FP32 encoding batches and supported FP16 queries;
+INT8 is available through explicit selection. Highway stays independent and supplies
+FP32 fallback when the add-on or the requested operation is unavailable:
+
+
+```bash
+mvn -pl jvector-native -am package -Dnative.onednn=true
+```
+
+For a direct native build:
+
+```bash
+bash src/build_native_lib.sh release false true
+```
+
+The recommended oneDNN build requires CMake 3.13+ in addition to the native prerequisites. Meson
+fetches the exact oneDNN revision pinned in `../onednn/subprojects/onednn.wrap`; an offline
+build can populate `../onednn/subprojects/onednn` with that revision beforehand. oneDNN is
+built with the sequential CPU runtime, no GPU support, and only inference
+matrix-multiplication/reorder primitives. Its dispatcher selects supported CPU
+instructions at runtime; the build does not use `-march=native`.
+
+oneDNN is statically linked into `libjvector_ash_fp16-<arch>.so`, so the jar
+carries one self-contained add-on and needs no system oneDNN. Maven packages
+this library and the upstream license/third-party notices beside the Highway
+resource. The existing architecture-aware loader first tries the system library
+path, then extracts the matching classpath resource. No external `libdnnl` or
+benchmark-specific path is required. The resource keeps its existing FP16 name
+for binary compatibility but supplies FP32 batch and FP16/INT8 query projection.
+Without `-Dnative.onednn=true` (the default) the build leaves oneDNN projection out
+of the package and removes stale add-on resources from previous builds; Highway FP32
+is then used.
+The optional component follows the native module's Linux platform support;
+cross-compilation still requires the corresponding target toolchain.
+
+FP32 batch projection retains the original FP32 matrix and uses sequential
+oneDNN SGEMM without converting database operands to FP16. Single-vector encoding
+continues to use Highway FP32. The FP32 loader validates the same ABI as FP16;
+missing/older add-ons and unsupported operations keep Highway. FP16 automatic
+mode additionally falls back for operands outside FP16's finite range. Explicit
+`fp16` and `int8` modes require support; invalid inputs, allocation failures and execution
+errors propagate. See [implementation and measured encoding scope](../../../../docs/native-ash-preparation.md#preferred-onednn-fp32-encoding-projection-november-1-2026).
+
+### Ownership, parallelism and tests
+
+Each model owns its immutable prepared low-precision weights and execution
+plans. Java automatic arenas release the native context when it becomes
+unreachable. Each calling thread reuses its conversion, staging and scratch
+buffers; neither thread-local cache retains the model or weights. Calls use
+ordinary FFM downcalls. oneDNN starts no search workers or nested thread pool.
+Concurrent callers use the same immutable model with separate workspaces.
+
+The native-module Java tests retain FP32 coverage and check FP16 against an
+independent rounded-operand oracle, irregular and large dimensions, numeric
+boundaries, input guards, model switching, concurrent platform/virtual threads,
+query-only precision and loading without the optional library. INT8 tests additionally
+cover full-range integer accumulation, FP32 scale underflow/overflow guards, batch tails,
+concurrent model switching, lazy packed-weight accounting, ABI compatibility and
+required-mode rejection of legacy integer kernels. On a machine
+known to support FP16, require both oneDNN paths rather than capability skips with:
+
+```bash
+mvn -pl jvector-native -am test -Dnative.onednn=true -Djvector.test.requireFp16=true -Djvector.test.requireFp32OneDnn=true
+```
+
+On VNNI/AMX hardware, require INT8 execution instead of capability skips:
+
+```bash
+mvn -pl jvector-native -am test -Djvector.test.requireInt8=true
+```
+
+No INT8 diagnostics are printed unconditionally. For a separate diagnostic run,
+use oneDNN's standard verbose mode to inspect the selected primitive:
+
+```text
+ONEDNN_VERBOSE=1 java ... -Djvector.ash.queryProjection=int8 ...
+```
+
+Keep verbose diagnostics out of reported timing runs.
+
+With Google Test installed, Meson also builds `test_ash_fp16`; run it with
+`meson test -C <build-directory> --suite ash_fp16 --print-errorlogs`.
+
+For projection throughput, use the built-in `DistancesASH` comparison with
+`-Djvector.bench.int8-projection=true`. The existing `jvector.bench.recall`
+setting controls optional exhaustive scans; leave it false for projection-only
+measurements. Graph recall and latency are measured separately with BenchYAML.
+
+For performance validation, use the standard BenchYAML query path on identical
+saved graphs for `fp32`, `auto`/`fp16` or explicit `int8`. Include normal query preparation in
+its timers and compare recall@10 as well as QPS. Control CPU affinity and NUMA
+memory placement consistently across runs; otherwise projection locality can
+obscure the precision comparison. Do not include compilation or another active
+benchmark in the query measurement interval.
+
+
+### Concurrent query integration
+
+ASH can combine independent queries when the selected projection advertises
+batch support. FP16 and INT8 use true oneDNN matrix multiplication while
+retaining a singleton path. Applications continue
+to issue synchronous searches; no query executor or nested native thread pool
+is created. Base-vector encoding and training remain FP32.
+
+Database developers should follow [Integrating ASH queries into a database](../../../../docs/ash-query-integration.md)
+for caller concurrency, bounded admission, resource ownership and latency
+validation. The [maintainer design](../../../../docs/ash-query-batching-design.md)
+describes coordination separately. Native batch entry points accept counts above
+eight; internal micro-tiling does not restrict their API.

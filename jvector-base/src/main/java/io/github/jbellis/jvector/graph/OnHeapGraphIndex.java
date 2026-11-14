@@ -32,7 +32,8 @@ import io.github.jbellis.jvector.graph.similarity.ScoreFunction;
 import io.github.jbellis.jvector.util.Accountable;
 import io.github.jbellis.jvector.util.BitSet;
 import io.github.jbellis.jvector.util.Bits;
-import io.github.jbellis.jvector.util.DenseIntMap;
+import io.github.jbellis.jvector.util.IntMap;
+import io.github.jbellis.jvector.util.PagedIntMap;
 import io.github.jbellis.jvector.util.RamUsageEstimator;
 import io.github.jbellis.jvector.util.SparseIntMap;
 import io.github.jbellis.jvector.util.ThreadSafeGrowableBitSet;
@@ -83,6 +84,15 @@ public class OnHeapGraphIndex implements MutableGraphIndex {
 
     private final boolean isHierarchical;
 
+    /**
+     * Dense node maps use {@link PagedIntMap}: slots never move, so updates are a single CAS with no
+     * lock. A read-write-locked map ({@link io.github.jbellis.jvector.util.DenseIntMap}) made every
+     * concurrent neighbor update take a shared lock, whose contention caused large build-time swings.
+     */
+    static <T> IntMap<T> newDenseNodeMap(int initialCapacity) {
+        return new PagedIntMap<>(initialCapacity);
+    }
+
     OnHeapGraphIndex(List<Integer> maxDegrees, int dimension, double overflowRatio, DiversityProvider diversityProvider, boolean isHierarchical) {
         this.overflowRatio = overflowRatio;
         this.maxDegrees = new IntArrayList();
@@ -92,7 +102,7 @@ public class OnHeapGraphIndex implements MutableGraphIndex {
         this.completions = new CompletionTracker(1024);
         // Initialize the base layer (layer 0) with a dense map.
         this.layers.add(new ConcurrentNeighborMap(
-                new DenseIntMap<>(1024),
+                newDenseNodeMap(1024),
                 diversityProvider,
                 getDegree(0),
                 (int) (getDegree(0) * overflowRatio))
@@ -464,6 +474,24 @@ public class OnHeapGraphIndex implements MutableGraphIndex {
         }
     }
 
+    /** Per-thread buffers for scoring one node's unvisited neighbors as a batch; they grow to the largest list. */
+    private static final ThreadLocal<BatchScratch> BATCH_SCRATCH = ThreadLocal.withInitial(BatchScratch::new);
+
+    private static final class BatchScratch {
+        int[] nodes = new int[64];
+        float[] scores = new float[64];
+
+        /** Stores {@code node} at {@code index}, growing both buffers if needed; returns the new count. */
+        int add(int index, int node) {
+            if (index == nodes.length) {
+                nodes = java.util.Arrays.copyOf(nodes, 2 * index);
+                scores = new float[2 * index];
+            }
+            nodes[index] = node;
+            return index + 1;
+        }
+    }
+
     private class FrozenView implements View {
         @Override
         public NodesIterator getNeighborsIterator(int level, int node) {
@@ -473,6 +501,18 @@ public class OnHeapGraphIndex implements MutableGraphIndex {
 
         @Override
         public void processNeighbors(int level, int node, ScoreFunction scoreFunction, IntMarker visited, NeighborProcessor neighborProcessor) {
+            if (scoreFunction.supportsBatchScoring()) {
+                // Gather the unvisited neighbors, score them in one batch, then hand them on in neighbor order.
+                var batch = BATCH_SCRATCH.get();
+                int count = 0;
+                for (var it = getNeighborsIterator(level, node); it.hasNext(); ) {
+                    var friendOrd = it.nextInt();
+                    if (visited.mark(friendOrd)) count = batch.add(count, friendOrd);
+                }
+                scoreFunction.similarityTo(batch.nodes, count, batch.scores);
+                for (int i = 0; i < count; i++) neighborProcessor.process(batch.nodes[i], batch.scores[i]);
+                return;
+            }
             for (var it = getNeighborsIterator(level, node); it.hasNext(); ) {
                 var friendOrd = it.nextInt();
                 if (visited.mark(friendOrd)) {

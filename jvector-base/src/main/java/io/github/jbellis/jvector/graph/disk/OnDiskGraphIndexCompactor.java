@@ -426,6 +426,9 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
         if (!refKeys.contains(FeatureId.INLINE_VECTORS)) {
             throw new IllegalArgumentException("Each source must have the INLINE_VECTORS feature");
         }
+        if (refKeys.contains(FeatureId.PAGE_ALIGNMENT)) {
+            throw new IllegalArgumentException("Compacting page-aligned indexes is not supported");
+        }
     }
 
     /** Number of level-0 cell scans run so far (one per node and target); for tests and diagnostics. */

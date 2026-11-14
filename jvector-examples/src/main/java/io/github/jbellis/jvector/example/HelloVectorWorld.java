@@ -17,34 +17,36 @@
 package io.github.jbellis.jvector.example;
 
 import io.github.jbellis.jvector.example.benchmarks.datasets.DataSets;
-import io.github.jbellis.jvector.example.reporting.RunArtifacts;
-import io.github.jbellis.jvector.example.yaml.MultiConfig;
-import io.github.jbellis.jvector.example.yaml.RunConfig;
+import io.github.jbellis.jvector.graph.GraphIndexBuilder;
+import io.github.jbellis.jvector.graph.GraphSearcher;
+import io.github.jbellis.jvector.util.Bits;
 
 import java.io.IOException;
-import java.util.List;
 
+/** Builds a graph and searches it through the library API. */
 public class HelloVectorWorld {
     public static void main(String[] args) throws IOException {
-        System.out.println("Heap space available is " + Runtime.getRuntime().maxMemory());
-
         String datasetName = "ada002-100k";
+        var loaded = DataSets.loadDataSet(datasetName)
+                .orElseThrow(() -> new IllegalArgumentException("Dataset not found: " + datasetName));
+        try (var dataset = loaded.getDataSet()) {
+            var vectors = dataset.getBaseRavv();
+            var similarity = dataset.getSimilarityFunction();
+            var query = dataset.getQueryVectors().get(0);
 
-        // Dataset-tuned config (construction/search grids)
-        MultiConfig config = MultiConfig.getDefaultConfig(datasetName);
-
-        // Run-level policy config (benchmarks/console/logging + run metadata)
-        RunConfig runCfg = RunConfig.loadDefault();
-
-        var ds = DataSets.loadDataSet(datasetName).orElseThrow(
-                () -> new RuntimeException("dataset " + datasetName + " not found"))
-                .getDataSet();
-
-        // Run artifacts + selections (sys_info/dataset_info/experiments.csv)
-        RunArtifacts artifacts = RunArtifacts.open(runCfg, List.of(config));
-        artifacts.registerDataset(datasetName, ds);
-
-        // Run
-        Grid.run(ds, GridSpec.fromConfig(config), artifacts);
+            try (var builder = GraphIndexBuilder.builder(vectors, similarity, 32)
+                         .withBeamWidth(100)
+                         .withNeighborOverflow(1.2f)
+                         .withAlpha(1.2f)
+                         .build();
+                 var graph = builder.build(vectors)) {
+                var result = GraphSearcher.search(query, 10, vectors, similarity, graph, Bits.ALL);
+                System.out.printf("Nearest neighbors to the first query in %s (%d indexed vectors)%n",
+                        datasetName, graph.size(0));
+                for (var match : result.getNodes()) {
+                    System.out.printf("vector %d  score %.6f%n", match.node, match.score);
+                }
+            }
+        }
     }
 }

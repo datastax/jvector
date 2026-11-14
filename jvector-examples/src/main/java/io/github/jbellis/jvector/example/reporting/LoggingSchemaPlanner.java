@@ -135,9 +135,10 @@ public final class LoggingSchemaPlanner {
             }
 
             // construction reranking types (FP/NVQ)
-            if (cfg.construction != null && cfg.construction.reranking != null) {
-                if (cfg.construction.reranking.contains("NVQ")) {
-                    wantsNVQ = true;
+            if (cfg.construction != null && cfg.construction.usesNVQReranking()) {
+                wantsNVQ = true;
+                if (cfg.usesSchema3() && "inMemory".equals(cfg.construction.type)) {
+                    indexQuantTypes.add("NVQ");
                 }
             }
 
@@ -145,7 +146,13 @@ public final class LoggingSchemaPlanner {
             if (cfg.search != null && cfg.search.compression != null) {
                 for (var c : cfg.search.compression) {
                     if (c != null && c.type != null && !"None".equals(c.type)) {
-                        searchQuantTypes.add(c.type); // "PQ" or "BQ"
+                        var fusedGraph = cfg.construction == null ? null : cfg.construction.fusedGraph;
+                        if (cfg.usesSchema3() && fusedGraph != null && fusedGraph.contains(true)) {
+                            indexQuantTypes.add(c.type);
+                        }
+                        if (!cfg.usesSchema3() || fusedGraph == null || fusedGraph.contains(false)) {
+                            searchQuantTypes.add(c.type);
+                        }
                     }
                 }
             }
@@ -158,7 +165,7 @@ public final class LoggingSchemaPlanner {
                     union.add(p + "." + qt + ".encoding_time_s");
                 }
                 if (wantsNVQ) {
-                    union.add(p + ".NVQ.compute_time_s"); // we intentionally do not time NVQ encode
+                    union.add(p + ".NVQ.compute_time_s"); // Disk NVQ encoding is part of graph/write.
                 }
             } else if ("search.search_quant_time_s".equals(p)) {
                 for (String qt : searchQuantTypes) {

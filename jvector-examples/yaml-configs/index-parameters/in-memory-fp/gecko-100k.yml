@@ -1,0 +1,26 @@
+# gecko-100k (768 dimensions, 100k vectors): in-memory graph built and searched with full-precision vectors.
+# Nothing is written to disk.
+yamlSchemaVersion: 3
+onDiskIndexVersion: 7
+
+dataset: gecko-100k
+
+construction:
+  type: inMemory
+  outDegree: [32]
+  efConstruction: [100]
+  neighborOverflow: [1.2f]
+  addHierarchy: [Yes]
+  refineFinalGraph: [Yes]
+  compression:
+    - type: None
+  reranking:
+    type: None
+
+search:
+  topKOverquery:
+    10: [1.0, 2.0]
+    100: [1.0, 2.0]
+  useSearchPruning: [No]
+  compression:
+    - type: None

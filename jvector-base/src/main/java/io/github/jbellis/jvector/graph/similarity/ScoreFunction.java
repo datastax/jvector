@@ -41,6 +41,23 @@ public interface ScoreFunction {
     float similarityTo(int node2);
 
     /**
+     * Scores {@code count} nodes: {@code scores[i]} is {@code similarityTo(nodes[i])} for {@code 0 <= i < count}.
+     * Implementations that report {@link #supportsBatchScoring()} score the nodes together, for example in one
+     * native call, and must give the same scores as {@link #similarityTo(int)}.
+     */
+    default void similarityTo(int[] nodes, int count, float[] scores) {
+        for (int i = 0; i < count; i++) scores[i] = similarityTo(nodes[i]);
+    }
+
+    /**
+     * @return true if {@link #similarityTo(int[], int, float[])} is faster than one {@link #similarityTo(int)} per
+     * node, so callers should gather the nodes they need before scoring them
+     */
+    default boolean supportsBatchScoring() {
+        return false;
+    }
+
+    /**
      * Computes the similarity to the neighborIndex-th neighbor of origin.
      * Before calling this function, enableSimilarityToNeighbors must be called first with the same origin.
      * This function only works if it is called for the same origin node multiple times.
@@ -65,6 +82,24 @@ public interface ScoreFunction {
         return false;
     }
 
+    /**
+     * Whether a top-K search scored by this function stops adaptively whatever {@link SearchScoreProvider} wraps it,
+     * when the searcher's experimental adaptive stopping is enabled ({@code GraphSearcher.useAdaptiveTermination}).
+     */
+    default boolean requiresAdaptiveTermination() {
+        return false;
+    }
+
+    /**
+     * For DOT_PRODUCT scores, an upper bound on the dot product this function can score between its query and any
+     * stored vector, such as the query's length times the largest stored vector length; NaN when unknown. Adaptive
+     * stopping reads dot-product scores as distances only when it is known, so it must hold for every vector the
+     * search can reach. Called once per search.
+     */
+    default float dotProductBound() {
+        return Float.NaN;
+    }
+
 
     interface ExactScoreFunction extends ScoreFunction {
         default boolean isExact() {
@@ -75,6 +110,17 @@ public interface ScoreFunction {
     interface ApproximateScoreFunction extends ScoreFunction {
         default boolean isExact() {
             return false;
+        }
+    }
+
+    /**
+     * An approximate score function whose top-K searches stop adaptively, when the searcher's experimental adaptive
+     * stopping is enabled, whatever provider wraps it. Every ASH score function is one.
+     */
+    interface AdaptiveApproximateScoreFunction extends ApproximateScoreFunction {
+        @Override
+        default boolean requiresAdaptiveTermination() {
+            return true;
         }
     }
 }

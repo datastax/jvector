@@ -52,6 +52,15 @@ public abstract class PQVectors implements CompressedVectors {
         this.pq = pq;
     }
 
+    /**
+     * The largest length of any stored vector's reconstruction, relative to the global centroid if any, or more:
+     * the PQ model's {@link ProductQuantization#maxEncodedNorm}, which counts every code it encoded or holds. With the
+     * centered query's length it bounds every dot product PQ scores. NaN when unknown.
+     */
+    public float maxReconstructedNorm() {
+        return pq.maxEncodedNorm();
+    }
+
     public static ImmutablePQVectors load(RandomAccessReader in) throws IOException {
         // pq codebooks
         var pq = ProductQuantization.load(in);
@@ -72,7 +81,7 @@ public abstract class PQVectors implements CompressedVectors {
             chunks[layout.fullSizeChunks] = vectorTypeSupport.readByteSequence(in, layout.lastChunkBytes);
         }
 
-        return new ImmutablePQVectors(pq, chunks, vectorCount, layout.fullChunkVectors);
+        return new ImmutablePQVectors(pq, chunks, vectorCount, layout.fullChunkVectors, false);
     }
 
     public static PQVectors load(RandomAccessReader in, long offset) throws IOException {
@@ -146,7 +155,7 @@ public abstract class PQVectors implements CompressedVectors {
         else
             VectorAccess.forEach(ravv, vectorCount, ordinalsMapping, simdExecutor, encode);
 
-        return new ImmutablePQVectors(pq, chunks, vectorCount, layout.fullChunkVectors);
+        return new ImmutablePQVectors(pq, chunks, vectorCount, layout.fullChunkVectors, false);
     }
 
     @Override

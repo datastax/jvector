@@ -1,0 +1,54 @@
+# BenchYAML run configuration for an index larger than memory. It measures cold queries on a cold index:
+#   cold query  a held-out query presented once, after the JIT is warmed with other vectors
+#   cold index  the index's pages start outside the page cache, so search reads them from storage
+#
+# Pair it with an index configuration served from disk, for example:
+#   java -Djvector.bench.runConfig=jvector-examples/yaml-configs/run-config-larger-than-memory.yml ... \
+#     io.github.jbellis.jvector.example.BenchYAML \
+#     jvector-examples/yaml-configs/index-parameters/larger-than-memory/mpnet-10m.yml
+#
+# Only the first search case in a JVM is cold: later cases repeat the same queries and find the pages earlier
+# cases read. For a cold measurement of each worker count or overquery, give the index configuration one value
+# of each and run it once per value. See docs/larger-than-memory-indexes.md.
+yamlSchemaVersion: 1
+onDiskIndexVersion: 7
+
+# Benchmarks to compute and the stats from each
+benchmarks:
+  throughput: [ AVG ]
+  count:      [ visited, expanded base layer ]   # Expanded nodes are the records read from storage
+  accuracy:   [ recall ]
+
+# How benchmarks run
+measurement:
+  evictIndex: true          # Cold index: evict it from the page cache before its first search (Linux)
+  throughput:
+    warmup: base            # Warm with dataset vectors, never the measured queries
+    warmupPasses: 3
+    untilCompiled: true     # Finish JIT compilation before timing
+    passes: 1               # Cold queries: one timed pass, each held-out query runs once
+    minSeconds: 0           # Do not repeat queries to fill a minimum time
+
+# Console table: query results and build time; the CSV below also records build phases and index size
+console:
+  benchmarks:
+    throughput: [ AVG ]
+    count:      [ visited, expanded base layer ]
+    accuracy:   [ recall ]
+  metrics:
+    construction: [ index_build_time_s ]
+    execution:    [ response_p50_ms, response_p99_ms, response_p999_ms, page_reads_per_query ]
+
+# Experiments CSV, one row per measured configuration
+logging:
+  dir: logging
+  runId: "larger-than-memory-{ts}"
+  type: csv
+  benchmarks:
+    throughput: [ AVG ]
+    count:      [ visited, expanded base layer ]
+    accuracy:   [ recall ]
+  metrics:
+    construction: [ index_build_time_s, graph_build_time_s, flush_time_s ]
+    disk:         [ total_file_size_mb ]
+    execution:    [ response_p50_ms, response_p99_ms, response_p999_ms, page_reads_per_query ]

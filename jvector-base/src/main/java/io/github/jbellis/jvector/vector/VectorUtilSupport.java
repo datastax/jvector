@@ -24,6 +24,7 @@
 
 package io.github.jbellis.jvector.vector;
 
+import io.github.jbellis.jvector.quantization.ASHQueryProjection;
 import io.github.jbellis.jvector.quantization.ProductQuantization;
 import io.github.jbellis.jvector.vector.types.ByteSequence;
 import io.github.jbellis.jvector.vector.types.VectorFloat;
@@ -34,6 +35,200 @@ import java.util.List;
  * Interface for implementations of VectorUtil support.
  */
 public interface VectorUtilSupport {
+
+  /** Effective ASH kernel tuning for benchmark diagnostics. */
+  default String ashKernelDescription() { return "portable scalar ASH kernels"; }
+
+  /** Query factories select the tuned entry point once, outside the scoring hot loop. */
+  default boolean usesAshProjectionTuning() { return false; }
+
+  /** Explicitly tuned projection kernel; the ordinary entry point retains its compact default loop. */
+  default float ashProjectionDotTuned(float[] query, byte[] code, int dimensions, int bitsPerDimension) {
+    return ashProjectionDotTuned(query, code, 0, dimensions, bitsPerDimension);
+  }
+
+  /** As {@link #ashProjectionDotTuned(float[], byte[], int, int)} for the code starting at {@code codeOffset}. */
+  default float ashProjectionDotTuned(float[] query, byte[] code, int codeOffset, int dimensions, int bitsPerDimension) {
+    return ashProjectionDot(query, code, codeOffset, dimensions, bitsPerDimension);
+  }
+
+  /** Whether ASH nibble lookup and accumulation are implemented with SIMD. */
+  default boolean supportsAshLutScoring() { return false; }
+
+  /** Exact integer lookup for encoded C=1 query pairs. LUT stride is 32 (two repeated 16-entry tables). */
+    default void ashSymmetricLutScore(byte[] codes, int groups, int stride, int lane, int count,
+                                      short[] lut, float[] out, int outOffset) {
+        for (int i = 0; i < count; i++) {
+            long sum = 0;
+            for (int g = 0; g < groups; g++) {
+                int nibble = (codes[(g / 2) * stride + lane + i] >>> (4 * (g % 2))) & 15;
+                sum += lut[g * 32 + nibble];
+            }
+            out[outOffset + i] = sum * .25f;
+        }
+    }
+
+  /** Packed-to-packed integer dot products for symmetric ASH. */
+  default boolean supportsAshSymmetricScoring() { return false; }
+
+  default float ashSymmetricDot(long[] aBits, byte[] aCodes, long[] bBits, byte[] bCodes,
+                                int dimensions, int bits) {
+    throw new UnsupportedOperationException("Symmetric ASH SIMD is unavailable on this backend");
+  }
+
+  /** Whether {@link #ashSymmetricDotAt} is implemented (2- and 4-bit codes at array offsets). */
+  default boolean supportsAshSymmetricDotAt() { return false; }
+
+  /**
+   * Symmetric 2/4-bit packed dot product of codes stored at offsets inside larger arrays.
+   * Same result as {@link #ashSymmetricDot} on the corresponding standalone code arrays.
+   */
+  default float ashSymmetricDotAt(byte[] aCodes, int aOffset, byte[] bCodes, int bOffset,
+                                  int dimensions, int bits) {
+    throw new UnsupportedOperationException("Offset symmetric ASH SIMD is unavailable on this backend");
+  }
+
+  /** Whether {@link #ashSymmetricDotRows} scores all rows in one call rather than one call per row. */
+  default boolean supportsAshSymmetricDotRows() { return false; }
+
+  /**
+   * Symmetric 2/4-bit dot products of one code against {@code count} codes stored {@code stride} bytes apart from
+   * the start of {@code rows}: {@code out[i]} equals {@link #ashSymmetricDotAt} of the query and row {@code i}.
+   * Requires {@link #supportsAshSymmetricDotAt()}.
+   */
+  default void ashSymmetricDotRows(byte[] query, int queryOffset, byte[] rows, int stride, int count,
+                                   int dimensions, int bits, float[] out) {
+    for (int i = 0; i < count; i++) out[i] = ashSymmetricDotAt(query, queryOffset, rows, i * stride, dimensions, bits);
+  }
+
+  /**
+   * Symmetric 1-bit dot product, {@code dimensions - 2 * mismatches}, of sign words stored at offsets
+   * inside larger arrays. Same result as {@link #ashSymmetricDot} with {@code bits == 1}.
+   * Available whenever {@link #supportsAshSymmetricScoring()} is.
+   */
+  default float ashSymmetricBinaryDotAt(long[] aBits, int aOffset, long[] bBits, int bOffset, int dimensions) {
+    throw new UnsupportedOperationException("Symmetric ASH SIMD is unavailable on this backend");
+  }
+
+  /** Whether canonical 2/4-bit projection codes have a single-vector SIMD kernel. */
+  default boolean supportsAshProjectionScoring() { return false; }
+
+  /** Whether canonical ASH codes can use an already prepared nibble LUT in SIMD. */
+  default boolean supportsAshCanonicalLutScoring() { return false; }
+
+  /** Whether canonical LUT scoring is implemented by the native backend. */
+  default boolean supportsNativeAshCanonicalLutScoring() { return false; }
+
+  /** Fail before scoring when the caller explicitly requires a native ASH single scorer. */
+  default void requireNativeAshSingleScoring(int bitsPerDimension) {
+    throw new IllegalStateException("Native ASH single scoring is unavailable for b=" + bitsPerDimension);
+  }
+
+  /** Projection dot only; callers apply the vector's scale, offset and landmark term. */
+  default float ashCanonicalLutDot(byte[] code, int groups, float[] lut) {
+    return ashCanonicalLutDot(code, 0, groups, lut);
+  }
+
+  /** As {@link #ashCanonicalLutDot(byte[], int, float[])} for the code starting at {@code codeOffset}. */
+  default float ashCanonicalLutDot(byte[] code, int codeOffset, int groups, float[] lut) {
+    return ASHLutScoring.dotCanonical(code, codeOffset, groups, lut);
+  }
+
+  /** Dot product of a projected query with a canonical signed-magnitude 2/4-bit code. */
+  default float ashProjectionDot(float[] query, byte[] code, int dimensions, int bitsPerDimension) {
+    return ashProjectionDot(query, code, 0, dimensions, bitsPerDimension);
+  }
+
+  /** As {@link #ashProjectionDot(float[], byte[], int, int)} for the code starting at {@code codeOffset}. */
+  default float ashProjectionDot(float[] query, byte[] code, int codeOffset, int dimensions, int bitsPerDimension) {
+    if (bitsPerDimension != 2 && bitsPerDimension != 4) {
+      throw new IllegalArgumentException("Projection scoring requires 2 or 4 bits per dimension");
+    }
+    java.util.Objects.checkFromIndexSize(0, dimensions, query.length);
+    int perByte = 8 / bitsPerDimension;
+    java.util.Objects.checkFromIndexSize(codeOffset, dimensions / perByte + (dimensions % perByte == 0 ? 0 : 1), code.length);
+    int sign = 1 << (bitsPerDimension - 1);
+    float sum = 0;
+    for (int i = 0; i < dimensions; i++) {
+      int field = (code[codeOffset + i / perByte] & 255) >>> ((i % perByte) * bitsPerDimension);
+      float magnitude = (field & (sign - 1)) + 0.5f;
+      sum += query[i] * ((field & sign) == 0 ? -magnitude : magnitude);
+    }
+    return sum;
+  }
+
+  /**
+   * Scores contiguous lanes in a byte-interleaved ASH block using a 16-entry LUT per nibble.
+   * Even groups occupy low nibbles; odd groups occupy high nibbles. Each byte row has
+   * {@code stride} lanes. Writes projection dot products, without per-vector headers.
+   */
+  default void ashLutScore(byte[] codes, int offset, int groups, int stride,
+                           int lane, int count, float[] lut, float[] out, int outOffset) {
+    ASHLutScoring.score(codes, offset, groups, stride, lane, count, lut, out, outOffset);
+  }
+
+  /**
+   * Whether this provider implements complete FusedASH neighborhood scoring for one landmark.
+   * Query factories use this capability independently of the standalone LUT primitive.
+   *
+   * @return {@code true} when {@link #ashScoreNeighborhood} is implemented
+   */
+  default boolean supportsAshNeighborhoodScoring() { return false; }
+
+  /**
+   * Scores one complete C=1 FusedASH neighborhood, including all serialized blocks and headers.
+   * The result is {@code (1 + rawDotProduct) / 2}, unclamped, matching graph DOT_PRODUCT similarity.
+   *
+   * <p>Inputs are read-only for the call; output storage must be distinct from {@code lut}.
+   * Calls may share immutable inputs across threads when their output arrays are separate.
+   * On failure, output contents are unspecified. Implementations validate sizes before native access.</p>
+   *
+   * @param codes complete packed neighborhood, with full serialized storage for its final block
+   * @param groups positive nibble group count, including a possible partial final group
+   * @param blockSize serialized block width: 8, 16, or 32
+   * @param capacity positive number of lanes to score, including graph padding
+   * @param lut query LUT with at least {@code 16 * groups} floats
+   * @param landmarkDot query dot product with the single landmark
+   * @param out receives {@code capacity} similarities; later elements are left unchanged
+   * @throws UnsupportedOperationException if this provider has no implementation
+   * @throws IllegalArgumentException for an invalid shape or aliased LUT/output
+   * @throws IndexOutOfBoundsException if an array is too small
+   * @throws IllegalStateException if a scored lane contains a nonzero landmark ID
+   */
+  default void ashScoreNeighborhood(byte[] codes, int groups, int blockSize, int capacity,
+                                    float[] lut, float landmarkDot, float[] out) {
+    throw new UnsupportedOperationException("Native ASH neighborhood scoring is unavailable");
+  }
+
+  /** Whether {@link #ashScoreNeighborhoodInt8} is implemented. */
+  default boolean supportsAshInt8NeighborhoodScoring() { return false; }
+
+  /**
+   * Scores one complete C=1 FusedASH neighborhood of offset-binary codes (3 and 5 to 9 bits) with an
+   * INT8 query. Each block's body is {@code [unit][lane][bits bytes]} for {@code units} units of
+   * eight dimensions, followed by the usual headers. Per lane,
+   * {@code dot = (<q, field> - center) * invScale}, and the result is
+   * {@code (1 + scale * dot + landmarkDot + offset) / 2}, unclamped.
+   *
+   * @param codes complete packed neighborhood, with full serialized storage for its final block
+   * @param bits bits per dimension: 3, 5, 6, 7, 8 or 9
+   * @param units positive number of eight-dimension units
+   * @param blockSize serialized block width: 8, 16, or 32
+   * @param capacity positive number of lanes to score, including graph padding
+   * @param q INT8 query, {@code units * 8} entries
+   * @param invScale reciprocal of the query quantization scale
+   * @param center {@code (2^bits - 1)/2 * sum(q)}
+   * @param landmarkDot query dot product with the single landmark
+   * @param out receives {@code capacity} similarities; later elements are left unchanged
+   * @throws UnsupportedOperationException if this provider has no implementation
+   * @throws IllegalArgumentException for an invalid shape
+   * @throws IndexOutOfBoundsException if an array is too small
+   * @throws IllegalStateException if a scored lane contains a nonzero landmark ID
+   */
+  default void ashScoreNeighborhoodInt8(byte[] codes, int bits, int units, int blockSize, int capacity,
+                                        byte[] q, float invScale, float center, float landmarkDot, float[] out) {
+    throw new UnsupportedOperationException("Native INT8 ASH neighborhood scoring is unavailable");
+  }
 
   /** Calculates the dot product of the given float arrays. */
   float dotProduct(VectorFloat<?> a, VectorFloat<?> b);
@@ -343,6 +538,217 @@ public interface VectorUtilSupport {
    */
   float nvqUniformLoss(VectorFloat<?> vector, float minValue, float maxValue, int nBits);
 
+  // ------------------------------------------------------------------
+  // ASH kernels (default scalar implementations)
+  // ------------------------------------------------------------------
+
+  /**
+   * @return true if this backend provides a SIMD implementation of the masked-load kernel as described in the ASH paper.
+   */
+  default boolean supportsAshMaskedLoad() {
+    return false;
+  }
+
+  /** Immutable provider-specific projection, safe to share between query threads. */
+  interface AshProjection {
+    /** Writes the full matrix-vector product; input and output must not alias. */
+    void project(float[] query, float[] out);
+
+    /**
+     * Projects the first {@code count} vectors, each stored in its own row.
+     * All input rows must have the model's original dimension and output rows
+     * its projected dimension. Output rows must be distinct and must not alias
+     * any input row. Rows beyond count are ignored; count zero is a no-op.
+     * Providers may batch the multiply; the default retains their single-vector
+     * arithmetic without allocating temporary arrays.
+     */
+    default void projectBatch(float[][] inputs, float[][] outputs, int count) {
+      validateBatch(inputs, outputs, count);
+      for (int i = 0; i < count; i++) project(inputs[i], outputs[i]);
+    }
+
+    /**
+     * Whether this view has a genuine multi-vector projection implementation.
+     * Query dispatch uses this capability to avoid coordinating providers whose
+     * batch method simply repeats singleton calls. This is a capability flag,
+     * not a performance promise, and may become false after a native fallback.
+     */
+    default boolean supportsBatchProjection() { return false; }
+
+    /** Validates a batch before any output is changed. */
+    static void validateBatch(float[][] inputs, float[][] outputs, int count) {
+      java.util.Objects.requireNonNull(inputs, "inputs");
+      java.util.Objects.requireNonNull(outputs, "outputs");
+      if (count < 0 || count > inputs.length || count > outputs.length)
+        throw new IllegalArgumentException("Invalid ASH projection batch count: " + count);
+      for (int i = 0; i < count; i++) {
+        java.util.Objects.requireNonNull(inputs[i], "input row");
+        java.util.Objects.requireNonNull(outputs[i], "output row");
+        if (inputs[i].length != inputs[0].length || outputs[i].length != outputs[0].length)
+          throw new IllegalArgumentException("Ragged ASH projection batch");
+      }
+      if (count <= 32) {
+        // The normal encoding batch needs no temporary collection. For larger
+        // API requests use linear validation rather than an unbounded scan.
+        for (int i = 0; i < count; i++)
+          for (int j = 0; j < count; j++)
+            if (outputs[i] == inputs[j] || (j < i && outputs[i] == outputs[j]))
+              throw new IllegalArgumentException("Aliased ASH projection batch");
+      } else {
+        var used = new java.util.IdentityHashMap<float[], Boolean>(count);
+        for (int i = 0; i < count; i++) used.put(inputs[i], Boolean.TRUE);
+        for (int i = 0; i < count; i++)
+          if (used.put(outputs[i], Boolean.TRUE) != null)
+            throw new IllegalArgumentException("Aliased ASH projection batch");
+      }
+    }
+
+    /**
+     * Returns an immutable view for query scoring, which may use lower operand
+     * precision. Encoding/training must continue to use this original object.
+     * The caller caches the returned view for the model's lifetime. Providers
+     * without a query-specific representation return this same object.
+     */
+    default AshProjection forQueryScoring() {
+      return forQueryScoring(ASHQueryProjection.fromSystemProperty());
+    }
+
+    /** As {@link #forQueryScoring()}, with an explicit precision instead of the system property. */
+    default AshProjection forQueryScoring(ASHQueryProjection precision) {
+      switch (precision) {
+        case AUTO:
+        case FP32: return this;
+        case FP16: throw new UnsupportedOperationException(
+                "This provider does not support FP16 ASH query projection");
+        case INT8: throw new UnsupportedOperationException(
+                "This provider does not support INT8 ASH query projection");
+        default: throw new AssertionError(precision);
+      }
+    }
+
+    /** Operand precision of this prepared view; reporting must not initialize another view. */
+    default String operandPrecision() { return "fp32"; }
+
+    /** Additional backing storage, excluding the caller-owned matrix. */
+    default long ramBytesUsed() { return 0L; }
+  }
+
+  /**
+   * Prepares an immutable [projected dimension][original dimension] matrix once.
+   * The caller must not mutate its rows after preparation. Providers may cache a
+   * packed representation; each project call still prepares exactly one query.
+   */
+  default AshProjection prepareAshProjection(float[][] matrix) {
+    java.util.Objects.requireNonNull(matrix, "matrix");
+    if (matrix.length == 0 || matrix[0].length == 0)
+      throw new IllegalArgumentException("ASH projection dimensions must be positive");
+    int columns = matrix[0].length;
+    for (float[] row : matrix) {
+      if (row.length != columns) throw new IllegalArgumentException("Ragged ASH projection");
+    }
+    return (query, out) -> {
+      if (query.length != columns || out.length != matrix.length || query == out)
+        throw new IllegalArgumentException("ASH projection shape or aliasing mismatch");
+      for (int row = 0; row < matrix.length; row++) out[row] = ashDotRow(matrix[row], query);
+    };
+  }
+
+  /**
+   * Dot product between a matrix row and a dense vector.
+   * Used by ASH projection: {@code y_i = <A_i, x>}.
+   *
+   * Contract: Arow.length == x.length.
+   * Default is scalar; SIMD backends may override.
+   */
+  default float ashDotRow(float[] Arow, float[] x) {
+    assert Arow.length == x.length : "Arow.length != x.length";
+    float acc = 0.0f;
+    for (int i = 0; i < x.length; i++) {
+      acc += Arow[i] * x[i];
+    }
+    return acc;
+  }
+
+  /**
+   * Sums {@code tildeQ[qOffset + i]} over the set bits {@code i < d} of one vector's packed sign words.
+   * The default is portable scalar code; SIMD backends override it.
+   */
+  default float ashMaskedAdd_512(float[] tildeQ,
+                                         int qOffset,
+                                         long[] allPackedVectors,
+                                         int packedBase,
+                                         int d,
+                                         int words) {
+    float sum = 0.0f;
+    int baseDim = 0;
+
+    for (int w = 0; w < words; w++) {
+      long word = allPackedVectors[packedBase + w];
+
+      // Standard bit-twiddling iteration (iterate only set bits)
+      while (word != 0L) {
+        int bit = Long.numberOfTrailingZeros(word);
+        int idx = baseDim + bit;
+
+        // Bounds check required for the last word
+        if (idx < d) {
+          sum += tildeQ[qOffset + idx];
+        }
+
+        // Clear the lowest set bit
+        word &= (word - 1);
+      }
+
+      baseDim += 64;
+    }
+    return sum;
+  }
+
+  /**
+   * Computes maskedAdd for a block slice of vectors stored in packed block-column-major form.
+   * For each lane in [0, blockLen), writes:
+   *   {@code outMaskedAdd[lane] = <tildeQ, b_lane>}
+   * packedBits layout:
+   *   packedBits[blockWordBase + w*blockSize + laneIndex] is 64-bit word w for that lane.
+   * Default implementation is scalar bit-walk with a register accumulator per lane.
+   * SIMD backends may override.
+   */
+  default void ashMaskedAddBlockAllWords(
+          float[] tildeQ,
+          int d,
+          long[] packedBits,
+          int packedBase,  // blockId * nWords * blockSize
+          int nWords,
+          int blockSize,
+          int laneStart,
+          int blockLen,
+          float[] outMaskedAdd
+  ) {
+    assert laneStart >= 0;
+    assert blockLen >= 0;
+    assert laneStart + blockLen <= blockSize;
+    assert outMaskedAdd.length >= blockLen : "outMaskedAdd too small";
+
+    for (int lane = 0; lane < blockLen; lane++) {
+      float maskedAdd = 0f; // register accumulator (critical!)
+      int laneIndex = laneStart + lane;
+
+      for (int w = 0; w < nWords; w++) {
+        long word = packedBits[packedBase + (w * blockSize) + laneIndex];
+        int baseDim = w * 64;
+
+        while (word != 0L) {
+          int bit = Long.numberOfTrailingZeros(word);
+          int idx = baseDim + bit;
+          if (idx < d) maskedAdd += tildeQ[idx];
+          word &= (word - 1);
+        }
+      }
+
+      outMaskedAdd[lane] = maskedAdd;
+    }
+  }
+
   /**
    * Optionally performs the existing coarse/fine NVQ growth-rate search in one
    * call. Returns NaN when unsupported; the caller then uses its Java search.
@@ -350,6 +756,15 @@ public interface VectorUtilSupport {
    */
   default float tryNvqGrowthRate(VectorFloat<?> vector, float minValue, float maxValue, int nBits) {
     return Float.NaN;
+  }
+
+  /**
+   * Sets the native BLAS thread count for calls made on the current thread, as
+   * {@link io.github.jbellis.jvector.util.BlasThreads} requests. Returns the setting to restore
+   * afterward, or -1 when this provider cannot control BLAS threads.
+   */
+  default int setBlasThreadsLocal(int threads) {
+    return -1;
   }
 
 }

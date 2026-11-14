@@ -1,0 +1,26 @@
+# Used by standalone BenchYAML via -Djvector.bench.runConfig=<this file>.
+yamlSchemaVersion: 1
+onDiskIndexVersion: 7
+benchmarks:
+  throughput: [AVG]
+  latency: [AVG, STD, P999]
+  accuracy: [recall]
+  count: [visited]
+measurement:
+  throughput:
+    minSeconds: 3.0   # Each timed pass repeats the queries for at least 3 s.
+console:
+  benchmarks:
+    throughput: [AVG]
+    latency: [AVG, STD, P999]
+    accuracy: [recall]
+    count: [visited]
+logging:
+  dir: logging
+  runId: ash-pq-direct-{ts}
+  type: csv
+  benchmarks:
+    throughput: [AVG]
+    latency: [AVG, STD, P999]
+    accuracy: [recall]
+    count: [visited]

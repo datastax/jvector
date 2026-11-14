@@ -17,6 +17,7 @@
 package io.github.jbellis.jvector.example;
 
 import io.github.jbellis.jvector.example.benchmarks.datasets.*;
+import io.github.jbellis.jvector.graph.disk.OnDiskGraphIndex;
 import io.github.jbellis.jvector.example.yaml.*;
 import io.github.jbellis.jvector.example.util.CompressorParameters;
 import io.github.jbellis.jvector.example.util.OnDiskGraphIndexCache;
@@ -49,18 +50,18 @@ public class TestDatasetPrefetching {
     @Test public void yamlDefaultsToResidentAndOptInIsParsed() throws Exception {
         var file = Files.createTempFile("prefetch-flag", ".yml");
         try {
-            Files.writeString(file, "yamlSchemaVersion: 1\nonDiskIndexVersion: 6\n");
+            Files.writeString(file, "yamlSchemaVersion: 2\nonDiskIndexVersion: " + OnDiskGraphIndex.CURRENT_VERSION + "\n");
             assertFalse(MultiConfig.getConfig(file.toString()).useDatasetPrefetching);
-            Files.writeString(file, "yamlSchemaVersion: 1\nonDiskIndexVersion: 6\nuseDatasetPrefetching: false\n");
+            Files.writeString(file, "yamlSchemaVersion: 2\nonDiskIndexVersion: " + OnDiskGraphIndex.CURRENT_VERSION + "\nuseDatasetPrefetching: false\n");
             assertFalse(MultiConfig.getConfig(file.toString()).useDatasetPrefetching);
-            Files.writeString(file, "yamlSchemaVersion: 1\nonDiskIndexVersion: 6\nuseDatasetPrefetching: true\n");
+            Files.writeString(file, "yamlSchemaVersion: 2\nonDiskIndexVersion: " + OnDiskGraphIndex.CURRENT_VERSION + "\nuseDatasetPrefetching: true\n");
             assertTrue(MultiConfig.getConfig(file.toString()).useDatasetPrefetching);
         } finally { Files.delete(file); }
     }
     @Test public void datasetPrefetchingAndCompactionOptionsAreIndependent() throws Exception {
         var file = Files.createTempFile("prefetch-compaction-flags", ".yml");
         try {
-            String common = "yamlSchemaVersion: 1\nonDiskIndexVersion: 6\nuseDatasetPrefetching: true\n";
+            String common = "yamlSchemaVersion: 2\nonDiskIndexVersion: " + OnDiskGraphIndex.CURRENT_VERSION + "\nuseDatasetPrefetching: true\n";
             Files.writeString(file, common);
             var config = MultiConfig.getConfig(file.toString());
             assertTrue(config.useDatasetPrefetching);
@@ -78,7 +79,7 @@ public class TestDatasetPrefetching {
     @Test public void versionedYamlRejectsUnknownSettings() throws Exception {
         var file = Files.createTempFile("prefetch-unknown-setting", ".yml");
         try {
-            Files.writeString(file, "yamlSchemaVersion: 1\nonDiskIndexVersion: 6\nuseDatasetPrefetching: false\nunknownSetting: true\n");
+            Files.writeString(file, "yamlSchemaVersion: 2\nonDiskIndexVersion: " + OnDiskGraphIndex.CURRENT_VERSION + "\nuseDatasetPrefetching: false\nunknownSetting: true\n");
             assertThrows(org.yaml.snakeyaml.error.YAMLException.class,
                     () -> MultiConfig.getConfig(file.toString()));
         } finally { Files.delete(file); }
@@ -135,7 +136,7 @@ public class TestDatasetPrefetching {
             public List<VectorFloat<?>> getQueryVectors(){return List.of(vectors.get(0));}
             public List<List<Integer>> getGroundTruth(){return List.of(List.of(0));}
         };
-        var cacheFile = Path.of("pq_cache").resolve(new CompressorParameters.PQParameters(4,16,false,-1f).idStringFor(ds));
+        var cacheFile = Path.of("compressor_cache").resolve(new CompressorParameters.PQParameters(4,16,false,-1f).idStringFor(ds));
         var work = Files.createTempDirectory("bulk-grid-wiring");
         try {
             Grid.runOneGraph(OnDiskGraphIndexCache.initialize(work.resolve("saved")), List.of(EnumSet.of(FeatureId.INLINE_VECTORS),EnumSet.of(FeatureId.NVQ_VECTORS)),

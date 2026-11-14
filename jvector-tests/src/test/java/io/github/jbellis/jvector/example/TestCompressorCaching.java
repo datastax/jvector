@@ -24,6 +24,7 @@ import io.github.jbellis.jvector.example.benchmarks.datasets.SimpleDataSet;
 import io.github.jbellis.jvector.example.util.CompressorParameters;
 import io.github.jbellis.jvector.graph.disk.OnDiskGraphIndex;
 import io.github.jbellis.jvector.quantization.NVQuantization;
+import io.github.jbellis.jvector.quantization.AsymmetricHashing;
 import io.github.jbellis.jvector.quantization.ProductQuantization;
 import io.github.jbellis.jvector.quantization.VectorCompressor;
 import io.github.jbellis.jvector.vector.VectorSimilarityFunction;
@@ -80,4 +81,20 @@ public class TestCompressorCaching extends RandomizedTest {
         assertTrue(loaded.getClass().getName(), loaded instanceof NVQuantization);
         assertEquals(nvq, loaded);
     }
+    @Test
+    public void ashLoadsAsASHAndCanEncodeVectors() throws Exception {
+        var ds = dataSet();
+        var cp = new CompressorParameters.ASHParameters(AsymmetricHashing.RANDOM,
+                AsymmetricHashing.HEADER_BITS + 4 * 2, 1, 2);
+        var ash = (AsymmetricHashing) cp.computeCompressor(ds);
+        var loaded = roundTrip(cp, ash);
+        assertTrue(loaded.getClass().getName(), loaded instanceof AsymmetricHashing);
+        var restored = (AsymmetricHashing) loaded;
+        assertEquals(ash.originalDimension, restored.originalDimension);
+        assertEquals(ash.quantizedDim, restored.quantizedDim);
+        assertEquals(ash.encodedBits, restored.encodedBits);
+        assertEquals(ash.bitsPerDimension, restored.bitsPerDimension);
+        assertEquals(ds.getBaseRavv().size(), restored.encodeAll(ds.getBaseRavv()).count());
+    }
+
 }

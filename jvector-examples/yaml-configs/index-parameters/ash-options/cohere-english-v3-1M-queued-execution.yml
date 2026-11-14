@@ -1,0 +1,39 @@
+# cohere-english-v3-1M: fused 2-bit ASH graph with NVQ reranking. This example shows how to
+# submit searches to workers that prepare up to eight queries together.
+yamlSchemaVersion: 3
+onDiskIndexVersion: 7
+
+dataset: cohere-english-v3-1M
+
+construction:
+  type: onDisk
+  outDegree: [32]
+  efConstruction: [100]
+  neighborOverflow: [1.2f]
+  addHierarchy: [Yes]
+  refineFinalGraph: [Yes]
+  fusedGraph: [Yes]
+  compression:
+    - type: ASH
+      parameters:
+        compressionRatio: 32
+        optimizer: ITQ
+        landmarkCount: 1
+        bitsPerDimension: 2
+  reranking:
+    type: NVQ
+  useSavedIndexIfExists: No
+
+search:
+  topKOverquery:
+    10: [1.0, 2.0]
+  useSearchPruning: [No]
+  queryExecution: queued
+  compression:
+    - type: ASH
+      parameters:
+        compressionRatio: 32
+        optimizer: ITQ
+        landmarkCount: 1
+        bitsPerDimension: 2
+        maxBatchSize: 8

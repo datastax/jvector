@@ -96,6 +96,11 @@ public class FusedPQ extends AbstractFeature implements FusedFeature {
     }
 
     @Override
+    public int headerSize(int version) {
+        return pq.compressorSize(version);
+    }
+
+    @Override
     public int featureSize() {
         return pq.compressedVectorSize() * maxDegree;
     }
@@ -135,9 +140,15 @@ public class FusedPQ extends AbstractFeature implements FusedFeature {
         return new FusedCompactionStrategy(ctx, this, retrainer);
     }
 
+    @Deprecated
     @Override
     public void writeHeader(IndexWriter out) throws IOException {
-        pq.write(out, OnDiskGraphIndex.CURRENT_VERSION);
+        writeHeader(out, OnDiskGraphIndex.CURRENT_VERSION);
+    }
+
+    @Override
+    public void writeHeader(IndexWriter out, int version) throws IOException {
+        pq.write(out, version);
     }
 
     // this is an awkward fit for the Feature.State design since we need to

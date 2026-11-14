@@ -2,8 +2,57 @@
 
 # fail on error
 set -e
-# print commands as they are executed
-set -x
+# Quiet by default: Meson and Ninja output goes to a log in the build directory and is shown
+# only if a step fails. JVECTOR_NATIVE_BUILD_VERBOSE=1 prints everything, including each command.
+VERBOSE="${JVECTOR_NATIVE_BUILD_VERBOSE:-}"
+if [ -n "${VERBOSE}" ]; then set -x; fi
+
+# Prints a status line only in verbose mode.
+info() {
+  if [ -n "${VERBOSE}" ]; then printf "$@"; fi
+}
+
+# A library's progress lines: the start line only for a first (unconfigured) build, which is the slow
+# case, and the finish line only when Ninja rebuilt something, so an up-to-date build prints nothing.
+# Usage: announce_start <build-dir> <what> <how-long>; report_built <compile-log> <file> <start-seconds>
+announce_start() {
+  if [[ ! -f "$1/meson-private/coredata.dat" ]]; then
+    echo "jvector-native: building $2 (the first build can take $3)"
+  fi
+}
+report_built() {
+  if [ -z "${VERBOSE}" ] && grep -q "ninja: no work to do" "$1" 2>/dev/null; then return; fi
+  echo "jvector-native: built $2 in $((SECONDS - $3)) s"
+}
+
+# Configures <build-dir> only when it is new or its setup arguments changed. Reconfiguring an
+# unchanged build regenerates the oneDNN CMake subproject and forces a relink on every build;
+# meson compile still regenerates by itself when a meson.build file changes.
+# Usage: setup_if_needed <build-dir> <source-dir> <meson setup options...>
+setup_if_needed() {
+  local build_dir="$1" source_dir="$2"; shift 2
+  local stamp="${build_dir}.setup-args" wanted="${source_dir} $*"
+  if [[ -f "${build_dir}/meson-private/coredata.dat" ]]; then
+    if [[ -f "${stamp}" && "$(cat "${stamp}")" == "${wanted}" ]]; then return; fi
+    set -- --reconfigure "$@"
+  fi
+  run_step "${build_dir}.setup.log" meson setup "${build_dir}" "${source_dir}" "$@"
+  printf '%s' "${wanted}" > "${stamp}"
+}
+
+# Runs a build step. Quiet mode keeps its output in <log> and prints the log's end on failure.
+# Usage: run_step <log> <command...>
+run_step() {
+  local log="$1"; shift
+  if [ -n "${VERBOSE}" ]; then "$@"; return; fi
+  mkdir -p "$(dirname "${log}")"
+  if ! "$@" > "${log}" 2>&1; then
+    echo "ERROR: native build step failed: $*" >&2
+    tail -n 60 "${log}" >&2
+    echo "Full log: ${log} (rerun with JVECTOR_NATIVE_BUILD_VERBOSE=1 to print everything)" >&2
+    exit 1
+  fi
+}
 
 # Copyright DataStax, Inc.
 #
@@ -27,16 +76,16 @@ set -x
 # ---------------------------------------------------------------------------
 REPO_ROOT="$(git -C "$(dirname "$0")" rev-parse --show-toplevel)"
 NATIVE_DIR="${REPO_ROOT}/jvector-native/src/main/native"
+# Separate Meson project for the optional oneDNN add-on (libjvector_ash_fp16).
+ONEDNN_DIR="${REPO_ROOT}/jvector-native/src/main/onednn"
 MODULE_ROOT="${REPO_ROOT}/jvector-native"
-
-HIGHWAY_DIR="${NATIVE_DIR}/third_party/highway"
 # Drop the .so files into target/meson-build/ so that mvn clean removes them
 # along with every other build artefact, and Maven's resource plugin picks them
 # up from there instead of from src/main/resources/.
 RESOURCES_DIR="${MODULE_ROOT}/target/meson-build"
 
 if [ "$1" == "--auto-install-deps" ] ; then AUTO_INSTALL_DEPS=true ; shift ; fi
-printf "AUTO_INSTALL_DEPS=%s\n" "${AUTO_INSTALL_DEPS}"
+info "AUTO_INSTALL_DEPS=%s\n" "${AUTO_INSTALL_DEPS}"
 
 # Accept buildtype parameter (default: release)
 BUILDTYPE="${1:-release}"
@@ -45,28 +94,30 @@ if [ "$BUILDTYPE" != "release" ] && [ "$BUILDTYPE" != "debug" ] && [ "$BUILDTYPE
   echo "         Valid values: release, debug, debugoptimized"
   BUILDTYPE="release"
 fi
-printf "BUILDTYPE=%s\n" "${BUILDTYPE}"
+info "BUILDTYPE=%s\n" "${BUILDTYPE}"
 
 # Accept crossarch flag (default: false).
 # When true, builds both the native arch library AND cross-compiles for the other arch.
 #   On x86_64: builds libjvector-x86_64.so  + cross-compiles libjvector-aarch64.so
 #   On aarch64: builds libjvector-aarch64.so + cross-compiles libjvector-x86_64.so
 CROSSARCH="${2:-false}"
-printf "CROSSARCH=%s\n" "${CROSSARCH}"
+info "CROSSARCH=%s\n" "${CROSSARCH}"
+
+# Optional oneDNN add-on for FP32 encoding batches and FP16/INT8 queries, built
+# from its own Meson project; libjvector stays independent. Off by default because
+# building oneDNN takes minutes; CI and release builds pass true.
+ONEDNN="${3:-false}"
+case "${ONEDNN}" in
+  true|false) ;;
+  *) echo "ERROR: oneDNN flag must be true or false."; exit 1 ;;
+esac
 
 mkdir -p "${RESOURCES_DIR}"
 # target/meson-build/ is under target/, which IS cleaned by mvn clean.
 # src/main/resources/ is intentionally NOT written to any more.
 
-# Check that the Google Highway submodule has been initialised
-if [ ! -f "${HIGHWAY_DIR}/hwy/highway.h" ]; then
-  echo "ERROR: Google Highway submodule not found at ${HIGHWAY_DIR}."
-  echo "       Run the following command from the repository root to fix this:"
-  echo ""
-  echo "         git submodule update --init"
-  echo ""
-  exit 1
-fi
+# Meson fetches Google Highway at the revision pinned in
+# ${NATIVE_DIR}/subprojects/highway.wrap on first setup.
 
 # Desired minimum GCC version: the x86_64 build targets Sapphire Rapids, and Highway's
 # HWY_AVX3_SPR target needs GCC 12 or newer (third_party/highway/hwy/detect_targets.h)
@@ -96,12 +147,15 @@ require_cmd() {
 
 require_cmd meson  "sudo apt-get install -y meson"
 require_cmd ninja  "sudo apt-get install -y ninja-build"
+if [[ "${ONEDNN}" == "true" ]]; then
+  require_cmd cmake "sudo apt-get install -y cmake"
+fi
 
 # ---------------------------------------------------------------------------
 # Detect the host CPU architecture.
 # ---------------------------------------------------------------------------
 HOST_ARCH="$(uname -m)"   # e.g. x86_64 or aarch64
-printf "HOST_ARCH=%s\n" "${HOST_ARCH}"
+info "HOST_ARCH=%s\n" "${HOST_ARCH}"
 
 # ---------------------------------------------------------------------------
 # build_native <arch>
@@ -116,6 +170,9 @@ build_native() {
 
   rm -rf "${OUT_SO}"
 
+  # Configured builds are reused, so repeated Maven phases keep incremental native outputs.
+  local cross_options=()
+
   if [ "${ARCH}" == "${HOST_ARCH}" ]; then
     # ---- Native build ------------------------------------------------------
     # meson compiles with $CXX when it is set, so check that compiler
@@ -128,9 +185,6 @@ build_native() {
       exit 1
     fi
 
-    meson setup "${BUILD_DIR}" "${NATIVE_DIR}" \
-        --wipe \
-        --buildtype="${BUILDTYPE}"
   else
     # ---- Cross-compile build -----------------------------------------------
     # Only x86_64 <-> aarch64 is supported.
@@ -147,14 +201,13 @@ build_native() {
     fi
 
     require_cmd "${CROSS_TOOLCHAIN}" "${CROSS_INSTALL}"
-
-    meson setup "${BUILD_DIR}" "${NATIVE_DIR}" \
-        --wipe \
-        --cross-file "${CROSS_FILE}" \
-        --buildtype="${BUILDTYPE}"
+    cross_options=(--cross-file "${CROSS_FILE}")
   fi
 
-  meson compile -C "${BUILD_DIR}"
+  announce_start "${BUILD_DIR}" "the native library for ${ARCH}" "a few minutes"
+  local started=${SECONDS}
+  setup_if_needed "${BUILD_DIR}" "${NATIVE_DIR}" "${cross_options[@]}" --buildtype="${BUILDTYPE}"
+  run_step "${BUILD_DIR}.compile.log" meson compile -C "${BUILD_DIR}"
 
   # The versioned .so (e.g. libjvector.so.0.1.0) is the real file; symlinks point to it.
   SOFILE=$(find "${BUILD_DIR}" -maxdepth 1 -name 'libjvector.so.*' -type f | head -1)
@@ -163,7 +216,24 @@ build_native() {
     exit 1
   fi
   cp "${SOFILE}" "${OUT_SO}"
-  printf "Built: %s\n" "${OUT_SO}"
+  report_built "${BUILD_DIR}.compile.log" "$(basename "${OUT_SO}")" "${started}"
+
+  local FP16_OUT="${RESOURCES_DIR}/libjvector_ash_fp16-${ARCH}.so"
+  if [ "${ONEDNN}" == "true" ]; then
+    local ONEDNN_BUILD_DIR="${MODULE_ROOT}/target/meson-build-onednn-${ARCH}"
+    announce_start "${ONEDNN_BUILD_DIR}" "the oneDNN add-on for ${ARCH}" "several minutes"
+    started=${SECONDS}
+    setup_if_needed "${ONEDNN_BUILD_DIR}" "${ONEDNN_DIR}" "${cross_options[@]}" --buildtype="${BUILDTYPE}"
+    run_step "${ONEDNN_BUILD_DIR}.compile.log" meson compile -C "${ONEDNN_BUILD_DIR}"
+    cp "${ONEDNN_BUILD_DIR}/libjvector_ash_fp16.so" "${FP16_OUT}"
+    report_built "${ONEDNN_BUILD_DIR}.compile.log" "$(basename "${FP16_OUT}")" "${started}"
+    # License texts travel with the optional static dependency in either jar.
+    cp "${ONEDNN_DIR}/subprojects/onednn/LICENSE" "${RESOURCES_DIR}/oneDNN-LICENSE.txt"
+    cp "${ONEDNN_DIR}/subprojects/onednn/THIRD-PARTY-PROGRAMS" "${RESOURCES_DIR}/oneDNN-THIRD-PARTY.txt"
+  else
+    # A later build without the add-on must not package a stale enabled build.
+    rm -f "${FP16_OUT}"
+  fi
 }
 
 # ---------------------------------------------------------------------------
@@ -176,6 +246,15 @@ elif [ "${HOST_ARCH}" == "aarch64" ]; then
 else
   echo "ERROR: Unsupported host architecture '${HOST_ARCH}'. Supported: x86_64, aarch64."
   exit 1
+fi
+
+if [ "${ONEDNN}" == "false" ]; then
+  # Maven copies resources without removing old files from target/classes.
+  # Remove only this optional component from both resource locations.
+  for resource_dir in "${RESOURCES_DIR}" "${MODULE_ROOT}/target/classes"; do
+    rm -f "${resource_dir}"/libjvector_ash_fp16-*.so \
+          "${resource_dir}/oneDNN-LICENSE.txt" "${resource_dir}/oneDNN-THIRD-PARTY.txt"
+  done
 fi
 
 # Always build the native arch.

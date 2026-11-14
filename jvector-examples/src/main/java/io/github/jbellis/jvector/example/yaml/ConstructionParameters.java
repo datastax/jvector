@@ -18,55 +18,147 @@ package io.github.jbellis.jvector.example.yaml;
 
 import io.github.jbellis.jvector.graph.disk.feature.FeatureId;
 
+import java.util.ArrayList;
 import java.util.EnumSet;
+import java.util.LinkedHashSet;
 import java.util.List;
-import java.util.stream.Collectors;
+import java.util.Map;
+import java.util.function.Predicate;
 
 
 public class ConstructionParameters extends CommonParameters {
+    public String type;
+    public String writerMode;
+    /** onDisk only: pad base-layer records so each starts on this page boundary (a power of two); omit for none. */
+    public Integer pageAlignment;
     public List<Integer> outDegree;
     public List<Integer> efConstruction;
     public List<Float> neighborOverflow;
     public List<Boolean> addHierarchy;
     public List<Boolean> refineFinalGraph;
-    public List<String> reranking;
+    /** Schema 2 accepts a list of features. Schema 3 accepts a single map with a type. */
+    public Object reranking;
     public List<Boolean> fusedGraph;
     public Boolean useSavedIndexIfExists;
+    /** Schema 3: threads for training, encoding, graph insertion and writing; an integer or max. */
+    public Object workers;
+
+    /** The construction worker count, or null when the YAML leaves it to the platform default. */
+    public Integer resolvedWorkers() {
+        return workers == null ? null : Workers.resolve(workers, "construction.workers");
+    }
+
+    void validateSchema3() {
+        if (type == null || !List.of("inMemory", "onDisk").contains(type)) {
+            throw new IllegalArgumentException("construction.type must be inMemory or onDisk");
+        }
+        if (writerMode != null && !List.of("sequential", "parallel").contains(writerMode)) {
+            throw new IllegalArgumentException("construction.writerMode must be sequential or parallel");
+        }
+        if ("inMemory".equals(type) && (writerMode != null || fusedGraph != null || useSavedIndexIfExists != null
+                || pageAlignment != null)) {
+            throw new IllegalArgumentException("construction.writerMode, pageAlignment, fusedGraph, and useSavedIndexIfExists require onDisk");
+        }
+        if (pageAlignment != null && (pageAlignment < 512 || pageAlignment > (1 << 20) || Integer.bitCount(pageAlignment) != 1)) {
+            throw new IllegalArgumentException("construction.pageAlignment must be a power of two from 512 to 1048576");
+        }
+        validateSweep("outDegree", outDegree, value -> value > 0);
+        validateSweep("efConstruction", efConstruction, value -> value > 0);
+        validateSweep("neighborOverflow", neighborOverflow, value -> Float.isFinite(value) && value >= 1);
+        validateSweep("addHierarchy", addHierarchy, value -> true);
+        validateSweep("refineFinalGraph", refineFinalGraph, value -> true);
+        if (fusedGraph != null) validateSweep("fusedGraph", fusedGraph, value -> true);
+        rerankingType();
+        resolvedWorkers();
+        validateCompression("construction", false);
+    }
+
+    private static <T> void validateSweep(String name, List<T> values, Predicate<T> valid) {
+        if (values == null || values.isEmpty() || values.stream().anyMatch(value -> value == null || !valid.test(value))) {
+            throw new IllegalArgumentException("construction." + name + " requires a nonempty list of valid values");
+        }
+    }
+
+    public String rerankingType() {
+        if (reranking == null) return "None";
+        if (!(reranking instanceof Map<?, ?>)) {
+            throw new IllegalArgumentException("construction.reranking must be a map with a type in schema 3");
+        }
+        var fields = (Map<?, ?>) reranking;
+        if (fields.size() != 1 || !(fields.get("type") instanceof String)
+                || !List.of("None", "FP32", "NVQ").contains(fields.get("type"))) {
+            throw new IllegalArgumentException("construction.reranking.type must be None, FP32, or NVQ");
+        }
+        return (String) fields.get("type");
+    }
+
+    public boolean usesNVQReranking() {
+        if (reranking instanceof List<?>) return ((List<?>) reranking).contains("NVQ");
+        return "NVQ".equals(rerankingType());
+    }
 
     public List<EnumSet<FeatureId>> getFeatureSets() {
-        List<EnumSet<FeatureId>> featureSets = null;
-        for (var fusedItem : fusedGraph) {
-            var newFeatures = reranking.stream().map(item -> {
-                EnumSet<FeatureId> features;
+        var featureSets = new LinkedHashSet<EnumSet<FeatureId>>();
+        boolean hasPQConstruction = hasConstructionCompressor("PQ");
+        boolean hasASHConstruction = hasConstructionCompressor("ASH");
 
-                switch (item) {
+        for (var fusedItem : fusedGraph) {
+            if (!(reranking instanceof List<?>)) {
+                throw new IllegalArgumentException("construction.reranking must be a list in schema 2");
+            }
+            for (var item : (List<?>) reranking) {
+                EnumSet<FeatureId> baseFeatures;
+
+                switch (String.valueOf(item)) {
                     case "FP":
-                        if (fusedItem) {
-                            features = EnumSet.of(FeatureId.INLINE_VECTORS, FeatureId.FUSED_PQ);
-                        } else {
-                            features = EnumSet.of(FeatureId.INLINE_VECTORS);
-                        }
+                        baseFeatures = EnumSet.of(FeatureId.INLINE_VECTORS);
                         break;
                     case "NVQ":
-                        if (fusedItem) {
-                            features = EnumSet.of(FeatureId.NVQ_VECTORS, FeatureId.FUSED_PQ);
-                        } else {
-                            features = EnumSet.of(FeatureId.NVQ_VECTORS);
-                        }
+                        baseFeatures = EnumSet.of(FeatureId.NVQ_VECTORS);
                         break;
                     default:
                         throw new IllegalArgumentException("Only 'FP' and 'NVQ' are supported");
                 }
 
-                return features;
-            }).collect(Collectors.toList());
-            if (featureSets == null) {
-                featureSets = newFeatures;
-            } else {
-                featureSets.addAll(newFeatures);
+                if (!fusedItem) {
+                    featureSets.add(baseFeatures);
+                    continue;
+                }
+
+                boolean addedFused = false;
+                if (hasPQConstruction) {
+                    var features = EnumSet.copyOf(baseFeatures);
+                    features.add(FeatureId.FUSED_PQ);
+                    featureSets.add(features);
+                    addedFused = true;
+                }
+                if (hasASHConstruction) {
+                    var features = EnumSet.copyOf(baseFeatures);
+                    features.add(FeatureId.FUSED_ASH);
+                    featureSets.add(features);
+                    addedFused = true;
+                }
+
+                if (!addedFused) {
+                    throw new IllegalArgumentException(
+                            "fusedGraph=Yes requires construction compression type PQ or ASH");
+                }
             }
         }
 
-        return featureSets;
+        return new ArrayList<>(featureSets);
+    }
+
+    private boolean hasConstructionCompressor(String type) {
+        if (compression == null) {
+            return false;
+        }
+
+        for (Compression c : compression) {
+            if (c != null && c.type != null && c.type.equalsIgnoreCase(type)) {
+                return true;
+            }
+        }
+        return false;
     }
 }

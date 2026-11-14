@@ -277,6 +277,14 @@ public class TestOnDiskGraphIndexCompactor extends RandomizedTest {
         OnDiskGraphIndex compacted = OnDiskGraphIndex.load(rsOut);
         assertEquals(2 * n, compacted.size(0));
 
+        // The compacted header stores the largest length of the vectors it holds, for adaptive dot-product stopping.
+        float maxLength = 0;
+        for (var v : vecs0) maxLength = Math.max(maxLength, (float) Math.sqrt(io.github.jbellis.jvector.vector.VectorUtil.dotProduct(v, v)));
+        for (var v : vecs1) maxLength = Math.max(maxLength, (float) Math.sqrt(io.github.jbellis.jvector.vector.VectorUtil.dotProduct(v, v)));
+        var inline = (io.github.jbellis.jvector.graph.disk.feature.InlineVectors)
+                compacted.getFeatures().get(io.github.jbellis.jvector.graph.disk.feature.FeatureId.INLINE_VECTORS);
+        assertEquals(maxLength, inline.maxVectorNorm(), maxLength * 1e-6f);
+
         var view = compacted.getView();
         VectorFloat<?> buf = vectorTypeSupport.createFloatVector(dim);
 

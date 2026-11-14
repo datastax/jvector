@@ -24,6 +24,7 @@ import io.github.jbellis.jvector.example.benchmarks.datasets.BaseVectorLoading;
 import io.github.jbellis.jvector.example.benchmarks.datasets.DataSets;
 import io.github.jbellis.jvector.example.yaml.DatasetCollection;
 import io.github.jbellis.jvector.example.yaml.MultiConfig;
+import io.github.jbellis.jvector.example.yaml.SearchParameters;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -52,9 +53,15 @@ import java.util.LinkedHashMap;
  */
 public class AutoBenchYAML {
     private static final Logger logger = LoggerFactory.getLogger(AutoBenchYAML.class);
-    private static final String REGRESSION_TEST_KEY = "regression-tests";
+    private static final String REGRESSION_TEST_KEY = DatasetCollection.REGRESSION_TESTS;
 
     public static void main(String[] args) throws IOException {
+        try (var projectionSetting = new SearchParameters.AshQueryProjectionSetting()) {
+            run(args, projectionSetting);
+        }
+    }
+
+    private static void run(String[] args, SearchParameters.AshQueryProjectionSetting projectionSetting) throws IOException {
         // Check for --output argument (required for this class)
         String outputPath = null;
         for (int i = 0; i < args.length - 1; i++) {
@@ -114,32 +121,30 @@ public class AutoBenchYAML {
         // Add results from checkpoint if present
         results.addAll(checkpointManager.getCompletedResults());
 
-        // Process datasets from regex patterns
-        if (!datasetNames.isEmpty()) {
-            for (var datasetName : datasetNames) {
-                // Skip already completed datasets
-                if (checkpointManager.isDatasetCompleted(datasetName)) {
-                    logger.info("Skipping already completed dataset: {}", datasetName);
-                    continue;
-                }
+        // Resolve the process-wide ASH projection before any regression builds start.
+        var configs = new LinkedHashMap<String, MultiConfig>();
+        for (var datasetName : datasetNames) {
+            if (checkpointManager.isDatasetCompleted(datasetName)) {
+                logger.info("Skipping already completed dataset: {}", datasetName);
+                continue;
+            }
+            try {
+                var name = datasetName.endsWith(".hdf5")
+                        ? datasetName.substring(0, datasetName.length() - ".hdf5".length()) : datasetName;
+                var config = finalConfigPath == null ? MultiConfig.getDefaultConfig(name) : MultiConfig.getConfig(finalConfigPath);
+                if (finalConfigPath == null || config.dataset == null || config.dataset.isEmpty()) config.dataset = name;
+                configs.put(datasetName, config);
+            } catch (Exception e) {
+                logger.error("Exception while processing dataset {}", datasetName, e);
+            }
+        }
+        projectionSetting.apply(configs.values().stream().filter(MultiConfig::usesSchema3).collect(Collectors.toList()));
 
+        if (!configs.isEmpty()) {
+            for (var entry : configs.entrySet()) {
+                var datasetName = entry.getKey();
+                var config = entry.getValue();
                 try {
-                    String normalizedDatasetName = datasetName;
-                    if (normalizedDatasetName.endsWith(".hdf5")) {
-                        normalizedDatasetName = normalizedDatasetName.substring(0, normalizedDatasetName.length() - ".hdf5".length());
-                    }
-
-                    MultiConfig config;
-                    if (finalConfigPath != null) {
-                        config = MultiConfig.getConfig(finalConfigPath);
-                        // Override dataset name if not specified in custom config
-                        if (config.dataset == null || config.dataset.isEmpty()) {
-                            config.dataset = normalizedDatasetName;
-                        }
-                    } else {
-                        config = MultiConfig.getDefaultConfig(normalizedDatasetName);
-                        config.dataset = normalizedDatasetName;
-                    }
                     logger.info("Using configuration: {}", config);
                     var loading = BaseVectorLoading.forBenchmark(config);
 

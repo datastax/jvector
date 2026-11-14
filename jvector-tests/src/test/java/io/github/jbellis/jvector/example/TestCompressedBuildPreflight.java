@@ -51,7 +51,7 @@ public class TestCompressedBuildPreflight {
         var ds = dataset("preflight-" + UUID.randomUUID(), 16, 128);
         var work = Files.createTempDirectory("compressed-build-preflight");
         var cacheDir = work.resolve("saved");
-        var pqFile = Path.of("pq_cache").resolve(new CompressorParameters.PQParameters(4, 16, false, -1f).idStringFor(ds));
+        var pqFile = Path.of("compressor_cache").resolve(new CompressorParameters.PQParameters(4, 16, false, -1f).idStringFor(ds));
         try {
             var cache = OnDiskGraphIndexCache.initialize(cacheDir);
             var e = assertThrows(IllegalArgumentException.class, () -> Grid.runOneGraph(cache,

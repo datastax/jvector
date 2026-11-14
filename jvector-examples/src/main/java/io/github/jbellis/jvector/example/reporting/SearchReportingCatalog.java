@@ -18,6 +18,7 @@ package io.github.jbellis.jvector.example.reporting;
 
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 /**
  * Search-phase reporting catalog:
@@ -41,6 +42,13 @@ public final class SearchReportingCatalog {
                 "accuracy",   List.of("recall")
         );
     }
+
+    /**
+     * Keys a selected stat reports only in some runs, so their absence is expected: spread across throughput
+     * passes exists only with more than one timed pass.
+     */
+    public static final Set<String> CONDITIONAL_KEYS =
+            Set.of("search.throughput.stddev_qps", "search.throughput.cv_pct");
 
     /** Catalog used by ReportingSelectionResolver for the search phase. */
     public static ReportingSelectionResolver.Catalog catalog() {
@@ -90,8 +98,20 @@ public final class SearchReportingCatalog {
                         "total_file_size_mb", "search.disk.total_file_size_mb",
                         "file_count",         "search.disk.file_count"
                 ),
+                "execution", Map.of(
+                        "response_mean_ms", "search.execution.response_mean_ms",
+                        "response_p50_ms", "search.execution.response_p50_ms",
+                        "response_p95_ms", "search.execution.response_p95_ms",
+                        "response_p99_ms", "search.execution.response_p99_ms",
+                        "response_p999_ms", "search.execution.response_p999_ms",
+                        "mean_batch_size", "search.execution.mean_batch_size",
+                        "page_reads_per_query", "search.execution.page_reads_per_query"
+                ),
                 "construction", Map.of(
                         "index_build_time_s","construction.index_build_time_s",
+                        "graph_build_time_s","construction.graph_build_time_s",
+                        "flush_time_s","construction.flush_time_s",
+                        "reopen_time_s","construction.reopen_time_s",
                         "index_quant_time_s","@prefix:construction.index_quant_time_s",
                         "search_quant_time_s","@prefix:search.search_quant_time_s"
                 )

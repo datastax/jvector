@@ -2,11 +2,15 @@
 <Configuration status="WARN">
     <Appenders>
         <Console name="Console" target="SYSTEM_OUT">
-            <PatternLayout pattern="%d{HH:mm:ss.SSS} [%t] %-5level %logger{1} - %msg%n"/>
+            <!-- Plain messages, matching BenchYAML's own console lines; other levels keep a prefix. -->
+            <PatternLayout pattern="%replace{%level: }{^INFO: }{}%msg%n"/>
         </Console>
     </Appenders>
     <Loggers>
         <Logger name="io.github.jbellis.jvector.example" level="INFO"/>
+        <!-- JMX registration and catalog scanning are routine; report only problems. -->
+        <Logger name="io.github.jbellis.jvector.management" level="WARN"/>
+        <Logger name="io.github.jbellis.jvector.example.benchmarks.datasets.DataSetLoaderSimpleMFD" level="WARN"/>
         <Root level="INFO">
             <AppenderRef ref="Console"/>
         </Root>

@@ -2,6 +2,60 @@
 
 JVector comes with the following sample programs to try:
 
+### Hello ASH world
+
+Two self-contained introductions build and query a fused ASH disk index over the
+public `e5-small-v2-100k` dataset (downloaded and cached automatically):
+
+- [HelloASHWorldInt8](src/main/java/io/github/jbellis/jvector/example/HelloASHWorldInt8.java):
+  INT8 query projection for Intel Ice Lake and other supported INT8 processors.
+- [HelloASHWorldFp16](src/main/java/io/github/jbellis/jvector/example/HelloASHWorldFp16.java):
+  native FP16 query projection for Intel Sapphire Rapids and newer FP16 processors.
+
+Both teach the same six steps: load vectors, train/encode ASH, construct the graph,
+write fused ASH neighborhoods with NVQ reranking vectors, reopen and search
+synchronously, then submit individual queries through the queued API.
+They use ASH(b=2,d=192) for 384-dimensional inputs. Stored-code precision (`b`)
+is independent of query-projection precision; training and encoding remain FP32.
+NVQ's mean is collected during ASH encoding, avoiding another input scan.
+
+Build the examples with the native provider and oneDNN support described in the
+[native build guide](../jvector-native/src/main/native/README.md#recommended-onednn-build-and-package).
+From the repository root, using JDK 22 or newer:
+
+```bash
+mvn package -DskipTests
+java --add-modules=jdk.incubator.vector --enable-native-access=ALL-UNNAMED -Xmx8g \
+  -cp jvector-examples/target/jvector-examples-4.1.0-SNAPSHOT-jar-with-dependencies.jar \
+  io.github.jbellis.jvector.example.HelloASHWorldInt8
+java --add-modules=jdk.incubator.vector --enable-native-access=ALL-UNNAMED -Xmx8g \
+  -cp jvector-examples/target/jvector-examples-4.1.0-SNAPSHOT-jar-with-dependencies.jar \
+  io.github.jbellis.jvector.example.HelloASHWorldFp16
+```
+
+Run the program matching your CPU; explicit unsupported precisions fail instead
+of silently changing precision. Each saves `ash-int8.graph` or `ash-fp16.graph`
+and prints top-ten vector ordinals, similarity scores and visited-node counts
+for the first held-out query using both synchronous and queued search. An optional
+argument selects a new output path;
+existing files are never overwritten. Original vectors are not needed to reopen
+the finished index.
+
+The synchronous section introduces preparation and graph search for one query.
+The queued section submits eight independent queries using two application-assigned
+workers, admission 16 and maximum preparation batch 8. The shared
+[HelloASHQueuedSearch](src/main/java/io/github/jbellis/jvector/example/HelloASHQueuedSearch.java)
+shows the host integration explicitly: compatible-query preparation, worker-owned
+searchers, completion futures, admission rejection and orderly shutdown. Callers
+submit individual requests; the queue prepares currently waiting compatible work
+together, without a fill timer. Batch sizes depend on what is waiting at that moment.
+Each request owns its input snapshot and prepared state through completion.
+
+For clarity, this small example allocates request records and preparation arrays.
+Services can reuse bounded storage as described in
+[bounded query batching and state ownership](../docs/ash-query-integration.md).
+For more hardware choices, see [projection precision](../docs/ash-projection-precision.md).
+
 ### Batched file-backed vectors
 
 Two hello-world programs use public-catalog `e5-small-v2-100k`, or accept an existing
@@ -18,7 +72,7 @@ and vector ownership; the second trains and encodes with PQ and NVQ. See
 source lifecycle, and integration guidance.
 
 ### SiftSmall 
-A simple benchmark for the sift dataset located in the [siftsmall](./siftsmall) directory in the project root.
+A simple benchmark for the sift dataset located in the [siftsmall](../siftsmall) directory in the project root.
 
 > `mvn compile exec:exec@sift`
 
@@ -28,8 +82,6 @@ the best tradeoffs between recall and throughput.
 
 This benchmark requires `fvecs' versions of datasets from [https://github.com/erikbern/ann-benchmarks](https://github.com/erikbern/ann-benchmarks/blob/main/README.md#data-sets) to be downloaded to `dataset_cache` 
 directory under the project root. 
-
-You can use [`plot_output.py`](./plot_output.py) to graph the [pareto-optimal points](https://en.wikipedia.org/wiki/Pareto_efficiency) found by `Bench`.
 
 > `mvn compile exec:exec@bench`
 

@@ -107,11 +107,14 @@ static const KernelVTable AVX3_vtable = {
 };
 #undef KERNEL_ENTRY
 
-// AVX3_DL (Ice Lake) inherits all slots from AVX3 unchanged for now.
+// AVX3_DL inherits AVX3 and uses native popcount/byte-dot for ASH pairs.
 // To override a slot: t.kernel_name = AVX3_DL::kernel_name;
 // The implementation must exist in jvector_avx3_dl_kernels.cpp.
 static const KernelVTable AVX3_DL_vtable = []() {
     KernelVTable t = AVX3_vtable;
+    t.ash_symmetric_dot = AVX3_DL::ash_symmetric_dot;
+    t.ash_symmetric_dot_rows = AVX3_DL::ash_symmetric_dot_rows;
+    t.ash_score_neighborhood_i8_c1 = AVX3_DL::ash_score_neighborhood_i8_c1;
     return t;
 }();
 

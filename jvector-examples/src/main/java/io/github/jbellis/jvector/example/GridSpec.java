@@ -17,11 +17,13 @@
 package io.github.jbellis.jvector.example;
 
 import io.github.jbellis.jvector.example.benchmarks.datasets.DataSet;
+import io.github.jbellis.jvector.example.diagnostics.ASHBuildScoreExperiment;
 import io.github.jbellis.jvector.example.util.CompressorParameters;
 import io.github.jbellis.jvector.example.yaml.MultiConfig;
 import io.github.jbellis.jvector.graph.disk.feature.FeatureId;
 
 import java.util.ArrayList;
+import java.util.EnumSet;
 import java.util.List;
 import java.util.Objects;
 import java.util.Set;
@@ -41,18 +43,43 @@ public final class GridSpec {
     final List<? extends Set<FeatureId>> featureSets;
     final SearchConfig search;
     final boolean enableIndexCache;
+    private final List<Boolean> fusedGraph;
 
     private GridSpec(Builder b) {
         this.buildSweep = List.copyOf(b.buildSweep);
         this.featureSets = b.featureSets;
         this.search = b.search;
         this.enableIndexCache = b.enableIndexCache;
+        this.fusedGraph = b.fusedGraph;
     }
 
     /** The sweep a dataset's YAML config describes. */
     public static GridSpec fromConfig(MultiConfig config) {
         var construction = config.construction;
         var search = config.search;
+        if (config.usesSchema3()) {
+            boolean onDisk = "onDisk".equals(construction.type);
+            var writerMode = onDisk ? Objects.requireNonNullElse(construction.writerMode, "parallel") : null;
+            return graphSweeps(construction.addHierarchy, construction.refineFinalGraph, construction.outDegree,
+                    construction.neighborOverflow, construction.efConstruction)
+                    .sweep("construction.compression", construction.compression, (point, compressor) -> point
+                            .buildCompressor(compressor.getCompressorParameters())
+                            .ashConstructionMode("ASH".equals(compressor.type)
+                                    ? Objects.requireNonNullElseGet(compressor.ashConstructionMode(),
+                                            ASHBuildScoreExperiment::defaultMode)
+                                    : null)
+                            .indexType(construction.type).writerMode(writerMode).pageAlignment(construction.pageAlignment)
+                            .rerankingType(construction.rerankingType())
+                            .workers(construction.resolvedWorkers()))
+                    .featureSets(List.of())
+                    .fusedGraph(construction.fusedGraph == null ? List.of(false) : construction.fusedGraph)
+                    .search(SearchConfig.builder().compressionEntries(search.compression)
+                            .topKGrid(search.topKOverquery).usePruningGrid(search.useSearchPruning)
+                            .workerGrid(search.resolvedWorkers()).queryExecution(search.queryExecution())
+                            .requestsPerWorker(search.requestsPerWorker).build())
+                    .enableIndexCache(onDisk && Boolean.TRUE.equals(construction.useSavedIndexIfExists))
+                    .build();
+        }
         return fromGrids(construction.addHierarchy,
                 construction.refineFinalGraph,
                 construction.outDegree,
@@ -82,18 +109,42 @@ public final class GridSpec {
                               List<? extends Set<FeatureId>> featureSets,
                               SearchConfig search,
                               boolean enableIndexCache) {
-        // Dimension names are the YAML field names, so error messages point at the config to fix.
-        return builder()
-                .sweep("addHierarchy", addHierarchyGrid, BuildConfig.Builder::addHierarchy)
-                .sweep("refineFinalGraph", refineFinalGraphGrid, BuildConfig.Builder::refineFinalGraph)
-                .sweep("outDegree", mGrid, BuildConfig.Builder::M)
-                .sweep("neighborOverflow", neighborOverflowGrid, BuildConfig.Builder::neighborOverflow)
-                .sweep("efConstruction", efConstructionGrid, BuildConfig.Builder::efConstruction)
+        return graphSweeps(addHierarchyGrid, refineFinalGraphGrid, mGrid, neighborOverflowGrid, efConstructionGrid)
                 .sweep("construction.compression", buildCompressors, BuildConfig.Builder::buildCompressor)
                 .featureSets(featureSets)
                 .search(search)
                 .enableIndexCache(enableIndexCache)
                 .build();
+    }
+
+    private static Builder graphSweeps(List<Boolean> hierarchy, List<Boolean> refinement, List<Integer> degree,
+                                       List<Float> overflow, List<Integer> efConstruction) {
+        return builder()
+                .sweep("addHierarchy", hierarchy, BuildConfig.Builder::addHierarchy)
+                .sweep("refineFinalGraph", refinement, BuildConfig.Builder::refineFinalGraph)
+                .sweep("outDegree", degree, BuildConfig.Builder::M)
+                .sweep("neighborOverflow", overflow, BuildConfig.Builder::neighborOverflow)
+                .sweep("efConstruction", efConstruction, BuildConfig.Builder::efConstruction);
+    }
+
+    List<? extends Set<FeatureId>> featuresFor(BuildConfig build, SearchConfig searchCase) {
+        if (build.indexType == null) return featureSets;
+        if ("inMemory".equals(build.indexType)) return List.of(Set.of());
+
+        // The file format requires a vector feature. Source vectors also provide primary
+        // traversal scores for uncompressed search, independently of the reranking policy.
+        var base = EnumSet.noneOf(FeatureId.class);
+        if ("NVQ".equals(build.rerankingType)) base.add(FeatureId.NVQ_VECTORS);
+        if (base.isEmpty() || "None".equals(searchCase.compression.type)) base.add(FeatureId.INLINE_VECTORS);
+        var sets = new ArrayList<Set<FeatureId>>();
+        for (boolean fused : fusedGraph) {
+            var features = EnumSet.copyOf(base);
+            if (fused) {
+                features.add("ASH".equals(searchCase.compression.type) ? FeatureId.FUSED_ASH : FeatureId.FUSED_PQ);
+            }
+            if (!sets.contains(features)) sets.add(features);
+        }
+        return sets;
     }
 
     public static Builder builder() {
@@ -138,6 +189,7 @@ public final class GridSpec {
         private List<? extends Set<FeatureId>> featureSets;
         private SearchConfig search;
         private boolean enableIndexCache;
+        private List<Boolean> fusedGraph;
 
         private Builder() {}
 
@@ -150,6 +202,7 @@ public final class GridSpec {
         public Builder featureSets(List<? extends Set<FeatureId>> featureSets) { this.featureSets = featureSets; return this; }
         public Builder search(SearchConfig search) { this.search = search; return this; }
         public Builder enableIndexCache(boolean enableIndexCache) { this.enableIndexCache = enableIndexCache; return this; }
+        Builder fusedGraph(List<Boolean> fusedGraph) { this.fusedGraph = List.copyOf(fusedGraph); return this; }
 
         /**
          * @throws IllegalStateException if the feature sets or search config were not set

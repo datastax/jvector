@@ -148,7 +148,7 @@ public class TestGridDeferredFeatureParallelism {
             config.setParallelBuild(previous);
             TestUtil.deleteQuietly(work);
             // Grid caches codebooks by dataset name in the working directory; remove this run's.
-            Files.deleteIfExists(Path.of("pq_cache").resolve(pqParameters.idStringFor(ds)));
+            Files.deleteIfExists(Path.of("compressor_cache").resolve(pqParameters.idStringFor(ds)));
         }
     }
 

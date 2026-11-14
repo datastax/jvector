@@ -329,28 +329,15 @@ public class BenchmarkDiagnostics implements AutoCloseable {
             DiskUsageMonitor.MultiDirectorySnapshot lastDisk = diskSnapshots.get(diskSnapshots.size() - 1);
             DiskUsageMonitor.MultiDirectorySnapshot totalDisk = lastDisk.subtract(firstDisk);
 
-            System.out.printf("\nDisk Usage Summary %s:%n", label);
-            
-            // Print statistics for each monitored directory
+            // One line per monitored directory: size and files now, and the change during the phase.
+            System.out.printf("Disk use after %s:%n", label);
             for (String dirLabel : lastDisk.snapshots.keySet()) {
                 DiskUsageMonitor.DiskUsageSnapshot lastSnap = lastDisk.get(dirLabel);
-                DiskUsageMonitor.DiskUsageSnapshot totalSnap = totalDisk.get(dirLabel);
-                
-                System.out.printf("  [%s]:%n", dirLabel);
-                System.out.printf("    Total Disk Used: %s%n", DiskUsageMonitor.formatBytes(lastSnap.totalBytes));
-                System.out.printf("    Total Files: %d%n", lastSnap.fileCount);
-                if (totalSnap != null) {
-                    System.out.printf("    Net Change: %s, %+d files%n",
-                            DiskUsageMonitor.formatBytes(totalSnap.totalBytes), totalSnap.fileCount);
-                }
+                DiskUsageMonitor.DiskUsageSnapshot change = totalDisk.get(dirLabel);
+                System.out.printf("  %-16s %10s in %d files%s%n", dirLabel, DiskUsageMonitor.formatBytes(lastSnap.totalBytes),
+                        lastSnap.fileCount, change == null ? "" : String.format(" (%s%s, %+d files)",
+                                change.totalBytes >= 0 ? "+" : "", DiskUsageMonitor.formatBytes(change.totalBytes), change.fileCount));
             }
-            
-            // Print overall totals
-            System.out.printf("  [Overall Total]:%n");
-            System.out.printf("    Total Disk Used: %s%n", DiskUsageMonitor.formatBytes(lastDisk.getTotalBytes()));
-            System.out.printf("    Total Files: %d%n", lastDisk.getTotalFileCount());
-            System.out.printf("    Net Change: %s, %+d files%n",
-                    DiskUsageMonitor.formatBytes(totalDisk.getTotalBytes()), totalDisk.getTotalFileCount());
         }
     }
 

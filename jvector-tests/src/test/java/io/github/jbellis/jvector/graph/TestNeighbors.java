@@ -23,7 +23,9 @@ import io.github.jbellis.jvector.graph.similarity.BuildScoreProvider;
 import io.github.jbellis.jvector.vector.VectorSimilarityFunction;
 import org.junit.Test;
 
+import java.util.ArrayList;
 import java.util.HashSet;
+import java.util.List;
 import java.util.concurrent.ForkJoinPool;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -116,13 +118,23 @@ public class TestNeighbors extends RandomizedTest {
         new TestVectorGraph.CircularFloatVectorValues(32), VectorSimilarityFunction.DOT_PRODUCT);
     var map = new ConcurrentNeighborMap(new VamanaDiversityProvider(bsp, 1.2f), 64, 80);
     map.addNode(0);
-    var pool = new ForkJoinPool(8);
+    // awaitTermination can return before the worker threads have exited, and the
+    // randomized-testing leak check then reports them; join every worker we created.
+    List<Thread> workers = new ArrayList<>();
+    var pool = new ForkJoinPool(8, p -> {
+      var worker = ForkJoinPool.defaultForkJoinWorkerThreadFactory.newThread(p);
+      synchronized (workers) { workers.add(worker); }
+      return worker;
+    }, null, false);
     try {
       pool.submit(() -> IntStream.range(0, 2000).parallel()
           .forEach(i -> map.insertEdge(0, 1 + i % 20, i, 1.2f))).join();
     } finally {
       pool.shutdown();
       assertTrue(pool.awaitTermination(10, TimeUnit.SECONDS));
+      synchronized (workers) {
+        for (Thread worker : workers) worker.join(TimeUnit.SECONDS.toMillis(10));
+      }
     }
     assertEquals(20, map.get(0).size());
     var ids = new HashSet<Integer>();

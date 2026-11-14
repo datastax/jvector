@@ -1,0 +1,39 @@
+# ada002-1M: fused 2-bit ASH graph with NVQ reranking. This example shows how to
+# use four ASH landmarks. Symmetric and mixed construction
+# require one landmark, so the build uses asymmetric scoring.
+yamlSchemaVersion: 3
+onDiskIndexVersion: 7
+
+dataset: ada002-1M
+
+construction:
+  type: onDisk
+  outDegree: [32]
+  efConstruction: [100]
+  neighborOverflow: [1.2f]
+  addHierarchy: [Yes]
+  refineFinalGraph: [Yes]
+  fusedGraph: [Yes]
+  compression:
+    - type: ASH
+      scoring: asymmetric
+      parameters:
+        compressionRatio: 32
+        optimizer: ITQ
+        landmarkCount: 4
+        bitsPerDimension: 2
+  reranking:
+    type: NVQ
+  useSavedIndexIfExists: No
+
+search:
+  topKOverquery:
+    10: [1.0, 2.0]
+  useSearchPruning: [No]
+  compression:
+    - type: ASH
+      parameters:
+        compressionRatio: 32
+        optimizer: ITQ
+        landmarkCount: 4
+        bitsPerDimension: 2

@@ -1,0 +1,31 @@
+# cohere-english-v3-1M (1024 dimensions): build the graph with full-precision vectors, then write fused PQ
+# traversal codes (D/8 subspaces, 256 centroids) and NVQ reranking vectors to disk.
+yamlSchemaVersion: 3
+onDiskIndexVersion: 7
+
+dataset: cohere-english-v3-1M
+
+construction:
+  type: onDisk
+  outDegree: [32]
+  efConstruction: [100]
+  neighborOverflow: [1.2f]
+  addHierarchy: [Yes]
+  refineFinalGraph: [Yes]
+  fusedGraph: [Yes]
+  compression:
+    - type: None
+  reranking:
+    type: NVQ
+  useSavedIndexIfExists: No
+
+search:
+  topKOverquery:
+    10: [1.0, 2.0]
+  useSearchPruning: [No]
+  compression:
+    - type: PQ
+      parameters:
+        mFactor: 8
+        k: 256
+        anisotropicThreshold: -1.0

@@ -1,0 +1,27 @@
+# lastfm-64-dot (65 dimensions, dot product): on-disk graph built and searched with full-precision vectors.
+yamlSchemaVersion: 3
+onDiskIndexVersion: 7
+
+dataset: lastfm-64-dot
+
+construction:
+  type: onDisk
+  outDegree: [32]
+  efConstruction: [100]
+  neighborOverflow: [1.2f]
+  addHierarchy: [Yes]
+  refineFinalGraph: [Yes]
+  fusedGraph: [No]
+  compression:
+    - type: None
+  reranking:
+    type: None
+  useSavedIndexIfExists: No
+
+search:
+  topKOverquery:
+    10: [1.0, 2.0]
+    100: [1.0, 2.0]
+  useSearchPruning: [No]
+  compression:
+    - type: None

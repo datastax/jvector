@@ -29,15 +29,18 @@ import io.github.jbellis.jvector.graph.RandomAccessVectorValues;
 import io.github.jbellis.jvector.graph.TestVectorGraph;
 import io.github.jbellis.jvector.graph.disk.feature.Feature;
 import io.github.jbellis.jvector.graph.disk.feature.FeatureId;
+import io.github.jbellis.jvector.graph.disk.feature.FusedASH;
 import io.github.jbellis.jvector.graph.disk.feature.FusedPQ;
 import io.github.jbellis.jvector.graph.disk.feature.InlineVectors;
 import io.github.jbellis.jvector.graph.disk.feature.NVQ;
 import io.github.jbellis.jvector.graph.disk.feature.SeparatedNVQ;
 import io.github.jbellis.jvector.graph.disk.feature.SeparatedVectors;
+import io.github.jbellis.jvector.quantization.AsymmetricHashing;
 import io.github.jbellis.jvector.quantization.NVQuantization;
 import io.github.jbellis.jvector.quantization.PQVectors;
 import io.github.jbellis.jvector.quantization.ProductQuantization;
 import io.github.jbellis.jvector.util.Bits;
+import io.github.jbellis.jvector.util.RamUsageEstimator;
 import io.github.jbellis.jvector.vector.VectorSimilarityFunction;
 import org.junit.After;
 import org.junit.Before;
@@ -340,7 +343,9 @@ public class TestOnDiskGraphIndex extends RandomizedTest {
              var onDiskGraph = OnDiskGraphIndex.load(readerSupplier);
              var onDiskView = onDiskGraph.getView())
         {
-            assertEquals(88, onDiskGraph.ramBytesUsed()); // Current size of graph that hasn't been read from
+            // Fixed fields, two references per FeatureId and the record layout; the graph hasn't been read from.
+            assertEquals(104 + RamUsageEstimator.NUM_BYTES_OBJECT_REF
+                    + RamUsageEstimator.shallowSizeOfInstance(L0Layout.class), onDiskGraph.ramBytesUsed());
             assertEquals(32, onDiskGraph.getDegree(0));
             assertEquals(2, onDiskGraph.version);
             assertEquals(100_000, onDiskGraph.size(0));
@@ -379,16 +384,74 @@ public class TestOnDiskGraphIndex extends RandomizedTest {
 
     @Test
     public void testVersionRoundTrip() throws Exception {
-        // Versions 3-5 predate V6's feature-reordering/footer-format changes but still need to
-        // round-trip correctly. Version 2 is covered separately by testV0Read/testV0Write, and
-        // version 6 (current) is exercised throughout the rest of this test class.
-        for (int version : new int[]{3, 4, 5}) {
+        // Every version a caller can select still round-trips, not only the current one: hosts
+        // write older formats until all of their readers support the newer one. Version 2 is
+        // covered separately by testV0Read/testV0Write.
+        for (int version = 3; version <= OnDiskGraphIndex.CURRENT_VERSION; version++) {
             versionRoundTrip(version, false);
         }
-        // Only versions 4 and 5 (of the ones under test here) support multi-layer graphs.
-        for (int version : new int[]{4, 5}) {
+        // Multi-layer graphs start at version 4.
+        for (int version = 4; version <= OnDiskGraphIndex.CURRENT_VERSION; version++) {
             versionRoundTrip(version, true);
         }
+    }
+
+    /** Version 6 with fused PQ, NVQ and a hierarchy, as written by hosts that have not adopted version 7. */
+    @Test
+    public void testFusedPQWithNVQAtVersion6() throws Exception {
+        var graph = new TestUtil.RandomlyConnectedGraphIndex(
+                List.of(new CommonHeader.LayerInfo(256, 8), new CommonHeader.LayerInfo(16, 4)), getRandom());
+        int dimension = 64;
+        var vectors = TestUtil.createRandomVectors(graph.size(0), dimension);
+        var ravv = new ListRandomAccessVectorValues(vectors, dimension);
+        var pq = ProductQuantization.compute(ravv, 16, 256, false);
+        var pqv = (PQVectors) pq.encodeAll(ravv);
+        var nvq = NVQuantization.compute(ravv, 2);
+        var outputPath = testDirectory.resolve("version_6_fused_pq_nvq");
+
+        try (var writer = new OnDiskGraphIndexWriter.Builder(graph, outputPath)
+                .withVersion(6)
+                .with(new NVQ(nvq))
+                .with(new FusedPQ(graph.getDegree(0), pq))
+                .build())
+        {
+            var view = graph.getView();
+            writer.write(Map.of(
+                    FeatureId.NVQ_VECTORS, ordinal -> new NVQ.State(nvq.encode(ravv.getVector(ordinal))),
+                    FeatureId.FUSED_PQ, ordinal -> new FusedPQ.State(view, pqv, ordinal)));
+        }
+
+        try (var readerSupplier = new SimpleMappedReader.Supplier(outputPath.toAbsolutePath());
+             var onDiskGraph = OnDiskGraphIndex.load(readerSupplier))
+        {
+            assertEquals(6, onDiskGraph.version);
+            assertEquals(EnumSet.of(FeatureId.NVQ_VECTORS, FeatureId.FUSED_PQ), onDiskGraph.features.keySet());
+            assertEquals(graph.getMaxLevel(), onDiskGraph.getMaxLevel());
+            TestUtil.assertGraphEquals(graph, onDiskGraph);
+            assertEquals(pq, ((FusedPQ) onDiskGraph.features.get(FeatureId.FUSED_PQ)).getPQ());
+            assertEquals(nvq, ((NVQ) onDiskGraph.features.get(FeatureId.NVQ_VECTORS)).getNVQuantization());
+        }
+    }
+
+    @Test
+    public void testFusedASHRequiresVersion7() throws Exception {
+        var graph = new TestUtil.RandomlyConnectedGraphIndex(32, 4, getRandom());
+        var ravv = new TestVectorGraph.CircularFloatVectorValues(graph.size(0));
+        var e = assertThrows(IllegalArgumentException.class, () -> new OnDiskGraphIndexWriter.Builder(graph,
+                testDirectory.resolve("version_6_fused_ash"))
+                .withVersion(6)
+                .with(new InlineVectors(ravv.dimension()))
+                .with(fusedAshFeature(graph))
+                .build());
+        assertTrue(e.getMessage(), e.getMessage().startsWith("Feature FUSED_ASH is not supported by version 6"));
+    }
+
+    private static FusedASH fusedAshFeature(ImmutableGraphIndex graph) throws java.io.IOException {
+        var vectors = TestUtil.createRandomVectors(graph.size(0), 64);
+        vectors.forEach(io.github.jbellis.jvector.vector.VectorUtil::l2normalize);
+        var ash = AsymmetricHashing.initialize(new ListRandomAccessVectorValues(vectors, 64),
+                AsymmetricHashing.RANDOM, AsymmetricHashing.HEADER_BITS + 64, 1, 2);
+        return new FusedASH(graph.getDegree(0), ash);
     }
 
     private void versionRoundTrip(int version, boolean hierarchical) throws Exception {

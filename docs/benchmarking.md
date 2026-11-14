@@ -1,6 +1,16 @@
 # How to run benchmarks
 
-JVector comes with a built-in benchmarking system in `jvector-examples/.../BenchYAML.java`.
+JVector runs dataset benchmarks with BenchYAML. See the
+[BenchYAML Guide](benchyaml-guide.md) for the construction and search fields.
+
+For a first run, benchmark one small public dataset from the repository root:
+```sh
+mvn compile exec:exec@bench -pl jvector-examples -am -DbenchArgs=cohere-english-v3-100k
+```
+It downloads the dataset on first use (about 430 MB), builds and searches 100,000 vectors with the default
+[index parameters](../jvector-examples/yaml-configs/index-parameters/default.yml) and
+[run configuration](../jvector-examples/yaml-configs/run-config.yml), and prints one table of throughput,
+nodes visited and recall for each overquery, in about a minute.
 
 To run a benchmark
 - Decide which dataset(s) you want to benchmark. A dataset consists of
@@ -50,15 +60,16 @@ some-other-category:
 
 `jvector-examples/yaml-configs/index-parameters/default.yml` specifies the default index construction and search parameters to be used by `bench` for all datasets.
 
-You can specify a custom set of a parameters for any given dataset by creating a file called `<dataset-name>.yml`, with `<dataset-name>` replaced by the actual name of the dataset. This is the same as the identifier used in `datasets.yml`. The format of this file is exactly the same as `default.yml`.
+You can specify a custom set of a parameters for any given dataset by creating a file called `<dataset-name>.yml`, with `<dataset-name>` replaced by the actual name of the dataset. This is the same as the identifier used in `datasets.yml`. The format of this file is exactly the same as `default.yml`. The name must match exactly, including case, and the file's `dataset:` field must name the same dataset; BenchYAML stops with an error otherwise. Place the file directly in `index-parameters`, not a subfolder. Subfolders hold [example pipelines](../jvector-examples/yaml-configs/index-parameters/README.md) that you run by path.
 
-Refer to `default.yml` for a list of all options.
+See the [BenchYAML Guide](benchyaml-guide.md) for the field reference and an
+example index configuration.
 
 Most parameters can be specified as an array. For these parameters, a separate benchmark is run for each value of the parameter. If multiple parameters are specified as arrays, a benchmark is run for each combination (i.e. taking the Cartesian product). For example:
 ```yaml
 construction:
-  M: [32, 64]
-  ef: [100, 200]
+  outDegree: [32, 64]
+  efConstruction: [100, 200]
 ```
 will build and benchmark four graphs, one for each combination of M and ef in {(32, 100), (64, 100), (32, 200), (64, 200)}. This is particularly useful when running a Grid search to identify the best performing parameters.
 
@@ -66,11 +77,14 @@ will build and benchmark four graphs, one for each combination of M and ef in {(
 
 This file contains configurations for
 - Specifying the measurements you want to report, like QPS, latency and recall
+- Specifying how they are measured, such as warmup, timed passes and the page cache state
 - Specifying where to output these measurements, i.e. to the console, or to a file, or both.
 
 The configurations in this file are "run-level", meaning that they are shared across all the datasets being benchmarked.
+Select another file with `-Djvector.bench.runConfig=<path>`.
 
-See `run-config.yml` for a full list of all options.
+See [Run configuration](benchyaml-guide.md#run-configuration) for every option, `run-config.yml` for the
+default, and `run-config-larger-than-memory.yml` for measuring an index served from storage.
 
 ## Running `bench` from the command line
 
@@ -118,8 +132,15 @@ For remote datasets, use `base_url` to specify where files should be downloaded 
 
 ## Final index serialization
 
-BenchYAML and AutoBenchYAML default to parallel complete-record serialization
-(default batch size 64) after graph cleanup. `-Djvector.parallel_writer=false`
-selects the sequential path, which encodes FP/NVQ features during insertion.
-Dataset prefetching is a separate option and is not required. See
-[Deferred batch serialization](deferred-batch-writer.md) for activation and caller examples.
+For an on-disk index, set `construction.writerMode` to `sequential` or
+`parallel` in the index parameters. Both writers serialize the completed graph
+after cleanup. The parallel writer defaults to 64 records per batch. See the
+[BenchYAML Guide](benchyaml-guide.md#construction) for configuration and
+[Deferred batch serialization](deferred-batch-writer.md) for writer details.
+
+## Fused PQ and ASH comparison
+
+[Reproducing ASH versus PQ](ash-pq-benchmark.md) provides byte-matched recipes
+for the 1M and the 6M/10M datasets, scripts that run one case or a whole study,
+and the measurement protocol. [ASH performance](ash-performance.md) reports the
+results.

@@ -16,7 +16,9 @@
 
 package io.github.jbellis.jvector.example.reporting;
 
+import io.github.jbellis.jvector.example.yaml.MultiConfig;
 import io.github.jbellis.jvector.example.yaml.RunConfig;
+import io.github.jbellis.jvector.util.PhysicalCoreExecutor;
 
 import java.io.IOException;
 import java.nio.file.Files;
@@ -24,7 +26,9 @@ import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.time.Clock;
 import java.time.Instant;
+import java.util.List;
 import java.util.UUID;
+import java.util.concurrent.ForkJoinPool;
 
 /**
  * Bootstraps a benchmark run directory and writes sys_info.json.
@@ -52,6 +56,10 @@ public final class RunReporting {
     }
 
     public static RunReporting open(RunConfig runCfg) throws IOException {
+        return open(runCfg, List.of());
+    }
+
+    static RunReporting open(RunConfig runCfg, List<MultiConfig> configs) throws IOException {
         // Resolve base logging directory (default "logging")
         String logDir = (runCfg != null && runCfg.logging != null && runCfg.logging.dir != null && !runCfg.logging.dir.isBlank())
                 ? runCfg.logging.dir.trim()
@@ -63,9 +71,9 @@ public final class RunReporting {
         String runId = RunIdUtil.renderRunId(runIdTemplate, clock);
 
         // Run metadata
-        String jvectorRef = (runCfg != null && runCfg.logging != null && runCfg.logging.jvectorRef != null)
-                ? runCfg.logging.jvectorRef
-                : "";
+        String configuredRef = (runCfg != null && runCfg.logging != null && runCfg.logging.jvectorRef != null)
+                ? runCfg.logging.jvectorRef : "";
+        String jvectorRef = System.getProperty("jvector.bench.sourceRef", configuredRef);
 
         UUID runUuid = UUID.randomUUID();
         Instant createdAt = clock.instant();
@@ -74,7 +82,7 @@ public final class RunReporting {
         Files.createDirectories(runDir);
 
         Integer buildThreads = detectBuildThreads();
-        Integer queryThreads = java.util.concurrent.ForkJoinPool.getCommonPoolParallelism();
+        Integer queryThreads = queryParallelism(configs);
 
         String systemId = SysInfoWriter.writeSysInfo(
                 runDir,
@@ -89,6 +97,28 @@ public final class RunReporting {
 
         RunContext run = new RunContext(runId, runUuid, createdAt, runDir, systemId);
         return new RunReporting(run, jvectorRef);
+    }
+
+    private static Integer queryParallelism(List<MultiConfig> configs) {
+        boolean direct = configs == null || configs.isEmpty();
+        boolean queued = false;
+        if (configs != null) {
+            for (var config : configs) {
+                if (config == null || !config.usesSchema3()) {
+                    direct = true;
+                    continue;
+                }
+                if ("queued".equals(config.search.queryExecution())) queued = true;
+                else direct = true;
+            }
+        }
+        if (direct && queued) return null;
+        if (queued) {
+            return Math.max(1, Math.min(Runtime.getRuntime().availableProcessors(), PhysicalCoreExecutor.getPhysicalCoreCount()));
+        }
+        int selected = Integer.getInteger("jvector.bench.queryThreads", 0);
+        if (selected < 0) throw new IllegalArgumentException("queryThreads must be nonnegative");
+        return selected == 0 ? ForkJoinPool.getCommonPoolParallelism() : selected;
     }
 
     private static Integer detectBuildThreads() {
