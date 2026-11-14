@@ -60,20 +60,11 @@ the configured ASH construction policy applies. See
 [ASH configuration and defaults](ash-configuration.md#graph-construction)
 for the JVM setting.
 
-For `onDisk` builds, three construction metrics split the build: `graph_build_time_s`
-covers graph construction and cleanup, `flush_time_s` covers writing the completed
-graph and its features, and `reopen_time_s` covers reopening the written files.
-Graph build plus flush equals `index_build_time_s`; quantizer training and encoding
-are reported separately under `index_quant_time_s`. Select them under
-`metrics.construction` in the run YAML. A cached index reports none of them.
-
 An `onDisk` index that does not fuse its ASH codes (`fusedGraph: [No]`) writes the build's
-codes beside the index file during the flush, and a search with the same ASH settings loads them
-instead of encoding the base vectors again. `codes_write_time_s` is the part of `flush_time_s`
-spent writing them, and `codes_file_size_mb` is the size of the codes file. Under
-`search_quant_time_s`, `ASH.load_time_s` replaces `ASH.encoding_time_s` when a search loads
-stored codes, for a cached index as well, so a row shows which of the two it did. Indexes cached
-before codes were stored, PQ and BQ codes, and searches with other ASH settings still encode.
+codes beside the index file during the flush, as a deployed index would, and a search with the
+same ASH settings loads them when it opens the index instead of encoding the base vectors again.
+Indexes cached before codes were stored, PQ and BQ codes, and searches with other ASH settings
+still encode. [Results](#results) defines the build-phase and code timings.
 
 ## Search
 
@@ -155,20 +146,77 @@ with `-Djvector.bench.runConfig=<path>`. Its sections, in order:
 | `throughput.passes` | Integer ≥ 1 | Timed passes; the throughput stats summarize them. With `1` and `minSeconds: 0`, each held-out query runs once (cold queries) in the first search case. Defaults to 3. |
 | `throughput.minSeconds` | Number ≥ 0 | A timed pass repeats the queries until it has run this long; `0` runs them once. Defaults to 1.0. |
 
-Named metrics under `console.metrics` and `logging.metrics` come in categories:
-`system` (heap use), `disk` (index files), `construction` (build phases) and
-`execution`. The `execution` metrics describe the throughput benchmark's timed
-passes: `response_mean_ms` and the `response_p50_ms`, `response_p95_ms`,
-`response_p99_ms` and `response_p999_ms` percentiles of each query's time (with
-queued execution, from submission to completion; with direct execution, the
-search itself); `mean_batch_size` for queued ASH preparation; and, on Linux,
-`page_reads_per_query`, the process's major page faults per query, which counts
-pages read from storage.
+Named metrics under `console.metrics` and `logging.metrics` come in the categories
+`system`, `disk`, `construction` and `execution`. [Results](#results) defines each one.
 
 [The default run configuration](../jvector-examples/yaml-configs/run-config.yml)
 prints one short table for a first run.
 [The larger-than-memory run configuration](../jvector-examples/yaml-configs/run-config-larger-than-memory.yml)
 measures queries that read the index from storage.
+
+## Results
+
+Each search case prints one console row per overquery and, with `logging`, appends one row to
+`experiments.csv` in the run directory. The console shows the selected fields under their
+headers; the CSV starts with fixed columns, then one column per selected field, named by its key.
+A field a case does not produce is left blank.
+
+### Fixed CSV columns
+
+| Column | Meaning |
+| --- | --- |
+| `schema_version` | Version of the CSV layout. |
+| `run_id`, `run_uuid` | The run's directory name (from `logging.runId`) and a unique id for it. |
+| `system_id` | A hash of the machine and JVM description in the run's system information, for joining runs from one system. |
+| `dataset_name` | The dataset. |
+| `M`, `efConstruction`, `neighborOverflow`, `addHierarchy`, `refineFinalGraph` | The graph construction parameters. `M` is `outDegree`. |
+| `feature_set` | The features stored in the index, such as `[NVQ_VECTORS, FUSED_ASH]`. |
+| `build_compressor`, `search_compressor` | The compressors used for construction and for search traversal. |
+| `usePruning`, `topK`, `overquery` | The search settings of the row. |
+| `rerankK` | Candidates kept for reranking, `topK × overquery` rounded down. |
+| `ash_query_projection_requested`, `ash_query_projection_effective` | The requested ASH query projection precision and the one in effect; blank without ASH search. |
+| `index_type`, `writer_mode`, `reranking_type`, `ash_construction_mode` | Schema 3 only: `construction.type`, `writerMode`, `reranking.type` and the ASH construction scoring mode. |
+| `query_execution`, `query_threads`, `max_batch_size` | Schema 3 only: `direct` or `queued`, the query workers (queued) or caller threads (direct), and the ASH query batch limit. |
+
+### Benchmark fields
+
+Selected under `benchmarks`. In the console, `(of N)` under a throughput header is the number of
+timed passes.
+
+| Selector | CSV key | Console header | Meaning |
+| --- | --- | --- | --- |
+| `throughput: AVG` | `search.throughput.avg_qps` | Avg QPS | Mean queries per second over the timed passes. |
+| | `search.throughput.stddev_qps`, `search.throughput.cv_pct` | ± Std Dev, CV % | Spread of QPS across passes, as a standard deviation and as a percentage of the mean. Only with more than one pass. |
+| `throughput: MEDIAN` | `search.throughput.median_qps` | Median QPS | Median QPS over the timed passes. |
+| `throughput: MAX` | `search.throughput.max_qps`, `search.throughput.min_qps` | Max QPS, Min QPS | Fastest and slowest timed pass. |
+| `latency: AVG`, `STD`, `P999` | `search.latency.mean_ms`, `std_ms`, `p999_ms` | Mean, STD, p999 Latency (ms) | Time of one query run on its own, one at a time: mean, standard deviation and 99.9th percentile. |
+| `count: visited` | `search.count.avg_visited` | Avg Visited | Nodes scored per query. |
+| `count: expanded` | `search.count.avg_expanded` | Avg Expanded | Nodes whose neighbors were explored, per query. |
+| `count: expanded base layer` | `search.count.avg_expanded_base_layer` | Avg Expanded Base Layer | The same, in the base layer only. |
+| `accuracy: recall` | `search.accuracy.recall_at_{topK}` | Recall@{topK} | Fraction of each query's true `topK` neighbors among its `topK` results, averaged over queries. |
+| `accuracy: MAP` | `search.accuracy.map_at_{topK}` | MAP@{topK} | Mean average precision of the `topK` results. |
+
+### Named metrics
+
+Selected under `metrics`, by category.
+
+| Category: field | CSV key | Console header | Meaning |
+| --- | --- | --- | --- |
+| `system: max_heap_mb` | `search.system.max_heap_mb` | Max heap usage (MB) | The larger of the heap in use before and after the case's queries; not a sampled peak. |
+| `system: max_offheap_mb` | `search.system.max_offheap_mb` | Max offheap usage (MB) | The same for direct and mapped buffers. |
+| `disk: file_count`, `total_file_size_mb` | `search.disk.file_count`, `search.disk.total_file_size_mb` | File count, Total file size (MB) | Files in the work and saved-index directories after the queries, and their total size. |
+| `construction: index_build_time_s` | `construction.index_build_time_s` | Index build time (s) | Building and writing the index; blank when every index came from the index cache. |
+| `construction: graph_build_time_s` | `construction.graph_build_time_s` | Graph build time (s) | `onDisk`: graph construction and cleanup. |
+| `construction: flush_time_s` | `construction.flush_time_s` | Flush time (s) | `onDisk`: writing the completed graph, its features and any stored codes. Graph build plus flush equals the index build time. |
+| `construction: reopen_time_s` | `construction.reopen_time_s` | Reopen time (s) | `onDisk`: opening the written index files. |
+| `construction: codes_write_time_s` | `construction.codes_write_time_s` | Codes write time (s) | The part of the flush spent writing the ASH codes stored beside a non-fused index. |
+| `construction: codes_file_size_mb` | `construction.codes_file_size_mb` | Codes file size (MB) | Size of the stored codes file, when the search uses it. |
+| `construction: index_quant_time_s` | `construction.index_quant_time_s.{type}.compute_time_s`, `.encoding_time_s` | Idx {type} compute (s), Idx {type} encoding (s) | Training the quantizer and encoding the vectors for construction, per quantizer type: PQ, BQ, ASH or NVQ. Compute time is blank when the model was loaded from the compressor cache. |
+| `construction: search_quant_time_s` | `search.search_quant_time_s.{type}.compute_time_s`, `.encoding_time_s` | Search {type} compute (s), Search {type} encoding (s) | The same for the search traversal codes of an index that does not fuse them. |
+| | `search.search_quant_time_s.ASH.load_time_s` | Search ASH load (s) | Loading the ASH codes stored with the index, in place of training and encoding; a row has this or the encoding time, not both. |
+| `execution: response_mean_ms`, `response_p50_ms`, `response_p95_ms`, `response_p99_ms`, `response_p999_ms` | `search.execution.response_*` | Loaded mean, p50, p95, p99, p99.9 (ms) | Each query's time in the throughput benchmark's timed passes: with queued execution from submission to completion, with direct execution the search itself. |
+| `execution: mean_batch_size` | `search.execution.mean_batch_size` | Mean batch | Queries prepared together, on average, by queued ASH execution. |
+| `execution: page_reads_per_query` | `search.execution.page_reads_per_query` | Page reads (per query) | Linux only: the process's major page faults per query in the timed passes, which counts pages read from storage. |
 
 ## Quantizer parameters
 

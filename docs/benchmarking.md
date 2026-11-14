@@ -1,7 +1,8 @@
 # How to run benchmarks
 
 JVector runs dataset benchmarks with BenchYAML. See the
-[BenchYAML Guide](benchyaml-guide.md) for the construction and search fields.
+[BenchYAML Guide](benchyaml-guide.md) for the construction and search fields, and
+[Results](benchyaml-guide.md#results) for what each console and CSV field reports.
 
 For a first run, benchmark one small public dataset from the repository root:
 ```sh
