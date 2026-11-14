@@ -62,6 +62,8 @@ final class CompressedOnDiskBuild implements IndexBuildStrategy {
     private final ConstructionMetrics constructionMetrics;
     private final Supplier<VectorCompressor<?>> fusedCompressor;
     private final String cacheIdentity;
+    /** Traversal codes stored with the indexes that do not fuse them, loaded as each index is opened. */
+    private final Map<Set<FeatureId>, CompressedVectors> storedCodes = new LinkedHashMap<>();
 
     /** @param constructionMetrics construction metrics sink, or null when not reporting */
     CompressedOnDiskBuild(OnDiskGraphIndexCache cache,
@@ -93,6 +95,24 @@ final class CompressedOnDiskBuild implements IndexBuildStrategy {
         return buildCompressor;
     }
 
+    /** Whether {@code features} keep traversal codes in the index records, so none are stored beside it. */
+    private static boolean fusesCodes(Set<FeatureId> features) {
+        return FeatureProviders.anyMatch(features, FeatureProvider::providesApproximateScoring);
+    }
+
+    /** Opens the traversal codes stored beside {@code indexFile}, if it does not fuse them and has any. */
+    private void loadStoredCodes(Set<FeatureId> features, Path indexFile, ImmutableGraphIndex index) throws IOException {
+        if (fusesCodes(features)) return;
+        var codes = StoredCodes.load(indexFile, index.getIdUpperBound());
+        if (codes != null) storedCodes.put(features, codes);
+    }
+
+    /** Writes the build's codes beside an index that does not fuse them, and removes stale codes otherwise. */
+    private static void storeCodes(Set<FeatureId> features, CompressedVectors codes, Path indexFile) throws IOException {
+        if (fusesCodes(features) || !StoredCodes.supports(codes)) StoredCodes.delete(indexFile);
+        else StoredCodes.write(codes, indexFile);
+    }
+
     @Override
     public BuiltIndexes build(List<? extends Set<FeatureId>> featureSets, BuildConfig build, DataSet ds) throws IOException {
         Map<Set<FeatureId>, ImmutableGraphIndex> indexes = new LinkedHashMap<>();
@@ -101,6 +121,7 @@ final class CompressedOnDiskBuild implements IndexBuildStrategy {
         // If cache is disabled, we use the (tmp) workDirectory as the output
         Path outputDir = cache.isEnabled() ? cache.cacheDir().toAbsolutePath() : workDirectory;
 
+        storedCodes.clear();
         List<Set<FeatureId>> missing = new ArrayList<>();
         // Map feature sets to their cache handles for the build phase
         Map<Set<FeatureId>, OnDiskGraphIndexCache.WriteHandle> handles = new LinkedHashMap<>();
@@ -121,6 +142,7 @@ final class CompressedOnDiskBuild implements IndexBuildStrategy {
                     System.out.printf("%s: Using cached graph index for %s%n", key.datasetName, fs);
                     indexes.put(fs, cached.get());
                     files.put(fs, cache.resolve(key).finalPath);
+                    loadStoredCodes(fs, cache.resolve(key).finalPath, cached.get());
                 } else {
                     missing.add(fs);
                     if (cache.isEnabled()) {
@@ -137,11 +159,14 @@ final class CompressedOnDiskBuild implements IndexBuildStrategy {
 
             Double buildTimeS = missing.isEmpty() ? null
                     : buildMissing(missing, build, ds, outputDir, handles, indexes, files);
-            return new BuiltIndexes(indexes, files, buildTimeS);
+            return new BuiltIndexes(indexes, files, buildTimeS, new LinkedHashMap<>(storedCodes));
         } catch (IOException | RuntimeException e) {
             // A failed build must release cached readers and discard uncommitted writes.
             for (var handle : handles.values()) {
-                try { handle.close(); }
+                try {
+                    handle.close();
+                    StoredCodes.delete(handle.writePath());
+                }
                 catch (IOException suppressed) { e.addSuppressed(suppressed); }
             }
             for (var index : indexes.values()) {
@@ -206,6 +231,7 @@ final class CompressedOnDiskBuild implements IndexBuildStrategy {
 
         Map<Set<FeatureId>, RandomAccessOnDiskGraphIndexWriter> writers = new LinkedHashMap<>();
         Map<Set<FeatureId>, FeatureWriteContext> contexts = new LinkedHashMap<>();
+        Map<Set<FeatureId>, Path> graphPaths = new LinkedHashMap<>();
         int n = 0;
         try {
             for (var features : featureSets) {
@@ -220,6 +246,7 @@ final class CompressedOnDiskBuild implements IndexBuildStrategy {
                         inputMean, constructionMetrics, null, GraphBuilderFactory.constructionThreads(build), build.pageAlignment);
                 writers.put(features, ctx.buildWriter());
                 contexts.put(features, ctx);
+                graphPaths.put(features, graphPath);
             }
         } catch (IOException | RuntimeException e) {
             // Close the writers opened so far rather than leak their files when a later one fails.
@@ -269,6 +296,7 @@ final class CompressedOnDiskBuild implements IndexBuildStrategy {
                 throw new UncheckedIOException(e);
             }
         });
+        for (var entry : graphPaths.entrySet()) storeCodes(entry.getKey(), encoded, entry.getValue());
         builder.close();
         double totalTime = (System.nanoTime() - startTime) / 1_000_000_000.0;
         System.out.printf("Graph phases: insertion=%.6f cleanup=%.6f flush=%.6f seconds%n",
@@ -316,6 +344,8 @@ final class CompressedOnDiskBuild implements IndexBuildStrategy {
                      var writer = ctx.buildWriter()) {
                     writer.write(ctx.completedSuppliers(view, input::get));
                 }
+                // An index without fused codes keeps the build's codes beside it, as a deployed index would.
+                storeCodes(features, encoded, path);
                 flushSeconds += (System.nanoTime() - start) / 1e9;
             }
             double totalTime = buildSeconds + flushSeconds;
@@ -327,14 +357,18 @@ final class CompressedOnDiskBuild implements IndexBuildStrategy {
         }
     }
 
-    private static void reopen(List<Set<FeatureId>> featureSets, Path outputDir,
-                               Map<Set<FeatureId>, OnDiskGraphIndexCache.WriteHandle> handles,
-                               Map<Set<FeatureId>, ImmutableGraphIndex> indexes,
-                               Map<Set<FeatureId>, Path> files) throws IOException {
-        // Commit the index to cache atomically
+    private void reopen(List<Set<FeatureId>> featureSets, Path outputDir,
+                        Map<Set<FeatureId>, OnDiskGraphIndexCache.WriteHandle> handles,
+                        Map<Set<FeatureId>, ImmutableGraphIndex> indexes,
+                        Map<Set<FeatureId>, Path> files) throws IOException {
+        // Commit the index to cache atomically, after the codes stored with it, so a committed index never
+        // sits beside codes from an earlier build.
         for (var entry : handles.entrySet()) {
             System.out.printf("Committing %s build to graph index cache...%n", entry.getKey());
-            entry.getValue().commit();
+            var handle = entry.getValue();
+            if (Files.exists(StoredCodes.pathFor(handle.writePath()))) StoredCodes.move(handle.writePath(), handle.finalPath());
+            else StoredCodes.delete(handle.finalPath());
+            handle.commit();
         }
 
         // open indexes and capture per-feature-set file sizes
@@ -344,8 +378,10 @@ final class CompressedOnDiskBuild implements IndexBuildStrategy {
                     ? handles.get(features).finalPath()
                     : outputDir.resolve("graph" + n++);
 
-            indexes.put(features, OnDiskGraphIndex.load(ReaderSupplierFactory.open(loadPath)));
+            var index = OnDiskGraphIndex.load(ReaderSupplierFactory.open(loadPath));
+            indexes.put(features, index);
             files.put(features, loadPath);
+            loadStoredCodes(features, loadPath, index);
         }
     }
 

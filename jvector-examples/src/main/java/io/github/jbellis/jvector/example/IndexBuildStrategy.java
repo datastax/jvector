@@ -19,6 +19,7 @@ package io.github.jbellis.jvector.example;
 import io.github.jbellis.jvector.example.benchmarks.datasets.DataSet;
 import io.github.jbellis.jvector.graph.ImmutableGraphIndex;
 import io.github.jbellis.jvector.graph.disk.feature.FeatureId;
+import io.github.jbellis.jvector.quantization.CompressedVectors;
 
 import java.io.IOException;
 import java.nio.file.Files;
@@ -38,11 +39,19 @@ interface IndexBuildStrategy {
         final Map<Set<FeatureId>, Path> files;
         /** Seconds spent building, or null if every index was loaded from the cache. */
         final Double buildTimeS;
+        /** Traversal codes stored with an index that does not fuse them, loaded when the index was opened. */
+        final Map<Set<FeatureId>, CompressedVectors> storedCodes;
 
         BuiltIndexes(Map<Set<FeatureId>, ImmutableGraphIndex> indexes, Map<Set<FeatureId>, Path> files, Double buildTimeS) {
+            this(indexes, files, buildTimeS, Map.of());
+        }
+
+        BuiltIndexes(Map<Set<FeatureId>, ImmutableGraphIndex> indexes, Map<Set<FeatureId>, Path> files, Double buildTimeS,
+                     Map<Set<FeatureId>, CompressedVectors> storedCodes) {
             this.indexes = indexes;
             this.files = files;
             this.buildTimeS = buildTimeS;
+            this.storedCodes = storedCodes;
         }
 
         /** Size of the index file for {@code features}, or null for an in-memory or unreadable index. */

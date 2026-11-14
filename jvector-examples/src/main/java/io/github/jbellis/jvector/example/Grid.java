@@ -379,11 +379,18 @@ public class Grid {
                         } else {
                             var searchParams = cpSupplier.apply(ds);
                             String searchQuantType = quantTypeOf(searchParams); // "PQ", "BQ", or null
-                            var compressor = build.indexType != null && searchParams == CompressorParameters.NONE
+                            // Codes written with the index and loaded when it was opened, as a deployed searcher has them.
+                            var stored = built.storedCodes.get(features);
+                            boolean useStored = stored != null && searchParams.describes(stored.getCompressor());
+                            var compressor = useStored || build.indexType != null && searchParams == CompressorParameters.NONE
                                     ? null
                                     : getCompressor(searchParams, ds, constructionMetrics, Phase.SEARCH, searchQuantType);
 
-                            if (compressor == null) {
+                            if (useStored) {
+                                cv = stored;
+                                System.out.format("%s: using the %d %s traversal codes stored with the index [%.2f MB]%n", ds.getName(),
+                                        stored.count(), stored.getCompressor(), stored.ramBytesUsed() / 1024f / 1024f);
+                            } else if (compressor == null) {
                                 cv = null;
                                 System.out.format("%s: No search compressor configured, FULL PRECISION vectors will be used for search%n", ds.getName());
                             } else {

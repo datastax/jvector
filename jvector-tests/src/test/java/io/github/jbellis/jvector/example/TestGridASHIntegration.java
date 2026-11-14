@@ -248,6 +248,59 @@ public class TestGridASHIntegration {
     }
 
     @Test(timeout = 120_000)
+    public void nonFusedIndexStoresItsCodesAndSearchesLoadThem() throws Exception {
+        var data = schema3Data();
+        String ash = "- type: ASH\n  parameters: {optimizer: RANDOM, encodedBits: 72, bitsPerDimension: 2}";
+        var config = schema3Config("onDisk", "parallel", false, "NVQ",
+                ash.replace("  parameters:", "  scoring: symmetric\n  parameters:"), ash);
+        var spec = GridSpec.fromConfig(config);
+        var build = spec.buildPoints().get(0);
+        var features = spec.featuresFor(build, spec.search.cases().get(0));
+        var featureSet = features.get(0);
+        var params = config.search.getCompressorParameters().get(0).apply(data);
+        var cache = OnDiskGraphIndexCache.initialize(temporary.newFolder().toPath());
+        var work = temporary.newFolder().toPath();
+        try {
+            var fresh = new CompressedOnDiskBuild(cache, work, () -> params.computeCompressor(data),
+                    new ConstructionMetrics(true), null, "schema3:stored-codes").build(features, build, data);
+            var stored = fresh.storedCodes.get(featureSet);
+            try (var index = fresh.indexes.get(featureSet)) {
+                assertNotNull(stored);
+                assertTrue(Files.exists(StoredCodes.pathFor(fresh.files.get(featureSet))));
+                assertEquals(data.getBaseRavv().size(), stored.count());
+                assertTrue(params.describes(stored.getCompressor()));
+                // The stored codes are the ones the model encodes from the base vectors.
+                assertEquals(stored.getCompressor().encodeAll(data.getBaseRavv()), stored);
+            }
+
+            var reused = new CompressedOnDiskBuild(cache, work, () -> {
+                throw new AssertionError("cache hit tried to prepare a build compressor");
+            }, new ConstructionMetrics(true), null, "schema3:stored-codes").build(features, build, data);
+            try (var index = reused.indexes.get(featureSet)) {
+                assertNull(reused.buildTimeS);
+                assertEquals(stored, reused.storedCodes.get(featureSet));
+            }
+
+            // A search with the same ASH settings uses the codes stored with the index and encodes nothing.
+            var artifacts = RunArtifacts.open(csvRunConfig(), List.of(config));
+            var console = new ByteArrayOutputStream();
+            var stdout = System.out;
+            try {
+                System.setOut(new PrintStream(console, true, StandardCharsets.UTF_8));
+                Grid.run(data, spec, artifacts);
+            } finally {
+                System.setOut(stdout);
+            }
+            var output = console.toString(StandardCharsets.UTF_8);
+            assertTrue(output, output.contains("traversal codes stored with the index"));
+            assertFalse(output, output.contains(" encoded " + data.getBaseRavv().size() + " vectors"));
+            assertEquals(2, Files.readAllLines(artifacts.experimentsWriter().path()).size());
+        } finally {
+            Files.deleteIfExists(Path.of("compressor_cache").resolve(params.idStringFor(data)));
+        }
+    }
+
+    @Test(timeout = 120_000)
     public void searchWorkersSweepQueriesOneIndexWithEachWorkerCount() throws Exception {
         var data = schema3Data();
         var search = String.join("\n", "- type: ASH", "  parameters:", "    optimizer: RANDOM",

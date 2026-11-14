@@ -54,6 +54,14 @@ public abstract class CompressorParameters {
     /** Validate dataset-dependent constraints before allocating codes or training a model. */
     public void validateFor(DataSet ds, boolean fused, String ashConstructionMode) {}
 
+    /**
+     * Whether {@code compressor} was made with these parameters, so codes it encoded can stand in for codes these
+     * parameters would produce. False unless a subclass can tell from the compressor itself.
+     */
+    public boolean describes(VectorCompressor<?> compressor) {
+        return false;
+    }
+
     public static class PQParameters extends CompressorParameters {
         private final int m;
         private final int k;
@@ -164,6 +172,14 @@ public abstract class CompressorParameters {
         @Override
         public VectorCompressor<?> loadCompressor(RandomAccessReader in) throws IOException {
             return AsymmetricHashing.load(in);
+        }
+
+        @Override
+        public boolean describes(VectorCompressor<?> compressor) {
+            if (!(compressor instanceof AsymmetricHashing)) return false;
+            var ash = (AsymmetricHashing) compressor;
+            return ash.optimizer == optimizer && ash.encodedBits == encodedBits
+                    && ash.landmarkCount == landmarkCount && ash.bitsPerDimension == bitsPerDimension;
         }
 
         @Override
