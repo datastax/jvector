@@ -88,7 +88,7 @@ final class ColdFileCache {
                 if ((int) close.invokeWithArguments(fd) != 0) throw new IOException("Cache-check descriptor cleanup failed");
             }
         } catch (IOException e) { throw e; }
-        catch (Throwable e) { throw new IOException("File cache eviction requires JDK 23+ with --enable-native-access=ALL-UNNAMED", e); }
+        catch (Throwable e) { throw new IOException("File cache eviction requires JDK 22+ with --enable-native-access=ALL-UNNAMED", e); }
     }
 
     // Resolve FFM only for cold-cache setup, so ordinary examples retain their Java 11 target.

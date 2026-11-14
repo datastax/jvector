@@ -338,8 +338,8 @@ public class TestGridASHIntegration {
         var data = schema3Data();
         var config = schema3Config("onDisk", "parallel", false, "None", "- type: None");
         boolean linux = System.getProperty("os.name").equals("Linux");
-        // Eviction calls the OS through the foreign function API, which needs JDK 23+.
-        boolean evict = linux && Runtime.version().feature() >= 23;
+        // Eviction calls the OS through the foreign function API, final from JDK 22.
+        boolean evict = linux && Runtime.version().feature() >= 22;
         var run = csvRunConfig();
         run.benchmarks = Map.of("throughput", List.of("AVG"), "accuracy", List.of("recall"));
         run.measurement = new Measurement();

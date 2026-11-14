@@ -140,7 +140,7 @@ with `-Djvector.bench.runConfig=<path>`. Its sections, in order:
 
 | Field | Values | Description |
 | --- | --- | --- |
-| `evictIndex` | `true`, `false` | Cold index: drops each on-disk index file from the page cache before its first search, so search reads it from storage. Pages the open index has already read stay cached. Linux only. Defaults to `false`. |
+| `evictIndex` | `true`, `false` | Cold index: drops each on-disk index file from the page cache before its first search, so search reads it from storage. Pages the open index has already read stay cached. Linux and JDK 22+ only. Defaults to `false`. |
 | `throughput.warmup` | `random`, `base`, `none` | Warmup queries. `random` uses random vectors; `base` uses base vectors sampled from the dataset, which follow the data without favoring the measured queries. Defaults to `random`. |
 | `throughput.warmupPasses` | Integer ≥ 0 | Warmup passes over the query count. Defaults to 3. |
 | `throughput.untilCompiled` | `true`, `false` | Continues warming, up to 10 passes, until a pass adds little JIT compilation, so timed passes run compiled code. Defaults to `false`. |
