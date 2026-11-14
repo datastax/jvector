@@ -261,11 +261,16 @@ public class TestGridASHIntegration {
         var cache = OnDiskGraphIndexCache.initialize(temporary.newFolder().toPath());
         var work = temporary.newFolder().toPath();
         try {
+            var freshMetrics = new ConstructionMetrics(true);
             var fresh = new CompressedOnDiskBuild(cache, work, () -> params.computeCompressor(data),
-                    new ConstructionMetrics(true), null, "schema3:stored-codes").build(features, build, data);
-            var stored = fresh.storedCodes.get(featureSet);
+                    freshMetrics, null, "schema3:stored-codes").build(features, build, data);
+            assertNotNull(fresh.storedCodes.get(featureSet));
+            var stored = fresh.storedCodes.get(featureSet).codes;
             try (var index = fresh.indexes.get(featureSet)) {
-                assertNotNull(stored);
+                // Writing the codes is part of the flush.
+                assertTrue(freshMetrics.codesWriteTimeS > 0);
+                assertTrue(freshMetrics.codesWriteTimeS <= freshMetrics.flushTimeS);
+                assertNotNull(fresh.codesFileSize(featureSet));
                 assertTrue(Files.exists(StoredCodes.pathFor(fresh.files.get(featureSet))));
                 assertEquals(data.getBaseRavv().size(), stored.count());
                 assertTrue(params.describes(stored.getCompressor()));
@@ -273,16 +278,23 @@ public class TestGridASHIntegration {
                 assertEquals(stored.getCompressor().encodeAll(data.getBaseRavv()), stored);
             }
 
+            var reusedMetrics = new ConstructionMetrics(true);
             var reused = new CompressedOnDiskBuild(cache, work, () -> {
                 throw new AssertionError("cache hit tried to prepare a build compressor");
-            }, new ConstructionMetrics(true), null, "schema3:stored-codes").build(features, build, data);
+            }, reusedMetrics, null, "schema3:stored-codes").build(features, build, data);
             try (var index = reused.indexes.get(featureSet)) {
                 assertNull(reused.buildTimeS);
-                assertEquals(stored, reused.storedCodes.get(featureSet));
+                assertNull(reusedMetrics.codesWriteTimeS);
+                assertEquals(stored, reused.storedCodes.get(featureSet).codes);
             }
 
-            // A search with the same ASH settings uses the codes stored with the index and encodes nothing.
-            var artifacts = RunArtifacts.open(csvRunConfig(), List.of(config));
+            // A search with the same ASH settings uses the codes stored with the index and encodes nothing,
+            // and the CSV reports loading them where it would report encoding them.
+            var run = csvRunConfig();
+            run.logging.metrics = new MetricSelection();
+            run.logging.metrics.put("construction", List.of("codes_write_time_s", "codes_file_size_mb",
+                    "search_quant_time_s"));
+            var artifacts = RunArtifacts.open(run, List.of(config));
             var console = new ByteArrayOutputStream();
             var stdout = System.out;
             try {
@@ -294,7 +306,18 @@ public class TestGridASHIntegration {
             var output = console.toString(StandardCharsets.UTF_8);
             assertTrue(output, output.contains("traversal codes stored with the index"));
             assertFalse(output, output.contains(" encoded " + data.getBaseRavv().size() + " vectors"));
-            assertEquals(2, Files.readAllLines(artifacts.experimentsWriter().path()).size());
+            var lines = Files.readAllLines(artifacts.experimentsWriter().path());
+            assertEquals(2, lines.size());
+            var headers = Arrays.asList(lines.get(0).split(","));
+            var cells = lines.get(1).split(",(?=(?:[^\"]*\"[^\"]*\")*[^\"]*$)", -1);
+            for (var key : List.of("search.search_quant_time_s.ASH.load_time_s",
+                    "construction.codes_write_time_s", "construction.codes_file_size_mb")) {
+                assertTrue(lines.get(0), headers.contains(key));
+                assertFalse(key, cells[headers.indexOf(key)].isEmpty());
+            }
+            String encoding = "search.search_quant_time_s.ASH.encoding_time_s";
+            assertTrue(lines.get(0), headers.contains(encoding));
+            assertTrue(encoding, cells[headers.indexOf(encoding)].isEmpty());
         } finally {
             Files.deleteIfExists(Path.of("compressor_cache").resolve(params.idStringFor(data)));
         }

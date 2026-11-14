@@ -41,6 +41,10 @@ final class ConstructionMetrics {
     public Double graphBuildTimeS;
     public Double flushTimeS;
     public Double reopenTimeS;
+    // Traversal codes stored beside an index that does not fuse them: the part of the flush spent writing
+    // them, and the size of the codes file.
+    public Double codesWriteTimeS;
+    public Long codesFileSizeBytes;
 
     // Index-construction phase (single pass per run)
     private final Map<String, QuantStats> indexByType = new HashMap<>();
@@ -84,6 +88,11 @@ final class ConstructionMetrics {
         appendPhase(out, "construction.graph_build_time_s", "Graph build time (s)", graphBuildTimeS);
         appendPhase(out, "construction.flush_time_s", "Flush time (s)", flushTimeS);
         appendPhase(out, "construction.reopen_time_s", "Reopen time (s)", reopenTimeS);
+        appendPhase(out, "construction.codes_write_time_s", "Codes write time (s)", codesWriteTimeS);
+        if (codesFileSizeBytes != null) {
+            out.add(Metric.of("construction.codes_file_size_mb",
+                    "Codes file size (MB)", ".2f", codesFileSizeBytes / 1024.0 / 1024.0));
+        }
 
         // Index-construction quant timings
         appendQuant(out, "construction.index_quant_time_s", "Idx", indexByType, sumIndexQuantTimes);
@@ -126,12 +135,19 @@ final class ConstructionMetrics {
                             hPrefix + qt + " encoding (s) #" + i, ".2f", qs.encodeTimesS.get(i)));
                 }
             }
+
+            // Loading codes stored with the index, in place of encoding them
+            if (qs.loadTimeS != null) {
+                out.add(Metric.of(prefix + "." + qt + ".load_time_s",
+                        hPrefix + qt + " load (s)", ".2f", qs.loadTimeS));
+            }
         }
     }
 
     private static final class QuantStats {
         final List<Double> computeTimesS = new ArrayList<>();
         final List<Double> encodeTimesS = new ArrayList<>();
+        Double loadTimeS;
     }
 
     static final class QuantHandle {
@@ -148,6 +164,11 @@ final class ConstructionMetrics {
             long t0 = System.nanoTime();
             try { return f.get(); }
             finally { qs.computeTimesS.add((System.nanoTime() - t0) / 1_000_000_000.0); }
+        }
+
+        /** Records the seconds spent loading stored codes instead of encoding them. */
+        void recordLoad(double seconds) {
+            if (qs != null) qs.loadTimeS = seconds;
         }
 
         <T> T timeEncode(java.util.function.Supplier<T> f) {

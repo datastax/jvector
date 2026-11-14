@@ -67,6 +67,14 @@ Graph build plus flush equals `index_build_time_s`; quantizer training and encod
 are reported separately under `index_quant_time_s`. Select them under
 `metrics.construction` in the run YAML. A cached index reports none of them.
 
+An `onDisk` index that does not fuse its ASH codes (`fusedGraph: [No]`) writes the build's
+codes beside the index file during the flush, and a search with the same ASH settings loads them
+instead of encoding the base vectors again. `codes_write_time_s` is the part of `flush_time_s`
+spent writing them, and `codes_file_size_mb` is the size of the codes file. Under
+`search_quant_time_s`, `ASH.load_time_s` replaces `ASH.encoding_time_s` when a search loads
+stored codes, for a cached index as well, so a row shows which of the two it did. Indexes cached
+before codes were stored, PQ and BQ codes, and searches with other ASH settings still encode.
+
 ## Search
 
 Search uses the index selected by `construction.type`. Changes to stored features

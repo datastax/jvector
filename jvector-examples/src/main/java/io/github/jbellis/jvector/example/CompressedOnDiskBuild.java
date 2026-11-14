@@ -63,7 +63,7 @@ final class CompressedOnDiskBuild implements IndexBuildStrategy {
     private final Supplier<VectorCompressor<?>> fusedCompressor;
     private final String cacheIdentity;
     /** Traversal codes stored with the indexes that do not fuse them, loaded as each index is opened. */
-    private final Map<Set<FeatureId>, CompressedVectors> storedCodes = new LinkedHashMap<>();
+    private final Map<Set<FeatureId>, StoredCodes.Loaded> storedCodes = new LinkedHashMap<>();
 
     /** @param constructionMetrics construction metrics sink, or null when not reporting */
     CompressedOnDiskBuild(OnDiskGraphIndexCache cache,
@@ -103,14 +103,21 @@ final class CompressedOnDiskBuild implements IndexBuildStrategy {
     /** Opens the traversal codes stored beside {@code indexFile}, if it does not fuse them and has any. */
     private void loadStoredCodes(Set<FeatureId> features, Path indexFile, ImmutableGraphIndex index) throws IOException {
         if (fusesCodes(features)) return;
-        var codes = StoredCodes.load(indexFile, index.getIdUpperBound());
-        if (codes != null) storedCodes.put(features, codes);
+        var loaded = StoredCodes.load(indexFile, index.getIdUpperBound());
+        if (loaded != null) storedCodes.put(features, loaded);
     }
 
     /** Writes the build's codes beside an index that does not fuse them, and removes stale codes otherwise. */
-    private static void storeCodes(Set<FeatureId> features, CompressedVectors codes, Path indexFile) throws IOException {
-        if (fusesCodes(features) || !StoredCodes.supports(codes)) StoredCodes.delete(indexFile);
-        else StoredCodes.write(codes, indexFile);
+    private void storeCodes(Set<FeatureId> features, CompressedVectors codes, Path indexFile) throws IOException {
+        if (fusesCodes(features) || !StoredCodes.supports(codes)) {
+            StoredCodes.delete(indexFile);
+            return;
+        }
+        double seconds = StoredCodes.write(codes, indexFile);
+        if (constructionMetrics != null) {
+            constructionMetrics.codesWriteTimeS = (constructionMetrics.codesWriteTimeS == null ? 0
+                    : constructionMetrics.codesWriteTimeS) + seconds;
+        }
     }
 
     @Override
@@ -159,6 +166,8 @@ final class CompressedOnDiskBuild implements IndexBuildStrategy {
 
             Double buildTimeS = missing.isEmpty() ? null
                     : buildMissing(missing, build, ds, outputDir, handles, indexes, files);
+            // Opened after the reopen timer, so their load time is reported on its own.
+            for (var fs : missing) loadStoredCodes(fs, files.get(fs), indexes.get(fs));
             return new BuiltIndexes(indexes, files, buildTimeS, new LinkedHashMap<>(storedCodes));
         } catch (IOException | RuntimeException e) {
             // A failed build must release cached readers and discard uncommitted writes.
@@ -378,10 +387,8 @@ final class CompressedOnDiskBuild implements IndexBuildStrategy {
                     ? handles.get(features).finalPath()
                     : outputDir.resolve("graph" + n++);
 
-            var index = OnDiskGraphIndex.load(ReaderSupplierFactory.open(loadPath));
-            indexes.put(features, index);
+            indexes.put(features, OnDiskGraphIndex.load(ReaderSupplierFactory.open(loadPath)));
             files.put(features, loadPath);
-            loadStoredCodes(features, loadPath, index);
         }
     }
 

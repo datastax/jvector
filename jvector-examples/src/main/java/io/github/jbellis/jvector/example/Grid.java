@@ -362,6 +362,7 @@ public class Grid {
                 for (var cpSupplier : search.searchCompressors) {
                     indexes.forEach((features, index) -> {
                         constructionMetrics.indexFileSizeBytes = built.fileSize(features);
+                        constructionMetrics.codesFileSizeBytes = built.codesFileSize(features);
                         var indexFile = built.files.get(features);
                         if (measurement != null && measurement.evictIndex() && indexFile != null && evictedFiles.add(indexFile)) {
                             evictFromPageCache(ds.getName(), indexFile);
@@ -380,7 +381,8 @@ public class Grid {
                             var searchParams = cpSupplier.apply(ds);
                             String searchQuantType = quantTypeOf(searchParams); // "PQ", "BQ", or null
                             // Codes written with the index and loaded when it was opened, as a deployed searcher has them.
-                            var stored = built.storedCodes.get(features);
+                            var loaded = built.storedCodes.get(features);
+                            var stored = loaded == null ? null : loaded.codes;
                             boolean useStored = stored != null && searchParams.describes(stored.getCompressor());
                             var compressor = useStored || build.indexType != null && searchParams == CompressorParameters.NONE
                                     ? null
@@ -388,6 +390,7 @@ public class Grid {
 
                             if (useStored) {
                                 cv = stored;
+                                constructionMetrics.search(searchQuantType).recordLoad(loaded.seconds);
                                 System.out.format("%s: using the %d %s traversal codes stored with the index [%.2f MB]%n", ds.getName(),
                                         stored.count(), stored.getCompressor(), stored.ramBytesUsed() / 1024f / 1024f);
                             } else if (compressor == null) {

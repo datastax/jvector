@@ -171,6 +171,8 @@ public final class LoggingSchemaPlanner {
                 for (String qt : searchQuantTypes) {
                     union.add(p + "." + qt + ".compute_time_s");
                     union.add(p + "." + qt + ".encoding_time_s");
+                    // ASH codes stored with a non-fused index are loaded instead of encoded.
+                    if ("ASH".equals(qt)) union.add(p + ".ASH.load_time_s");
                 }
             }
         }

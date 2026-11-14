@@ -48,7 +48,9 @@ public final class SearchReportingCatalog {
      * passes exists only with more than one timed pass.
      */
     public static final Set<String> CONDITIONAL_KEYS =
-            Set.of("search.throughput.stddev_qps", "search.throughput.cv_pct");
+            Set.of("search.throughput.stddev_qps", "search.throughput.cv_pct",
+                    // Only indexes that store their traversal codes beside them report these.
+                    "construction.codes_write_time_s", "construction.codes_file_size_mb");
 
     /** Catalog used by ReportingSelectionResolver for the search phase. */
     public static ReportingSelectionResolver.Catalog catalog() {
@@ -112,6 +114,8 @@ public final class SearchReportingCatalog {
                         "graph_build_time_s","construction.graph_build_time_s",
                         "flush_time_s","construction.flush_time_s",
                         "reopen_time_s","construction.reopen_time_s",
+                        "codes_write_time_s","construction.codes_write_time_s",
+                        "codes_file_size_mb","construction.codes_file_size_mb",
                         "index_quant_time_s","@prefix:construction.index_quant_time_s",
                         "search_quant_time_s","@prefix:search.search_quant_time_s"
                 )

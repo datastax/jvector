@@ -38,6 +38,17 @@ final class StoredCodes {
 
     private StoredCodes() {}
 
+    /** Codes loaded from beside an index, and the seconds loading them took. */
+    static final class Loaded {
+        final CompressedVectors codes;
+        final double seconds;
+
+        private Loaded(CompressedVectors codes, double seconds) {
+            this.codes = codes;
+            this.seconds = seconds;
+        }
+    }
+
     /** The codes file for {@code index}. */
     static Path pathFor(Path index) {
         return index.resolveSibling(index.getFileName() + ".codes");
@@ -80,7 +91,7 @@ final class StoredCodes {
      * Loads the codes stored beside {@code index}, or returns null when there are none or they do not cover the
      * index's {@code nodes} ordinals.
      */
-    static CompressedVectors load(Path index, int nodes) throws IOException {
+    static Loaded load(Path index, int nodes) throws IOException {
         Path path = pathFor(index);
         if (!Files.exists(path)) return null;
         long start = System.nanoTime();
@@ -94,9 +105,9 @@ final class StoredCodes {
                 System.out.printf("Ignoring %s: %d codes for an index of %d nodes%n", path.getFileName(), codes.count(), nodes);
                 return null;
             }
-            System.out.printf("Loaded %d traversal codes stored with the index in %.2f s%n",
-                    codes.count(), (System.nanoTime() - start) / 1e9);
-            return codes;
+            double seconds = (System.nanoTime() - start) / 1e9;
+            System.out.printf("Loaded %d traversal codes stored with the index in %.2f s%n", codes.count(), seconds);
+            return new Loaded(codes, seconds);
         }
     }
 }
