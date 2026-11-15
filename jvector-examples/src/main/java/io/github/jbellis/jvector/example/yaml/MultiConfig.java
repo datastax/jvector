@@ -303,6 +303,11 @@ public class MultiConfig {
                 part += "-" + (bits == null ? "1" : bits) + "b";
                 Object landmarks = parameters.get("landmarkCount");
                 if (landmarks != null && !"1".equals(String.valueOf(landmarks))) part += " " + landmarks + " landmarks";
+                Object trainingCount = parameters.get("trainingCount");
+                if (trainingCount != null) {
+                    Object trainingStart = parameters.get("trainingStart");
+                    part += " trained on " + trainingCount + " from " + (trainingStart == null ? "0" : trainingStart);
+                }
             }
             if (detailed && entry.scoring != null) part += " " + entry.scoring;
             parts.add(part);

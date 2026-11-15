@@ -40,9 +40,12 @@ Each `compression` list entry has a `type` and its own settings.
 | Field | Values | Description |
 | --- | --- | --- |
 | `type` | `inMemory`, `onDisk` | `inMemory` keeps the graph in memory for search. `onDisk` serializes the completed graph and reopens it for search. |
+| `streaming` | `Yes`, `No` | Optional scalar. `Yes` builds the index as a live index is built, inserting vectors as they arrive; see [Streaming builds](#streaming-builds). Defaults to `No`. |
+| `coldStartSize` | Integers ≥ 0 | Required with `streaming: Yes`, which it sweeps. `0` starts the index with the construction compressor's model. A positive count starts it cold; see [Streaming builds](#streaming-builds). |
+| `trainWhileStreaming` | `Yes`, `No` | Optional with `streaming: Yes`, swept. `Yes` lets a cold index train its first model, with the construction compressor's optimizer, once its sample holds 20 × the dimension vectors. `No` fixes a random projection after `coldStartSize` vectors instead. Defaults to `No`. |
 | `writerMode` | `sequential`, `parallel` | Selects the writer after graph cleanup for `onDisk`. Defaults to `parallel`. |
 | `pageAlignment` | Power of two from 512 to 1048576 | Optional, `onDisk` only. Places base-layer node records so none crosses a page boundary of this size, typically `4096`; see [Page-aligned records](larger-than-memory-indexes.md#page-aligned-records). Omitted, records are packed back to back. Part of the saved-index identity. |
-| `useSavedIndexIfExists` | `Yes`, `No` | Controls reuse of a compatible `onDisk` index. `Yes` saves each built index in the working directory's `index_cache` and reuses it on later runs; a cache hit skips fresh construction and serialization measurements. Saved indexes are never deleted automatically, so starting-point configurations use `No`; recipes that query an index from a later JVM, such as the ASH/PQ comparison, use `Yes`. |
+| `useSavedIndexIfExists` | `Yes`, `No` | Controls reuse of a compatible index, `inMemory` or `onDisk`, batch or streaming. `Yes` saves each built index, with the traversal codes it stores, in the working directory's `index_cache` and reuses it on later runs; an `inMemory` index is reloaded into memory. A cache hit skips fresh construction and serialization measurements. Saved indexes are never deleted automatically, so starting-point configurations use `No`; recipes that query an index from a later JVM, such as the ASH/PQ comparison, use `Yes`. |
 | `workers` | Positive integer or `max` | Optional. Threads for quantizer training, encoding, graph insertion and the parallel writer. `max` is the platform's physical core count, which is also the default. |
 | `outDegree` | Positive integers | Maximum final neighborhood degree, also called M. |
 | `efConstruction` | Positive integers | Search width used to find candidates during insertion. |
@@ -54,6 +57,39 @@ Each `compression` list entry has a `type` and its own settings.
 | `compression[].parameters` | [Quantizer parameters](#quantizer-parameters) | Supplies training and encoding settings for this entry. |
 | `compression[].scoring` | `symmetric`, `asymmetric`, `mixed` | Optional for ASH construction. `symmetric` scores encoded vectors during insertion and pruning. `asymmetric` scores source queries against codes for both operations. `mixed` uses asymmetric insertion and symmetric pruning. |
 | `reranking.type` | `None`, `FP32`, `NVQ` | `FP32` rescores candidates with source vectors. `NVQ` rescores them with NVQ codes. `None` or omission skips reranking where the scorer and layout allow it. |
+
+### Streaming builds
+
+A streaming case adds the base vectors one at a time, in file order, from one
+thread per construction worker, to an index that keeps no copy of the vectors,
+as a database's live index would. The case needs a single ASH `compression`
+entry. Searches use the codes the index built, whatever `search.compression`
+says, with the search case's query settings.
+
+- **Warm start.** With `coldStartSize: [0]` the index starts with the
+  construction compressor's model and encodes each vector as it arrives. Train
+  that model on a window with the ASH `trainingStart` and `trainingCount`
+  parameters to stand in for a model inherited from an earlier index.
+- **Cold start.** With a positive `coldStartSize` the index first builds and
+  searches its graph with exact scores, as an uncompressed index does. When its
+  first model is ready, trained with `trainWhileStreaming: [Yes]` or a random
+  projection without it, the index encodes the vectors it holds, rescores the
+  graph's edges with ASH scores and continues with ASH. While the first model
+  trains, inserts run on at most half the logical CPUs, so the training gets
+  the CPU it needs.
+- **The flush.** At the end, the build readies the index as a flush does: every
+  vector ends on the newest model.
+
+`inMemory` streaming indexes rerank from the source vectors, so `reranking` is
+`FP32` or `None`. `onDisk` streaming indexes are then written and reopened for
+search, with `fusedGraph: [No]`: the index's codes are stored beside it, and `NVQ` reranking is centered with the mean the
+index kept as vectors arrived, so writing reads each vector once. The console
+reports the streaming timeline, the insertion rate, how long fixing the first
+model held inserts and the memory the index holds. Build time covers insertion,
+the flush preparation and graph cleanup, plus writing for `onDisk`. With
+`useSavedIndexIfExists: Yes`, a saved streaming index is reused, with its
+codes, only by a case with the same streaming settings and insert threads, so
+later JVMs can query it, for example with fewer cores.
 
 ASH construction uses symmetric scoring by default. When `scoring` is omitted,
 the configured ASH construction policy applies. See
@@ -80,7 +116,7 @@ reports thread counts per case in the CSV.
 | `topKOverquery` | Map of positive integer K to lists of finite multipliers ≥ 1 | Required for search. The integer part of K × multiplier is the candidate budget. Return up to K results, with a second scoring pass when configured. |
 | `useSearchPruning` | List of `Yes` and `No` values | Enables traversal pruning for supported scorers and similarity functions. |
 | `workers` | List of positive integers or `max` | Optional sweep. Direct search uses this many calling threads; queued search uses this many workers to prepare and execute queries. Each value queries the same index, so `[1, 8]` reports 1 and 8 workers from one build. Omitted, the JVM-wide settings apply. |
-| `queryExecution` | `direct`, `queued` | `direct` runs each search on a calling thread. `queued` sends searches to a fixed pool of workers through a bounded queue and, for ASH, prepares waiting queries together. Applies to every compression entry. Defaults to `direct`. |
+| `queryExecution` | `direct`, `queued` | `direct` runs each search on a calling thread. `queued` sends searches to a fixed pool of workers through a bounded queue and, for ASH, prepares waiting queries together, with fused codes or with codes stored beside the index or held in memory. Applies to every compression entry. Defaults to `direct`. |
 | `requestsPerWorker` | Positive integer | Optional, `queued` only. Queries admitted per worker, counting the one it is searching; the queue holds this many times the worker count. Defaults to the larger of 8 and the ASH `maxBatchSize`. Use `1` when search waits on storage, so queries do not queue behind busy workers. |
 | `compression[].type` | `None`, `ASH`, `PQ`, `BQ` | Selects the traversal representation. `None` scores source vectors. |
 | `compression[].parameters` | [Quantizer parameters](#quantizer-parameters) | Supplies encoding settings for traversal. Reuse matching construction models and codes where possible. |
@@ -230,6 +266,7 @@ D is the dataset dimension.
 | ASH `encodedBits` | Positive integer bit budget | Includes a 40-bit header. The payload must be divisible by `bitsPerDimension` and yield 1 through D projected dimensions. |
 | ASH `bitsPerDimension` | 1–9 in core ASH. 1, 2, or 4 for fused ASH. | Bits per projected dimension in the stored codes. Defaults to 1. |
 | ASH `landmarkCount` | 1–256 | Number of landmarks. Defaults to 1. ASH graph scoring uses dot-product similarity. Symmetric and mixed construction require one landmark. |
+| ASH `trainingStart`, `trainingCount` | Base ordinals inside the dataset | Optional. Trains the model only on `trainingCount` base vectors starting at `trainingStart` (default 0), as an index that has seen only its first vectors would. All base vectors are still encoded. Omitted, training samples the whole set. A windowed model gets its own cache entries, and its codes are always re-encoded rather than loaded. |
 | PQ `m` | Integer from 1 through D | Number of subspaces. Specify either `m` or `mFactor`. |
 | PQ `mFactor` | Positive integer yielding a valid `m` | Chooses the subspace count by integer division of D by `mFactor`. |
 | PQ `k` | Integer from 1 through 256 | Centroids per subspace. Defaults to 256. Training requires at least k vectors. Fused PQ requires 256. |

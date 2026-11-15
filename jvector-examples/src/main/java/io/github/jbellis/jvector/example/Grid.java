@@ -43,6 +43,7 @@ import io.github.jbellis.jvector.graph.similarity.SearchScoreProvider;
 import io.github.jbellis.jvector.quantization.CompressedVectors;
 import io.github.jbellis.jvector.quantization.AsymmetricHashing;
 import io.github.jbellis.jvector.quantization.ASHVectors;
+import io.github.jbellis.jvector.quantization.MutableASHVectors;
 import io.github.jbellis.jvector.graph.disk.feature.FusedASH;
 import io.github.jbellis.jvector.graph.disk.feature.FusedPQ;
 import io.github.jbellis.jvector.graph.disk.feature.NVQ;
@@ -205,6 +206,20 @@ public class Grid {
         }
     }
 
+    /** What besides the graph settings determines a saved in-memory index: its compression and how it was built. */
+    private static String inMemoryIdentity(BuildConfig build, CompressorParameters buildParams, DataSet ds) {
+        String ashMode = buildParams instanceof CompressorParameters.ASHParameters
+                ? GraphBuilderFactory.ashConstructionMode(build) : null;
+        return compressorId(buildParams, ds) + (ashMode == null ? "" : ":" + ashMode) + streamingIdentity(build);
+    }
+
+    /** A streaming build's graph and codes depend on how it started and on its insert threads; empty otherwise. */
+    private static String streamingIdentity(BuildConfig build) {
+        return build.streaming ? ":streaming:cold" + build.coldStartSize
+                + ":train" + Boolean.TRUE.equals(build.trainWhileStreaming)
+                + ":inserts" + GraphBuilderFactory.constructionThreads(build) : "";
+    }
+
     private static boolean hasFusedScoring(Set<FeatureId> features) {
         return FeatureProviders.anyMatch(features, FeatureProvider::providesApproximateScoring);
     }
@@ -313,9 +328,26 @@ public class Grid {
                                 : ":" + ashMode + ("symmetric-all".equals(ashMode) ? ""
                                         : ":" + System.getProperty("jvector.ash.queryProjection", "auto")))
                         + (fused ? ":" + compressorId(searchParams, ds) : "")
-                        + (build.pageAlignment == null ? "" : ":page" + build.pageAlignment);
+                        + (build.pageAlignment == null ? "" : ":page" + build.pageAlignment)
+                        + streamingIdentity(build);
                 strategy = new CompressedOnDiskBuild(cache, workDirectory, buildCodec, constructionMetrics,
                         fusedCodec, cacheIdentity);
+            } else if (build.streaming) {
+                // The index encodes as vectors arrive; a model is trained up front only for a warm start.
+                Supplier<IndexBuildStrategy> fresh = () -> new StreamingBuild((CompressorParameters.ASHParameters) buildParams,
+                        () -> GraphBuilderFactory.inConstructionPool(build, buildCodec::get));
+                strategy = cache.isEnabled()
+                        ? new SavedInMemoryBuild(cache, inMemoryIdentity(build, buildParams, ds), fresh, () -> null, true)
+                        : fresh.get();
+            } else if ("inMemory".equals(build.indexType) && cache.isEnabled()) {
+                // Encoded only on a cache miss; the saved codes are searched when they match the search compression.
+                var encodedForBuild = new java.util.concurrent.atomic.AtomicReference<CompressedVectors>();
+                strategy = new SavedInMemoryBuild(cache, inMemoryIdentity(build, buildParams, ds), () -> {
+                    var encoded = encodeForConstruction(GraphBuilderFactory.inConstructionPool(build, buildCodec::get),
+                            ds.getBaseRavv(), constructionMetrics, GraphBuilderFactory.constructionPool(build));
+                    encodedForBuild.set(encoded);
+                    return new InMemoryBuild(workDirectory, encoded);
+                }, encodedForBuild::get, false);
             } else {
                 buildCompressorObj = GraphBuilderFactory.inConstructionPool(build, buildCodec::get);
                 if ("inMemory".equals(build.indexType)) {
@@ -383,12 +415,23 @@ public class Grid {
                             // Codes written with the index and loaded when it was opened, as a deployed searcher has them.
                             var loaded = built.storedCodes.get(features);
                             var stored = loaded == null ? null : loaded.codes;
-                            boolean useStored = stored != null && searchParams.describes(stored.getCompressor());
+                            // An index that built its own codes is searched with them; codes from a file are used
+                            // when they describe the configured search compression.
+                            boolean useStored = stored != null
+                                    && (loaded.builtWithIndex || searchParams.describes(stored.getCompressor()));
                             var compressor = useStored || build.indexType != null && searchParams == CompressorParameters.NONE
                                     ? null
                                     : getCompressor(searchParams, ds, constructionMetrics, Phase.SEARCH, searchQuantType);
 
-                            if (useStored) {
+                            if (useStored && loaded.builtWithIndex) {
+                                cv = stored;
+                                // Written beside a flushed streaming index and loaded with it, or kept in memory.
+                                if (loaded.seconds > 0) constructionMetrics.search(searchQuantType).recordLoad(loaded.seconds);
+                                System.out.format("%s: using the %d %s codes the index built as vectors arrived%s [%.2f MB]%n",
+                                        ds.getName(), stored.count(), stored.getCompressor(),
+                                        loaded.seconds > 0 ? ", loaded with the index" : "",
+                                        stored.ramBytesUsed() / 1024f / 1024f);
+                            } else if (useStored) {
                                 cv = stored;
                                 constructionMetrics.search(searchQuantType).recordLoad(loaded.seconds);
                                 System.out.format("%s: using the %d %s traversal codes stored with the index [%.2f MB]%n", ds.getName(),
@@ -411,7 +454,7 @@ public class Grid {
                         }
 
                         NVQVectors memoryReranker = null;
-                        if ("inMemory".equals(build.indexType) && "NVQ".equals(build.rerankingType)) {
+                        if (build.inMemoryIndex() && "NVQ".equals(build.rerankingType)) {
                             var base = ds.getBaseRavv();
                             var nvq = constructionMetrics.index("NVQ").timeCompute(() -> NVQProvider.train(base, null));
                             memoryReranker = (NVQVectors) constructionMetrics.index("NVQ").timeEncode(() -> nvq.encodeAll(base));
@@ -834,6 +877,8 @@ public class Grid {
         private int queryBatchSize = 8;
         private int queryRequestsPerWorker = 8;
         private io.github.jbellis.jvector.graph.similarity.QueryPreparer queryPreparer;
+        /** True when {@link #queryPreparer} comes from the search codes rather than the index's own features. */
+        private boolean preparedFromCodes;
         private java.util.concurrent.ExecutorService queuedQueryWorkers;
         private boolean closed;
 
@@ -891,8 +936,15 @@ public class Grid {
             queuedExecution = "queued".equals(mode);
             queryBatchSize = batchSize;
             queryRequestsPerWorker = requestsPerWorker;
-            if (queuedExecution && queryPreparer == null)
+            if (queuedExecution && queryPreparer == null) {
                 queryPreparer = index.queryPreparer(ds.getSimilarityFunction()).orElse(null);
+                // Indexes that score with stored or in-memory ASH codes prepare queries with those codes' model.
+                if (queryPreparer == null && !scoresFromIndex) {
+                    if (cv instanceof ASHVectors) queryPreparer = ((ASHVectors) cv).queryPreparer();
+                    else if (cv instanceof MutableASHVectors) queryPreparer = ((MutableASHVectors) cv).queryPreparer();
+                    preparedFromCodes = queryPreparer != null;
+                }
+            }
         }
         public boolean usesQueuedExecution() { return queuedExecution; }
         public int queryBatchSize() { return queryBatchSize; }
@@ -902,6 +954,14 @@ public class Grid {
             return Math.max(queryBatchSize, Math.multiplyExact(queryRequestsPerWorker, queryWorkerCount()));
         }
         public io.github.jbellis.jvector.graph.similarity.QueryPreparer queryPreparer() { return queryPreparer; }
+
+        /** The score provider for a query prepared by {@link #queryPreparer}. */
+        public SearchScoreProvider scoreProviderFor(io.github.jbellis.jvector.graph.similarity.PreparedQuery prepared,
+                                                    ImmutableGraphIndex.View view) {
+            if (!preparedFromCodes) return ((ImmutableGraphIndex.ScoringView) view).scoreProviderFor(prepared, true);
+            var query = prepared.queryVector();
+            return rerankingType != null ? configuredScorer(query, prepared, view) : scoreProviderFor(query, prepared, view);
+        }
 
 
         private final ExplicitThreadLocal<GraphSearcher> searchers = ExplicitThreadLocal.withInitial(() -> {
@@ -943,7 +1003,8 @@ public class Grid {
                 var feature = ((OnDiskGraphIndex) index).getFeatures().get(FeatureId.FUSED_ASH);
                 return feature instanceof FusedASH ? ((FusedASH) feature).getASH() : null;
             }
-            return cv instanceof ASHVectors ? ((ASHVectors) cv).getCompressor() : null;
+            if (cv instanceof ASHVectors) return ((ASHVectors) cv).getCompressor();
+            return cv instanceof MutableASHVectors ? ((MutableASHVectors) cv).getCompressor() : null;
         }
 
         private VectorCompressor<?> fusedCompressor() {
@@ -958,7 +1019,20 @@ public class Grid {
         }
 
         public SearchScoreProvider scoreProviderFor(VectorFloat<?> queryVector, ImmutableGraphIndex.View view) {
-            if (rerankingType != null) return configuredScorer(queryVector, view);
+            return rerankingType != null ? configuredScorer(queryVector, null, view) : scoreProviderFor(queryVector, null, view);
+        }
+
+        /** The search codes' score function: from the prepared query when there is one, else from the raw query. */
+        private ScoreFunction.ApproximateScoreFunction codesScore(VectorFloat<?> query,
+                                                                  io.github.jbellis.jvector.graph.similarity.PreparedQuery prepared) {
+            if (prepared == null) return cv.precomputedScoreFunctionFor(query, ds.getSimilarityFunction());
+            return cv instanceof ASHVectors ? ((ASHVectors) cv).scoreFunctionFor(prepared)
+                    : ((MutableASHVectors) cv).scoreFunctionFor(prepared);
+        }
+
+        private SearchScoreProvider scoreProviderFor(VectorFloat<?> queryVector,
+                                                     io.github.jbellis.jvector.graph.similarity.PreparedQuery prepared,
+                                                     ImmutableGraphIndex.View view) {
             var scoringView = (ImmutableGraphIndex.ScoringView) view;
             ScoreFunction.ApproximateScoreFunction asf;
             if (scoresFromIndex) {
@@ -969,20 +1043,22 @@ public class Grid {
                     return DefaultSearchScoreProvider.exact(queryVector, ds.getSimilarityFunction(), exactVectors.get());
                 }
 
-                asf = cv.precomputedScoreFunctionFor(queryVector, ds.getSimilarityFunction());
+                asf = codesScore(queryVector, prepared);
             }
             var rr = scoringView.rerankerFor(queryVector, ds.getSimilarityFunction());
             return new DefaultSearchScoreProvider(asf, rr, adaptiveSimilarity());
         }
 
-        private SearchScoreProvider configuredScorer(VectorFloat<?> query, ImmutableGraphIndex.View view) {
+        private SearchScoreProvider configuredScorer(VectorFloat<?> query,
+                                                     io.github.jbellis.jvector.graph.similarity.PreparedQuery prepared,
+                                                     ImmutableGraphIndex.View view) {
             var similarity = ds.getSimilarityFunction();
             var diskView = view instanceof OnDiskGraphIndex.View ? (OnDiskGraphIndex.View) view : null;
             ScoreFunction score;
             if (scoresFromIndex) {
                 score = diskView.approximateScoreFunctionFor(query, similarity);
             } else if (cv != null) {
-                score = cv.precomputedScoreFunctionFor(query, similarity);
+                score = codesScore(query, prepared);
             } else {
                 score = diskView == null
                         ? DefaultSearchScoreProvider.exact(query, similarity, exactVectors.get()).scoreFunction()

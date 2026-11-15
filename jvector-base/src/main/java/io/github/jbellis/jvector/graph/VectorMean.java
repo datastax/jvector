@@ -23,6 +23,7 @@ import java.util.Arrays;
 import java.util.HashSet;
 import java.util.Objects;
 import java.util.Random;
+import java.util.concurrent.ConcurrentLinkedQueue;
 
 /**
  * Collects an original-coordinate mean during an existing, explicit input scan.
@@ -138,6 +139,85 @@ public final class VectorMean {
                 return observe(VectorAccess.openSelection(source, requested, offset, count), 0, false);
             }
         };
+    }
+
+    /**
+     * A mean kept as vectors arrive, for inputs whose final size is unknown, such as a streaming index. Each thread
+     * adds to its own sums and count, so concurrent callers never contend and each vector costs one addition per
+     * dimension; {@link #mean} adds the threads' sums and divides by the count. Sums are kept in double precision,
+     * which keeps the mean accurate over billions of vectors.
+     */
+    public static final class Running {
+        private final int dimension;
+        private final ConcurrentLinkedQueue<Partial> partials =
+                new ConcurrentLinkedQueue<>();
+        private final ThreadLocal<Partial> local;
+
+        /** One thread's sums and count; guarded by itself, so a reader sees them consistent. */
+        private static final class Partial {
+            final double[] sum;
+            long count;
+
+            Partial(int dimension) {
+                sum = new double[dimension];
+            }
+        }
+
+        public Running(int dimension) {
+            if (dimension <= 0) throw new IllegalArgumentException("Positive dimension required");
+            this.dimension = dimension;
+            this.local = ThreadLocal.withInitial(() -> {
+                var partial = new Partial(dimension);
+                partials.add(partial);
+                return partial;
+            });
+        }
+
+        /**
+         * Adds an already-read vector; a borrowed buffer is consumed immediately, never retained.
+         *
+         * @throws IllegalArgumentException for a vector of another dimension or with a non-finite component, which
+         *                                  leaves the mean unchanged
+         */
+        public void accept(VectorFloat<?> vector) {
+            if (vector.length() != dimension) throw new IllegalArgumentException("Vector dimension mismatch");
+            for (int d = 0; d < dimension; d++) {
+                if (!Float.isFinite(vector.get(d))) throw new IllegalArgumentException("Non-finite vector component");
+            }
+            var partial = local.get();
+            synchronized (partial) {
+                double[] sum = partial.sum;
+                for (int d = 0; d < dimension; d++) sum[d] += vector.get(d);
+                partial.count++;
+            }
+        }
+
+        /** Vectors added so far. */
+        public long count() {
+            long count = 0;
+            for (var partial : partials) {
+                synchronized (partial) {
+                    count += partial.count;
+                }
+            }
+            return count;
+        }
+
+        /** An owned snapshot of the mean of the vectors added so far, or null before the first. */
+        public VectorFloat<?> mean() {
+            double[] sum = new double[dimension];
+            long count = 0;
+            for (var partial : partials) {
+                synchronized (partial) {
+                    count += partial.count;
+                    for (int d = 0; d < dimension; d++) sum[d] += partial.sum[d];
+                }
+            }
+            if (count == 0) return null;
+            var result = VectorizationProvider.getInstance().getVectorTypeSupport().createFloatVector(dimension);
+            for (int d = 0; d < dimension; d++) result.set(d, (float) (sum[d] / count));
+            return result;
+        }
     }
 
     private VectorCursor observe(VectorCursor cursor, int firstSample, boolean range) {

@@ -60,7 +60,7 @@ public final class GridSpec {
         if (config.usesSchema3()) {
             boolean onDisk = "onDisk".equals(construction.type);
             var writerMode = onDisk ? Objects.requireNonNullElse(construction.writerMode, "parallel") : null;
-            return graphSweeps(construction.addHierarchy, construction.refineFinalGraph, construction.outDegree,
+            var sweeps = graphSweeps(construction.addHierarchy, construction.refineFinalGraph, construction.outDegree,
                     construction.neighborOverflow, construction.efConstruction)
                     .sweep("construction.compression", construction.compression, (point, compressor) -> point
                             .buildCompressor(compressor.getCompressorParameters())
@@ -70,14 +70,22 @@ public final class GridSpec {
                                     : null)
                             .indexType(construction.type).writerMode(writerMode).pageAlignment(construction.pageAlignment)
                             .rerankingType(construction.rerankingType())
-                            .workers(construction.resolvedWorkers()))
+                            .workers(construction.resolvedWorkers())
+                            .streaming(Boolean.TRUE.equals(construction.streaming)));
+            if (Boolean.TRUE.equals(construction.streaming)) {
+                sweeps.sweep("construction.coldStartSize", construction.coldStartSize, BuildConfig.Builder::coldStartSize);
+                if (construction.trainWhileStreaming != null)
+                    sweeps.sweep("construction.trainWhileStreaming", construction.trainWhileStreaming,
+                            BuildConfig.Builder::trainWhileStreaming);
+            }
+            return sweeps
                     .featureSets(List.of())
                     .fusedGraph(construction.fusedGraph == null ? List.of(false) : construction.fusedGraph)
                     .search(SearchConfig.builder().compressionEntries(search.compression)
                             .topKGrid(search.topKOverquery).usePruningGrid(search.useSearchPruning)
                             .workerGrid(search.resolvedWorkers()).queryExecution(search.queryExecution())
                             .requestsPerWorker(search.requestsPerWorker).build())
-                    .enableIndexCache(onDisk && Boolean.TRUE.equals(construction.useSavedIndexIfExists))
+                    .enableIndexCache(Boolean.TRUE.equals(construction.useSavedIndexIfExists))
                     .build();
         }
         return fromGrids(construction.addHierarchy,
@@ -129,7 +137,7 @@ public final class GridSpec {
 
     List<? extends Set<FeatureId>> featuresFor(BuildConfig build, SearchConfig searchCase) {
         if (build.indexType == null) return featureSets;
-        if ("inMemory".equals(build.indexType)) return List.of(Set.of());
+        if (build.inMemoryIndex()) return List.of(Set.of());
 
         // The file format requires a vector feature. Source vectors also provide primary
         // traversal scores for uncompressed search, independently of the reranking policy.

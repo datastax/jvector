@@ -46,9 +46,9 @@ public class Compression {
             case "ASH":
                 allowed = search
                         ? Set.of("optimizer", "encodedBits", "compressionRatio", "landmarkCount", "bitsPerDimension",
-                                 "queryProjection", "maxBatchSize")
+                                 "queryProjection", "maxBatchSize", "trainingStart", "trainingCount")
                         : Set.of("optimizer", "encodedBits", "compressionRatio", "landmarkCount", "bitsPerDimension",
-                                 "queryProjection");
+                                 "queryProjection", "trainingStart", "trainingCount");
                 break;
             case "PQ":
                 allowed = Set.of("m", "mFactor", "k", "centerData", "anisotropicThreshold");
@@ -231,8 +231,10 @@ public class Compression {
                                 actualCompressionRatio);
                     }
 
+                    int trainingStart = Integer.parseInt(parameters.getOrDefault("trainingStart", "0"));
+                    int trainingCount = Integer.parseInt(parameters.getOrDefault("trainingCount", "-1"));
                     return new CompressorParameters.ASHParameters(
-                            optimizer, encodedBits, landmarkCount, bitsPerDimension);
+                            optimizer, encodedBits, landmarkCount, bitsPerDimension, trainingStart, trainingCount);
                 };
             default:
                 throw new IllegalArgumentException("Unsupported compression type: " + type);

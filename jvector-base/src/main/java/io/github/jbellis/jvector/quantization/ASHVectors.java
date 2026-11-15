@@ -19,6 +19,8 @@ package io.github.jbellis.jvector.quantization;
 import io.github.jbellis.jvector.annotations.Experimental;
 import io.github.jbellis.jvector.disk.IndexWriter;
 import io.github.jbellis.jvector.disk.RandomAccessReader;
+import io.github.jbellis.jvector.graph.similarity.PreparedQuery;
+import io.github.jbellis.jvector.graph.similarity.QueryPreparer;
 import io.github.jbellis.jvector.graph.similarity.ScoreFunction;
 import io.github.jbellis.jvector.util.RamUsageEstimator;
 import io.github.jbellis.jvector.vector.VectorSimilarityFunction;
@@ -1026,6 +1028,34 @@ public class ASHVectors implements CompressedVectors {
         final double stddev = Math.sqrt(var);
 
         return new LandmarkRunStats(n, runCount, avg, max, stddev);
+    }
+
+    /**
+     * A preparer for queries to this store: it projects queries, several at once when they arrive together, so
+     * {@link #scoreFunctionFor(PreparedQuery)} scores without projecting again. Queued search uses it to prepare
+     * waiting queries in one batch.
+     */
+    public QueryPreparer queryPreparer() {
+        return new ASHQueryPreparer(ash);
+    }
+
+    /**
+     * As {@link #scoreFunctionFor(VectorFloat, VectorSimilarityFunction)} for dot products, for a query prepared by
+     * this store's {@link #queryPreparer}; the score function borrows the prepared state until its search ends.
+     */
+    public ScoreFunction.AdaptiveApproximateScoreFunction scoreFunctionFor(PreparedQuery query) {
+        var qp = ASHQueryPreparer.state(ash, query, true).prepared;
+        if (ash.bitsPerDimension == 1) {
+            var kernel = AshSingleKernel.fromProperty();
+            var vecUtil = VectorizationProvider.getInstance().getVectorUtilSupport();
+            if (kernel != AshSingleKernel.SCALAR && vecUtil.supportsAshMaskedLoad()) {
+                return new SimdASHScoreFunction(new QueryPrecompute(ash.quantizedDim, ash.landmarkCount, qp.qProj,
+                        qp.sumQProj, qp.dotQMuByLandmark, qp.queryNorm));
+            }
+            if (kernel == AshSingleKernel.SIMD)
+                throw new IllegalStateException("ASH single-vector SIMD is unavailable on " + vecUtil.getClass().getName());
+        }
+        return nodeScoreFunction(qp);
     }
 
     /**

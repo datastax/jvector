@@ -631,6 +631,9 @@ public interface VectorUtilSupport {
 
     /** Additional backing storage, excluding the caller-owned matrix. */
     default long ramBytesUsed() { return 0L; }
+
+    /** The part of {@link #ramBytesUsed} held in native memory, outside the Java heap. */
+    default long nativeBytesUsed() { return 0L; }
   }
 
   /**

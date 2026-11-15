@@ -18,6 +18,8 @@ package io.github.jbellis.jvector.example.util;
 
 import io.github.jbellis.jvector.disk.RandomAccessReader;
 import io.github.jbellis.jvector.example.benchmarks.datasets.DataSet;
+import io.github.jbellis.jvector.graph.RandomAccessVectorValues;
+import io.github.jbellis.jvector.graph.RemappedRandomAccessVectorValues;
 import io.github.jbellis.jvector.quantization.AsymmetricHashing;
 import io.github.jbellis.jvector.quantization.BinaryQuantization;
 import io.github.jbellis.jvector.quantization.NVQuantization;
@@ -157,16 +159,53 @@ public abstract class CompressorParameters {
         private final int encodedBits;
         private final int landmarkCount;
         private final int bitsPerDimension;
+        // Training window over the base vectors; trainingCount < 0 trains on the whole set.
+        private final int trainingStart;
+        private final int trainingCount;
 
         public ASHParameters(int optimizer, int encodedBits, int landmarkCount) {
             this(optimizer, encodedBits, landmarkCount, 1);
         }
 
         public ASHParameters(int optimizer, int encodedBits, int landmarkCount, int bitsPerDimension) {
+            this(optimizer, encodedBits, landmarkCount, bitsPerDimension, 0, -1);
+        }
+
+        /**
+         * @param trainingStart first base ordinal of the training window
+         * @param trainingCount number of base vectors in the training window, or a negative value
+         *                      to train on the whole set
+         */
+        public ASHParameters(int optimizer, int encodedBits, int landmarkCount, int bitsPerDimension,
+                             int trainingStart, int trainingCount) {
             this.optimizer = optimizer;
             this.encodedBits = encodedBits;
             this.landmarkCount = landmarkCount;
             this.bitsPerDimension = bitsPerDimension;
+            this.trainingStart = trainingStart;
+            this.trainingCount = trainingCount;
+        }
+
+        /** ASH code size, including the header. */
+        public int encodedBits() {
+            return encodedBits;
+        }
+
+        public int bitsPerDimension() {
+            return bitsPerDimension;
+        }
+
+        private boolean hasTrainingWindow() {
+            return trainingCount >= 0;
+        }
+
+        /** The base vectors the model trains on: the whole set, or the training window as a view over it. */
+        private RandomAccessVectorValues trainingVectors(DataSet ds) {
+            var base = ds.getBaseRavv();
+            if (!hasTrainingWindow()) return base;
+            int[] ordinals = new int[trainingCount];
+            for (int i = 0; i < trainingCount; i++) ordinals[i] = trainingStart + i;
+            return new RemappedRandomAccessVectorValues(base, ordinals);
         }
 
         @Override
@@ -177,6 +216,8 @@ public abstract class CompressorParameters {
         @Override
         public boolean describes(VectorCompressor<?> compressor) {
             if (!(compressor instanceof AsymmetricHashing)) return false;
+            // A model does not record the window it was trained on, so a windowed model is never matched.
+            if (hasTrainingWindow()) return false;
             var ash = (AsymmetricHashing) compressor;
             return ash.optimizer == optimizer && ash.encodedBits == encodedBits
                     && ash.landmarkCount == landmarkCount && ash.bitsPerDimension == bitsPerDimension;
@@ -197,6 +238,15 @@ public abstract class CompressorParameters {
             }
             if (landmarkCount < 1 || landmarkCount > 256 || landmarkCount > ds.getBaseRavv().size()) {
                 throw new IllegalArgumentException("ASH landmarkCount must be between 1 and 256 and fit the training set");
+            }
+            if (hasTrainingWindow()) {
+                long end = (long) trainingStart + trainingCount;
+                if (trainingStart < 0 || trainingCount < 1 || end > ds.getBaseRavv().size()) {
+                    throw new IllegalArgumentException("ASH trainingStart and trainingCount must select 1 or more base vectors inside the dataset");
+                }
+                if (landmarkCount > trainingCount) {
+                    throw new IllegalArgumentException("ASH landmarkCount must not exceed trainingCount");
+                }
             }
             if (ashConstructionMode != null) {
                 switch (ashConstructionMode) {
@@ -223,7 +273,7 @@ public abstract class CompressorParameters {
                 // otherwise the library's physical-core pool.
                 var executor = ForkJoinTask.inForkJoinPool() ? ForkJoinTask.getPool() : PhysicalCoreExecutor.pool();
                 return AsymmetricHashing.initialize(
-                        ds.getBaseRavv(),
+                        trainingVectors(ds),
                         optimizer,
                         encodedBits,
                         landmarkCount,
@@ -244,7 +294,7 @@ public abstract class CompressorParameters {
                     encodedBits,
                     bitsPerDimension,
                     landmarkCount
-            );
+            ) + (hasTrainingWindow() ? String.format("_train%d+%d", trainingStart, trainingCount) : "");
         }
 
         @Override

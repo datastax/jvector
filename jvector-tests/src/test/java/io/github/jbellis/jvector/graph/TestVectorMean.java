@@ -145,6 +145,27 @@ public class TestVectorMean {
         assertEquals(5, mean.mean().get(1), 0);
     }
 
+    @Test public void runningMeanNeedsNoSizeAndCombinesThreads() throws Exception {
+        var mean = new VectorMean.Running(2);
+        assertNull(mean.mean());
+        var threads = new ArrayList<Thread>();
+        for (int t = 0; t < 4; t++) {
+            int first = t * 1000;
+            threads.add(new Thread(() -> {
+                for (int i = first; i < first + 1000; i++) mean.accept(vector(i, -2f * i));
+            }));
+        }
+        for (var t : threads) t.start();
+        for (var t : threads) t.join();
+        assertEquals(4000, mean.count());
+        assertEquals(1999.5, mean.mean().get(0), 1e-3);
+        assertEquals(-3999.0, mean.mean().get(1), 1e-3);
+        // A rejected vector leaves the mean unchanged.
+        assertThrows(IllegalArgumentException.class, () -> mean.accept(vector(Float.NaN, 0)));
+        assertThrows(IllegalArgumentException.class, () -> mean.accept(vector(1, 2, 3)));
+        assertEquals(4000, mean.count());
+    }
+
     @Test public void invalidValuesAndMissingInputsAreHandledExplicitly() {
         assertThrows(IllegalArgumentException.class, () -> new VectorMean(0, 2));
         assertThrows(IllegalArgumentException.class, () -> new VectorMean(1, 0));

@@ -178,6 +178,9 @@ final class NativeASHFP16Projection implements VectorUtilSupport.AshProjection {
     public long ramBytesUsed() { return retainedBytes; }
 
     @Override
+    public long nativeBytesUsed() { return retainedBytes; }
+
+    @Override
     public String operandPrecision() { return fp32FallbackUsed ? "fp16+fp32" : "fp16"; }
 
     @Override
