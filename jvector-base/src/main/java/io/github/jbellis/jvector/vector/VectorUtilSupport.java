@@ -198,6 +198,37 @@ public interface VectorUtilSupport {
   }
 
 
+  /**
+   * Squared L2 distances from one query to {@code count} vectors stored back to back in {@code vectors}:
+   * {@code out[i] = squareDistance(query, 0, vectors, i * query.length(), query.length())}.
+   * <p>
+   * Callers must ensure {@code vectors.length() >= count * query.length()} and {@code out.length >= count}
+   * ({@link VectorUtil} checks this once per batch). Implementations may score the whole batch in one
+   * native call, which amortizes per-call overhead; results must equal the one-pair-at-a-time results.
+   */
+  default void squareDistanceBatch(VectorFloat<?> query, VectorFloat<?> vectors, int count, float[] out) {
+    final int dim = query.length();
+    for (int i = 0; i < count; i++) {
+      out[i] = squareDistance(query, 0, vectors, i * dim, dim);
+    }
+  }
+
+  /** Dot products of one query against {@code count} contiguous vectors; see {@link #squareDistanceBatch}. */
+  default void dotProductBatch(VectorFloat<?> query, VectorFloat<?> vectors, int count, float[] out) {
+    final int dim = query.length();
+    for (int i = 0; i < count; i++) {
+      out[i] = dotProduct(query, 0, vectors, i * dim, dim);
+    }
+  }
+
+  /** Cosine similarities of one query against {@code count} contiguous vectors; see {@link #squareDistanceBatch}. */
+  default void cosineBatch(VectorFloat<?> query, VectorFloat<?> vectors, int count, float[] out) {
+    final int dim = query.length();
+    for (int i = 0; i < count; i++) {
+      out[i] = cosine(query, 0, vectors, i * dim, dim);
+    }
+  }
+
   default float pqDecodedCosineSimilarity(ByteSequence<?> encoded, int clusterCount, VectorFloat<?> partialSums, VectorFloat<?> aMagnitude, float bMagnitude)
   {
     return pqDecodedCosineSimilarity(encoded, 0, encoded.length(), clusterCount, partialSums, aMagnitude, bMagnitude);

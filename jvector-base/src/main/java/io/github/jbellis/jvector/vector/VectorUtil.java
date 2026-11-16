@@ -197,6 +197,32 @@ public final class VectorUtil {
     impl.subInPlace(v1, v2);
   }
 
+  /** @see VectorUtilSupport#squareDistanceBatch */
+  public static void squareL2DistanceBatch(VectorFloat<?> query, VectorFloat<?> vectors, int count, float[] out) {
+    checkBatch(query, vectors, count, out);
+    impl.squareDistanceBatch(query, vectors, count, out);
+  }
+
+  /** @see VectorUtilSupport#dotProductBatch */
+  public static void dotProductBatch(VectorFloat<?> query, VectorFloat<?> vectors, int count, float[] out) {
+    checkBatch(query, vectors, count, out);
+    impl.dotProductBatch(query, vectors, count, out);
+  }
+
+  /** @see VectorUtilSupport#cosineBatch */
+  public static void cosineBatch(VectorFloat<?> query, VectorFloat<?> vectors, int count, float[] out) {
+    checkBatch(query, vectors, count, out);
+    impl.cosineBatch(query, vectors, count, out);
+  }
+
+  // One check per batch (not per pair): the native kernels trust these bounds.
+  private static void checkBatch(VectorFloat<?> query, VectorFloat<?> vectors, int count, float[] out) {
+    if (count < 0 || (long) count * query.length() > vectors.length() || count > out.length) {
+      throw new IllegalArgumentException("batch of " + count + " vectors of dimension " + query.length()
+              + " does not fit in vectors.length()=" + vectors.length() + ", out.length=" + out.length);
+    }
+  }
+
   /** @see VectorUtilSupport#dotProductMulti */
   public static void dotProductMulti(VectorFloat<?> vector, VectorFloat<?>[] queries, int count, float[] out) {
     impl.dotProductMulti(vector, queries, count, out);
