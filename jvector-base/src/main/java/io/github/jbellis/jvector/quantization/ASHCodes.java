@@ -111,6 +111,36 @@ final class ASHCodes implements Accountable {
         this.ramBytesUsed = bytes;
     }
 
+    /** A store of this one's first {@code size} vectors; shares the code pages and copies the headers. */
+    private ASHCodes(ASHCodes from, int size) {
+        if (size < 0 || size > from.size) throw new IllegalArgumentException("Prefix size out of range: " + size);
+        this.size = size;
+        this.quantizedDim = from.quantizedDim;
+        this.bitsPerDimension = from.bitsPerDimension;
+        this.signWords = from.signWords;
+        this.bodyBytes = from.bodyBytes;
+        this.pageShift = from.pageShift;
+        this.pageMask = from.pageMask;
+        int pages = Math.toIntExact((size + (long) pageMask) >>> pageShift);
+        this.signPages = from.signPages == null ? null : java.util.Arrays.copyOf(from.signPages, pages);
+        this.bodyPages = from.bodyPages == null ? null : java.util.Arrays.copyOf(from.bodyPages, pages);
+        this.scales = java.util.Arrays.copyOf(from.scales, size);
+        this.offsets = java.util.Arrays.copyOf(from.offsets, size);
+        this.landmarks = java.util.Arrays.copyOf(from.landmarks, size);
+        long bytes = RamUsageEstimator.shallowSizeOfInstance(ASHCodes.class)
+                + RamUsageEstimator.sizeOf(scales) + RamUsageEstimator.sizeOf(offsets) + RamUsageEstimator.sizeOf(landmarks);
+        for (int p = 0; p < pages; p++) {
+            if (signPages != null) bytes += RamUsageEstimator.sizeOf(signPages[p]);
+            if (bodyPages != null) bytes += RamUsageEstimator.sizeOf(bodyPages[p]);
+        }
+        this.ramBytesUsed = bytes;
+    }
+
+    /** The first {@code size} vectors of this store, which must not change afterward. */
+    ASHCodes prefix(int size) {
+        return size == this.size ? this : new ASHCodes(this, size);
+    }
+
     /** An all-zero store for {@code size} vectors, to be filled with {@link #set}. */
     static ASHCodes allocate(int size, int quantizedDim, int bitsPerDimension) {
         return allocate(size, quantizedDim, bitsPerDimension, DEFAULT_PAGE_BYTES);

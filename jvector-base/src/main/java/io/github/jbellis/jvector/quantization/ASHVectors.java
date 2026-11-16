@@ -171,6 +171,50 @@ public class ASHVectors implements CompressedVectors {
     }
 
     /**
+     * Encodes vectors into an immutable store as they arrive, for an index built while its vectors stream in with a
+     * fixed model: batches are encoded from any number of threads into distinct ordinals, and {@link #build} returns
+     * the codes once all are encoded. {@link #live} scores the codes while they are being filled, for a graph built
+     * at the same time; a code may be scored only after its batch has been encoded. Ordinals never encoded keep the
+     * all-zero code that {@link AsymmetricHashing#encodeAll} gives a missing vector.
+     */
+    public static final class Builder {
+        private final AsymmetricHashing ash;
+        private final ASHCodes codes;
+        private final float[] symmetricOffsets;
+        private final ASHVectors live;
+
+        Builder(AsymmetricHashing ash, int capacity) {
+            this.ash = ash;
+            this.codes = ASHCodes.allocate(capacity, ash.quantizedDim, ash.bitsPerDimension);
+            this.symmetricOffsets = new float[capacity];
+            java.util.Arrays.fill(symmetricOffsets,
+                    ash.centeredOffset(AsymmetricHashing.QuantizedVector.createEmpty(ash.quantizedDim, ash.bitsPerDimension)));
+            this.live = new ASHVectors(ash, codes, symmetricOffsets);
+        }
+
+        /** The most codes this builder holds. */
+        public int capacity() {
+            return codes.size;
+        }
+
+        /** Encodes {@code vectors[0..count)} at {@code ordinals[0..count)}, each below {@link #capacity}. */
+        public void encode(VectorFloat<?>[] vectors, int[] ordinals, int count) {
+            for (int i = 0; i < count; i++) Objects.checkIndex(ordinals[i], codes.size);
+            ash.encodeInto(vectors, ordinals, count, codes, symmetricOffsets);
+        }
+
+        /** Every slot's codes, for scoring encoded codes while the rest are being filled. */
+        public ASHVectors live() {
+            return live;
+        }
+
+        /** The first {@code size} codes, once every one that will be encoded is; nothing may be encoded after. */
+        public ASHVectors build(int size) {
+            return new ASHVectors(ash, codes.prefix(size), java.util.Arrays.copyOf(symmetricOffsets, size));
+        }
+    }
+
+    /**
      * Serialize the compressor followed by the compressed vectors.
      *
      * <p>

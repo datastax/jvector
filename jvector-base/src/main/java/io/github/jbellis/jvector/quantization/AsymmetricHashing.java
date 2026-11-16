@@ -1760,6 +1760,45 @@ public class AsymmetricHashing implements VectorCompressor<AsymmetricHashing.Qua
         return new ASHVectors(this, out, symmetricOffsets);
     }
 
+    /**
+     * A builder that encodes vectors into an immutable {@link ASHVectors} of up to {@code capacity} codes as they
+     * arrive, in batches from any number of threads; see {@link ASHVectors.Builder}.
+     */
+    public ASHVectors.Builder vectorsBuilder(int capacity) {
+        return new ASHVectors.Builder(this, capacity);
+    }
+
+    /**
+     * Encodes {@code vectors[0..count)} into {@code out} at {@code ordinals[0..count)}, as {@link #encodeAll}
+     * encodes a range. Safe to call from several threads at once for distinct ordinals.
+     */
+    void encodeInto(VectorFloat<?>[] vectors, int[] ordinals, int count, ASHCodes out, float[] symmetricOffsets) {
+        int capacity = Math.min(ENCODING_BATCH_SIZE, count);
+        if (capacity == 0) return;
+        float[][] inputs = new float[capacity][originalDimension];
+        float[][] projected = new float[capacity][quantizedDim];
+        float[] residualNorms = new float[capacity];
+        int[] slots = new int[capacity];
+        double[] absNorm = new double[quantizedDim];
+        QuantizedVector[] scratch = new QuantizedVector[capacity];
+        for (int k = 0; k < capacity; k++) scratch[k] = QuantizedVector.createEmpty(quantizedDim, bitsPerDimension);
+        int pending = 0;
+        for (int v = 0; v < count; v++) {
+            VectorFloat<?> vector = Objects.requireNonNull(vectors[v], "vector");
+            if (vector.length() != originalDimension) throw new IllegalArgumentException("ASH encoding vector dimension mismatch");
+            QuantizedVector dest = scratch[pending];
+            float residualNorm = prepareEncoding(vector, dest);
+            normalizeResidual(vector, landmarks[dest.landmark & 0xFF], residualNorm, inputs[pending]);
+            residualNorms[pending] = residualNorm;
+            slots[pending] = ordinals[v];
+            if (++pending == capacity) {
+                encodeBatch(inputs, projected, residualNorms, slots, pending, absNorm, scratch, out, symmetricOffsets);
+                pending = 0;
+            }
+        }
+        if (pending != 0) encodeBatch(inputs, projected, residualNorms, slots, pending, absNorm, scratch, out, symmetricOffsets);
+    }
+
     private void encodeRange(RandomAccessVectorValues source, ASHCodes out,
                              float[] symmetricOffsets, int start, int end) {
         int capacity = Math.min(ENCODING_BATCH_SIZE, end - start);
