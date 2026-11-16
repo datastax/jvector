@@ -47,6 +47,11 @@ final public class MemorySegmentVectorFloat implements VectorFloat<MemorySegment
     // then its MemorySegment view. The view keeps the same array alive.
     private volatile Object segment;
 
+    // The element count never changes: every constructor wraps a float[] and the segment view is
+    // over that same array. Caching it makes length() a plain field read; deriving it from the
+    // storage slot cost a type check plus a dependent load of the segment's byteSize() per call.
+    private final int length;
+
     MemorySegmentVectorFloat(int length) {
         this(new float[length]);
     }
@@ -58,6 +63,7 @@ final public class MemorySegmentVectorFloat implements VectorFloat<MemorySegment
 
     MemorySegmentVectorFloat(float[] data) {
         this.segment = java.util.Objects.requireNonNull(data);
+        this.length = data.length;
     }
 
     @Override
@@ -131,9 +137,7 @@ final public class MemorySegmentVectorFloat implements VectorFloat<MemorySegment
 
     @Override
     public int length() {
-        Object current = STORAGE.get(this);
-        return current instanceof float[] data
-                ? data.length : (int) (((MemorySegment) current).byteSize() / Float.BYTES);
+        return length;
     }
 
     @Override

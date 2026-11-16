@@ -66,4 +66,14 @@ class NativeBatchSimilarityTest {
             }
         }
     }
+
+    @Test
+    void lengthIsCachedAndStable() {
+        var v = types.createFloatVector(128);
+        assertEquals(128, v.length());
+        v.set(5, 1f);
+        ((MemorySegmentVectorFloat) v).get(); // publish the native segment view
+        assertEquals(128, v.length());
+        assertEquals(1f, v.get(5), 0f);
+    }
 }
