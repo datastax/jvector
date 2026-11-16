@@ -20,7 +20,7 @@ import io.github.jbellis.jvector.disk.ReaderSupplierFactory;
 import io.github.jbellis.jvector.example.benchmarks.datasets.DataSets;
 import io.github.jbellis.jvector.graph.GraphIndexBuilder;
 import io.github.jbellis.jvector.graph.GraphSearcher;
-import io.github.jbellis.jvector.graph.ImmutableGraphIndex;
+import io.github.jbellis.jvector.graph.GraphIndex;
 import io.github.jbellis.jvector.graph.VectorMean;
 import io.github.jbellis.jvector.graph.disk.OnDiskGraphIndex;
 import io.github.jbellis.jvector.graph.disk.OnDiskParallelGraphIndexWriter;
@@ -98,7 +98,7 @@ public class HelloASHWorldFp16 {
                 var preparer = graph.queryPreparer(similarity).orElseThrow();
                 var prepared = preparer.newState();
                 preparer.prepare(dataset.getQueryVectors().get(0), prepared);
-                var view = (ImmutableGraphIndex.ScoringView) searcher.getView();
+                var view = (GraphIndex.ScoringView) searcher.getView();
                 // Fused ASH finds candidates; NVQ reranks 20 candidates down to 10.
                 // One searcher/prepared state per in-flight query; reuse after completion.
                 var result = searcher.search(view.scoreProviderFor(prepared, true),

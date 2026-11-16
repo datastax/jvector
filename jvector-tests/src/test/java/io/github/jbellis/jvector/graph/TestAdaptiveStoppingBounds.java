@@ -53,7 +53,7 @@ public class TestAdaptiveStoppingBounds {
             var vectors = new ListRandomAccessVectorValues(base, DIM);
             for (var similarity : VectorSimilarityFunction.values()) {
                 if (similarity == VectorSimilarityFunction.COSINE && !unitLength) continue;
-                ImmutableGraphIndex graph;
+                GraphIndex graph;
                 try (var builder = new GraphIndexBuilder(BuildScoreProvider.randomAccessScoreProvider(vectors, similarity),
                         DIM, 16, 64, 1.2f, 1.2f, false)) {
                     graph = builder.build(vectors);

@@ -48,6 +48,8 @@ import java.util.stream.IntStream;
 import org.apache.commons.math3.linear.RealMatrix;
 import org.apache.commons.math3.linear.Array2DRowRealMatrix;
 import org.netlib.util.intW;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 /**
  * Asymmetric Hashing (ASH) for float vectors.
@@ -82,7 +84,7 @@ public class AsymmetricHashing implements VectorCompressor<AsymmetricHashing.Qua
     private static final int TRAINING_ITERS = 25;
 
     /** Default number of stored bits per projected dimension. */
-    private static final int DEFAULT_BITS_PER_DIMENSION = 2;
+    public static final int DEFAULT_BITS_PER_DIMENSION = 2;
 
     // Physical header size, reflecting actual stored fields:
     //  - scale: fp16 (16 bits), where scale = ||x − μ|| / ||code||

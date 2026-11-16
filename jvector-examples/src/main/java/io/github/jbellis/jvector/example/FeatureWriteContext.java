@@ -16,7 +16,7 @@
 
 package io.github.jbellis.jvector.example;
 
-import io.github.jbellis.jvector.graph.ImmutableGraphIndex;
+import io.github.jbellis.jvector.graph.GraphIndex;
 import io.github.jbellis.jvector.graph.RandomAccessVectorValues;
 import io.github.jbellis.jvector.graph.disk.AbstractGraphIndexWriter;
 import io.github.jbellis.jvector.graph.disk.RandomAccessOnDiskGraphIndexWriter;
@@ -36,7 +36,7 @@ import java.util.function.Supplier;
 /** What a {@link FeatureProvider} needs to add its feature to one graph index writer. */
 final class FeatureWriteContext {
     private final AbstractGraphIndexWriter.Builder<? extends RandomAccessOnDiskGraphIndexWriter, ?> writer;
-    private final ImmutableGraphIndex graph;
+    private final GraphIndex graph;
     private final RandomAccessVectorValues vectors;
     // File-backed sources reuse scratch vectors; ordinal suppliers need a view per worker.
     private final Supplier<RandomAccessVectorValues> writerVectors;
@@ -46,7 +46,7 @@ final class FeatureWriteContext {
     private final ConstructionMetrics metrics;
 
     private final Map<FeatureId, Function<VectorFloat<?>, Feature.State>> vectorSuppliers = new EnumMap<>(FeatureId.class);
-    private final Map<FeatureId, Function<ImmutableGraphIndex.View, IntFunction<Feature.State>>> afterBuildSuppliers =
+    private final Map<FeatureId, Function<GraphIndex.View, IntFunction<Feature.State>>> afterBuildSuppliers =
             new EnumMap<>(FeatureId.class);
 
     /**
@@ -54,14 +54,14 @@ final class FeatureWriteContext {
      * @param metrics construction metrics sink, or null when not reporting
      */
     FeatureWriteContext(AbstractGraphIndexWriter.Builder<? extends RandomAccessOnDiskGraphIndexWriter, ?> writer,
-                        ImmutableGraphIndex graph,
+                        GraphIndex graph,
                         RandomAccessVectorValues vectors,
                         PQVectors buildPQ,
                         ConstructionMetrics metrics) {
         this(writer, graph, vectors, buildPQ, null, null, metrics);
     }
 
-    FeatureWriteContext(AbstractGraphIndexWriter.Builder<? extends RandomAccessOnDiskGraphIndexWriter, ?> writer, ImmutableGraphIndex graph,
+    FeatureWriteContext(AbstractGraphIndexWriter.Builder<? extends RandomAccessOnDiskGraphIndexWriter, ?> writer, GraphIndex graph,
                         RandomAccessVectorValues vectors, PQVectors buildPQ, ASHVectors buildASH,
                         VectorFloat<?> inputMean, ConstructionMetrics metrics) {
         this.buildASH = buildASH;
@@ -75,7 +75,7 @@ final class FeatureWriteContext {
     }
 
     /** The graph being written; complete only for in-memory builds. */
-    ImmutableGraphIndex graph() { return graph; }
+    GraphIndex graph() { return graph; }
 
     /** The full-precision base vectors. */
     RandomAccessVectorValues vectors() { return vectors; }
@@ -98,7 +98,7 @@ final class FeatureWriteContext {
     }
 
     /** Registers a feature whose state needs the completed graph, such as fused neighbor codes. */
-    void supplyAfterBuild(FeatureId id, Function<ImmutableGraphIndex.View, IntFunction<Feature.State>> supplier) {
+    void supplyAfterBuild(FeatureId id, Function<GraphIndex.View, IntFunction<Feature.State>> supplier) {
         afterBuildSuppliers.put(id, supplier);
     }
 
@@ -118,11 +118,11 @@ final class FeatureWriteContext {
         return built;
     }
 
-    Map<FeatureId, IntFunction<Feature.State>> completedSuppliers(ImmutableGraphIndex.View view) {
+    Map<FeatureId, IntFunction<Feature.State>> completedSuppliers(GraphIndex.View view) {
         return completedSuppliers(view, ordinal -> writerVectors.get().getVector(ordinal));
     }
 
-    Map<FeatureId, IntFunction<Feature.State>> completedSuppliers(ImmutableGraphIndex.View view,
+    Map<FeatureId, IntFunction<Feature.State>> completedSuppliers(GraphIndex.View view,
                                                                   IntFunction<VectorFloat<?>> readVector) {
         var suppliers = new EnumMap<FeatureId, IntFunction<Feature.State>>(FeatureId.class);
         if (readVector != null) {
@@ -135,7 +135,7 @@ final class FeatureWriteContext {
 
     Map<FeatureId, Function<VectorFloat<?>, Feature.State>> vectorSuppliers() { return vectorSuppliers; }
 
-    Map<FeatureId, Function<ImmutableGraphIndex.View, IntFunction<Feature.State>>> afterBuildSuppliers() {
+    Map<FeatureId, Function<GraphIndex.View, IntFunction<Feature.State>>> afterBuildSuppliers() {
         return afterBuildSuppliers;
     }
 }

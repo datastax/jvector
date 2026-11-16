@@ -19,7 +19,7 @@ package io.github.jbellis.jvector.example;
 import io.github.jbellis.jvector.disk.ReaderSupplierFactory;
 import io.github.jbellis.jvector.example.benchmarks.datasets.DataSet;
 import io.github.jbellis.jvector.example.util.OnDiskGraphIndexCache;
-import io.github.jbellis.jvector.graph.ImmutableGraphIndex;
+import io.github.jbellis.jvector.graph.GraphIndex;
 import io.github.jbellis.jvector.graph.VectorAccess;
 import io.github.jbellis.jvector.graph.VectorMean;
 import io.github.jbellis.jvector.graph.disk.OnDiskGraphIndex;
@@ -101,7 +101,7 @@ final class CompressedOnDiskBuild implements IndexBuildStrategy {
     }
 
     /** Opens the traversal codes stored beside {@code indexFile}, if it does not fuse them and has any. */
-    private void loadStoredCodes(Set<FeatureId> features, Path indexFile, ImmutableGraphIndex index) throws IOException {
+    private void loadStoredCodes(Set<FeatureId> features, Path indexFile, GraphIndex index) throws IOException {
         if (fusesCodes(features)) return;
         var loaded = StoredCodes.load(indexFile, index.getIdUpperBound());
         if (loaded != null) storedCodes.put(features, loaded);
@@ -122,7 +122,7 @@ final class CompressedOnDiskBuild implements IndexBuildStrategy {
 
     @Override
     public BuiltIndexes build(List<? extends Set<FeatureId>> featureSets, BuildConfig build, DataSet ds) throws IOException {
-        Map<Set<FeatureId>, ImmutableGraphIndex> indexes = new LinkedHashMap<>();
+        Map<Set<FeatureId>, GraphIndex> indexes = new LinkedHashMap<>();
         Map<Set<FeatureId>, Path> files = new LinkedHashMap<>();
 
         // If cache is disabled, we use the (tmp) workDirectory as the output
@@ -192,7 +192,7 @@ final class CompressedOnDiskBuild implements IndexBuildStrategy {
                                 DataSet ds,
                                 Path outputDir,
                                 Map<Set<FeatureId>, OnDiskGraphIndexCache.WriteHandle> handles,
-                                Map<Set<FeatureId>, ImmutableGraphIndex> indexes,
+                                Map<Set<FeatureId>, GraphIndex> indexes,
                                 Map<Set<FeatureId>, Path> files) throws IOException
     {
         Files.createDirectories(outputDir);
@@ -368,7 +368,7 @@ final class CompressedOnDiskBuild implements IndexBuildStrategy {
 
     private void reopen(List<Set<FeatureId>> featureSets, Path outputDir,
                         Map<Set<FeatureId>, OnDiskGraphIndexCache.WriteHandle> handles,
-                        Map<Set<FeatureId>, ImmutableGraphIndex> indexes,
+                        Map<Set<FeatureId>, GraphIndex> indexes,
                         Map<Set<FeatureId>, Path> files) throws IOException {
         // Commit the index to cache atomically, after the codes stored with it, so a committed index never
         // sits beside codes from an earlier build.

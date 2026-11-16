@@ -15,9 +15,12 @@
  */
 package io.github.jbellis.jvector.annotations;
 
+import java.lang.annotation.Documented;
+
 /**
  * Indicates that an API is experimental and may change or be removed in future releases
  * with no prior notice.
  */
+@Documented
 public @interface Experimental {
 }

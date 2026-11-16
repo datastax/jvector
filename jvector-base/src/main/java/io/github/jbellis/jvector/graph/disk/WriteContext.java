@@ -16,7 +16,7 @@
 
 package io.github.jbellis.jvector.graph.disk;
 
-import io.github.jbellis.jvector.graph.ImmutableGraphIndex;
+import io.github.jbellis.jvector.graph.GraphIndex;
 import io.github.jbellis.jvector.graph.disk.feature.Feature;
 import io.github.jbellis.jvector.graph.disk.feature.FeatureId;
 
@@ -30,7 +30,7 @@ import java.util.Map;
  */
 class WriteContext {
     /** The immutable graph being serialized. */
-    final ImmutableGraphIndex graph;
+    final GraphIndex graph;
     /** Maps between original (old) ordinals and the compacted (new) ordinals written to disk. */
     final OrdinalMapper ordinalMapper;
     /** All features configured for this index, keyed by their {@link FeatureId}. */
@@ -58,7 +58,7 @@ class WriteContext {
      * @param dimension      vector dimension, sourced from the configured features
      * @param l0Layout       placement of base-layer records
      */
-    WriteContext(ImmutableGraphIndex graph,
+    WriteContext(GraphIndex graph,
                  OrdinalMapper ordinalMapper,
                  Map<FeatureId, Feature> featureMap,
                  List<Feature> inlineFeatures,

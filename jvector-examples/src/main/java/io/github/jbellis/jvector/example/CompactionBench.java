@@ -23,7 +23,7 @@ import io.github.jbellis.jvector.example.util.AccuracyMetrics;
 import io.github.jbellis.jvector.example.util.CompactionPartitionSource;
 import io.github.jbellis.jvector.example.yaml.TestDataPartition.Distribution;
 import io.github.jbellis.jvector.graph.GraphSearcher;
-import io.github.jbellis.jvector.graph.ImmutableGraphIndex;
+import io.github.jbellis.jvector.graph.GraphIndex;
 import io.github.jbellis.jvector.graph.SearchResult;
 import io.github.jbellis.jvector.graph.disk.OnDiskGraphIndex;
 import io.github.jbellis.jvector.graph.disk.OnDiskGraphIndexCompactor;
@@ -279,7 +279,7 @@ public final class CompactionBench {
         try (var rs = ReaderSupplierFactory.open(indexPath)) {
             var graph = OnDiskGraphIndex.load(rs);
             try (var searcher = new GraphSearcher(graph)) {
-                var view = (ImmutableGraphIndex.ScoringView) searcher.getView();
+                var view = (GraphIndex.ScoringView) searcher.getView();
                 searcher.usePruning(false);
                 int n = queryVectors.size();
                 List<SearchResult> results = new ArrayList<>(n);

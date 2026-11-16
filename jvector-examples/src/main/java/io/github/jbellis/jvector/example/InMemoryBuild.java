@@ -18,7 +18,7 @@ package io.github.jbellis.jvector.example;
 
 import io.github.jbellis.jvector.disk.ReaderSupplierFactory;
 import io.github.jbellis.jvector.example.benchmarks.datasets.DataSet;
-import io.github.jbellis.jvector.graph.ImmutableGraphIndex;
+import io.github.jbellis.jvector.graph.GraphIndex;
 import io.github.jbellis.jvector.quantization.CompressedVectors;
 import io.github.jbellis.jvector.graph.disk.OnDiskGraphIndex;
 import io.github.jbellis.jvector.graph.disk.feature.FeatureId;
@@ -50,7 +50,7 @@ final class InMemoryBuild implements IndexBuildStrategy {
     @Override
     public BuiltIndexes build(List<? extends Set<FeatureId>> featureSets, BuildConfig build, DataSet ds) throws IOException {
         var floatVectors = ds.getBaseRavv();
-        Map<Set<FeatureId>, ImmutableGraphIndex> indexes = new LinkedHashMap<>();
+        Map<Set<FeatureId>, GraphIndex> indexes = new LinkedHashMap<>();
         if (build.indexType != null) {
             long start = System.nanoTime();
             var graph = GraphBuilderFactory.buildGraph(ds, build, encoded);

@@ -20,7 +20,7 @@ import io.github.jbellis.jvector.disk.IndexWriter;
 import io.github.jbellis.jvector.disk.RandomAccessReader;
 import io.github.jbellis.jvector.disk.RandomAccessWriter;
 import io.github.jbellis.jvector.disk.ReaderSupplier;
-import io.github.jbellis.jvector.graph.ImmutableGraphIndex;
+import io.github.jbellis.jvector.graph.GraphIndex;
 import io.github.jbellis.jvector.graph.disk.feature.Feature;
 import io.github.jbellis.jvector.graph.disk.feature.FeatureId;
 import org.slf4j.Logger;
@@ -75,6 +75,15 @@ public interface GraphIndexFormat {
     boolean supportsMultiLayer();
 
     /**
+     * Checks if this version uses the fused-feature layout (version 6+): a fused feature's packed
+     * neighbor data is stored inline in each L0 record, and the fused feature's source data for the
+     * in-memory hierarchy is written in a block after the sparse levels. Which fused features a
+     * version can store is still governed by {@link #supportsFeature}.
+     * @return true if fused features are supported
+     */
+    boolean supportsFusedFeatures();
+
+    /**
      * Checks if this version uses a footer for metadata instead of a header.
      * @return true if footer-based metadata is used
      */
@@ -109,12 +118,12 @@ public interface GraphIndexFormat {
          * @param suppliers per-feature functions that produce a {@link Feature.State} for a given original ordinal
          * @throws IOException if an I/O error occurs while writing
          */
-        void write(ImmutableGraphIndex.View view, Map<FeatureId, IntFunction<Feature.State>> suppliers) throws IOException;
+        void write(GraphIndex.View view, Map<FeatureId, IntFunction<Feature.State>> suppliers) throws IOException;
     }
 
     /**
      * Returns the feature map for this format version, ordered as required by the on-disk layout.
-     * Versions 2–5 preserve the natural {@link FeatureId} enum ordinal order; version 6 places
+     * Versions 2–5 preserve the natural {@link FeatureId} enum ordinal order; version 6+ places
      * fused features last so that non-fused inline features occupy a contiguous prefix.
      * The returned map preserves insertion order.
      *

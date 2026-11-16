@@ -16,10 +16,23 @@
 
 package io.github.jbellis.jvector.management;
 
+/**
+ * The compression a graph builder applies to the vectors before building, so that the graph is built
+ * with compressed (approximate) scores. See {@code HnswIndexBuilder.withCompressionType}.
+ */
 public enum CompressionType {
+    /** No compression: the graph is built with exact scores. */
     NONE("None"),
+    /** Product quantization ({@code ProductQuantization}). */
     PQ("PQ"),
-    BQ("BQ");
+    /** Binary quantization ({@code BinaryQuantization}), one bit per dimension. */
+    BQ("BQ"),
+    /**
+     * Asymmetric hashing ({@code AsymmetricHashing}). Supports
+     * {@code VectorSimilarityFunction.DOT_PRODUCT} only, and trains a single landmark, which ASH
+     * construction scoring requires; see {@code AsymmetricHashing} for its other limitations.
+     */
+    ASH("ASH");
 
     private final String type;
 

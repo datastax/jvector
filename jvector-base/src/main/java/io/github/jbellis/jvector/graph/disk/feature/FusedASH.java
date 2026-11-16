@@ -19,7 +19,7 @@ package io.github.jbellis.jvector.graph.disk.feature;
 import io.github.jbellis.jvector.annotations.Experimental;
 import io.github.jbellis.jvector.disk.IndexWriter;
 import io.github.jbellis.jvector.disk.RandomAccessReader;
-import io.github.jbellis.jvector.graph.ImmutableGraphIndex;
+import io.github.jbellis.jvector.graph.GraphIndex;
 import io.github.jbellis.jvector.graph.disk.CommonHeader;
 import io.github.jbellis.jvector.graph.disk.CompactionContext;
 import io.github.jbellis.jvector.graph.disk.OnDiskGraphIndex;
@@ -54,6 +54,10 @@ import java.util.function.Supplier;
  * it is based on 4-bit projection groups and a 16-entry query LUT per group.
  * Core standalone ASH may support additional bit widths, but those are not part
  * of the fused graph hot path.</p>
+ *
+ * <p>Requires on-disk format version 7 or later, scores {@code VectorSimilarityFunction.DOT_PRODUCT}
+ * only, and does not support compaction yet. See the limitations listed on
+ * {@link AsymmetricHashing}.</p>
  */
 @Experimental
 public class FusedASH extends AbstractFeature implements FusedFeature {
@@ -340,24 +344,24 @@ public class FusedASH extends AbstractFeature implements FusedFeature {
     }
 
     public static class State implements Feature.State {
-        public final ImmutableGraphIndex.View view;
+        public final GraphIndex.View view;
         public final IntFunction<AsymmetricHashing.QuantizedVector> compressedVectorFunction;
         public final int nodeId;
         /** When non-null, neighbor codes are copied from here into reusable storage instead. */
         final ASHVectors vectors;
 
-        public State(ImmutableGraphIndex.View view, ASHVectors ashVectors, int nodeId) {
+        public State(GraphIndex.View view, ASHVectors ashVectors, int nodeId) {
             this(view, ashVectors::get, nodeId, ashVectors);
         }
 
         public State(
-                ImmutableGraphIndex.View view,
+                GraphIndex.View view,
                 IntFunction<AsymmetricHashing.QuantizedVector> compressedVectorFunction,
                 int nodeId) {
             this(view, compressedVectorFunction, nodeId, null);
         }
 
-        private State(ImmutableGraphIndex.View view, IntFunction<AsymmetricHashing.QuantizedVector> compressedVectorFunction,
+        private State(GraphIndex.View view, IntFunction<AsymmetricHashing.QuantizedVector> compressedVectorFunction,
                       int nodeId, ASHVectors vectors) {
             this.view = view;
             this.compressedVectorFunction = compressedVectorFunction;

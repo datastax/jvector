@@ -45,12 +45,20 @@ class GraphIndexFormatV6 extends GraphIndexFormatV5 {
 
     /** Creates the singleton format for version 6. */
     GraphIndexFormatV6() {
-        this(6, allFeatures());
+        super(6, v6Features());
     }
 
-    /** Allows later feature extensions to reuse the V6 record and hierarchy layout. */
+    /**
+     * Protected constructor for subclasses (V7) that share V6's wire format but support a
+     * different set of features.
+     */
     protected GraphIndexFormatV6(int version, Set<FeatureId> supportedFeatures) {
         super(version, supportedFeatures);
+    }
+
+    @Override
+    public boolean supportsFusedFeatures() {
+        return true;
     }
 
     /** Places fused features last so non-fused inline features occupy a contiguous prefix. */

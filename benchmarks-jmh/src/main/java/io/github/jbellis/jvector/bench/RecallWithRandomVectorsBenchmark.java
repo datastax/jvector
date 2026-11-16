@@ -16,6 +16,7 @@
 package io.github.jbellis.jvector.bench;
 
 import io.github.jbellis.jvector.graph.*;
+import io.github.jbellis.jvector.graph.*;
 import io.github.jbellis.jvector.graph.similarity.BuildScoreProvider;
 import io.github.jbellis.jvector.graph.similarity.DefaultSearchScoreProvider;
 import io.github.jbellis.jvector.graph.similarity.ScoreFunction;
@@ -52,7 +53,7 @@ public class RecallWithRandomVectorsBenchmark {
     private ArrayList<VectorFloat<?>> baseVectors;
     private ArrayList<VectorFloat<?>> queryVectors;
     private GraphIndexBuilder graphIndexBuilder;
-    private ImmutableGraphIndex graphIndex;
+    private GraphIndex graphIndex;
     private PQVectors pqVectors;
 
     // Add ground truth storage

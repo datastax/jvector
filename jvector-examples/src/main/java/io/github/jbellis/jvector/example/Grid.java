@@ -32,7 +32,7 @@ import io.github.jbellis.jvector.example.reporting.RunArtifacts;
 import io.github.jbellis.jvector.example.util.CompressorParameters;
 import io.github.jbellis.jvector.example.util.OnDiskGraphIndexCache;
 import io.github.jbellis.jvector.management.GraphIndexBuilderConfig;
-import io.github.jbellis.jvector.graph.ImmutableGraphIndex;
+import io.github.jbellis.jvector.graph.GraphIndex;
 import io.github.jbellis.jvector.graph.GraphSearcher;
 import io.github.jbellis.jvector.graph.RandomAccessVectorValues;
 import io.github.jbellis.jvector.graph.disk.*;
@@ -547,9 +547,9 @@ public class Grid {
      * The built indexes in the order their feature sets were configured, so output order is the same on
      * every run. EnumSet hash codes come from identity hashes, so HashMap order over them varies by JVM.
      */
-    private static Map<Set<FeatureId>, ImmutableGraphIndex> inConfiguredOrder(
-            Map<Set<FeatureId>, ImmutableGraphIndex> built, List<? extends Set<FeatureId>> featureSets) {
-        Map<Set<FeatureId>, ImmutableGraphIndex> ordered = new LinkedHashMap<>();
+    private static Map<Set<FeatureId>, GraphIndex> inConfiguredOrder(
+            Map<Set<FeatureId>, GraphIndex> built, List<? extends Set<FeatureId>> featureSets) {
+        Map<Set<FeatureId>, GraphIndex> ordered = new LinkedHashMap<>();
         for (var features : featureSets) {
             var index = built.get(features);
             if (index != null) {
@@ -823,7 +823,7 @@ public class Grid {
 
     public static class ConfiguredSystem implements AutoCloseable {
         DataSet ds;
-        ImmutableGraphIndex index;
+        GraphIndex index;
         CompressedVectors cv;
         Set<FeatureId> features;
         private final Supplier<RandomAccessVectorValues> exactVectors;
@@ -915,11 +915,11 @@ public class Grid {
             return searcher;
         });
 
-        ConfiguredSystem(DataSet ds, ImmutableGraphIndex index, CompressedVectors cv, Set<FeatureId> features) {
+        ConfiguredSystem(DataSet ds, GraphIndex index, CompressedVectors cv, Set<FeatureId> features) {
             this(ds, index, cv, features, null, null);
         }
 
-        ConfiguredSystem(DataSet ds, ImmutableGraphIndex index, CompressedVectors cv, Set<FeatureId> features,
+        ConfiguredSystem(DataSet ds, GraphIndex index, CompressedVectors cv, Set<FeatureId> features,
                          String rerankingType, NVQVectors memoryReranker) {
             this.rerankingType = rerankingType;
             this.memoryReranker = memoryReranker;
@@ -957,9 +957,9 @@ public class Grid {
             return null;
         }
 
-        public SearchScoreProvider scoreProviderFor(VectorFloat<?> queryVector, ImmutableGraphIndex.View view) {
+        public SearchScoreProvider scoreProviderFor(VectorFloat<?> queryVector, GraphIndex.View view) {
             if (rerankingType != null) return configuredScorer(queryVector, view);
-            var scoringView = (ImmutableGraphIndex.ScoringView) view;
+            var scoringView = (GraphIndex.ScoringView) view;
             ScoreFunction.ApproximateScoreFunction asf;
             if (scoresFromIndex) {
                 asf = scoringView.approximateScoreFunctionFor(queryVector, ds.getSimilarityFunction());
@@ -975,7 +975,7 @@ public class Grid {
             return new DefaultSearchScoreProvider(asf, rr, adaptiveSimilarity());
         }
 
-        private SearchScoreProvider configuredScorer(VectorFloat<?> query, ImmutableGraphIndex.View view) {
+        private SearchScoreProvider configuredScorer(VectorFloat<?> query, GraphIndex.View view) {
             var similarity = ds.getSimilarityFunction();
             var diskView = view instanceof OnDiskGraphIndex.View ? (OnDiskGraphIndex.View) view : null;
             ScoreFunction score;
