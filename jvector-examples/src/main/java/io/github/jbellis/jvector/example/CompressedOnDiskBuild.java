@@ -145,6 +145,7 @@ final class CompressedOnDiskBuild implements IndexBuildStrategy {
                         : cache.keyWithCompressorId(ds.getName(), fs, build.M, build.efConstruction, build.neighborOverflow,
                                 build.alpha, build.addHierarchy, build.refineFinalGraph, cacheIdentity,
                                 baseCount, dimension, nvq);
+                key = key.withUpperLayerDegree(build.upperLayerDegree);
                 var cached = cache.tryLoad(key);
 
                 if (cached.isPresent()) {

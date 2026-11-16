@@ -134,6 +134,8 @@ public final class OnDiskGraphIndexCache {
         public final int dimension;
         /** NVQ subvectors when the feature set stores NVQ vectors, otherwise 0. */
         public final int nvqSubvectors;
+        /** The upper layers' maximum degree when it differs from the base layer's {@link #M}, otherwise null. */
+        public final Integer upperLayerDegree;
 
         private CacheKey(String datasetName,
                          Set<FeatureId> featureSet,
@@ -146,7 +148,8 @@ public final class OnDiskGraphIndexCache {
                          String compressorId,
                          int baseCount,
                          int dimension,
-                         int nvqSubvectors) {
+                         int nvqSubvectors,
+                         Integer upperLayerDegree) {
             this.datasetName = datasetName;
             this.featureSet = featureSet;
             this.M = M;
@@ -159,6 +162,13 @@ public final class OnDiskGraphIndexCache {
             this.baseCount = baseCount;
             this.dimension = dimension;
             this.nvqSubvectors = nvqSubvectors;
+            this.upperLayerDegree = upperLayerDegree;
+        }
+
+        /** This key for a graph whose upper layers have {@code degree} as their maximum degree (null: {@link #M}). */
+        public CacheKey withUpperLayerDegree(Integer degree) {
+            return new CacheKey(datasetName, featureSet, M, efConstruction, neighborOverflow, alpha, addHierarchy,
+                    refineFinalGraph, compressorId, baseCount, dimension, nvqSubvectors, degree);
         }
     }
 
@@ -195,7 +205,7 @@ public final class OnDiskGraphIndexCache {
         if (featureSet.contains(FeatureId.NVQ_VECTORS) != (nvqSubvectors > 0))
             throw new IllegalArgumentException("NVQ subvectors must be given exactly when NVQ vectors are stored");
         return new CacheKey(datasetName, featureSet, M, efConstruction, neighborOverflow, alpha,
-                addHierarchy, refineFinalGraph, compressorId, baseCount, dimension, nvqSubvectors);
+                addHierarchy, refineFinalGraph, compressorId, baseCount, dimension, nvqSubvectors, null);
     }
 
     /**
@@ -370,7 +380,7 @@ public final class OnDiskGraphIndexCache {
                     "d" + key.dimension,
                     "fmt" + OnDiskGraphIndex.CURRENT_VERSION,
                     featureSetName + (key.nvqSubvectors > 0 ? "-nvq" + key.nvqSubvectors : ""),
-                    "M" + key.M,
+                    "M" + key.M + (key.upperLayerDegree == null ? "" : "U" + key.upperLayerDegree),
                     "ef" + key.efConstruction,
                     "of" + key.neighborOverflow,
                     "alpha" + key.alpha,

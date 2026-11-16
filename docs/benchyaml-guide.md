@@ -48,6 +48,7 @@ Each `compression` list entry has a `type` and its own settings.
 | `useSavedIndexIfExists` | `Yes`, `No` | Controls reuse of a compatible index, `inMemory` or `onDisk`, batch or streaming. `Yes` saves each built index, with the traversal codes it stores, in the working directory's `index_cache` and reuses it on later runs; an `inMemory` index is reloaded into memory. A cache hit skips fresh construction and serialization measurements. Saved indexes are never deleted automatically, so starting-point configurations use `No`; recipes that query an index from a later JVM, such as the ASH/PQ comparison, use `Yes`. |
 | `workers` | Positive integer or `max` | Optional. Threads for quantizer training, encoding, graph insertion and the parallel writer. `max` is the platform's physical core count, which is also the default. |
 | `outDegree` | Positive integers | Maximum final neighborhood degree, also called M. |
+| `upperLayerDegree` | Positive integers | Optional, schema 3, with `addHierarchy: [Yes]`. Maximum degree of the layers above the base layer; with it, `outDegree` is the base layer's degree. Omit for `outDegree` on every layer. Each value is one more build. |
 | `efConstruction` | Positive integers | Search width used to find candidates during insertion. |
 | `neighborOverflow` | Finite numbers ≥ 1.0 | Temporary neighborhood capacity relative to final degree. Java float suffixes such as `1.2f` are accepted. |
 | `addHierarchy` | `Yes`, `No` | Builds upper graph layers. |

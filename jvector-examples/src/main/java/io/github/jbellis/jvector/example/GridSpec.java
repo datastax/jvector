@@ -61,7 +61,10 @@ public final class GridSpec {
             boolean onDisk = "onDisk".equals(construction.type);
             var writerMode = onDisk ? Objects.requireNonNullElse(construction.writerMode, "parallel") : null;
             var sweeps = graphSweeps(construction.addHierarchy, construction.refineFinalGraph, construction.outDegree,
-                    construction.neighborOverflow, construction.efConstruction)
+                    construction.neighborOverflow, construction.efConstruction);
+            if (construction.upperLayerDegree != null)
+                sweeps.sweep("construction.upperLayerDegree", construction.upperLayerDegree, BuildConfig.Builder::upperLayerDegree);
+            sweeps
                     .sweep("construction.compression", construction.compression, (point, compressor) -> point
                             .buildCompressor(compressor.getCompressorParameters())
                             .ashConstructionMode("ASH".equals(compressor.type)

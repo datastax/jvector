@@ -32,6 +32,11 @@ public class ConstructionParameters extends CommonParameters {
     /** onDisk only: pad base-layer records so each starts on this page boundary (a power of two); omit for none. */
     public Integer pageAlignment;
     public List<Integer> outDegree;
+    /**
+     * Schema 3: maximum out-degrees of the layers above the base layer to sweep; omit for {@code outDegree} on every
+     * layer. With it, {@code outDegree} is the base layer's degree. Needs {@code addHierarchy} Yes.
+     */
+    public List<Integer> upperLayerDegree;
     public List<Integer> efConstruction;
     public List<Float> neighborOverflow;
     public List<Boolean> addHierarchy;
@@ -89,6 +94,13 @@ public class ConstructionParameters extends CommonParameters {
             throw new IllegalArgumentException("construction.pageAlignment must be a power of two from 512 to 1048576");
         }
         validateSweep("outDegree", outDegree, value -> value > 0);
+        if (upperLayerDegree != null) {
+            validateSweep("upperLayerDegree", upperLayerDegree, value -> value > 0);
+            if (addHierarchy == null || addHierarchy.contains(Boolean.FALSE))
+                throw new IllegalArgumentException("construction.upperLayerDegree requires addHierarchy Yes");
+            if (Boolean.TRUE.equals(streaming))
+                throw new IllegalArgumentException("construction.upperLayerDegree is not supported for streaming builds");
+        }
         validateSweep("efConstruction", efConstruction, value -> value > 0);
         validateSweep("neighborOverflow", neighborOverflow, value -> Float.isFinite(value) && value >= 1);
         validateSweep("addHierarchy", addHierarchy, value -> true);

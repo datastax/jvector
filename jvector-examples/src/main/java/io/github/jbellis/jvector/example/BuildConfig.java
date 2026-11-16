@@ -21,6 +21,7 @@ import io.github.jbellis.jvector.example.util.CompressorParameters;
 
 import java.util.Collections;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.function.Function;
 
@@ -33,8 +34,10 @@ import java.util.function.Function;
  * its own lines lets concurrent changes merge without touching shared signatures.</p>
  */
 public final class BuildConfig {
-    /** Maximum out-degree of the graph. */
+    /** Maximum out-degree of the graph's base layer, and of every layer unless {@link #upperLayerDegree} is set. */
     public final int M;
+    /** Maximum out-degree of the layers above the base layer, or null for {@link #M} on every layer. */
+    public final Integer upperLayerDegree;
     public final int efConstruction;
     public final float neighborOverflow;
     /** Diversity pruning factor; Grid has always used 1.2. */
@@ -61,6 +64,7 @@ public final class BuildConfig {
 
     private BuildConfig(Builder b) {
         this.M = b.M;
+        this.upperLayerDegree = b.upperLayerDegree;
         this.efConstruction = b.efConstruction;
         this.neighborOverflow = b.neighborOverflow;
         this.alpha = b.alpha;
@@ -76,6 +80,11 @@ public final class BuildConfig {
         this.streaming = b.streaming;
         this.coldStartSize = b.coldStartSize;
         this.trainWhileStreaming = b.trainWhileStreaming;
+    }
+
+    /** The graph builder's per-layer maximum degrees: the base layer's first, then the upper layers'. */
+    public List<Integer> layerDegrees() {
+        return upperLayerDegree == null ? List.of(M) : List.of(M, upperLayerDegree);
     }
 
     /** True for indexes searched in memory, built in one pass or streamed. */
@@ -94,6 +103,7 @@ public final class BuildConfig {
     public Map<String, Object> reportedParameters() {
         Map<String, Object> params = new LinkedHashMap<>();
         params.put("M", M);
+        if (upperLayerDegree != null) params.put("upperLayerDegree", upperLayerDegree);
         params.put("efConstruction", efConstruction);
         params.put("neighborOverflow", neighborOverflow);
         params.put("addHierarchy", addHierarchy);
@@ -116,6 +126,7 @@ public final class BuildConfig {
 
     public static final class Builder {
         private Integer M;
+        private Integer upperLayerDegree;
         private Integer efConstruction;
         private Float neighborOverflow;
         private float alpha = 1.2f;
@@ -135,6 +146,7 @@ public final class BuildConfig {
         private Builder() {}
 
         public Builder M(int M) { this.M = M; return this; }
+        public Builder upperLayerDegree(Integer degree) { this.upperLayerDegree = degree; return this; }
         public Builder efConstruction(int efConstruction) { this.efConstruction = efConstruction; return this; }
         public Builder neighborOverflow(float neighborOverflow) { this.neighborOverflow = neighborOverflow; return this; }
         public Builder alpha(float alpha) { this.alpha = alpha; return this; }

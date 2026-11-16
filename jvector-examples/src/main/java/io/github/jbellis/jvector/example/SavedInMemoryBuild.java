@@ -66,7 +66,7 @@ final class SavedInMemoryBuild implements IndexBuildStrategy {
     public BuiltIndexes build(List<? extends Set<FeatureId>> featureSets, BuildConfig build, DataSet ds) throws IOException {
         var key = cache.keyWithCompressorId(ds.getName(), Set.of(), build.M, build.efConstruction,
                 build.neighborOverflow, build.alpha, build.addHierarchy, build.refineFinalGraph, "inMemory:" + identity,
-                ds.getBaseRavv().size(), ds.getDimension(), 0);
+                ds.getBaseRavv().size(), ds.getDimension(), 0).withUpperLayerDegree(build.upperLayerDegree);
         var path = cache.resolve(key).finalPath;
         if (Files.exists(path)) {
             long start = System.nanoTime();

@@ -219,6 +219,21 @@ public class TestGridASHIntegration {
         }
     }
 
+    @Test(timeout = 120_000)
+    public void upperLayerDegreeSweepsTheUpperLayersDegree() throws Exception {
+        // outDegree stays the base layer's degree; each upperLayerDegree is one build with that upper-layer degree
+        var data = schema3Data();
+        var config = schema3Config("onDisk", "parallel", false, "None", "- type: None");
+        config.construction.addHierarchy = List.of(true);
+        config.construction.upperLayerDegree = List.of(4, 8);
+        var spec = GridSpec.fromConfig(config);
+        var degrees = spec.buildPoints().stream().map(BuildConfig::layerDegrees).collect(java.util.stream.Collectors.toList());
+        assertEquals(List.of(List.of(8, 4), List.of(8, 8)), degrees);
+        var artifacts = RunArtifacts.open(csvRunConfig(), List.of(config));
+        Grid.run(data, spec, artifacts);
+        assertEquals(3, Files.readAllLines(artifacts.experimentsWriter().path()).size());
+    }
+
     @Test
     public void schema3AcceptsAnAshTrainingWindow() throws Exception {
         var data = schema3Data();
