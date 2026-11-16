@@ -240,7 +240,7 @@ public class TestStreamingASHIndex extends RandomizedTest {
     @Test
     public void aColdIndexTrainsITQAsItsFirstModel() {
         var data = vectors(6000, 3);
-        var queries = vectors(30, 4);
+        var queries = vectors(200, 4); // enough that recall is measured to about 0.01
         var options = new StreamingASHIndex.Options();
         options.coldStartSize = 256;
         options.train = true;
