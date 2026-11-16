@@ -295,6 +295,9 @@ public class ASHVectors implements CompressedVectors {
     private ScoreFunction.AdaptiveApproximateScoreFunction nodeScoreFunction(ASHScorer.CodeScorer f,
                                                                             ASHScorer.QueryPrecompute qp) {
         final ASHCodes c = codes;
+        if (c.signWords == 0 && gatheredScoringSupported(ash)) {
+            return new GatheredScoreFunction(f, qp);
+        }
         if (c.signWords == 0) {
             return new BoundedScoreFunction(qp) {
                 @Override
@@ -334,6 +337,71 @@ public class ASHVectors implements CompressedVectors {
         @Override
         public float dotProductBound() {
             return qp == null ? Float.NaN : scorer.dotProductBound(qp);
+        }
+    }
+
+    private static final int GATHERED_BLOCK = 32;
+
+    /**
+     * Whether codes are scored as gathered neighborhoods (see {@link GatheredScoreFunction}): experimental, and off unless
+     * {@code -Djvector.ash.gatheredScoring=true}; it also needs canonical nibble codes, one landmark and a backend
+     * neighborhood kernel. It lowers single-query latency, but with every core busy it has measured 1-6% lower
+     * throughput than scoring one node at a time.
+     */
+    private static boolean gatheredScoringSupported(AsymmetricHashing ash) {
+        return ash.bitsPerDimension != 1 && !FusedASHLayout.usesFieldBlocks(ash.bitsPerDimension) && ash.landmarkCount == 1
+               && "true".equals(System.getProperty("jvector.ash.gatheredScoring"))
+               && VectorizationProvider.getInstance().getVectorUtilSupport().supportsAshNeighborhoodScoring();
+    }
+
+    /**
+     * Scores nodes one at a time like the plain multi-bit scorer, and a batch of nodes (a node's neighbors, which a
+     * search scores together) by gathering their codes into one neighborhood block and scoring it with the backend's
+     * neighborhood kernel, as an index with fused codes scores its stored neighborhoods. Gathering costs a copy of each
+     * code; the kernel scores a block of codes for about the cost of a few single codes.
+     */
+    private final class GatheredScoreFunction extends BoundedScoreFunction {
+        private final int BLOCK = GATHERED_BLOCK;
+        private final ASHScorer.CodeScorer single;
+        private final ASHNeighborhoodScorer neighborhood;
+        private final AsymmetricHashing.QuantizedVector[] gathered = new AsymmetricHashing.QuantizedVector[BLOCK];
+        private final byte[] packed;
+        private final float[] out = new float[BLOCK];
+
+        GatheredScoreFunction(ASHScorer.CodeScorer single, ASHScorer.QueryPrecompute qp) {
+            super(qp);
+            this.single = single;
+            this.neighborhood = new ASHNeighborhoodScorer(ash, qp, BLOCK, BLOCK);
+            this.packed = new byte[FusedASHLayout.featureSize(BLOCK, ash.quantizedDim, ash.bitsPerDimension, BLOCK)];
+            for (int i = 0; i < BLOCK; i++) gathered[i] = AsymmetricHashing.QuantizedVector.createEmpty(ash.quantizedDim, ash.bitsPerDimension);
+        }
+
+        @Override
+        public float similarityTo(int node) {
+            return ASHScorer.toSimilarity(single.dot(null, 0, codes.bodyPage(node), codes.bodyOffset(node),
+                    scales[node], offsets[node], landmarks[node] & 0xFF));
+        }
+
+        @Override
+        public boolean supportsBatchScoring() {
+            return true;
+        }
+
+        @Override
+        public void similarityTo(int[] nodes, int count, float[] scores) {
+            for (int first = 0; first < count; first += BLOCK) {
+                int n = Math.min(BLOCK, count - first);
+                if (n < 4) {
+                    // too few to gather
+                    for (int i = 0; i < n; i++) scores[first + i] = similarityTo(nodes[first + i]);
+                    continue;
+                }
+                java.util.Arrays.fill(packed, (byte) 0);
+                for (int i = 0; i < n; i++) codes.copyTo(nodes[first + i], gathered[i]);
+                FusedASHBlockPacker.pack(packed, 0, gathered, 0, n, ash.quantizedDim, ash.bitsPerDimension, BLOCK);
+                neighborhood.score(packed, out);
+                System.arraycopy(out, 0, scores, first, n);
+            }
         }
     }
 

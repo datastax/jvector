@@ -505,6 +505,9 @@ public class OnDiskGraphIndex implements ImmutableGraphIndex, AutoCloseable, Acc
         private final int[] neighbors;
         private int nodeDegree;
         private EnumMap<FeatureId, Object> featureScratch;
+        // the unvisited neighbors of a node and their scores, for score functions that score a batch at once
+        private int[] batchNodes = new int[64];
+        private float[] batchScores = new float[64];
 
         /**
          * Returns scratch confined to this view, allocating it on first use only.
@@ -679,6 +682,21 @@ public class OnDiskGraphIndex implements ImmutableGraphIndex, AutoCloseable, Acc
                         neighborProcessor.process(friendOrd, friendSimilarity);
                     }
                 }
+            } else if (scoreFunction.supportsBatchScoring()) {
+                // Gather the unvisited neighbors, score them in one batch, then hand them on in neighbor order.
+                int count = 0;
+                for (var it = getNeighborsIterator(level, node); it.hasNext(); ) {
+                    var friendOrd = it.nextInt();
+                    if (visited.mark(friendOrd)) {
+                        if (count == batchNodes.length) {
+                            batchNodes = java.util.Arrays.copyOf(batchNodes, count * 2);
+                            batchScores = java.util.Arrays.copyOf(batchScores, count * 2);
+                        }
+                        batchNodes[count++] = friendOrd;
+                    }
+                }
+                scoreFunction.similarityTo(batchNodes, count, batchScores);
+                for (int i = 0; i < count; i++) neighborProcessor.process(batchNodes[i], batchScores[i]);
             } else {
                 var it = getNeighborsIterator(level, node);
                 while (it.hasNext()) {
