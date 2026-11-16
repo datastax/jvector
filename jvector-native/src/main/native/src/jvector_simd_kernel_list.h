@@ -37,6 +37,10 @@
     KERNEL_ENTRY(float, cosine_f32, (const float *a, size_t aoffset, const float *b, size_t boffset, size_t length), (a, aoffset, b, boffset, length)) \
     KERNEL_ENTRY(float, dot_product_f32, (const float *a, size_t aoffset, const float *b, size_t boffset, size_t length), (a, aoffset, b, boffset, length)) \
     KERNEL_ENTRY(float, euclidean_f32, (const float *a, size_t aoffset, const float *b, size_t boffset, size_t length), (a, aoffset, b, boffset, length)) \
+    /* Batched similarity: one query against `count` contiguous vectors of `length` floats; results[i] is the metric for vector i */ \
+    KERNEL_ENTRY(void, cosine_f32_batch, (const float *query, const float *vectors, size_t count, size_t length, float *results), (query, vectors, count, length, results)) \
+    KERNEL_ENTRY(void, dot_product_f32_batch, (const float *query, const float *vectors, size_t count, size_t length, float *results), (query, vectors, count, length, results)) \
+    KERNEL_ENTRY(void, euclidean_f32_batch, (const float *query, const float *vectors, size_t count, size_t length, float *results), (query, vectors, count, length, results)) \
     /* Element-wise arithmetic and reductions */ \
     KERNEL_ENTRY(void, add_in_place_f32, (float *v1, const float *v2, size_t length), (v1, v2, length)) \
     KERNEL_ENTRY(void, add_scalar_in_place_f32, (float *v1, float value, size_t length), (v1, value, length)) \
