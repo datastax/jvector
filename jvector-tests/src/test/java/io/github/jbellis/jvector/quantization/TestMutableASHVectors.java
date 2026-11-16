@@ -29,6 +29,7 @@ import org.junit.Test;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Random;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
@@ -76,6 +77,16 @@ public class TestMutableASHVectors extends RandomizedTest {
         var codes = new AsymmetricHashing.QuantizedVector[data.size()];
         for (int i = 0; i < codes.length; i++) codes[i] = ash.encode(data.get(i));
         return new ASHVectors(ash, codes);
+    }
+
+    /** Waits until {@code checks} grows, or a reader fails; fails if the readers make no progress for a minute. */
+    private static void awaitMoreChecks(AtomicInteger checks, AtomicReference<Throwable> failure) throws InterruptedException {
+        int start = checks.get();
+        long deadline = System.nanoTime() + TimeUnit.MINUTES.toNanos(1);
+        while (checks.get() == start && failure.get() == null) {
+            if (System.nanoTime() > deadline) throw new AssertionError("readers made no progress");
+            Thread.sleep(1);
+        }
     }
 
     private static void addAll(MutableASHVectors growing, List<VectorFloat<?>> data, int threads) throws Exception {
@@ -236,8 +247,10 @@ public class TestMutableASHVectors extends RandomizedTest {
             readers.add(t);
             t.start();
         }
-        // Swap every page to B, back to A, and to B again while the readers run.
+        // Swap every page to B, back to A, and to B again while the readers run. Each round starts only once the
+        // readers have checked scores since the last, so every round overlaps reads however the threads are scheduled.
         for (int round = 0; round < 3; round++) {
+            awaitMoreChecks(checks, failure);
             int to = round % 2 == 0 ? idB : 0;
             for (int p = 0; p < growing.pageCount(); p++) assertTrue(growing.reencodePage(p, to, ravv));
         }
