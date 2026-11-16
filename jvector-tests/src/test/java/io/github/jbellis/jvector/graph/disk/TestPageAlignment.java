@@ -120,6 +120,38 @@ public class TestPageAlignment extends LuceneTestCase {
     }
 
     @Test
+    public void recordsAlignWithTheFileAtAStartOffset() throws IOException {
+        // An index written after other data (as Cassandra writes one per segment) still has page-aligned records,
+        // counted from the start of the file, and reads back from that offset.
+        var vectors = vectors(16);
+        var graph = graph(vectors, true);
+        var suppliers = Feature.singleStateFactory(FeatureId.INLINE_VECTORS,
+                node -> new InlineVectors.State(vectors.getVector(node)));
+        for (var kind : new Writer[] {Writer.SEQUENTIAL_RANDOM_ACCESS, Writer.PARALLEL}) {
+            for (long start : new long[] {7, PAGE - 1, PAGE + 13, 3L * PAGE}) {
+                Path path = directory.resolve(kind + "-at-" + start);
+                Files.write(path, new byte[(int) start]);
+                AbstractGraphIndexWriter.Builder<? extends RandomAccessOnDiskGraphIndexWriter, ?> builder =
+                        kind == Writer.SEQUENTIAL_RANDOM_ACCESS
+                                ? new OnDiskGraphIndexWriter.Builder(graph, path).withStartOffset(start)
+                                : new OnDiskParallelGraphIndexWriter.Builder(graph, path).withStartOffset(start).withParallelWorkerThreads(3);
+                builder.with(new InlineVectors(vectors.dimension())).withPageAlignment(PAGE);
+                try (var writer = builder.build()) {
+                    writer.getOutput().seek(start);
+                    writer.write(suppliers);
+                }
+                try (var reader = new SimpleMappedReader.Supplier(path)) {
+                    var index = OnDiskGraphIndex.load(reader, start);
+                    assertTrue(index.getFeatureSet().contains(FeatureId.PAGE_ALIGNMENT));
+                    assertRecordsAligned(index, Files.size(path));
+                    TestUtil.assertGraphEquals(graph, index);
+                    TestOnDiskGraphIndex.validateVectors(index.getView(), vectors);
+                }
+            }
+        }
+    }
+
+    @Test
     public void rejectsOldFormatsAndInvalidPages() throws IOException {
         var vectors = vectors(16);
         var graph = graph(vectors, false);

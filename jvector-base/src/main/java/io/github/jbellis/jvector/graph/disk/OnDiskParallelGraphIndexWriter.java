@@ -238,6 +238,11 @@ public class OnDiskParallelGraphIndexWriter extends RandomAccessOnDiskGraphIndex
             return this;
         }
 
+        @Override
+        protected long startOffset() {
+            return startOffset;
+        }
+
         /**
          * Set the number of worker threads for parallel writes.
          *
