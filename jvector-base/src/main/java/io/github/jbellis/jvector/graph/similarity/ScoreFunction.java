@@ -65,6 +65,31 @@ public interface ScoreFunction {
         return false;
     }
 
+    /**
+     * Computes the similarity to each of {@code nodes[0..count)}: {@code out[i] = similarityTo(nodes[i])}.
+     * <p>
+     * Used when expanding the neighbors of a search candidate. Implementations that can score several
+     * nodes more cheaply together (e.g. one native call over contiguous vectors) override this and
+     * {@link #supportsSimilarityToBatch()}. The default simply loops over {@link #similarityTo(int)}.
+     *
+     * @param nodes the nodes to score
+     * @param count how many entries of {@code nodes} to score
+     * @param out   receives the scores; must have room for {@code count} entries
+     */
+    default void similarityToBatch(int[] nodes, int count, float[] out) {
+        for (int i = 0; i < count; i++) {
+            out[i] = similarityTo(nodes[i]);
+        }
+    }
+
+    /**
+     * @return true if {@link #similarityToBatch} is meaningfully cheaper than calling
+     * {@link #similarityTo(int)} in a loop, so callers should gather neighbors before scoring them
+     */
+    default boolean supportsSimilarityToBatch() {
+        return false;
+    }
+
 
     interface ExactScoreFunction extends ScoreFunction {
         default boolean isExact() {

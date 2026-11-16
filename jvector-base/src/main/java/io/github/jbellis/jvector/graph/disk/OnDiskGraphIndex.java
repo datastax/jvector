@@ -486,10 +486,15 @@ public class OnDiskGraphIndex implements ImmutableGraphIndex, AutoCloseable, Acc
         protected final RandomAccessReader reader;
         private final int[] neighbors;
         private int nodeDegree;
+        // scratch for processNeighbors when the ScoreFunction can score a batch; a View is per-thread
+        private int[] batchNodes;
+        private float[] batchScores;
 
         public View(RandomAccessReader reader) {
             this.reader = reader;
             this.neighbors = new int[layerInfo.stream().mapToInt(li -> li.degree).max().orElse(0)];
+            this.batchNodes = new int[neighbors.length];
+            this.batchScores = new float[neighbors.length];
         }
 
         @Override
@@ -644,6 +649,27 @@ public class OnDiskGraphIndex implements ImmutableGraphIndex, AutoCloseable, Acc
                     if (visited.mark(friendOrd)) {
                         float friendSimilarity = scoreFunction.similarityToNeighbor(node, i);
                         neighborProcessor.process(friendOrd, friendSimilarity);
+                    }
+                }
+            } else if (scoreFunction.supportsSimilarityToBatch()) {
+                // Gather the unvisited neighbors first, then score them with one call, then process them in
+                // the original order. Marking before scoring is equivalent: marks only dedupe this list.
+                var it = getNeighborsIterator(level, node);
+                if (it.size() > batchNodes.length) {
+                    batchNodes = new int[it.size()];
+                    batchScores = new float[it.size()];
+                }
+                int count = 0;
+                while (it.hasNext()) {
+                    var friendOrd = it.nextInt();
+                    if (visited.mark(friendOrd)) {
+                        batchNodes[count++] = friendOrd;
+                    }
+                }
+                if (count > 0) {
+                    scoreFunction.similarityToBatch(batchNodes, count, batchScores);
+                    for (int i = 0; i < count; i++) {
+                        neighborProcessor.process(batchNodes[i], batchScores[i]);
                     }
                 }
             } else {
