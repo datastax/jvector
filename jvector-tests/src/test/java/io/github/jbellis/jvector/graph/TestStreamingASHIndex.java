@@ -136,18 +136,19 @@ public class TestStreamingASHIndex extends RandomizedTest {
     }
 
     @Test
-    public void coldIndexScoresExactlyThenSwitchesToASH() {
+    public void coldIndexSearchesExactlyThenSwitchesToASH() {
         var data = vectors(3000, 1);
         var queries = vectors(30, 2);
         var options = new StreamingASHIndex.Options();
         options.coldStartSize = 256;
         var index = StreamingASHIndex.coldStart(new ListRandomAccessVectorValues(data, DIM), DOT, encodedBits(4), 4,
                 builders(), options);
-        // Before the model is fixed, the graph is searched with exact scores; with a beam as large as the graph the
-        // results are the exact top results, deletions excluded.
+        // Before the model is fixed, a search scores every recorded vector exactly: the results are the exact top
+        // results, deletions excluded, and the graph is still empty.
         for (int i = 0; i < 100; i++) index.add(i);
         index.markDeleted(3);
         assertFalse(index.hasModel());
+        assertEquals(0, index.graph().size(0));
         var q = queries.get(0);
         Bits notThree = node -> node != 3;
         int[] expected = exactTop(data, 100, q, 5, notThree);
@@ -157,7 +158,8 @@ public class TestStreamingASHIndex extends RandomizedTest {
             assertEquals(DOT.compare(q, data.get(expected[i])), found[i].score, 0f);
         }
 
-        // The random projection is fixed on the pool once coldStartSize vectors have arrived; the deletion carries over.
+        // The random projection is fixed on the pool once coldStartSize vectors have arrived, and the recorded vectors
+        // join the graph; the deletion carries over.
         for (int i = 100; i < data.size(); i++) index.add(i);
         while (index.isTraining()) Thread.onSpinWait();
         assertTrue(index.hasModel());
@@ -179,7 +181,30 @@ public class TestStreamingASHIndex extends RandomizedTest {
     }
 
     @Test
-    public void aCallersOwnSearcherWorksAcrossTheFirstModelAndAddsReportTheirBytes() {
+    public void aColdIndexHoldsInsertsBeyondTwiceItsThresholdUntilItHasAModel() throws Exception {
+        // Recording is cheap, so many writers could outrun the first model's catch-up and leave every search scoring
+        // all recorded vectors. Inserts beyond twice the threshold wait instead: once every add has returned, the
+        // index has its model and every vector is in the graph.
+        var data = vectors(6000, 31);
+        var options = new StreamingASHIndex.Options();
+        options.coldStartSize = 256;
+        var index = StreamingASHIndex.coldStart(new ListRandomAccessVectorValues(data, DIM), DOT, encodedBits(2), 2,
+                builders(), options);
+        var next = new AtomicInteger();
+        var pool = new ForkJoinPool(8);
+        try {
+            pool.submit(() -> java.util.stream.IntStream.range(0, 8).parallel().forEach(t -> {
+                for (int o; (o = next.getAndIncrement()) < data.size(); ) index.add(o);
+            })).get();
+        } finally {
+            pool.shutdown();
+        }
+        assertTrue(index.hasModel());
+        assertEquals(data.size(), index.graph().size(0));
+    }
+
+    @Test
+    public void aCallerSearchesTheIndexUntilItHasAModelThenItsOwnSearcherAndAddsReportTheirBytes() {
         var data = vectors(3000, 11);
         var q = vectors(1, 12).get(0);
         var options = new StreamingASHIndex.Options();
@@ -189,9 +214,10 @@ public class TestStreamingASHIndex extends RandomizedTest {
         // A caller's searcher (one that may resume), made once and pointed at the index's current graph per search.
         var searcher = new GraphSearcher(index.graph());
 
-        for (int i = 0; i < 100; i++) assertTrue("an exact-phase insert adds a graph node", index.add(i) > 0);
-        searcher.setView(index.graph().getView());
-        var exact = searcher.search(index.searchScoreProviderFor(q), 5, 100, 0f, 0f, Bits.ALL).getNodes();
+        // While cold, an insert only records its ordinal, and the caller searches through the index, exactly.
+        for (int i = 0; i < 100; i++) index.add(i);
+        assertEquals(0, index.graph().size(0));
+        var exact = index.search(q, 5, 100, Bits.ALL).getNodes();
         int[] expected = exactTop(data, 100, q, 5, Bits.ALL);
         for (int i = 0; i < 5; i++) assertEquals(expected[i], exact[i].node);
 
@@ -202,7 +228,7 @@ public class TestStreamingASHIndex extends RandomizedTest {
         assertTrue("an insert after the switch adds a graph node and a code",
                 index.add(last) > index.codes().bytesPerVector());
 
-        // The same searcher, now on the rescored graph with ASH scores reranked exactly: every score is exact.
+        // The caller's searcher, now on the graph with ASH scores reranked exactly: every score is exact.
         searcher.setView(index.graph().getView());
         var found = searcher.search(index.searchScoreProviderFor(q), 10, 40, 0f, 0f, Bits.ALL).getNodes();
         assertEquals(10, found.length);

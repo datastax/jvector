@@ -59,18 +59,22 @@ import java.util.function.Supplier;
  * vectors.</p>
  *
  * <p><b>Models.</b> An index starts with a model the caller passes in, typically one trained on an earlier index
- * over the same kind of data, or cold. A cold index first builds and searches its graph with exact scores read from
- * the caller's vectors, as an uncompressed index does, while it keeps a {@link OrdinalReservoir uniform sample} of
- * ordinals. With {@link Options#train} it trains its first model on that sample once {@link Options#trainAfter}
- * ordinals have been offered; without it, it fixes a random-projection model, which needs no training, after
- * {@link Options#coldStartSize}. It then encodes the vectors it holds with that model, rescores the graph's edges with
- * ASH scores and continues with ASH scoring. Later, with {@link Options#train}, it trains newer models when due (see
+ * over the same kind of data, or cold. A cold index first only records the ordinals it is given, and searches them
+ * by scoring each exactly, while it keeps a {@link OrdinalReservoir uniform sample} of ordinals. With
+ * {@link Options#train} it trains its first model on that sample once {@link Options#trainAfter} ordinals have been
+ * offered; without it, it fixes a random-projection model, which needs no training, after
+ * {@link Options#coldStartSize}. It then encodes the recorded vectors with that model and inserts them into its graph
+ * in parallel, with ASH scores, while new ordinals are still recorded, and continues with ASH scoring once they are
+ * all in. Later, with {@link Options#train}, it trains newer models when due (see
  * {@link Options}) and moves to them: new pages of codes are encoded with the new model at once, and existing pages
  * are re-encoded from the caller's vectors and replaced one at a time (see {@link MutableASHVectors}). The graph is
  * never rebuilt.</p>
  *
- * <p><b>Cost.</b> Every operation's cost is bounded. A cold index's first model is fixed while inserts wait, once:
- * encoding the vectors it holds and rescoring their edges. An insert encodes its vector, inserts it into the graph and
+ * <p><b>Cost.</b> Every operation's cost is bounded. Until a cold index has its first model, an insert only records its
+ * ordinal, and a search scores every recorded vector: at most twice the number that makes the model due, since
+ * inserts beyond that wait for the model. Otherwise inserts wait only while the last few recorded vectors join the
+ * graph, once. Once the index has a
+ * model, an insert encodes its vector, inserts it into the graph and
  * re-encodes at most {@link Options#reencodePerInsert} earlier vectors for a model change in progress, skipping that
  * work rather than waiting when another insert is doing it. Training runs on the library's physical-core pool. A search
  * prepares its query once per model in use (two during a model change) and is never blocked.</p>
@@ -88,8 +92,8 @@ public final class StreamingASHIndex implements Accountable {
     /** Settings for a streaming index; the defaults suit most data. */
     public static final class Options {
         /**
-         * Vectors a cold index scores exactly before it fixes a random-projection model, when it does not train; also
-         * the smallest sample a first model is trained on, below which it uses a random projection.
+         * Vectors a cold index records before it fixes a random-projection model, when it does not train; also the
+         * smallest sample a first model is trained on, below which it uses a random projection.
          */
         public int coldStartSize = 1024;
         /** Ordinals sampled for training; 0 means 20 times the dimension, the sample ASH training uses. */
@@ -140,25 +144,31 @@ public final class StreamingASHIndex implements Accountable {
     private final long trainAfter;
     private final OrdinalReservoir reservoir;
 
-    /** Null until the index has a model; published once, before {@link #exact} is cleared. */
+    /** Null until the index has a model; published once, before {@link #cold} is cleared. */
     private volatile Live live;
-    /** A cold index's graph with exact scores, until the index has a model; then null. */
-    private volatile Exact exact;
-    /** Held by inserts and deletes into the exact graph; held exclusively while the first model is fixed. */
+    /** A cold index's recorded ordinals, until the index has a model; then null. */
+    private volatile Cold cold;
+    /** Held by inserts and deletes while the index is cold; held exclusively while the first model is published. */
     private final ReentrantReadWriteLock firstModel =
             new ReentrantReadWriteLock();
     /** The mean of the vectors added, kept as they arrive; see {@link #mean}. */
     private final VectorMean.Running mean;
-    /** How long fixing the first model held inserts, in nanoseconds; 0 until then. */
+    /** How long publishing the first model held inserts, in nanoseconds; 0 until then. */
     private volatile long firstModelPauseNanos;
+    /** Recorded vectors still to join the graph when inserts are held to add the rest; see {@link #fixFirstModel}. */
+    private static final int CATCH_UP = 256;
+    /** Vectors a cold index records, at most, before inserts wait for its first model: twice the number that makes
+     * the model due, so searching the recorded vectors stays cheap and the model's catch-up finishes. */
+    private final long recordLimit;
+    private final java.util.concurrent.atomic.AtomicLong recorded = new java.util.concurrent.atomic.AtomicLong();
 
-    // Memory allocated outside inserts (the sample, models, and the codes the first model gives the vectors already
-    // held) is reported on the insert path, heap through add() and native through takeNativeBytes(). Guarded by
-    // itself; the charge is re-checked when the models change and on about one insert in 1024.
+    // Memory allocated outside inserts (the sample, models, and the graph nodes and codes the first model gives the
+    // recorded vectors) is reported on the insert path, heap through add() and native through takeNativeBytes().
+    // Guarded by itself; the charge is re-checked when the models change and on about one insert in 1024.
     private final Object charges = new Object();
     private long reportedHeap;
     private long reportedNative;
-    private long firstModelCodeBytes;
+    private long firstModelBytes;
     private volatile boolean chargesDue = true;
     private final java.util.concurrent.atomic.AtomicLong pendingNative = new java.util.concurrent.atomic.AtomicLong();
     /** Insert slots while the first model trains; see {@link Options#insertsWhileTraining}. */
@@ -196,16 +206,16 @@ public final class StreamingASHIndex implements Accountable {
     }
 
     /** The parts of a cold index before its first model. */
-    private static final class Exact {
-        final GraphIndexBuilder builder;
-        final ExplicitThreadLocal<GraphSearcher> searchers;
+    private static final class Cold {
         /** Ordinals added, including those with no vector, which get the all-zero code. */
-        final ThreadSafeGrowableBitSet added =
-                new ThreadSafeGrowableBitSet(1024);
+        final ThreadSafeGrowableBitSet added = new ThreadSafeGrowableBitSet(1024);
+        /** Ordinals deleted while the index is cold. */
+        final ThreadSafeGrowableBitSet deleted = new ThreadSafeGrowableBitSet(1024);
+        /** What {@link #builder} returns until the first model is published: an empty graph. */
+        final GraphIndexBuilder empty;
 
-        Exact(GraphIndexBuilder builder) {
-            this.builder = builder;
-            this.searchers = ExplicitThreadLocal.withInitial(() -> new GraphSearcher(builder.getGraph()));
+        Cold(GraphIndexBuilder empty) {
+            this.empty = empty;
         }
     }
 
@@ -226,6 +236,7 @@ public final class StreamingASHIndex implements Accountable {
         int reservoirSize = options.reservoirSize > 0 ? options.reservoirSize : 20 * dimension;
         this.reservoir = new OrdinalReservoir(reservoirSize);
         this.trainAfter = options.trainAfter > 0 ? options.trainAfter : reservoirSize;
+        this.recordLimit = 2 * Math.max(1, options.train ? trainAfter : options.coldStartSize);
         this.mean = new VectorMean.Running(dimension);
         this.trainingSlots = new Semaphore(options.insertsWhileTraining > 0
                 ? options.insertsWhileTraining
@@ -236,7 +247,7 @@ public final class StreamingASHIndex implements Accountable {
             live = startLive(model);
         } else {
             if (options.coldStartSize < 1) throw new IllegalArgumentException("coldStartSize must be positive");
-            exact = new Exact(builders.apply(BuildScoreProvider.randomAccessScoreProvider(source, similarity)));
+            cold = new Cold(builders.apply(BuildScoreProvider.randomAccessScoreProvider(source, similarity)));
         }
     }
 
@@ -282,36 +293,40 @@ public final class StreamingASHIndex implements Accountable {
      * Adds the caller's vector at {@code ordinal}; see the class comment.
      *
      * @return the memory the insert added to the index: its graph node and its code. Fixing a cold index's first
-     *         model encodes the vectors it holds at once, counted by {@link #ramBytesUsed} but not here.
+     *         model gives the recorded vectors their nodes and codes outside inserts; that memory is reported by later
+     *         calls.
      */
     public long add(int ordinal) {
         Live l = live;
+        if (l == null && recorded.get() >= recordLimit) {
+            // A cold index that has recorded its limit waits for its first model, retrying it if a fix failed.
+            while ((l = live) == null) {
+                afterColdInsert();
+                LockSupport.parkNanos(100_000);
+            }
+        }
         if (l == null) {
             // While the first model trains, inserts take turns so the training gets the CPU.
             boolean slot = training.get();
             if (slot) trainingSlots.acquireUninterruptibly();
-            long bytes = 0;
             var lock = firstModel.readLock();
             lock.lock();
             try {
                 l = live;
                 if (l == null) {
-                    Exact e = exact;
-                    e.added.set(ordinal);
                     reservoir.offer(ordinal);
                     VectorFloat<?> v = vectors.get().getVector(ordinal);
-                    if (v != null) {
-                        mean.accept(v);
-                        bytes = e.builder.addGraphNode(ordinal, v);
-                    }
+                    if (v != null) mean.accept(v);
+                    cold.added.set(ordinal); // last, so a search that finds the ordinal can read its vector
+                    recorded.incrementAndGet();
                 }
             } finally {
                 lock.unlock();
                 if (slot) trainingSlots.release();
             }
             if (l == null) {
-                afterExactInsert();
-                return bytes + chargeOutsideInserts();
+                afterColdInsert();
+                return chargeOutsideInserts();
             }
         }
         long bytes = insert(l, ordinal);
@@ -329,7 +344,7 @@ public final class StreamingASHIndex implements Accountable {
         synchronized (charges) {
             chargesDue = false;
             long heap = RamUsageEstimator.shallowSizeOfInstance(StreamingASHIndex.class) + reservoir.ramBytesUsed()
-                    + firstModelCodeBytes;
+                    + firstModelBytes;
             long nativeBytes = 0;
             Live l = live;
             if (l != null) {
@@ -354,7 +369,7 @@ public final class StreamingASHIndex implements Accountable {
     }
 
     /** Fixes the first model on the physical-core pool once it is due. */
-    private void afterExactInsert() {
+    private void afterColdInsert() {
         long due = options.train ? trainAfter : options.coldStartSize;
         if (reservoir.offered() < due || !training.compareAndSet(false, true)) return;
         try {
@@ -373,8 +388,9 @@ public final class StreamingASHIndex implements Accountable {
 
     /**
      * Trains (or, without {@link Options#train} or on a small sample, fixes a random projection for) the first model,
-     * then, while inserts wait, encodes every vector the index holds with it and rescores the graph's edges with
-     * ASH scores. Searches keep using the exact graph until the index publishes the rescored one.
+     * then encodes the recorded vectors with it and inserts them into a new graph with ASH scores, in parallel, while
+     * inserts keep recording. Once few are left, inserts wait while the rest join and the index publishes its graph;
+     * until then searches score the recorded vectors exactly.
      */
     private void fixFirstModel() {
         if (live != null) return;
@@ -383,35 +399,29 @@ public final class StreamingASHIndex implements Accountable {
         boolean trained = options.train && sample.length >= options.coldStartSize;
         AsymmetricHashing model = trainNextModel(trained ? options.optimizer : AsymmetricHashing.RANDOM, null);
         configureQueries(model, null);
+        Cold c = cold;
+        Live next = startLive(model);
+        var inserted = new ThreadSafeGrowableBitSet(Math.max(1024, c.added.length()));
+        var bytes = new java.util.concurrent.atomic.AtomicLong();
+        // Catch up with the recorded vectors while inserts continue; each round takes what arrived during the last.
+        for (int round = 0; round < 8 && insertRecorded(c, next, inserted, bytes) > CATCH_UP; round++) { }
         var lock = firstModel.writeLock();
         lock.lock();
         long pauseStart = System.nanoTime();
         try {
             if (live != null) return;
-            Exact e = exact;
-            var codes = new MutableASHVectors(model);
-            var added = e.added;
-            int upper = added.length();
-            PhysicalCoreExecutor.pool().submit(() -> java.util.stream.IntStream.range(0, upper).parallel()
-                    .filter(added::get).forEach(ordinal -> {
-                        VectorFloat<?> v = vectors.get().getVector(ordinal);
-                        if (v == null) codes.setZero(ordinal);
-                        else codes.encodeAndSet(ordinal, v);
-                    })).join();
-            var scores = codes.buildScoreProvider(source);
-            var builder = GraphIndexBuilder.rescore(e.builder, scores);
-            var deleted = ((OnHeapGraphIndex) e.builder.getGraph()).getDeletedNodes();
-            for (int i = deleted.nextSetBit(0); i != DocIdSetIterator.NO_MORE_DOCS;
-                 i = i + 1 < deleted.length() ? deleted.nextSetBit(i + 1) : DocIdSetIterator.NO_MORE_DOCS)
-                builder.markNodeDeleted(i);
-            trainedAt = codes.count();
+            insertRecorded(c, next, inserted, bytes);
+            for (int i = c.deleted.nextSetBit(0); i != DocIdSetIterator.NO_MORE_DOCS;
+                 i = i + 1 < c.deleted.length() ? c.deleted.nextSetBit(i + 1) : DocIdSetIterator.NO_MORE_DOCS)
+                next.builder.markNodeDeleted(i);
+            trainedAt = next.codes.count();
             provisional = options.optimizer != AsymmetricHashing.RANDOM
                     && (!trained || options.optimizer != model.optimizer);
             synchronized (charges) {
-                firstModelCodeBytes = (long) added.cardinality() * codes.bytesPerVector();
+                firstModelBytes = bytes.get();
             }
-            live = new Live(codes, scores, builder);
-            exact = null;
+            live = next;
+            cold = null;
             chargesDue = true;
             firstModelPauseNanos = System.nanoTime() - pauseStart;
         } finally {
@@ -419,14 +429,36 @@ public final class StreamingASHIndex implements Accountable {
         }
     }
 
+    /**
+     * Encodes and inserts, in parallel on the physical-core pool, the recorded ordinals not yet in {@code inserted}.
+     *
+     * @return how many it inserted
+     */
+    private int insertRecorded(Cold c, Live l, ThreadSafeGrowableBitSet inserted,
+                               java.util.concurrent.atomic.AtomicLong bytes) {
+        var added = c.added;
+        int upper = added.length();
+        int[] todo = java.util.stream.IntStream.range(0, upper).filter(o -> added.get(o) && !inserted.get(o)).toArray();
+        if (todo.length == 0) return 0;
+        PhysicalCoreExecutor.pool().submit(() -> java.util.Arrays.stream(todo).parallel().forEach(ordinal -> {
+            bytes.addAndGet(place(l, ordinal));
+            inserted.set(ordinal);
+        })).join();
+        return todo.length;
+    }
+
     private long insert(Live l, int ordinal) {
         VectorFloat<?> v = vectors.get().getVector(ordinal);
-        if (v == null) l.codes.setZero(ordinal);
-        else {
-            mean.accept(v);
-            l.codes.encodeAndSet(ordinal, v);
-        }
+        if (v != null) mean.accept(v);
         reservoir.offer(ordinal);
+        return place(l, ordinal);
+    }
+
+    /** Encodes the vector at {@code ordinal} and inserts it into the graph; returns the memory both added. */
+    private long place(Live l, int ordinal) {
+        VectorFloat<?> v = vectors.get().getVector(ordinal);
+        if (v == null) l.codes.setZero(ordinal);
+        else l.codes.encodeAndSet(ordinal, v);
         return l.builder.addGraphNode(ordinal, l.scores.searchProviderFor(ordinal)) + l.codes.bytesPerVector();
     }
 
@@ -450,7 +482,7 @@ public final class StreamingASHIndex implements Accountable {
             try {
                 l = live;
                 if (l == null) {
-                    exact.builder.markNodeDeleted(ordinal);
+                    cold.deleted.set(ordinal);
                     return;
                 }
             } finally {
@@ -699,35 +731,56 @@ public final class StreamingASHIndex implements Accountable {
 
     /**
      * The {@code topK} nearest vectors to {@code query}: an ASH graph search for {@code rerankK} candidates,
-     * reranked with exact scores from the caller's vectors. Before a cold index has its model, a graph search with
-     * exact scores.
+     * reranked with exact scores from the caller's vectors. Before a cold index has its model, every recorded vector
+     * scored exactly, so the results are exact; callers that search the graph themselves use this until
+     * {@link #hasModel}.
      */
     public SearchResult search(VectorFloat<?> query, int topK, int rerankK, Bits acceptOrds) {
         Live l = live;
         if (l == null) {
-            Exact e = exact;
-            if (e != null) {
-                var searcher = e.searchers.get();
-                searcher.setView(e.builder.getGraph().getView());
-                return searcher.search(DefaultSearchScoreProvider.exact(query, similarity, vectors.get()), topK,
-                        rerankK, 0f, 0f, acceptOrds);
-            }
-            l = live; // published before the exact graph is dropped
+            Cold c = cold;
+            if (c != null) return searchRecorded(c, query, topK, acceptOrds);
+            l = live; // published before the recorded ordinals are dropped
         }
         return search(l, l.codes.precomputedScoreFunctionFor(query, similarity), query, topK, rerankK, acceptOrds);
     }
 
+    /** The {@code topK} best of a cold index's recorded vectors, each scored exactly. */
+    private SearchResult searchRecorded(Cold c, VectorFloat<?> query, int topK, Bits acceptOrds) {
+        var source = vectors.get();
+        var best = new java.util.PriorityQueue<SearchResult.NodeScore>(
+                java.util.Comparator.comparingDouble((SearchResult.NodeScore n) -> n.score));
+        var added = c.added;
+        int scored = 0;
+        for (int o = added.nextSetBit(0); o != DocIdSetIterator.NO_MORE_DOCS;
+             o = o + 1 < added.length() ? added.nextSetBit(o + 1) : DocIdSetIterator.NO_MORE_DOCS) {
+            if (c.deleted.get(o) || !acceptOrds.get(o)) continue;
+            VectorFloat<?> v = source.getVector(o);
+            if (v == null) continue;
+            float score = similarity.compare(query, v);
+            scored++;
+            if (best.size() < topK) best.add(new SearchResult.NodeScore(o, score));
+            else if (score > best.peek().score) {
+                best.poll();
+                best.add(new SearchResult.NodeScore(o, score));
+            }
+        }
+        var nodes = new SearchResult.NodeScore[best.size()];
+        for (int i = nodes.length - 1; i >= 0; i--) nodes[i] = best.poll();
+        return new SearchResult(nodes, scored, 0, 0, 0, Float.POSITIVE_INFINITY);
+    }
+
     /**
      * The scores for searching this index with a searcher of the caller's own, such as one that resumes searches:
-     * exact scores before a cold index has its model, then ASH scores reranked with exact scores from the caller's
-     * vectors. Search the current {@link #graph}; either may be read first, as both kinds of scores cover every node
-     * of either graph.
+     * ASH scores reranked with exact scores from the caller's vectors. Search the current {@link #graph}. Before a
+     * cold index has its model its graph is empty, and these are exact scores; search with {@link #search} until
+     * {@link #hasModel}.
      */
     public SearchScoreProvider searchScoreProviderFor(VectorFloat<?> query) {
         Live l = live;
         if (l == null) {
-            if (exact != null) return DefaultSearchScoreProvider.exact(query, similarity, vectors.get());
-            l = live; // published before the exact graph is dropped
+            if (cold != null) return DefaultSearchScoreProvider.exact(query, similarity, vectors.get());
+            l = live; // published before the recorded ordinals are dropped
         }
         return new DefaultSearchScoreProvider(l.codes.precomputedScoreFunctionFor(query, similarity),
                 vectors.get().rerankerFor(query, similarity));
@@ -779,7 +832,7 @@ public final class StreamingASHIndex implements Accountable {
         return l == null ? null : l.codes;
     }
 
-    /** The graph; before a cold index has its model, the graph with exact scores. */
+    /** The graph; empty until a cold index has its model. */
     public OnHeapGraphIndex graph() {
         return (OnHeapGraphIndex) builder().getGraph();
     }
@@ -788,8 +841,8 @@ public final class StreamingASHIndex implements Accountable {
     public GraphIndexBuilder builder() {
         Live l = live;
         if (l != null) return l.builder;
-        Exact e = exact;
-        return e != null ? e.builder : live.builder;
+        Cold c = cold;
+        return c != null ? c.empty : live.builder;
     }
 
     /** The sampled ordinals training uses. */
@@ -803,13 +856,16 @@ public final class StreamingASHIndex implements Accountable {
         return heapBytesUsed() + nativeBytesUsed();
     }
 
-    /** The part of {@link #ramBytesUsed} on the Java heap: graph, codes, models' heap and sample. */
+    /**
+     * The part of {@link #ramBytesUsed} on the Java heap: graph, codes, models' heap and sample; for a cold index, its
+     * record of ordinals.
+     */
     public long heapBytesUsed() {
         long bytes = RamUsageEstimator.shallowSizeOfInstance(StreamingASHIndex.class) + reservoir.ramBytesUsed();
         Live l = live;
         if (l == null) {
-            Exact e = exact;
-            if (e != null) return bytes + e.builder.getGraph().ramBytesUsed();
+            Cold c = cold;
+            if (c != null) return bytes + (c.added.length() + c.deleted.length()) / 8 + c.empty.getGraph().ramBytesUsed();
             l = live;
         }
         return bytes + l.codes.ramBytesUsed() - l.codes.nativeBytesUsed() + l.builder.getGraph().ramBytesUsed();
