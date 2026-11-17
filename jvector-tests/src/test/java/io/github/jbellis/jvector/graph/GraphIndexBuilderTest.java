@@ -20,6 +20,7 @@ import com.carrotsearch.randomizedtesting.annotations.ThreadLeakScope;
 import io.github.jbellis.jvector.LuceneTestCase;
 import io.github.jbellis.jvector.TestUtil;
 import io.github.jbellis.jvector.disk.SimpleMappedReader;
+import io.github.jbellis.jvector.graph.disk.OnDiskGraphIndex;
 import io.github.jbellis.jvector.graph.similarity.BuildScoreProvider;
 import io.github.jbellis.jvector.util.Bits;
 import io.github.jbellis.jvector.quantization.PQVectors;
@@ -240,6 +241,32 @@ public class GraphIndexBuilderTest extends LuceneTestCase {
         assertEquals(ravv.size(), builder.graph.size(0));
         assertNull(builder.graph.entryNode());
         assertGraphEquals(graph, builder.graph);
+    }
+
+    /**
+     * A graph with no nodes reports level 0 and returns no results, both in memory and after a round trip
+     * through disk, rather than failing on its absent entry node.
+     */
+    @Test
+    public void testSearchEmptyGraph() throws IOException {
+        int dimension = randomIntBetween(2, 32);
+        var ravv = MockVectorValues.empty(dimension);
+        var query = TestUtil.randomVector(getRandom(), dimension);
+
+        try (var builder = new GraphIndexBuilder(ravv, VectorSimilarityFunction.COSINE, 2, 10, 1.0f, 1.0f, true)) {
+            var graph = builder.build(ravv);
+            assertEquals(0, graph.getMaxLevel());
+            assertEquals(0, GraphSearcher.search(query, 10, ravv, VectorSimilarityFunction.COSINE, graph, Bits.ALL).getNodes().length);
+
+            var indexPath = testDirectory.resolve("empty_graph_search");
+            graph.writeTo(indexPath, ravv);
+            try (var readerSupplier = new SimpleMappedReader.Supplier(indexPath);
+                 var onDiskGraph = OnDiskGraphIndex.load(readerSupplier);
+                 var searcher = onDiskGraph.searcher()) {
+                assertEquals(0, onDiskGraph.getMaxLevel());
+                assertEquals(0, searcher.search(query, 10, 10, VectorSimilarityFunction.COSINE, Bits.ALL).getNodes().length);
+            }
+        }
     }
 
     /**

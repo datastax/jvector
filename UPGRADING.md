@@ -1,5 +1,28 @@
 # Upgrading from 4.0.x to 4.1.x
 
+## Critical API changes
+
+If you only read one thing, read this!
+
+- **`ImmutableGraphIndex` has been renamed to `GraphIndex`**, which now extends the new generic `Index` interface.
+  There is no deprecated alias: code that names `ImmutableGraphIndex` no longer compiles. Replace the name:
+
+  | Before | Now |
+  |---|---|
+  | `ImmutableGraphIndex` | `GraphIndex` |
+  | `ImmutableGraphIndex.View`, `.ScoringView`, `.NodeAtLevel`, `.IntMarker`, `.NeighborProcessor` | `GraphIndex.View`, `.ScoringView`, `.NodeAtLevel`, `.IntMarker`, `.NeighborProcessor` |
+  | `ImmutableGraphIndex.ENTRY_NODE_ABSENT` | `GraphIndex.ENTRY_NODE_ABSENT` |
+  | `ImmutableGraphIndex.prettyPrint(graph)` | `GraphIndex.prettyPrint(graph)` |
+
+  The rename is mechanical: the methods and nested types are unchanged.
+- **`GraphIndexBuilder.build(RandomAccessVectorValues)` and `getGraph()` now return `PersistableGraphIndex`**, a
+  `GraphIndex` that can also be written to disk (see below), and `buildAndMergeNewNodes(...)` returns `GraphIndex`.
+  Code that assigns these results to `GraphIndex` compiles unchanged.
+- **Recompile against 4.1.** Besides the rename, the nested types are now members of `GraphIndex`, and many
+  signatures that took or returned `ImmutableGraphIndex` (for example `new GraphSearcher(graph)`,
+  `GraphSearcher.getView()`, `OnDiskGraphIndex.write`, and the graph writer builders) now use `GraphIndex`.
+  Classes compiled against 4.0.x will fail to link.
+
 ## On-disk format version 7
 - Version 7 of the on-disk graph format adds two features: fused ASH (`FeatureId.FUSED_ASH`), ASH codes
   stored in the graph alongside each node's neighbors, and page alignment (`FeatureId.PAGE_ALIGNMENT`),
@@ -35,34 +58,6 @@
   [Building and serving larger-than-memory indexes](docs/larger-than-memory-indexes.md).
 - JVector sets the native BLAS thread count for ASH training: one thread by default, or the size of the
   executor passed to `AsymmetricHashing.initialize(..., ForkJoinPool executor)`.
-
-# Upgrading from 4.0.2 to 4.0.3
-
-## Critical API changes
-
-If you only read one thing, read this!
-
-- **`ImmutableGraphIndex` has been renamed to `GraphIndex`**, which now extends the new generic `Index` interface.
-  There is no deprecated alias: code that names `ImmutableGraphIndex` no longer compiles. Replace the name:
-
-  | Before | Now |
-  |---|---|
-  | `ImmutableGraphIndex` | `GraphIndex` |
-  | `ImmutableGraphIndex.View`, `.ScoringView`, `.NodeAtLevel`, `.IntMarker`, `.NeighborProcessor` | `GraphIndex.View`, `.ScoringView`, `.NodeAtLevel`, `.IntMarker`, `.NeighborProcessor` |
-  | `ImmutableGraphIndex.ENTRY_NODE_ABSENT` | `GraphIndex.ENTRY_NODE_ABSENT` |
-  | `ImmutableGraphIndex.prettyPrint(graph)` | `GraphIndex.prettyPrint(graph)` |
-
-  The rename is mechanical: the methods and nested types are unchanged.
-- **`GraphIndexBuilder.build(RandomAccessVectorValues)` and `getGraph()` now return `PersistableGraphIndex`**, a
-  `GraphIndex` that can also be written to disk (see below), and `buildAndMergeNewNodes(...)` returns `GraphIndex`.
-  Code that assigns these results to `GraphIndex` compiles unchanged.
-- **Recompile against 4.0.3.** Besides the rename, the nested types are now members of `GraphIndex`, and many
-  signatures that took or returned `ImmutableGraphIndex` (for example `new GraphSearcher(graph)`,
-  `GraphSearcher.getView()`, `OnDiskGraphIndex.write`, and the graph writer builders) now use `GraphIndex`.
-  Classes compiled against 4.0.2 will fail to link.
-
-## New features
-
 - **A generic index API.** `io.github.jbellis.jvector.api.Index` is a backing-agnostic handle (`searcher()`, `ramBytesUsed()`, `close()`), and
   `IndexSearcher` is the matching searcher type. `GraphIndex` implements `Index`, and `GraphIndex.searcher()`
   returns a `GraphSearcher` with no cast. Code that holds only an `Index` recovers the concrete type with
@@ -88,6 +83,12 @@ If you only read one thing, read this!
     1536), `withPqGlobalCentering(boolean)` whether to center the vectors first (default `false`), and
     `withPqAnisotropicThreshold(float)` the anisotropic weighting (default `-1.0`, unweighted). The cluster count
     (256) still comes from `GraphIndexBuilderConfig`.
+    `withCompressionType(CompressionType.ASH)` builds with ASH scores instead. It supports
+    `VectorSimilarityFunction.DOT_PRODUCT` only, and any other similarity function is rejected when the compression
+    type is set. The builder trains ASH with ITQ around a single landmark. `withAshProjectedDimensions(n)` sets the
+    projected dimension (default: the vector dimension), and `withAshBitsPerDimension(b)` the bits per projected
+    dimension (default `AsymmetricHashing.DEFAULT_BITS_PER_DIMENSION`, 2). `getCompressedVectors()` then returns
+    `ASHVectors`.
   - `Indexes.hnswBuilder(BuildScoreProvider, dimension)` scores with your own provider, for callers that stream
     vectors in or already have a provider. It has no vectors of its own, so populate it with
     `populateGraph(ravv)` or `addGraphNode`.
@@ -126,7 +127,7 @@ If you only read one thing, read this!
 - **Shortcuts for the simplest on-disk index.** `PersistableGraphIndex.writeTo(path, vectors)` writes a graph with
   its vectors stored inline. `GraphSearcher.search(query, topK, rerankK, similarityFunction, acceptOrds)` searches a
   graph that stores its vectors (an `OnDiskGraphIndex` with inline or NVQ vectors) without building a score
-  provider: with fused PQ it traverses with the PQ codes and reranks the best `rerankK` with the stored vectors,
+  provider: with fused PQ or fused ASH it traverses with those codes and reranks the best `rerankK` with the stored vectors,
   otherwise it scores with the stored vectors. For the same `rerankK` it returns the same results as building that
   score provider by hand. On an in-memory graph it throws `IllegalStateException`. `GraphIndex.ScoringView.hasApproximateScores()`
   (default `false`) reports whether a view supports `approximateScoreFunctionFor`.
@@ -157,7 +158,7 @@ If you only read one thing, read this!
 |---|---|
 | `new GraphIndexBuilder(ravv, vsf, M, beamWidth, overflow, alpha, addHierarchy).build(ravv)` | `Indexes.hnswBuilder(ravv, vsf).withMaxDegree(M).withBeamWidth(beamWidth).withNeighborOverflow(overflow).withAlpha(alpha).withAddHierarchy(addHierarchy).buildAndPopulate()`, omitting any setting that matches the default |
 | constructors taking a `BuildScoreProvider` and dimension | `Indexes.hnswBuilder(bsp, dimension)` |
-| computing PQ or BQ vectors yourself to build with compressed scores | `Indexes.hnswBuilder(ravv, vsf).withCompressionType(CompressionType.PQ)` (or `BQ`) |
+| computing PQ, BQ or ASH vectors yourself to build with compressed scores | `Indexes.hnswBuilder(ravv, vsf).withCompressionType(CompressionType.PQ)` (or `BQ`, or `ASH` with `DOT_PRODUCT`) |
 | `List<Integer>` max degrees | `withMaxDegrees(list)` |
 | `refineFinalGraph`, SIMD and parallel executor arguments | `withRefineFinalGraph`, `withBuildExecutor` (the SIMD executor), `withMaintenanceExecutor` (the parallel executor) |
 | `addGraphNode`, `markNodeDeleted`, `removeDeletedNodes`, `cleanup`, `insertsInProgress` | the same methods on `HnswIndexBuilder`, after `build()` |
@@ -204,6 +205,9 @@ Differences to be aware of:
   an open file. An error opening the file (for example, a missing directory) is now thrown by `build()`.
 - When `GraphIndexBuilderConfig` (JMX) selects PQ or BQ build compression for `GraphIndexBuilder`, the vectors are
   now encoded on `PhysicalCoreExecutor.pool()` rather than `ForkJoinPool.commonPool()`. Results are unchanged.
+  The JMX build compression type also accepts `ASH`, with the same training as `HnswIndexBuilder`'s defaults
+  (projected to the vector dimension, 2 bits per dimension). It supports `DOT_PRODUCT` only. With any other
+  similarity function, the build fails after training.
 
 ## Other changes to public classes
 
@@ -214,6 +218,11 @@ Differences to be aware of:
   their own type, so writer-specific options can follow them in a chain.
 - `@Experimental` is now `@Documented`, so it appears in the generated Javadoc.
 - `GraphIndex` extends `Accountable`, as `ImmutableGraphIndex` did.
+- `CompressionType` has a new constant, `ASH`. A `switch` over `CompressionType` without a default branch needs a
+  case for it.
+- `GraphIndexFormat` has a new method, `supportsFusedFeatures()` (true from version 6). Implementations outside
+  JVector must add it.
+- `AsymmetricHashing.DEFAULT_BITS_PER_DIMENSION` is now public.
 - Writer documentation corrected, with no behavior change: `withParallelWorkerThreads` and
   `withParallelDirectBuffers` apply only to the parallel writer, and `RandomAccessOnDiskGraphIndexWriter.Builder`
   (which picks a writer from the JMX configuration) ignores them when it picks the single-threaded one. A worker

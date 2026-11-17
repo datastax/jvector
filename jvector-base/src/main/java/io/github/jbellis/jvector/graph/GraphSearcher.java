@@ -186,7 +186,7 @@ public class GraphSearcher implements IndexSearcher {
 
     /**
      * Searches for the {@code topK} nodes nearest {@code queryVector}, scoring with the vectors the graph
-     * itself stores, so no score provider has to be built. For a graph with fused PQ codes, the search
+     * itself stores, so no score provider has to be built. For a graph with fused PQ or fused ASH codes, the search
      * traverses with those and reranks the best {@code rerankK} candidates with the stored vectors (inline
      * or NVQ); otherwise every candidate is scored with the stored vectors, and {@code rerankK} only widens
      * the search. To choose the scoring yourself, use
