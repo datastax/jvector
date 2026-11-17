@@ -21,6 +21,7 @@ import io.github.jbellis.jvector.example.util.CompressorParameters;
 
 import java.util.Collections;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.function.Function;
 
@@ -33,8 +34,10 @@ import java.util.function.Function;
  * its own lines lets concurrent changes merge without touching shared signatures.</p>
  */
 public final class BuildConfig {
-    /** Maximum out-degree of the graph. */
+    /** Maximum out-degree of the graph's base layer, and of every layer unless {@link #upperLayerDegree} is set. */
     public final int M;
+    /** Maximum out-degree of the layers above the base layer, or null for {@link #M} on every layer. */
+    public final Integer upperLayerDegree;
     public final int efConstruction;
     public final float neighborOverflow;
     /** Diversity pruning factor; Grid has always used 1.2. */
@@ -52,9 +55,16 @@ public final class BuildConfig {
     public final String ashConstructionMode;
     /** Construction threads for training, encoding, insertion and writing; null for the platform default. */
     public final Integer workers;
+    /** Whether the base vectors are inserted in arrival order into a streaming index; see {@link StreamingBuild}. */
+    public final boolean streaming;
+    /** Streaming builds: vectors scored exactly before a cold index fixes a random projection; 0 to start with a model. */
+    public final Integer coldStartSize;
+    /** Streaming builds: whether the index trains a model while vectors arrive and moves to it. */
+    public final Boolean trainWhileStreaming;
 
     private BuildConfig(Builder b) {
         this.M = b.M;
+        this.upperLayerDegree = b.upperLayerDegree;
         this.efConstruction = b.efConstruction;
         this.neighborOverflow = b.neighborOverflow;
         this.alpha = b.alpha;
@@ -67,6 +77,19 @@ public final class BuildConfig {
         this.rerankingType = b.rerankingType;
         this.ashConstructionMode = b.ashConstructionMode;
         this.workers = b.workers;
+        this.streaming = b.streaming;
+        this.coldStartSize = b.coldStartSize;
+        this.trainWhileStreaming = b.trainWhileStreaming;
+    }
+
+    /** The graph builder's per-layer maximum degrees: the base layer's first, then the upper layers'. */
+    public List<Integer> layerDegrees() {
+        return upperLayerDegree == null ? List.of(M) : List.of(M, upperLayerDegree);
+    }
+
+    /** True for indexes searched in memory, built in one pass or streamed. */
+    public boolean inMemoryIndex() {
+        return "inMemory".equals(indexType);
     }
 
     /**
@@ -80,6 +103,7 @@ public final class BuildConfig {
     public Map<String, Object> reportedParameters() {
         Map<String, Object> params = new LinkedHashMap<>();
         params.put("M", M);
+        if (upperLayerDegree != null) params.put("upperLayerDegree", upperLayerDegree);
         params.put("efConstruction", efConstruction);
         params.put("neighborOverflow", neighborOverflow);
         params.put("addHierarchy", addHierarchy);
@@ -90,6 +114,9 @@ public final class BuildConfig {
         if (rerankingType != null) params.put("reranking", rerankingType);
         if (ashConstructionMode != null) params.put("ashConstruction", ashConstructionMode);
         if (workers != null) params.put("constructionWorkers", workers);
+        if (streaming) params.put("streaming", true);
+        if (coldStartSize != null) params.put("coldStartSize", coldStartSize);
+        if (trainWhileStreaming != null) params.put("trainWhileStreaming", trainWhileStreaming);
         return Collections.unmodifiableMap(params);
     }
 
@@ -99,6 +126,7 @@ public final class BuildConfig {
 
     public static final class Builder {
         private Integer M;
+        private Integer upperLayerDegree;
         private Integer efConstruction;
         private Float neighborOverflow;
         private float alpha = 1.2f;
@@ -111,10 +139,14 @@ public final class BuildConfig {
         private String rerankingType;
         private String ashConstructionMode;
         private Integer workers;
+        private boolean streaming;
+        private Integer coldStartSize;
+        private Boolean trainWhileStreaming;
 
         private Builder() {}
 
         public Builder M(int M) { this.M = M; return this; }
+        public Builder upperLayerDegree(Integer degree) { this.upperLayerDegree = degree; return this; }
         public Builder efConstruction(int efConstruction) { this.efConstruction = efConstruction; return this; }
         public Builder neighborOverflow(float neighborOverflow) { this.neighborOverflow = neighborOverflow; return this; }
         public Builder alpha(float alpha) { this.alpha = alpha; return this; }
@@ -127,6 +159,9 @@ public final class BuildConfig {
         public Builder rerankingType(String rerankingType) { this.rerankingType = rerankingType; return this; }
         public Builder ashConstructionMode(String mode) { this.ashConstructionMode = mode; return this; }
         public Builder workers(Integer workers) { this.workers = workers; return this; }
+        public Builder streaming(boolean streaming) { this.streaming = streaming; return this; }
+        public Builder coldStartSize(Integer coldStartSize) { this.coldStartSize = coldStartSize; return this; }
+        public Builder trainWhileStreaming(Boolean train) { this.trainWhileStreaming = train; return this; }
 
         /** @throws IllegalStateException if a parameter without a default was not set */
         public BuildConfig build() {

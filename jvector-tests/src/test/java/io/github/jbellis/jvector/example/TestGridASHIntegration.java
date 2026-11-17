@@ -219,6 +219,127 @@ public class TestGridASHIntegration {
         }
     }
 
+    @Test(timeout = 120_000)
+    public void upperLayerDegreeSweepsTheUpperLayersDegree() throws Exception {
+        // outDegree stays the base layer's degree; each upperLayerDegree is one build with that upper-layer degree
+        var data = schema3Data();
+        var config = schema3Config("onDisk", "parallel", false, "None", "- type: None");
+        config.construction.addHierarchy = List.of(true);
+        config.construction.upperLayerDegree = List.of(4, 8);
+        var spec = GridSpec.fromConfig(config);
+        var degrees = spec.buildPoints().stream().map(BuildConfig::layerDegrees).collect(java.util.stream.Collectors.toList());
+        assertEquals(List.of(List.of(8, 4), List.of(8, 8)), degrees);
+        var artifacts = RunArtifacts.open(csvRunConfig(), List.of(config));
+        Grid.run(data, spec, artifacts);
+        assertEquals(3, Files.readAllLines(artifacts.experimentsWriter().path()).size());
+    }
+
+    @Test
+    public void schema3AcceptsAnAshTrainingWindow() throws Exception {
+        var data = schema3Data();
+        String ash = "- type: ASH\n  parameters: {optimizer: RANDOM, encodedBits: 72, bitsPerDimension: 2,"
+                + " trainingStart: 8, trainingCount: 64}";
+        var config = schema3Config("inMemory", "parallel", false, "FP32",
+                ash.replace("  parameters:", "  scoring: symmetric\n  parameters:"), ash);
+        var build = config.construction.getCompressorParameters().get(0).apply(data);
+        var search = config.search.getCompressorParameters().get(0).apply(data);
+        assertTrue(build.idStringFor(data), build.idStringFor(data).endsWith("_train8+64"));
+        assertEquals(build.idStringFor(data), search.idStringFor(data));
+    }
+
+    @Test(timeout = 120_000)
+    public void streamingBuildsWarmAndColdAndSearchesWithItsOwnCodes() throws Exception {
+        var data = schema3Data();
+        String ash = "- type: ASH\n  parameters: {optimizer: ITQ, encodedBits: 72, bitsPerDimension: 2}";
+        var config = schema3Config("streaming", null, false, "FP32",
+                ash.replace("  parameters:", "  scoring: symmetric\n  parameters:"), ash);
+        var params = config.construction.getCompressorParameters().get(0).apply(data);
+        var out = new java.io.ByteArrayOutputStream();
+        var console = System.out;
+        System.setOut(new java.io.PrintStream(out, true));
+        try {
+            var artifacts = RunArtifacts.open(csvRunConfig(), List.of(config));
+            Grid.run(data, GridSpec.fromConfig(config), artifacts);
+            var lines = Files.readAllLines(artifacts.experimentsWriter().path());
+            assertEquals("A warm and a cold build, one search each", 3, lines.size());
+        } finally {
+            System.setOut(console);
+            Files.deleteIfExists(Path.of("compressor_cache").resolve(params.idStringFor(data)));
+        }
+        String text = out.toString();
+        assertTrue(text, text.contains("streamed 288 vectors"));
+        assertTrue(text, text.contains("an inherited model"));
+        assertTrue(text, text.contains("a cold-start (after 64 vectors) model"));
+        assertEquals(text, 2, text.split(java.util.regex.Pattern.quote("codes the index built as vectors arrived ["), -1).length - 1);
+    }
+
+    @Test
+    public void savedInMemoryIndexesReloadIntoMemoryWithTheirCodes() throws Exception {
+        var data = schema3Data();
+        var build = BuildConfig.builder().M(8).efConstruction(32).neighborOverflow(1.2f).alpha(1.2f)
+                .addHierarchy(true).refineFinalGraph(false).indexType("inMemory").build();
+        var ash = AsymmetricHashing.initialize(data.getBaseRavv(), AsymmetricHashing.ITQ, 72, 1, 2);
+        var codes = ash.encodeAll(data.getBaseRavv());
+        var cache = OnDiskGraphIndexCache.initialize(temporary.newFolder().toPath());
+        var builds = new java.util.concurrent.atomic.AtomicInteger();
+        IndexBuildStrategy fresh = (featureSets, b, ds) -> {
+            builds.incrementAndGet();
+            return new IndexBuildStrategy.BuiltIndexes(Map.of(Set.of(), GraphBuilderFactory.buildGraph(ds, b, codes)),
+                    Map.of(), 1.0);
+        };
+        var first = new SavedInMemoryBuild(cache, "test", () -> fresh, () -> codes, false)
+                .build(List.of(Set.of()), build, data);
+        var second = new SavedInMemoryBuild(cache, "test", () -> fresh, () -> codes, false)
+                .build(List.of(Set.of()), build, data);
+        assertEquals("the second run reloads instead of building", 1, builds.get());
+        assertNull(second.buildTimeS);
+        var built = first.indexes.get(Set.of());
+        var loaded = second.indexes.get(Set.of());
+        assertTrue(loaded instanceof io.github.jbellis.jvector.graph.OnHeapGraphIndex);
+        assertEquals(built.getMaxLevel(), loaded.getMaxLevel());
+        try (var a = built.getView(); var b = loaded.getView()) {
+            assertEquals(a.entryNode(), b.entryNode());
+            for (int level = 0; level <= built.getMaxLevel(); level++) {
+                for (int node = 0; node < data.getBaseRavv().size(); node++) {
+                    if (((io.github.jbellis.jvector.graph.OnHeapGraphIndex) built).getMaxLevelForNode(node) < level) continue;
+                    var x = a.getNeighborsIterator(level, node);
+                    var y = b.getNeighborsIterator(level, node);
+                    assertEquals(x.size(), y.size());
+                    while (x.hasNext()) assertEquals(x.nextInt(), y.nextInt());
+                }
+            }
+        }
+        var stored = second.storedCodes.get(Set.of());
+        assertFalse(stored.builtWithIndex);
+        for (int i = 0; i < codes.count(); i++) assertEquals(((io.github.jbellis.jvector.quantization.ASHVectors) codes).get(i),
+                ((io.github.jbellis.jvector.quantization.ASHVectors) stored.codes).get(i));
+    }
+
+    @Test(timeout = 120_000)
+    public void streamingOnDiskWritesReloadsAndSearchesTheFlushedIndex() throws Exception {
+        var data = schema3Data();
+        String ash = "- type: ASH\n  parameters: {optimizer: ITQ, encodedBits: 72, bitsPerDimension: 2}";
+        var config = schema3Config("streamingOnDisk", "parallel", false, "NVQ",
+                ash.replace("  parameters:", "  scoring: symmetric\n  parameters:"), ash);
+        var params = config.construction.getCompressorParameters().get(0).apply(data);
+        var out = new java.io.ByteArrayOutputStream();
+        var console = System.out;
+        System.setOut(new java.io.PrintStream(out, true));
+        try {
+            var artifacts = RunArtifacts.open(csvRunConfig(), List.of(config));
+            Grid.run(data, GridSpec.fromConfig(config), artifacts);
+            var lines = Files.readAllLines(artifacts.experimentsWriter().path());
+            assertEquals("A warm and a cold build, one search each", 3, lines.size());
+        } finally {
+            System.setOut(console);
+            Files.deleteIfExists(Path.of("compressor_cache").resolve(params.idStringFor(data)));
+        }
+        String text = out.toString();
+        assertTrue(text, text.contains("streamed 288 vectors"));
+        // Each flushed index is reloaded and searched with the codes written beside it.
+        assertEquals(text, 2, text.split("codes the index built as vectors arrived, loaded with the index", -1).length - 1);
+    }
+
     @Test
     public void schema3CacheHitSkipsBuildAndFlush() throws Exception {
         var data = schema3Data();
@@ -478,9 +599,12 @@ public class TestGridASHIntegration {
     private MultiConfig schema3Config(String type, String writer, boolean fused, String reranker,
                                       String construction, String search) throws Exception {
         var path = temporary.newFile().toPath();
-        String diskSettings = "onDisk".equals(type)
-                ? "  writerMode: " + writer + "\n  fusedGraph: [" + fused + "]\n"
-                : "";
+        // "streaming" streams into an in-memory index; "streamingOnDisk" also writes and reloads it, as a flush does.
+        boolean streaming = type.startsWith("streaming");
+        if (streaming) type = "streamingOnDisk".equals(type) ? "onDisk" : "inMemory";
+        String diskSettings = ("onDisk".equals(type)
+                ? "  writerMode: " + writer + "\n  fusedGraph: [" + fused + "]\n" : "")
+                + (streaming ? "  streaming: Yes\n  coldStartSize: [0, 64]\n" : "");
         String yaml = String.join("\n",
                 "yamlSchemaVersion: 3",
                 "onDiskIndexVersion: " + OnDiskGraphIndex.CURRENT_VERSION,

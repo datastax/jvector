@@ -84,6 +84,9 @@ final class NativeASHFP32BatchProjection implements VectorUtilSupport.AshProject
     public long ramBytesUsed() { return FALLBACK_HEAP_BYTES + fallback.ramBytesUsed(); }
 
     @Override
+    public long nativeBytesUsed() { return fallback.nativeBytesUsed(); }
+
+    @Override
     public void project(float[] input, float[] output) { fallback.project(input, output); }
 
     @Override

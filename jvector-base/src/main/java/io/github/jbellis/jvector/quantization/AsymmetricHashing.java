@@ -48,8 +48,6 @@ import java.util.stream.IntStream;
 import org.apache.commons.math3.linear.RealMatrix;
 import org.apache.commons.math3.linear.Array2DRowRealMatrix;
 import org.netlib.util.intW;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 
 /**
  * Asymmetric Hashing (ASH) for float vectors.
@@ -1762,6 +1760,45 @@ public class AsymmetricHashing implements VectorCompressor<AsymmetricHashing.Qua
         return new ASHVectors(this, out, symmetricOffsets);
     }
 
+    /**
+     * A builder that encodes vectors into an immutable {@link ASHVectors} of up to {@code capacity} codes as they
+     * arrive, in batches from any number of threads; see {@link ASHVectors.Builder}.
+     */
+    public ASHVectors.Builder vectorsBuilder(int capacity) {
+        return new ASHVectors.Builder(this, capacity);
+    }
+
+    /**
+     * Encodes {@code vectors[0..count)} into {@code out} at {@code ordinals[0..count)}, as {@link #encodeAll}
+     * encodes a range. Safe to call from several threads at once for distinct ordinals.
+     */
+    void encodeInto(VectorFloat<?>[] vectors, int[] ordinals, int count, ASHCodes out, float[] symmetricOffsets) {
+        int capacity = Math.min(ENCODING_BATCH_SIZE, count);
+        if (capacity == 0) return;
+        float[][] inputs = new float[capacity][originalDimension];
+        float[][] projected = new float[capacity][quantizedDim];
+        float[] residualNorms = new float[capacity];
+        int[] slots = new int[capacity];
+        double[] absNorm = new double[quantizedDim];
+        QuantizedVector[] scratch = new QuantizedVector[capacity];
+        for (int k = 0; k < capacity; k++) scratch[k] = QuantizedVector.createEmpty(quantizedDim, bitsPerDimension);
+        int pending = 0;
+        for (int v = 0; v < count; v++) {
+            VectorFloat<?> vector = Objects.requireNonNull(vectors[v], "vector");
+            if (vector.length() != originalDimension) throw new IllegalArgumentException("ASH encoding vector dimension mismatch");
+            QuantizedVector dest = scratch[pending];
+            float residualNorm = prepareEncoding(vector, dest);
+            normalizeResidual(vector, landmarks[dest.landmark & 0xFF], residualNorm, inputs[pending]);
+            residualNorms[pending] = residualNorm;
+            slots[pending] = ordinals[v];
+            if (++pending == capacity) {
+                encodeBatch(inputs, projected, residualNorms, slots, pending, absNorm, scratch, out, symmetricOffsets);
+                pending = 0;
+            }
+        }
+        if (pending != 0) encodeBatch(inputs, projected, residualNorms, slots, pending, absNorm, scratch, out, symmetricOffsets);
+    }
+
     private void encodeRange(RandomAccessVectorValues source, ASHCodes out,
                              float[] symmetricOffsets, int start, int end) {
         int capacity = Math.min(ENCODING_BATCH_SIZE, end - start);
@@ -1819,6 +1856,87 @@ public class AsymmetricHashing implements VectorCompressor<AsymmetricHashing.Qua
         }
     }
 
+    /**
+     * Working set for encoding vectors in batches, as {@link #encodeAll} does, one batch at a time. It holds no
+     * model, so one scratch serves every model of the same dimensions. Used by one thread at a time.
+     */
+    static final class EncodingBatch {
+        private final float[][] inputs;
+        private final float[][] projected;
+        private final float[] residualNorms;
+        private final double[] absNorm;
+        private final QuantizedVector[] codes;
+        private final float[] centeredOffsets;
+        private int count;
+
+        EncodingBatch(int originalDimension, int quantizedDim, int bitsPerDimension) {
+            inputs = new float[ENCODING_BATCH_SIZE][originalDimension];
+            projected = new float[ENCODING_BATCH_SIZE][quantizedDim];
+            residualNorms = new float[ENCODING_BATCH_SIZE];
+            absNorm = new double[quantizedDim];
+            codes = new QuantizedVector[ENCODING_BATCH_SIZE];
+            for (int i = 0; i < codes.length; i++) codes[i] = QuantizedVector.createEmpty(quantizedDim, bitsPerDimension);
+            centeredOffsets = new float[ENCODING_BATCH_SIZE];
+        }
+
+        int size() {
+            return count;
+        }
+
+        int capacity() {
+            return codes.length;
+        }
+
+        boolean isFull() {
+            return count == codes.length;
+        }
+
+        void clear() {
+            count = 0;
+        }
+
+        /** The code of the {@code i}-th vector of the last encoded batch. */
+        QuantizedVector code(int i) {
+            return codes[i];
+        }
+
+        /** The centered offset of the {@code i}-th code, as {@link #encodeToWithCenteredOffset} returns it. */
+        float centeredOffset(int i) {
+            return centeredOffsets[i];
+        }
+    }
+
+    /** A batch scratch sized for this model. */
+    EncodingBatch newEncodingBatch() {
+        return new EncodingBatch(originalDimension, quantizedDim, bitsPerDimension);
+    }
+
+    /** Adds {@code vector} to a batch that is not full, reading it now: the caller may reuse it afterwards. */
+    void addToBatch(EncodingBatch batch, VectorFloat<?> vector) {
+        if (batch.isFull()) throw new IllegalStateException("Encoding batch is full");
+        int i = batch.count;
+        QuantizedVector dest = batch.codes[i];
+        float residualNorm = prepareEncoding(vector, dest);
+        normalizeResidual(vector, landmarks[dest.landmark & 0xFF], residualNorm, batch.inputs[i]);
+        batch.residualNorms[i] = residualNorm;
+        batch.count = i + 1;
+    }
+
+    /** Encodes the batch's vectors with this model, as {@link #encodeAll} does; the batch keeps its size. */
+    void encodeBatch(EncodingBatch batch) {
+        int count = batch.count;
+        if (count == 0) return;
+        stiefelTransform.projectBatch(batch.inputs, batch.projected, count);
+        for (int i = 0; i < count; i++) {
+            QuantizedVector dest = batch.codes[i];
+            Arrays.fill(dest.binaryVector, 0L);
+            Arrays.fill(dest.extraBits, (byte) 0);
+            float codeNorm = ProjectedBinaryQuantizer.quantizeProjected(batch.projected[i], bitsPerDimension,
+                    dest.binaryVector, dest.extraBits, batch.absNorm);
+            batch.centeredOffsets[i] = finishEncoding(dest, batch.residualNorms[i], codeNorm);
+        }
+    }
+
     private static void normalizeResidual(VectorFloat<?> vector, VectorFloat<?> mean,
                                           float residualNorm, float[] normalized) {
         if (vector.length() != normalized.length || mean.length() != normalized.length)
@@ -1852,9 +1970,14 @@ public class AsymmetricHashing implements VectorCompressor<AsymmetricHashing.Qua
 
     @Override
     public void encodeTo(VectorFloat<?> vector, QuantizedVector dest) {
+        encodeToWithCenteredOffset(vector, dest);
+    }
+
+    /** As {@link #encodeTo}, returning the code's centered offset for symmetric scoring. */
+    float encodeToWithCenteredOffset(VectorFloat<?> vector, QuantizedVector dest) {
         float residualNorm = prepareEncoding(vector, dest);
         float codeNorm = quantizeVector(vector, residualNorm, dest.landmark, dest);
-        finishEncoding(dest, residualNorm, codeNorm);
+        return finishEncoding(dest, residualNorm, codeNorm);
     }
 
     /** Sets landmark and raw offset; returns the residual norm needed by both paths. */
@@ -2980,6 +3103,18 @@ public class AsymmetricHashing implements VectorCompressor<AsymmetricHashing.Qua
             bytes += stiefelTransform.queryProjectionHeapBytes;
             if (queryProjection != stiefelTransform.projection) bytes += queryProjection.ramBytesUsed();
         }
+        return bytes;
+    }
+
+    /**
+     * The part of {@link #ramBytesUsed} held in native memory, outside the Java heap: native projections of the model
+     * for encoding and for queries, which a native backend allocates when it first needs them.
+     */
+    public long nativeBytesUsed() {
+        long bytes = stiefelTransform.projection.nativeBytesUsed();
+        var queryProjection = stiefelTransform.queryProjection;
+        if (queryProjection != null && queryProjection != stiefelTransform.projection)
+            bytes += queryProjection.nativeBytesUsed();
         return bytes;
     }
 

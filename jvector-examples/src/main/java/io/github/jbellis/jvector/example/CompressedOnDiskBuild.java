@@ -20,6 +20,8 @@ import io.github.jbellis.jvector.disk.ReaderSupplierFactory;
 import io.github.jbellis.jvector.example.benchmarks.datasets.DataSet;
 import io.github.jbellis.jvector.example.util.OnDiskGraphIndexCache;
 import io.github.jbellis.jvector.graph.GraphIndex;
+import io.github.jbellis.jvector.graph.RandomAccessVectorValues;
+import io.github.jbellis.jvector.example.util.CompressorParameters;
 import io.github.jbellis.jvector.graph.VectorAccess;
 import io.github.jbellis.jvector.graph.VectorMean;
 import io.github.jbellis.jvector.graph.disk.OnDiskGraphIndex;
@@ -143,6 +145,7 @@ final class CompressedOnDiskBuild implements IndexBuildStrategy {
                         : cache.keyWithCompressorId(ds.getName(), fs, build.M, build.efConstruction, build.neighborOverflow,
                                 build.alpha, build.addHierarchy, build.refineFinalGraph, cacheIdentity,
                                 baseCount, dimension, nvq);
+                key = key.withUpperLayerDegree(build.upperLayerDegree);
                 var cached = cache.tryLoad(key);
 
                 if (cached.isPresent()) {
@@ -168,6 +171,8 @@ final class CompressedOnDiskBuild implements IndexBuildStrategy {
                     : buildMissing(missing, build, ds, outputDir, handles, indexes, files);
             // Opened after the reopen timer, so their load time is reported on its own.
             for (var fs : missing) loadStoredCodes(fs, files.get(fs), indexes.get(fs));
+            // A streaming index built its codes as vectors arrived, from a model it may have trained itself.
+            if (build.streaming) storedCodes.replaceAll((fs, loaded) -> loaded.builtByIndex());
             return new BuiltIndexes(indexes, files, buildTimeS, new LinkedHashMap<>(storedCodes));
         } catch (IOException | RuntimeException e) {
             // A failed build must release cached readers and discard uncommitted writes.
@@ -198,7 +203,10 @@ final class CompressedOnDiskBuild implements IndexBuildStrategy {
         Files.createDirectories(outputDir);
 
         if (build.indexType != null) {
-            buildCompressor = buildCodec == null ? null : GraphBuilderFactory.inConstructionPool(build, buildCodec::get);
+            // A cold streaming index fixes its own model; a warm one inherits the construction model.
+            boolean coldStream = build.streaming && build.coldStartSize != null && build.coldStartSize > 0;
+            buildCompressor = buildCodec == null || coldStream ? null
+                    : GraphBuilderFactory.inConstructionPool(build, buildCodec::get);
             double seconds = buildAndFlush(featureSets, build, ds, outputDir, handles);
             long reopenStart = System.nanoTime();
             reopen(featureSets, outputDir, handles, indexes, files);
@@ -321,14 +329,34 @@ final class CompressedOnDiskBuild implements IndexBuildStrategy {
     private double buildAndFlush(List<Set<FeatureId>> featureSets, BuildConfig build, DataSet ds, Path outputDir,
                                  Map<Set<FeatureId>, OnDiskGraphIndexCache.WriteHandle> handles) throws IOException {
         var vectors = ds.getBaseRavv();
-        var mean = featureSets.stream().anyMatch(features -> features.contains(FeatureId.NVQ_VECTORS))
-                ? new VectorMean(vectors.size(), vectors.dimension()) : null;
-        var buildVectors = mean == null ? vectors : mean.duringScan(vectors);
-        var encoded = Grid.encodeForConstruction(buildCompressor, buildVectors, constructionMetrics,
-                GraphBuilderFactory.constructionPool(build));
-
-        long start = System.nanoTime();
-        try (var graph = GraphBuilderFactory.buildGraph(ds, build, encoded)) {
+        long start;
+        GraphIndex builtGraph;
+        CompressedVectors encoded;
+        VectorMean mean;
+        VectorFloat<?> streamedMean = null;
+        RandomAccessVectorValues buildVectors;
+        if (build.streaming) {
+            // Streamed as a database's writes arrive, then flushed: the index's own graph and codes are written,
+            // and NVQ centers with the mean the index kept as vectors arrived.
+            mean = null;
+            buildVectors = vectors;
+            var params = (CompressorParameters.ASHParameters) build.buildCompressor.apply(ds);
+            var model = buildCompressor;
+            start = System.nanoTime();
+            var index = StreamingBuild.stream(build, ds, params, () -> model);
+            builtGraph = index.graph();
+            encoded = index.codes().snapshot();
+            streamedMean = index.mean();
+        } else {
+            mean = featureSets.stream().anyMatch(features -> features.contains(FeatureId.NVQ_VECTORS))
+                    ? new VectorMean(vectors.size(), vectors.dimension()) : null;
+            buildVectors = mean == null ? vectors : mean.duringScan(vectors);
+            encoded = Grid.encodeForConstruction(buildCompressor, buildVectors, constructionMetrics,
+                    GraphBuilderFactory.constructionPool(build));
+            start = System.nanoTime();
+            builtGraph = GraphBuilderFactory.buildGraph(ds, build, encoded);
+        }
+        try (var graph = builtGraph) {
             double buildSeconds = (System.nanoTime() - start) / 1e9;
             var codec = fusedCompressor == null ? null
                     : GraphBuilderFactory.inConstructionPool(build, fusedCompressor::get);
@@ -336,7 +364,7 @@ final class CompressedOnDiskBuild implements IndexBuildStrategy {
                     ? encoded
                     : Grid.encodeForConstruction(codec, mean != null && !mean.isComplete() ? buildVectors : vectors,
                             constructionMetrics, GraphBuilderFactory.constructionPool(build));
-            var inputMean = mean != null && mean.isComplete() ? mean.mean() : null;
+            var inputMean = streamedMean != null ? streamedMean : mean != null && mean.isComplete() ? mean.mean() : null;
             double flushSeconds = 0;
             int n = 0;
             for (var features : featureSets) {

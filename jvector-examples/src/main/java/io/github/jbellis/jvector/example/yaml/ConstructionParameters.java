@@ -32,6 +32,11 @@ public class ConstructionParameters extends CommonParameters {
     /** onDisk only: pad base-layer records so each starts on this page boundary (a power of two); omit for none. */
     public Integer pageAlignment;
     public List<Integer> outDegree;
+    /**
+     * Schema 3: maximum out-degrees of the layers above the base layer to sweep; omit for {@code outDegree} on every
+     * layer. With it, {@code outDegree} is the base layer's degree. Needs {@code addHierarchy} Yes.
+     */
+    public List<Integer> upperLayerDegree;
     public List<Integer> efConstruction;
     public List<Float> neighborOverflow;
     public List<Boolean> addHierarchy;
@@ -42,6 +47,18 @@ public class ConstructionParameters extends CommonParameters {
     public Boolean useSavedIndexIfExists;
     /** Schema 3: threads for training, encoding, graph insertion and writing; an integer or max. */
     public Object workers;
+    /**
+     * Schema 3: insert the base vectors in arrival order into a streaming index, which encodes each as it arrives,
+     * instead of encoding them all first. An {@code onDisk} streaming index is written and reloaded, as a flush does.
+     */
+    public Boolean streaming;
+    /**
+     * streaming only: vectors scored exactly before a cold index fixes a random-projection model, or 0 to start with
+     * the construction compressor's model.
+     */
+    public List<Integer> coldStartSize;
+    /** streaming only: whether a cold index trains its first model on its sample while vectors arrive. */
+    public List<Boolean> trainWhileStreaming;
 
     /** The construction worker count, or null when the YAML leaves it to the platform default. */
     public Integer resolvedWorkers() {
@@ -55,14 +72,35 @@ public class ConstructionParameters extends CommonParameters {
         if (writerMode != null && !List.of("sequential", "parallel").contains(writerMode)) {
             throw new IllegalArgumentException("construction.writerMode must be sequential or parallel");
         }
-        if ("inMemory".equals(type) && (writerMode != null || fusedGraph != null || useSavedIndexIfExists != null
-                || pageAlignment != null)) {
-            throw new IllegalArgumentException("construction.writerMode, pageAlignment, fusedGraph, and useSavedIndexIfExists require onDisk");
+        if (!"onDisk".equals(type) && (writerMode != null || fusedGraph != null || pageAlignment != null)) {
+            throw new IllegalArgumentException("construction.writerMode, pageAlignment, and fusedGraph require onDisk");
+        }
+        if (Boolean.TRUE.equals(streaming)) {
+            validateSweep("coldStartSize", coldStartSize, value -> value >= 0);
+            if (compression == null || compression.size() != 1 || !"ASH".equals(compression.get(0).type)) {
+                throw new IllegalArgumentException("construction.streaming requires a single ASH construction.compression");
+            }
+            if ("inMemory".equals(type) && "NVQ".equals(rerankingType())) {
+                throw new IllegalArgumentException("An inMemory streaming index reranks with the source vectors: use reranking FP32 or None");
+            }
+            if (fusedGraph != null && fusedGraph.contains(Boolean.TRUE)) {
+                throw new IllegalArgumentException("construction.streaming writes its codes beside the index: use fusedGraph No");
+            }
+            if (trainWhileStreaming != null) validateSweep("trainWhileStreaming", trainWhileStreaming, value -> true);
+        } else if (coldStartSize != null || trainWhileStreaming != null) {
+            throw new IllegalArgumentException("construction.coldStartSize and trainWhileStreaming require construction.streaming Yes");
         }
         if (pageAlignment != null && (pageAlignment < 512 || pageAlignment > (1 << 20) || Integer.bitCount(pageAlignment) != 1)) {
             throw new IllegalArgumentException("construction.pageAlignment must be a power of two from 512 to 1048576");
         }
         validateSweep("outDegree", outDegree, value -> value > 0);
+        if (upperLayerDegree != null) {
+            validateSweep("upperLayerDegree", upperLayerDegree, value -> value > 0);
+            if (addHierarchy == null || addHierarchy.contains(Boolean.FALSE))
+                throw new IllegalArgumentException("construction.upperLayerDegree requires addHierarchy Yes");
+            if (Boolean.TRUE.equals(streaming))
+                throw new IllegalArgumentException("construction.upperLayerDegree is not supported for streaming builds");
+        }
         validateSweep("efConstruction", efConstruction, value -> value > 0);
         validateSweep("neighborOverflow", neighborOverflow, value -> Float.isFinite(value) && value >= 1);
         validateSweep("addHierarchy", addHierarchy, value -> true);

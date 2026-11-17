@@ -277,7 +277,8 @@ public abstract class AbstractGraphIndexWriter<T extends IndexWriter> implements
 
         /**
          * Places base-layer node records so that none crosses a {@code pageBytes} boundary, counted from the start
-         * of the index, so reading one node from disk reads only the pages its record needs. Records that fit in a
+         * of the file, so reading one node from disk reads only the pages its record needs; an index written at a
+         * start offset pads its header so its records still line up with the file's pages. Records that fit in a
          * page are packed as many per page as fit; larger records each start on a page and are padded to whole
          * pages, but only when their last page would be at least half full, since otherwise the padding costs more
          * space than the page reads it saves (the index is then written unaligned; {@link #build()} still
@@ -295,6 +296,14 @@ public abstract class AbstractGraphIndexWriter<T extends IndexWriter> implements
             }
             this.pageAlignment = pageBytes;
             return this;
+        }
+
+        /**
+         * Returns where in the file the index starts; page alignment counts pages from the start of the file.
+         * @return the start offset, 0 for writers that always start at the beginning of their output
+         */
+        protected long startOffset() {
+            return 0;
         }
 
         /**
@@ -369,7 +378,8 @@ public abstract class AbstractGraphIndexWriter<T extends IndexWriter> implements
                     var layerInfo = CommonHeader.LayerInfo.fromGraph(graphIndex, ordinalMapper);
                     var common = new CommonHeader(version, dimension, 0, layerInfo, 0);
                     int unpadded = new Header(common, format.orderFeatures(features)).size();
-                    int headerPad = (pageAlignment - unpadded % pageAlignment) % pageAlignment;
+                    // pages are counted from the start of the file, so the graph may start anywhere in it
+                    int headerPad = (int) ((pageAlignment - (startOffset() + unpadded) % pageAlignment) % pageAlignment);
                     features.put(FeatureId.PAGE_ALIGNMENT, new PageAlignment(pageAlignment, headerPad));
                 } else {
                     note = String.format("%d-byte page alignment not applied: the last of the record's pages would be"

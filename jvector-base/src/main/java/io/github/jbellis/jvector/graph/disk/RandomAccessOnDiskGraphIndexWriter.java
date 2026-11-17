@@ -166,6 +166,11 @@ public abstract class RandomAccessOnDiskGraphIndexWriter extends AbstractGraphIn
             return this;
         }
 
+        @Override
+        protected long startOffset() {
+            return startOffset;
+        }
+
         /** Number of worker threads for parallel L0 writes (0 = available processors). Ignored in sequential mode. */
         public Builder withParallelWorkerThreads(int workerThreads) {
             this.parallelWorkerThreads = workerThreads;

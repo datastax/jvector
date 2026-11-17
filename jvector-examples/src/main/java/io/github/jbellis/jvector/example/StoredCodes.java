@@ -42,10 +42,27 @@ final class StoredCodes {
     static final class Loaded {
         final CompressedVectors codes;
         final double seconds;
+        /** True for codes an in-memory index built itself, which are not loaded from a file. */
+        final boolean builtWithIndex;
 
-        private Loaded(CompressedVectors codes, double seconds) {
+        private Loaded(CompressedVectors codes, double seconds, boolean builtWithIndex) {
             this.codes = codes;
             this.seconds = seconds;
+            this.builtWithIndex = builtWithIndex;
+        }
+
+        private Loaded(CompressedVectors codes, double seconds) {
+            this(codes, seconds, false);
+        }
+
+        /** Codes an in-memory index built while it was built; searches use them as they are. */
+        static Loaded built(CompressedVectors codes) {
+            return new Loaded(codes, 0, true);
+        }
+
+        /** These codes, loaded from a file, marked as built by the index, so searches use them as they are. */
+        Loaded builtByIndex() {
+            return new Loaded(codes, seconds, true);
         }
     }
 

@@ -55,6 +55,8 @@ class PanamaVectorUtilSupport implements VectorUtilSupport {
     private static final int[] ASH_FOUR_BIT_QUERY_INDICES = ashQueryIndices(2);
     private static final int[][] ASH_TWO_BIT_TAIL_INDICES = ashTailQueryIndices(4);
     private static final int[][] ASH_FOUR_BIT_TAIL_INDICES = ashTailQueryIndices(2);
+    // A code's last partial block, copied here when its array ends too soon to load the block in place
+    private static final ThreadLocal<byte[]> ASH_TAIL_BLOCK = ThreadLocal.withInitial(() -> new byte[ASH_BYTES.length()]);
 
     private static int[] ashQueryIndices(int dimensionsPerByte) {
         int[] indices = new int[ASH_FLOATS.length()];
@@ -291,9 +293,9 @@ class PanamaVectorUtilSupport implements VectorUtilSupport {
         int lanes = ASH_FLOATS.length();
         // No masked loads or gathers: JDK 20's C2 miscompiles masked AVX-512 memory
         // operations here. Whole blocks need no mask. A partial final block loads its
-        // bytes unmasked when the array extends past them (extra lanes are discarded),
-        // gathers with indices that stay in range, and masks only the register addition.
-        // Otherwise the tail is scalar, so results may differ in the last bit by position.
+        // bytes unmasked (extra lanes are discarded), gathers with indices that stay in
+        // range, and masks only the register addition. When the array ends before a whole
+        // block, the block is loaded from a copy, so a code scores the same wherever it is.
         int fullBytes = (dimensions / (lanes * perByte)) * lanes;
         int loadBytes = ASH_BYTES.length();
         FloatVector sum = FloatVector.zero(ASH_FLOATS);
@@ -305,8 +307,15 @@ class PanamaVectorUtilSupport implements VectorUtilSupport {
                 sum = sum.add(ashProjectionTerm(query, packed, base * perByte + slot, indices, slot, bitsPerDimension));
             }
         }
-        if (base < bytes && bytes - base <= lanes && codeOffset + base + loadBytes <= code.length) {
-            var packed = (IntVector) ByteVector.fromArray(ASH_BYTES, code, codeOffset + base)
+        if (base < bytes && bytes - base <= lanes) {
+            byte[] block = code;
+            int blockOffset = codeOffset + base;
+            if (blockOffset + loadBytes > code.length) {
+                block = ASH_TAIL_BLOCK.get();
+                System.arraycopy(code, blockOffset, block, 0, bytes - base);
+                blockOffset = 0;
+            }
+            var packed = (IntVector) ByteVector.fromArray(ASH_BYTES, block, blockOffset)
                     .convertShape(VectorOperators.B2I, ASH_INTS, 0);
             int[][] tails = bitsPerDimension == 2 ? ASH_TWO_BIT_TAIL_INDICES : ASH_FOUR_BIT_TAIL_INDICES;
             for (int slot = 0; slot < perByte; slot++) {
@@ -2039,7 +2048,7 @@ class PanamaVectorUtilSupport implements VectorUtilSupport {
         }
 
         // Reduce all accumulators
-        return acc0.add(acc1).add(acc2).add(acc3).reduceLanes(VectorOperators.ADD);
+        return addLanesInOrder(acc0.add(acc1).add(acc2).add(acc3));
     }
 
     public float ashMaskedAdd_512(
@@ -2302,8 +2311,7 @@ class PanamaVectorUtilSupport implements VectorUtilSupport {
         FloatVector sum01 = acc0.add(acc1);
         FloatVector sum23 = acc2.add(acc3);
 
-        return sum01.add(sum23)
-                .reduceLanes(VectorOperators.ADD);
+        return addLanesInOrder(sum01.add(sum23));
     }
 
     private static float reduce8(
@@ -2320,9 +2328,18 @@ class PanamaVectorUtilSupport implements VectorUtilSupport {
         FloatVector sum45 = acc4.add(acc5);
         FloatVector sum67 = acc6.add(acc7);
 
-        return sum01.add(sum23)
-                .add(sum45.add(sum67))
-                .reduceLanes(VectorOperators.ADD);
+        return addLanesInOrder(sum01.add(sum23).add(sum45.add(sum67)));
+    }
+
+    /**
+     * The sum of {@code v}'s lanes, added in lane order. reduceLanes may add them in a different order before and
+     * after the JIT compiles its caller, so the same code would score differently in the last bit depending on when
+     * it was scored; masked-add scores must not.
+     */
+    private static float addLanesInOrder(FloatVector v) {
+        float total = 0f;
+        for (int lane = 0; lane < v.length(); lane++) total += v.lane(lane);
+        return total;
     }
 
     @Override

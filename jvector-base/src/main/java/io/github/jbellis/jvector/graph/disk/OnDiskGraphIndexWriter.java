@@ -208,6 +208,11 @@ public class OnDiskGraphIndexWriter extends RandomAccessOnDiskGraphIndexWriter {
         }
 
         @Override
+        protected long startOffset() {
+            return startOffset;
+        }
+
+        @Override
         protected OnDiskGraphIndexWriter reallyBuild(int dimension) {
             return new OnDiskGraphIndexWriter(out, version, startOffset, graphIndex, ordinalMapper, dimension, features);
         }

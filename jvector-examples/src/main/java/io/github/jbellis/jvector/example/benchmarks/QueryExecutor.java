@@ -47,8 +47,7 @@ public class QueryExecutor {
             boolean usePruning, io.github.jbellis.jvector.graph.similarity.PreparedQuery prepared) {
         var searcher = cs.getSearcher();
         searcher.usePruning(usePruning);
-        var view = (io.github.jbellis.jvector.graph.GraphIndex.ScoringView) searcher.getView();
-        return searcher.search(view.scoreProviderFor(prepared, true), topK, rerankK, 0.0f, 0.0f, Bits.ALL);
+        return searcher.search(cs.scoreProviderFor(prepared, searcher.getView()), topK, rerankK, 0.0f, 0.0f, Bits.ALL);
     }
 
     /**

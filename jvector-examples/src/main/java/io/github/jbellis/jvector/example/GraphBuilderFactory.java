@@ -56,7 +56,7 @@ final class GraphBuilderFactory {
         var bsp = BuildScoreProvider.randomAccessScoreProvider(vectors, similarity);
         return new GraphIndexBuilder(bsp,
                                      vectors.dimension(),
-                                     build.M,
+                                     build.layerDegrees(),
                                      build.efConstruction,
                                      build.neighborOverflow,
                                      build.alpha,
@@ -122,11 +122,11 @@ final class GraphBuilderFactory {
 
     static GraphIndexBuilder forCompressed(BuildScoreProvider bsp, int dimension, BuildConfig build) {
         if (hasCustomWorkers(build)) {
-            return new GraphIndexBuilder(bsp, dimension, build.M, build.efConstruction, build.neighborOverflow,
+            return new GraphIndexBuilder(bsp, dimension, build.layerDegrees(), build.efConstruction, build.neighborOverflow,
                                          build.alpha, build.addHierarchy, build.refineFinalGraph,
                                          constructionPool(build), FilteredForkJoinPool.createFilteredPool(build.workers));
         }
-        return new GraphIndexBuilder(bsp, dimension, build.M, build.efConstruction, build.neighborOverflow,
+        return new GraphIndexBuilder(bsp, dimension, build.layerDegrees(), build.efConstruction, build.neighborOverflow,
                                      build.alpha, build.addHierarchy, build.refineFinalGraph);
     }
 

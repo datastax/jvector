@@ -145,6 +145,10 @@ final class NativeASHInt8Projection implements VectorUtilSupport.AshProjection {
         }
     }
 
+    /** All of this view's storage is native. */
+    @Override
+    public long nativeBytesUsed() { return ramBytesUsed(); }
+
     @Override
     public String operandPrecision() { return "int8"; }
 

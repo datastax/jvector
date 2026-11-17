@@ -111,6 +111,12 @@ final class NativeASHProjection implements VectorUtilSupport.AshProjection {
         return matrix.byteSize() + (packed == null ? 0 : packed.byteSize());
     }
 
+    /** The matrix and its packed copy are both native. */
+    @Override
+    public long nativeBytesUsed() {
+        return ramBytesUsed();
+    }
+
     int rows() { return rows; }
     int columns() { return columns; }
     MemorySegment matrix() { return matrix; }
