@@ -2048,7 +2048,7 @@ class PanamaVectorUtilSupport implements VectorUtilSupport {
         }
 
         // Reduce all accumulators
-        return acc0.add(acc1).add(acc2).add(acc3).reduceLanes(VectorOperators.ADD);
+        return addLanesInOrder(acc0.add(acc1).add(acc2).add(acc3));
     }
 
     public float ashMaskedAdd_512(
@@ -2311,8 +2311,7 @@ class PanamaVectorUtilSupport implements VectorUtilSupport {
         FloatVector sum01 = acc0.add(acc1);
         FloatVector sum23 = acc2.add(acc3);
 
-        return sum01.add(sum23)
-                .reduceLanes(VectorOperators.ADD);
+        return addLanesInOrder(sum01.add(sum23));
     }
 
     private static float reduce8(
@@ -2329,9 +2328,18 @@ class PanamaVectorUtilSupport implements VectorUtilSupport {
         FloatVector sum45 = acc4.add(acc5);
         FloatVector sum67 = acc6.add(acc7);
 
-        return sum01.add(sum23)
-                .add(sum45.add(sum67))
-                .reduceLanes(VectorOperators.ADD);
+        return addLanesInOrder(sum01.add(sum23).add(sum45.add(sum67)));
+    }
+
+    /**
+     * The sum of {@code v}'s lanes, added in lane order. reduceLanes may add them in a different order before and
+     * after the JIT compiles its caller, so the same code would score differently in the last bit depending on when
+     * it was scored; masked-add scores must not.
+     */
+    private static float addLanesInOrder(FloatVector v) {
+        float total = 0f;
+        for (int lane = 0; lane < v.length(); lane++) total += v.lane(lane);
+        return total;
     }
 
     @Override
