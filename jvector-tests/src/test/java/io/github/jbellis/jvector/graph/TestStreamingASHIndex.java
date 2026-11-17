@@ -181,10 +181,10 @@ public class TestStreamingASHIndex extends RandomizedTest {
     }
 
     @Test
-    public void aColdIndexHoldsInsertsBeyondTwiceItsThresholdUntilItHasAModel() throws Exception {
-        // Recording is cheap, so many writers could outrun the first model's catch-up and leave every search scoring
-        // all recorded vectors. Inserts beyond twice the threshold wait instead: once every add has returned, the
-        // index has its model and every vector is in the graph.
+    public void aColdIndexKeepsTakingInsertsWhileItsFirstModelCatchesUp() throws Exception {
+        // Recording is cheap, so many writers could outrun the first model's catch-up. Inserts never wait for
+        // training; once the model is trained each one also places a recorded vector, so the catch-up finishes:
+        // once every add has returned and training is over, the index has its model and every vector is in the graph.
         var data = vectors(6000, 31);
         var options = new StreamingASHIndex.Options();
         options.coldStartSize = 256;
@@ -199,6 +199,7 @@ public class TestStreamingASHIndex extends RandomizedTest {
         } finally {
             pool.shutdown();
         }
+        while (index.isTraining()) Thread.onSpinWait();
         assertTrue(index.hasModel());
         assertEquals(data.size(), index.graph().size(0));
     }
@@ -322,6 +323,9 @@ public class TestStreamingASHIndex extends RandomizedTest {
             threads.add(new Thread(() -> {
                 try {
                     for (int i; (i = next.getAndIncrement()) < data.size(); ) {
+                        // Paced like a live write stream, so deletes and searches overlap the inserts throughout:
+                        // a cold index takes inserts without waiting for its first model.
+                        java.util.concurrent.locks.LockSupport.parkNanos(50_000);
                         index.add(i);
                         addedSet.add(i);
                         synchronized (added) {

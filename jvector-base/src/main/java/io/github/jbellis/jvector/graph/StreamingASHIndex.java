@@ -71,9 +71,11 @@ import java.util.function.Supplier;
  * never rebuilt.</p>
  *
  * <p><b>Cost.</b> Every operation's cost is bounded. Until a cold index has its first model, an insert only records its
- * ordinal, and a search scores every recorded vector: at most twice the number that makes the model due, since
- * inserts beyond that wait for the model. Otherwise inserts wait only while the last few recorded vectors join the
- * graph, once. Once the index has a
+ * ordinal, and a search scores every recorded vector. Once the model is trained, each insert also places one recorded
+ * vector into the new graph while the pool places the rest, so the backlog shrinks however fast inserts arrive, and
+ * inserts never wait for training: a caller with a write timeout, such as a database, sees no stall. Inserts wait only
+ * while the last few recorded vectors join the graph, once, and, as a safeguard, if recorded vectors reach many times
+ * the number that makes the model due before it is trained. Once the index has a
  * model, an insert encodes its vector, inserts it into the graph and
  * re-encodes at most {@link Options#reencodePerInsert} earlier vectors for a model change in progress, skipping that
  * work rather than waiting when another insert is doing it. Training runs on the library's physical-core pool. A search
@@ -157,9 +159,11 @@ public final class StreamingASHIndex implements Accountable {
     private volatile long firstModelPauseNanos;
     /** Recorded vectors still to join the graph when inserts are held to add the rest; see {@link #fixFirstModel}. */
     private static final int CATCH_UP = 256;
-    /** Vectors a cold index records, at most, before inserts wait for its first model: twice the number that makes
-     * the model due, so searching the recorded vectors stays cheap and the model's catch-up finishes. */
+    /** Vectors a cold index records, at most, before inserts wait for its first model to be trained: a safeguard far
+     * above what arrives while a model trains, so it bounds the vectors a search scores if training cannot keep up. */
     private final long recordLimit;
+    /** Times the number that makes the first model due that a cold index records before inserts wait for it. */
+    private static final int RECORD_LIMIT_FACTOR = 64;
     private final java.util.concurrent.atomic.AtomicLong recorded = new java.util.concurrent.atomic.AtomicLong();
 
     // Memory allocated outside inserts (the sample, models, and the graph nodes and codes the first model gives the
@@ -206,6 +210,21 @@ public final class StreamingASHIndex implements Accountable {
     }
 
     /** The parts of a cold index before its first model. */
+    /** The first model's graph while the recorded vectors join it; see {@link #fixFirstModel}. */
+    private static final class CatchUp {
+        final Live next;
+        /** Recorded ordinals placed in {@link #next}, or claimed by the thread placing them. */
+        final ThreadSafeGrowableBitSet placed;
+        final java.util.concurrent.atomic.AtomicLong bytes = new java.util.concurrent.atomic.AtomicLong();
+        /** Where inserts look for the next recorded ordinal to place. */
+        final java.util.concurrent.atomic.AtomicInteger cursor = new java.util.concurrent.atomic.AtomicInteger();
+
+        CatchUp(Live next, int capacity) {
+            this.next = next;
+            this.placed = new ThreadSafeGrowableBitSet(capacity);
+        }
+    }
+
     private static final class Cold {
         /** Ordinals added, including those with no vector, which get the all-zero code. */
         final ThreadSafeGrowableBitSet added = new ThreadSafeGrowableBitSet(1024);
@@ -213,6 +232,8 @@ public final class StreamingASHIndex implements Accountable {
         final ThreadSafeGrowableBitSet deleted = new ThreadSafeGrowableBitSet(1024);
         /** What {@link #builder} returns until the first model is published: an empty graph. */
         final GraphIndexBuilder empty;
+        /** Set once the first model is trained, while the recorded vectors join its graph; inserts help. */
+        volatile CatchUp catchUp;
 
         Cold(GraphIndexBuilder empty) {
             this.empty = empty;
@@ -236,7 +257,7 @@ public final class StreamingASHIndex implements Accountable {
         int reservoirSize = options.reservoirSize > 0 ? options.reservoirSize : 20 * dimension;
         this.reservoir = new OrdinalReservoir(reservoirSize);
         this.trainAfter = options.trainAfter > 0 ? options.trainAfter : reservoirSize;
-        this.recordLimit = 2 * Math.max(1, options.train ? trainAfter : options.coldStartSize);
+        this.recordLimit = (long) RECORD_LIMIT_FACTOR * Math.max(1, options.train ? trainAfter : options.coldStartSize);
         this.mean = new VectorMean.Running(dimension);
         this.trainingSlots = new Semaphore(options.insertsWhileTraining > 0
                 ? options.insertsWhileTraining
@@ -298,9 +319,9 @@ public final class StreamingASHIndex implements Accountable {
      */
     public long add(int ordinal) {
         Live l = live;
-        if (l == null && recorded.get() >= recordLimit) {
+        if (l == null && recorded.get() >= recordLimit && cold.catchUp == null) {
             // A cold index that has recorded its limit waits for its first model, retrying it if a fix failed.
-            while ((l = live) == null) {
+            while ((l = live) == null && cold.catchUp == null) {
                 afterColdInsert();
                 LockSupport.parkNanos(100_000);
             }
@@ -317,8 +338,13 @@ public final class StreamingASHIndex implements Accountable {
                     reservoir.offer(ordinal);
                     VectorFloat<?> v = vectors.get().getVector(ordinal);
                     if (v != null) mean.accept(v);
-                    cold.added.set(ordinal); // last, so a search that finds the ordinal can read its vector
+                    Cold c = cold;
+                    c.added.set(ordinal); // last, so a search that finds the ordinal can read its vector
                     recorded.incrementAndGet();
+                    // Once the first model is trained, each insert places one recorded vector, so the backlog
+                    // cannot outgrow the catch-up however fast inserts arrive.
+                    CatchUp u = c.catchUp;
+                    if (u != null) placeOneRecorded(c, u);
                 }
             } finally {
                 lock.unlock();
@@ -401,16 +427,16 @@ public final class StreamingASHIndex implements Accountable {
         configureQueries(model, null);
         Cold c = cold;
         Live next = startLive(model);
-        var inserted = new ThreadSafeGrowableBitSet(Math.max(1024, c.added.length()));
-        var bytes = new java.util.concurrent.atomic.AtomicLong();
-        // Catch up with the recorded vectors while inserts continue; each round takes what arrived during the last.
-        for (int round = 0; round < 8 && insertRecorded(c, next, inserted, bytes) > CATCH_UP; round++) { }
+        var u = new CatchUp(next, Math.max(1024, c.added.length()));
+        c.catchUp = u;
+        // Catch up with the recorded vectors while inserts continue and help; each round takes what is left.
+        for (int round = 0; round < 8 && insertRecorded(c, u) > CATCH_UP; round++) { }
         var lock = firstModel.writeLock();
         lock.lock();
         long pauseStart = System.nanoTime();
         try {
             if (live != null) return;
-            insertRecorded(c, next, inserted, bytes);
+            insertRecorded(c, u);
             for (int i = c.deleted.nextSetBit(0); i != DocIdSetIterator.NO_MORE_DOCS;
                  i = i + 1 < c.deleted.length() ? c.deleted.nextSetBit(i + 1) : DocIdSetIterator.NO_MORE_DOCS)
                 next.builder.markNodeDeleted(i);
@@ -418,7 +444,7 @@ public final class StreamingASHIndex implements Accountable {
             provisional = options.optimizer != AsymmetricHashing.RANDOM
                     && (!trained || options.optimizer != model.optimizer);
             synchronized (charges) {
-                firstModelBytes = bytes.get();
+                firstModelBytes = u.bytes.get();
             }
             live = next;
             cold = null;
@@ -430,21 +456,34 @@ public final class StreamingASHIndex implements Accountable {
     }
 
     /**
-     * Encodes and inserts, in parallel on the physical-core pool, the recorded ordinals not yet in {@code inserted}.
+     * Encodes and inserts, in parallel on the physical-core pool, the recorded ordinals not yet placed.
      *
-     * @return how many it inserted
+     * @return how many it found to place
      */
-    private int insertRecorded(Cold c, Live l, ThreadSafeGrowableBitSet inserted,
-                               java.util.concurrent.atomic.AtomicLong bytes) {
+    private int insertRecorded(Cold c, CatchUp u) {
         var added = c.added;
         int upper = added.length();
-        int[] todo = java.util.stream.IntStream.range(0, upper).filter(o -> added.get(o) && !inserted.get(o)).toArray();
+        int[] todo = java.util.stream.IntStream.range(0, upper).filter(o -> added.get(o) && !u.placed.get(o)).toArray();
         if (todo.length == 0) return 0;
         PhysicalCoreExecutor.pool().submit(() -> java.util.Arrays.stream(todo).parallel().forEach(ordinal -> {
-            bytes.addAndGet(place(l, ordinal));
-            inserted.set(ordinal);
+            if (!u.placed.getAndSet(ordinal)) u.bytes.addAndGet(place(u.next, ordinal));
         })).join();
         return todo.length;
+    }
+
+    /** Places the next recorded ordinal no one has placed yet, if the insert finds one nearby. */
+    private void placeOneRecorded(Cold c, CatchUp u) {
+        int from = u.cursor.get();
+        for (int tries = 0; tries < 64; tries++) {
+            int o = c.added.nextSetBit(from);
+            if (o == DocIdSetIterator.NO_MORE_DOCS) return;
+            u.cursor.accumulateAndGet(o + 1, Math::max);
+            if (!u.placed.getAndSet(o)) {
+                u.bytes.addAndGet(place(u.next, o));
+                return;
+            }
+            from = o + 1;
+        }
     }
 
     private long insert(Live l, int ordinal) {
