@@ -31,6 +31,7 @@ import org.junit.jupiter.api.io.TempDir;
 import java.io.IOException;
 import java.nio.file.Path;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Comparator;
 import java.util.HashSet;
 import java.util.List;
@@ -185,6 +186,25 @@ class IvfAshIndexNativeTest {
                 assertEquals(NQ, batcher.queryCount());
                 assertThrows(IllegalArgumentException.class, () -> batcher.search(new float[DIM + 1]));
             }
+        }
+    }
+
+    @Test
+    void reusedBuffersGiveTheSameResults() throws IOException {
+        try (FvecThreadPool pool = FvecThreadPool.create(2);
+             IvfAshIndex index = build(new Array2DVecs(data), pool);
+             IvfAshIndexSearcher searcher = index.searcherBuilder().topk(TOPK).nprobe(NPROBE).searchThreadPool(pool).build()) {
+            // The searcher keeps its query and result buffers between calls: a smaller batch
+            // after a larger one, and a larger one after it, must not see each other's leftovers
+            SearchResult all = searcher.search(queryVecs());
+            float[][] firstTwo = Arrays.copyOf(queries, 2);
+            SearchResult two = searcher.search(new Array2DVecs(firstTwo));
+            assertEquals(2, two.results().size());
+            for (int q = 0; q < 2; q++) {
+                // Batches split differently, so compare neighbour sets rather than tie order
+                assertEquals(labels(all.results().get(q)), labels(two.results().get(q)));
+            }
+            assertEquals(all, searcher.search(queryVecs()));
         }
     }
 

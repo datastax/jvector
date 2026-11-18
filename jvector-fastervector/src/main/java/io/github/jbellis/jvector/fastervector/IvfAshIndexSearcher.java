@@ -22,6 +22,8 @@ import java.lang.foreign.Arena;
 import java.lang.foreign.MemorySegment;
 import java.lang.foreign.ValueLayout;
 import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.Collections;
 import java.util.List;
 
 /**
@@ -37,6 +39,10 @@ import java.util.List;
  * object; queries whose {@link Vecs#dim()} differs are rejected.  For the open
  * path dim is not exposed by the C API (unless set via
  * {@link IvfAshIndex.OpenBuilder#dim(int)}), so the query dim is trusted.
+ * <p>
+ * <b>Threads:</b> a searcher runs one search at a time, as the native searcher requires; use
+ * one searcher per thread, or {@link IvfAshBatchingSearcher} to share one. It may be created
+ * on one thread and used on another.
  */
 public final class IvfAshIndexSearcher implements AutoCloseable {
 
@@ -47,6 +53,17 @@ public final class IvfAshIndexSearcher implements AutoCloseable {
 
     /** Raw native pointer. Null if closed. */
     private volatile MemorySegment nativePtr;
+
+    /*
+     * Off-heap query and result buffers, kept between searches and grown to the largest batch
+     * searched, so a search neither allocates nor zero-fills them. A shared arena, since the
+     * searcher may be used on a thread other than the one that created it; it is replaced when
+     * the buffers grow and closed by close(). Allocated on the first search.
+     */
+    private Arena buffers;
+    private MemorySegment queryBuf;
+    private MemorySegment labelsBuf;
+    private MemorySegment scoresBuf;
 
     IvfAshIndexSearcher(MemorySegment nativePtr, int topk, int dim, IvfAshIndex parent) {
         this.nativePtr = nativePtr;
@@ -68,8 +85,9 @@ public final class IvfAshIndexSearcher implements AutoCloseable {
     /**
      * Search all vectors of {@code queries}.
      * <p>
-     * The queries are read through a fresh cursor into a temporary off-heap
-     * row-major {@code nq × dim} float32 buffer, which is released before returning.
+     * The queries are read through a fresh cursor into the searcher's off-heap row-major
+     * {@code nq × dim} float32 buffer, which it keeps for later searches. The buffer and the
+     * result buffers grow to the largest batch searched and are freed by {@link #close()}.
      *
      * @param queries query vectors; {@link Vecs#nvecs()} is the number of queries
      * @return {@link SearchResult} with one list of up to {@code topk} {@link NodeScore}s per
@@ -90,46 +108,79 @@ public final class IvfAshIndexSearcher implements AutoCloseable {
         }
         long nq = queries.nvecs();
 
-        long resultLen = nq * (long) topk;
-        try (Arena arena = Arena.ofConfined()) {
-            MemorySegment qvecs = arena.allocate(nq * qdim * Float.BYTES);
-            long read = BuildChunks.fillChunk(queries.getCursor(), qdim, nq, qvecs);
-            if (read != nq) {
-                throw new IllegalArgumentException(
-                        "queries cursor yielded " + read + " vectors, expected " + nq);
-            }
-            MemorySegment labelsBuf = arena.allocate(resultLen * Long.BYTES);
-            MemorySegment scoresBuf = arena.allocate(resultLen * Float.BYTES);
-
-            int rc = FvecCapi.fvec_ivfash_searcher_search(ptr, nq, qvecs, labelsBuf, scoresBuf);
-            if (rc != 0) {
-                throw new FvecException("fvec_ivfash_searcher_search failed (rc=" + rc + ")");
-            }
-
-            List<List<NodeScore>> results = new ArrayList<>((int) nq);
-            for (long q = 0; q < nq; q++) {
-                List<NodeScore> row = new ArrayList<>(topk);
-                for (int k = 0; k < topk; k++) {
-                    long i = q * topk + k;
-                    long label = labelsBuf.get(ValueLayout.JAVA_LONG, i * Long.BYTES);
-                    if (label == -1) {
-                        break; // empty slot; results are best-first so the rest are empty too
-                    }
-                    row.add(new NodeScore(label, scoresBuf.get(ValueLayout.JAVA_FLOAT, i * Float.BYTES)));
-                }
-                results.add(List.copyOf(row));
-            }
-            return new SearchResult(List.copyOf(results));
+        ensureBuffers(nq * qdim, nq * (long) topk);
+        long read = BuildChunks.fillChunk(queries.getCursor(), qdim, nq, queryBuf);
+        if (read != nq) {
+            throw new IllegalArgumentException(
+                    "queries cursor yielded " + read + " vectors, expected " + nq);
         }
+
+        int rc = FvecCapi.fvec_ivfash_searcher_search(ptr, nq, queryBuf, labelsBuf, scoresBuf);
+        if (rc != 0) {
+            throw new FvecException("fvec_ivfash_searcher_search failed (rc=" + rc + ")");
+        }
+
+        // Each row is sized exactly and wrapped rather than copied: both lists are unmodifiable
+        // views of arrays nothing else holds
+        List<List<NodeScore>> results = new ArrayList<>((int) nq);
+        for (long q = 0; q < nq; q++) {
+            long base = q * topk;
+            int n = 0;
+            // Empty slots (label -1) come last, since results are best-first
+            while (n < topk && labelsBuf.getAtIndex(ValueLayout.JAVA_LONG, base + n) != -1) {
+                n++;
+            }
+            NodeScore[] row = new NodeScore[n];
+            for (int k = 0; k < n; k++) {
+                row[k] = new NodeScore(labelsBuf.getAtIndex(ValueLayout.JAVA_LONG, base + k),
+                                       scoresBuf.getAtIndex(ValueLayout.JAVA_FLOAT, base + k));
+            }
+            results.add(Collections.unmodifiableList(Arrays.asList(row)));
+        }
+        return new SearchResult(Collections.unmodifiableList(results));
     }
 
     /**
-     * Delete the native searcher. Idempotent.
+     * Make the buffers hold at least {@code queryFloats} query floats and {@code resultSlots}
+     * results. Growing replaces the arena; the old buffers are freed with it.
+     */
+    private void ensureBuffers(long queryFloats, long resultSlots) {
+        if (buffers != null
+                && queryBuf.byteSize() >= queryFloats * Float.BYTES
+                && labelsBuf.byteSize() >= resultSlots * Long.BYTES) {
+            return;
+        }
+        long floats = Math.max(queryFloats, queryBuf == null ? 0 : queryBuf.byteSize() / Float.BYTES);
+        long slots = Math.max(resultSlots, labelsBuf == null ? 0 : labelsBuf.byteSize() / Long.BYTES);
+        Arena grown = Arena.ofShared();
+        MemorySegment q = grown.allocate(ValueLayout.JAVA_FLOAT, Math.max(floats, 1));
+        MemorySegment l = grown.allocate(ValueLayout.JAVA_LONG, Math.max(slots, 1));
+        MemorySegment s = grown.allocate(ValueLayout.JAVA_FLOAT, Math.max(slots, 1));
+        if (buffers != null) {
+            buffers.close();
+        }
+        buffers = grown;
+        queryBuf = q;
+        labelsBuf = l;
+        scoresBuf = s;
+    }
+
+    /**
+     * Free the buffers and delete the native searcher. Idempotent.
+     *
+     * @throws IllegalStateException if a search is running on another thread; the searcher
+     *                               stays open
      */
     @Override
     public synchronized void close() {
         MemorySegment p = nativePtr;
         if (p != null) {
+            // First, so a search in its native call makes this throw (the call keeps the arena
+            // alive) instead of the native searcher being deleted under it
+            if (buffers != null) {
+                buffers.close();
+                buffers = null;
+            }
             nativePtr = null;
             FvecCapi.fvec_ivfash_searcher_delete(p);
             parent.onSearcherClosed(this);

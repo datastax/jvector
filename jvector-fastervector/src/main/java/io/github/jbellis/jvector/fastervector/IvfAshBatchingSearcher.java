@@ -16,7 +16,7 @@
 
 package io.github.jbellis.jvector.fastervector;
 
-import io.github.jbellis.jvector.fastervector.utils.FlatArrayVecs;
+import io.github.jbellis.jvector.fastervector.utils.Array2DVecs;
 
 import java.time.Duration;
 import java.util.ArrayList;
@@ -355,13 +355,15 @@ public final class IvfAshBatchingSearcher implements AutoCloseable {
                         "query dim mismatch: batch dim=" + d + ", query dim=" + request.query().length));
             }
         }
-        float[] flat = new float[searched.size() * d];
+        // A view over the requests' own arrays: the searcher copies each one once, straight into
+        // its off-heap query buffer
+        float[][] rows = new float[searched.size()][];
         for (int i = 0; i < searched.size(); i++) {
-            System.arraycopy(searched.get(i).query(), 0, flat, i * d, d);
+            rows[i] = searched.get(i).query();
         }
         SearchResult result;
         try {
-            result = search.apply(new FlatArrayVecs(flat, d));
+            result = search.apply(new Array2DVecs(rows));
         } catch (RuntimeException e) {
             searched.forEach(r -> r.result().completeExceptionally(e));
             return;
