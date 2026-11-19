@@ -28,6 +28,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Random;
 
+import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertTrue;
 
 /**
@@ -81,6 +82,60 @@ public class TestAdaptiveStoppingBounds {
                     }
                 }
             }
+        }
+    }
+
+    /**
+     * Every top-K search stops adaptively whatever "no threshold" value it passes (0, a negative value, or the
+     * NEGATIVE_INFINITY that {@code search(provider, topK, acceptOrds)} passes), while a threshold search
+     * (threshold > 0) keeps its own early termination.
+     */
+    @Test
+    public void adaptiveStoppingAppliesToTopKSearchesButNotToThresholdSearches() throws Exception {
+        var random = new Random(37);
+        List<VectorFloat<?>> base = new ArrayList<>();
+        for (int i = 0; i < N; i++) {
+            var v = TestUtil.randomVector(random, DIM);
+            VectorUtil.l2normalize(v);
+            base.add(v);
+        }
+        var vectors = new ListRandomAccessVectorValues(base, DIM);
+        var similarity = VectorSimilarityFunction.DOT_PRODUCT;
+        ImmutableGraphIndex graph;
+        try (var builder = new GraphIndexBuilder(BuildScoreProvider.randomAccessScoreProvider(vectors, similarity),
+                DIM, 16, 64, 1.2f, 1.2f, false)) {
+            graph = builder.build(vectors);
+        }
+        try (var standard = new GraphSearcher(graph); var adaptive = new GraphSearcher(graph)) {
+            standard.useAdaptiveTermination(false);
+            // A margin wide enough that adaptive stopping expands visibly more than the standard rule.
+            adaptive.useAdaptiveTermination(true, 1f);
+            int k = 10;
+            boolean adaptiveTookEffect = false;
+            for (int q = 0; q < QUERIES; q++) {
+                var query = TestUtil.randomVector(random, DIM);
+                VectorUtil.l2normalize(query);
+                var sf = DefaultSearchScoreProvider.exact(query, similarity, vectors).scoreFunction();
+                var provider = new DefaultSearchScoreProvider(sf, null, similarity, 1f);
+
+                int zero = adaptive.search(provider, k, k, 0f, 0f, Bits.ALL).getExpandedCountBaseLayer();
+                int negInf = adaptive.search(provider, k, Bits.ALL).getExpandedCountBaseLayer();
+                int negative = adaptive.search(provider, k, k, -0.5f, 0f, Bits.ALL).getExpandedCountBaseLayer();
+                assertEquals("query " + q + ": NEGATIVE_INFINITY stopped differently from 0", zero, negInf);
+                assertEquals("query " + q + ": a negative threshold stopped differently from 0", zero, negative);
+                int least = standard.search(provider, k, k, 0f, 0f, Bits.ALL).getExpandedCountBaseLayer();
+                adaptiveTookEffect |= negInf > least;
+
+                // Unit vectors score (1 + dot) / 2, so 0.6 keeps roughly the best tenth of the graph.
+                float threshold = 0.6f;
+                var expected = standard.search(provider, N, N, threshold, 0f, Bits.ALL);
+                var actual = adaptive.search(provider, N, N, threshold, 0f, Bits.ALL);
+                assertEquals("query " + q + ": a threshold search stopped adaptively",
+                        expected.getExpandedCountBaseLayer(), actual.getExpandedCountBaseLayer());
+                assertEquals("query " + q + ": threshold results differ",
+                        expected.getNodes().length, actual.getNodes().length);
+            }
+            assertTrue("adaptive stopping never took effect", adaptiveTookEffect);
         }
     }
 }

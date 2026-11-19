@@ -469,8 +469,10 @@ public class GraphSearcher implements Closeable {
         try {
             assert approximateResults.size() == 0; // should be cleared by setEntryPointsFromPreviousLayer
             approximateResults.setMaxSize(rerankK);
-            // When enabled, ASH score functions stop adaptively whatever provider wraps them.
-            boolean adaptive = adaptiveTerminationEnabled && level == 0 && threshold == 0.0f && rerankK > 0
+            // When enabled, ASH score functions stop adaptively whatever provider wraps them. Only top-K searches
+            // (threshold <= 0, such as the NEGATIVE_INFINITY dot product needs) stop adaptively; threshold searches
+            // keep their own early termination.
+            boolean adaptive = adaptiveTerminationEnabled && level == 0 && threshold <= 0.0f && rerankK > 0
                     && startAdaptiveTermination(scoreProvider, rerankK);
             // Bounded candidates: a scored node is expanded only while it ranks among the best rerankK accepted
             // nodes scored so far (or, adaptively, within the cutoff of the rerankK-th), and that bar only rises.
