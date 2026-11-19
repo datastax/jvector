@@ -16,7 +16,6 @@
 
 package io.github.jbellis.jvector.quantization;
 
-import io.github.jbellis.jvector.disk.ByteReadable;
 import io.github.jbellis.jvector.disk.IndexWriter;
 import io.github.jbellis.jvector.disk.RandomAccessReader;
 import io.github.jbellis.jvector.util.Accountable;
@@ -234,13 +233,12 @@ final class ASHCodes implements Accountable {
 
     /** Reads {@code size} vectors written by {@link #write} or {@link AsymmetricHashing.QuantizedVector#write}. */
     static ASHCodes load(RandomAccessReader in, int size, int quantizedDim, int bitsPerDimension) throws IOException {
-        if (!(in instanceof ByteReadable)) throw new IOException("ASH requires ByteReadable reader for landmark");
         ASHCodes codes = allocate(size, quantizedDim, bitsPerDimension);
         byte[] body = new byte[codes.bodyBytes];
         for (int i = 0; i < size; i++) {
             codes.scales[i] = AsymmetricHashing.readFloat16(in);
             codes.offsets[i] = AsymmetricHashing.readFloat16(in);
-            codes.landmarks[i] = ((ByteReadable) in).readByte();
+            codes.landmarks[i] = in.readByte();
             if (codes.signWords != 0) {
                 long[] page = codes.signPage(i);
                 for (int w = 0, at = codes.signOffset(i); w < codes.signWords; w++) page[at + w] = in.readLong();

@@ -1277,12 +1277,7 @@ public class AsymmetricHashing implements VectorCompressor<AsymmetricHashing.Qua
             float scale = readFloat16(in);
             float offset = readFloat16(in);
 
-            byte landmark;
-            if (in instanceof io.github.jbellis.jvector.disk.ByteReadable) {
-                landmark = ((io.github.jbellis.jvector.disk.ByteReadable) in).readByte();
-            } else {
-                throw new IOException("ASH requires ByteReadable reader for landmark");
-            }
+            byte landmark = in.readByte();
 
             int words = signWordsForDims(quantizedDim, bitsPerDimension);
             long[] signWords = new long[words];
@@ -1312,11 +1307,7 @@ public class AsymmetricHashing implements VectorCompressor<AsymmetricHashing.Qua
             dest.scale = readFloat16(in);
             dest.offset = readFloat16(in);
 
-            if (in instanceof io.github.jbellis.jvector.disk.ByteReadable) {
-                dest.landmark = ((io.github.jbellis.jvector.disk.ByteReadable) in).readByte();
-            } else {
-                throw new IOException("ASH requires ByteReadable reader for landmark");
-            }
+            dest.landmark = in.readByte();
 
             int words = signWordsForDims(quantizedDim, bitsPerDimension);
             if (dest.binaryVector == null || dest.binaryVector.length != words) {
@@ -2969,23 +2960,10 @@ public class AsymmetricHashing implements VectorCompressor<AsymmetricHashing.Qua
     }
 
     static float readFloat16(RandomAccessReader in) throws IOException {
-        int hi = readUnsignedByte(in);
-        int lo = readUnsignedByte(in);
+        int hi = in.readByte() & 0xFF;
+        int lo = in.readByte() & 0xFF;
         return halfBitsToFloat((hi << 8) | lo);
     }
-
-    private static int readUnsignedByte(RandomAccessReader in) throws IOException {
-        if (in instanceof io.github.jbellis.jvector.disk.ByteReadable) {
-            return ((io.github.jbellis.jvector.disk.ByteReadable) in).readByte() & 0xFF;
-        }
-
-        byte[] one = ONE_BYTE.get();
-        in.readFully(one);
-        return one[0] & 0xFF;
-    }
-
-    private static final ThreadLocal<byte[]> ONE_BYTE =
-            ThreadLocal.withInitial(() -> new byte[1]);
 
     /**
      * IEEE-754 binary16 round-to-nearest-even conversion.
