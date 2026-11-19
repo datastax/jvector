@@ -61,6 +61,7 @@ import java.util.function.IntFunction;
 import static io.github.jbellis.jvector.TestUtil.createRandomVectors;
 import static io.github.jbellis.jvector.quantization.KMeansPlusPlusClusterer.UNWEIGHTED;
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertNotEquals;
 import static org.junit.Assert.assertTrue;
 import static org.junit.Assert.assertFalse;
 
@@ -988,6 +989,73 @@ public class TestOnDiskGraphIndexCompactor extends RandomizedTest {
                 stored = mergedPqv.get(compactor.ordinalMappers().get(1).oldToNew(i));
                 for (int b = 0; b < M; b++) {
                     assertEquals("ord " + (n + i) + " code byte " + b, tmpCode.get(b), stored.get(b));
+                }
+            }
+        }
+    }
+
+    /** {@code ProductQuantization.MAGIC}: the first int of a PQ serialized at version 3 or above. */
+    private static final int PQ_MAGIC = 0x75EC4012;
+
+    /**
+     * {@code withVersion} governs the compressed sidecar too: the merged PQ in its header is serialized
+     * at the output's format version (3 and above carry the PQ magic and that version; 2 writes the
+     * layout without them), the graph is written at the same version, and the sidecar loads back as
+     * {@code PQVectors} with every merged code in place.
+     */
+    @Test
+    public void testCompactCompressedSidecarVersion() throws Exception {
+        int dim = 16, n = 32, M = 8, clusters = 16;
+        VectorSimilarityFunction vsf = VectorSimilarityFunction.EUCLIDEAN;
+        List<VectorFloat<?>> vecs0 = createRandomVectors(n, dim);
+        List<VectorFloat<?>> vecs1 = createRandomVectors(n, dim);
+        Path graph0 = buildSimpleSourceGraph(vecs0, dim, vsf, "sidecarver_src_0");
+        Path graph1 = buildSimpleSourceGraph(vecs1, dim, vsf, "sidecarver_src_1");
+        RandomAccessVectorValues ravv0 = new ListRandomAccessVectorValues(vecs0, dim);
+        RandomAccessVectorValues ravv1 = new ListRandomAccessVectorValues(vecs1, dim);
+        ProductQuantization pq0 = ProductQuantization.compute(ravv0, M, clusters, true, UNWEIGHTED, simdExecutor, parallelExecutor);
+        ProductQuantization pq1 = ProductQuantization.compute(ravv1, M, clusters, true, UNWEIGHTED, simdExecutor, parallelExecutor);
+        PQVectors pqv0 = (PQVectors) pq0.encodeAll(ravv0, simdExecutor);
+        PQVectors pqv1 = (PQVectors) pq1.encodeAll(ravv1, simdExecutor);
+
+        for (int version : new int[]{2, 3, 4, OnDiskGraphIndex.CURRENT_VERSION}) {
+            try (ReaderSupplier rs0 = ReaderSupplierFactory.open(graph0); ReaderSupplier rs1 = ReaderSupplierFactory.open(graph1)) {
+                OnDiskGraphIndex g0 = OnDiskGraphIndex.load(rs0);
+                OnDiskGraphIndex g1 = OnDiskGraphIndex.load(rs1);
+                FixedBitSet live0 = new FixedBitSet(n); live0.set(0, n);
+                FixedBitSet live1 = new FixedBitSet(n); live1.set(0, n);
+                var compactor = new OnDiskGraphIndexCompactor(
+                        List.of(g0, g1),
+                        List.<io.github.jbellis.jvector.quantization.CompressedVectors>of(pqv0, pqv1),
+                        List.of(live0, live1),
+                        vsf, null).withVersion(version);
+                Path graphOut = testDirectory.resolve("sidecarver_graph_v" + version);
+                Path compressedOut = testDirectory.resolve("sidecarver_pq_v" + version);
+                compactor.compact(graphOut, compressedOut);
+
+                try (ReaderSupplier rsOut = ReaderSupplierFactory.open(graphOut)) {
+                    assertEquals("graph version", version, OnDiskGraphIndex.load(rsOut).version);
+                }
+                try (var rsCompressed = ReaderSupplierFactory.open(compressedOut); var reader = rsCompressed.get()) {
+                    int first = reader.readInt();
+                    if (version >= 3) {
+                        assertEquals("PQ magic at version " + version, PQ_MAGIC, first);
+                        assertEquals("PQ version in the sidecar", version, reader.readInt());
+                    } else {
+                        assertNotEquals("no PQ magic at version " + version, PQ_MAGIC, first);
+                    }
+                    reader.seek(0);
+                    PQVectors merged = PQVectors.load(reader);
+                    assertEquals("merged count at version " + version, 2 * n, merged.count());
+                    assertEquals("merged subspaces at version " + version, M, merged.getCompressor().getSubspaceCount());
+                    var code = vectorTypeSupport.createByteSequence(M);
+                    for (int i = 0; i < n; i++) {
+                        merged.getCompressor().encodeTo(vecs1.get(i), code);
+                        var stored = merged.get(compactor.ordinalMappers().get(1).oldToNew(i));
+                        for (int b = 0; b < M; b++) {
+                            assertEquals("version " + version + " ord " + (n + i) + " code byte " + b, code.get(b), stored.get(b));
+                        }
+                    }
                 }
             }
         }

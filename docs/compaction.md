@@ -41,7 +41,7 @@ The compactor assigns the output ordinals; the caller does not choose them. Live
 
 ### Output format version
 
-The sources may be of any on-disk format version the reader supports (2 to 6); the compactor detects each source's version from its file. The output is written at `OnDiskGraphIndex.CURRENT_VERSION` unless `withVersion(int)` asks for another one, so by default a compaction also upgrades old sources. An output that carries fused PQ needs version 6, and one with upper layers version 4 or above; a version that cannot hold the output is rejected when `compact` starts. A sharded compaction writes every shard at the version of the compactor the session was opened on.
+The sources may be of any on-disk format version the reader supports (2 to 6); the compactor detects each source's version from its file. The output is written at `OnDiskGraphIndex.CURRENT_VERSION` unless `withVersion(int)` asks for another one, so by default a compaction also upgrades old sources. An output that carries fused PQ needs version 6, and one with upper layers version 4 or above; a version that cannot hold the output is rejected when `compact` starts. A sharded compaction writes every shard at the version of the compactor the session was opened on. A compressed sidecar written beside the graph (`compact(graphPath, compressedPath)`) serializes its merged compressor at the same version, so the two files always share one; a PQ with an anisotropic threshold needs version 3 or above.
 
 ### Handling Deleted Nodes
 

@@ -21,6 +21,7 @@ import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 import java.nio.file.Path;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -179,11 +180,25 @@ final class CompactWriter implements AutoCloseable {
         return fusedPQEnabled && pqCodeCache == null;
     }
 
+    // The header as writeHeader() serialized it, for the assertion in writeFooter(): every header field
+    // (version, dimension, entry node, layer sizes, features) is fixed in the constructor and nothing fills
+    // one in while the records are written. A footer-based format (version 5 and above) writes the header
+    // again at the end, so a late change would at least reach the file there; a header-based format
+    // (4 and below) has only the copy written at the start, so for it a late change would be lost.
+    private byte[] headerAtStart;
+
     public void writeHeader() throws IOException {
         writer.seek(startOffset);
         header.write(writer);
         assert writer.position() == startOffset + headerSize : String.format("%d != %d", writer.position(), startOffset + headerSize);
         writer.flush();
+        headerAtStart = serializedHeader();
+    }
+
+    private byte[] serializedHeader() throws IOException {
+        var out = ByteBufferIndexWriter.create(headerSize, false);
+        header.write(out);
+        return Arrays.copyOf(out.getBuffer().array(), out.getBuffer().position());
     }
 
     void writeFooter() throws IOException {
@@ -208,7 +223,11 @@ final class CompactWriter implements AutoCloseable {
             }
         }
         if (!usesFooter) {
-            return;   // a header-based format: the header written at the start is the metadata
+            // A header-based format: the header written at the start is the metadata, and it is not
+            // written again, so it must not have changed since (see headerAtStart).
+            assert headerAtStart == null || Arrays.equals(headerAtStart, serializedHeader())
+                    : "the header changed after writeHeader(); a header-based format cannot record that";
+            return;
         }
         long headerOffset = writer.position();
         header.write(writer);

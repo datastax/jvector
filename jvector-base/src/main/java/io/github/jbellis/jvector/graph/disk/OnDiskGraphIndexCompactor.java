@@ -349,6 +349,8 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
      * Sets the on-disk format version of the output; the default is {@link OnDiskGraphIndex#CURRENT_VERSION}.
      * The sources may be of any version the reader supports, and the output is written at this one.
      * An output that carries fused PQ needs version 6; one with upper layers needs version 4 or above.
+     * A compressed sidecar written beside the graph ({@link #compact(Path, Path)}) serializes its merged
+     * compressor at the same version; a PQ with an anisotropic threshold needs version 3 or above there.
      *
      * @throws IllegalArgumentException if the version is not one the writer supports
      */
@@ -874,7 +876,7 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
     /** Snapshot the compactor's state into a {@link CompactionContext} for strategies to consume. */
     private CompactionContext buildContext() {
         return new CompactionContext(sources, sourceCompressed, liveNodes, remappers,
-                dimension, maxOrdinal, executor, taskWindowSize, recordAnnounceAhead);
+                dimension, maxOrdinal, executor, taskWindowSize, recordAnnounceAhead, version);
     }
 
     /**
