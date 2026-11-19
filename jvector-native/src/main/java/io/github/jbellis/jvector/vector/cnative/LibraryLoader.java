@@ -18,32 +18,43 @@ package io.github.jbellis.jvector.vector.cnative;
 
 import java.io.File;
 import java.nio.file.Files;
+import java.util.Locale;
 
 /**
  * This class is used to load supporting native libraries. First, it tries to load the library from the system path.
  * If that fails, it tries to load the library from the classpath (using the usual copying to a tmp directory route).
  * <p>
- * Two resource names are bundled in the jar:
+ * One resource per supported platform may be bundled in the jar:
  * <ul>
- *   <li>{@code /libjvector-x86_64.so}  — built natively for x86_64</li>
- *   <li>{@code /libjvector-aarch64.so} — cross-compiled for aarch64</li>
+ *   <li>{@code /libjvector-x86_64.so}  — Linux x86_64</li>
+ *   <li>{@code /libjvector-aarch64.so} — Linux aarch64</li>
+ *   <li>{@code /jvector-windows-x86_64.dll} — Windows x86_64</li>
  * </ul>
- * At runtime the correct file is chosen based on {@code os.arch}.
+ * At runtime the correct file is chosen based on {@code os.name} and {@code os.arch}. Release jars
+ * contain all of them; a development build contains only the library built on the current machine.
  */
 public class LibraryLoader {
     private LibraryLoader() {}
 
     /**
      * Returns the classpath resource name for the native library appropriate for the
-     * current CPU architecture, or {@code null} when the architecture is not supported.
+     * current operating system and CPU architecture, or {@code null} when the platform is not supported.
      */
-    static String resourceNameForArch() {
-        String arch = System.getProperty("os.arch", "");
-        if (arch.equals("aarch64") || arch.equals("arm64")) {
-            return "/libjvector-aarch64.so";
-        }
-        if (arch.equals("amd64") || arch.equals("x86_64")) {
-            return "/libjvector-x86_64.so";
+    static String resourceNameForPlatform() {
+        return resourceNameFor(System.getProperty("os.name", ""), System.getProperty("os.arch", ""));
+    }
+
+    /// Maps `os.name` / `os.arch` values to the bundled resource name, or `null` if unsupported.
+    /// The Linux names predate multi-platform support and are kept for compatibility.
+    static String resourceNameFor(String osName, String archName) {
+        String os = osName.toLowerCase(Locale.ROOT);
+        boolean aarch64 = archName.equals("aarch64") || archName.equals("arm64");
+        boolean x86_64 = archName.equals("amd64") || archName.equals("x86_64");
+        if (os.contains("linux")) {
+            if (aarch64) return "/libjvector-aarch64.so";
+            if (x86_64) return "/libjvector-x86_64.so";
+        } else if (os.contains("windows")) {
+            if (x86_64) return "/jvector-windows-x86_64.dll";
         }
         return null;
     }
@@ -66,9 +77,9 @@ public class LibraryLoader {
         try {
             // reinventing the wheel instead of picking up deps, so we'll just use the classloader to load the library
             // as a resource and then copy it to a tmp directory and load it from there
-            String resourceName = resourceNameForArch();
+            String resourceName = resourceNameForPlatform();
             if (resourceName == null) {
-                return false; // unsupported architecture
+                return false; // unsupported platform
             }
             String baseName = resourceName.substring(1, resourceName.lastIndexOf('.'));   // e.g. "libjvector-aarch64"
             String ext      = resourceName.substring(resourceName.lastIndexOf('.'));      // e.g. ".so"
