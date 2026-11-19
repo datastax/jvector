@@ -16,6 +16,7 @@
 
 package io.github.jbellis.jvector.quantization;
 
+import io.github.jbellis.jvector.annotations.Experimental;
 import io.github.jbellis.jvector.vector.VectorUtilSupport;
 import io.github.jbellis.jvector.vector.VectorizationProvider;
 import io.github.jbellis.jvector.vector.types.VectorFloat;
@@ -34,6 +35,7 @@ import java.util.Objects;
  * arrays and immutable packed inputs. Scalar/Panama execution supports all model landmarks;
  * a capable native provider handles C=1 with one call per entire neighborhood.</p>
  */
+@Experimental
 public final class ASHNeighborhoodScorer {
     private final int maxDegree;
     private final int blockSize;

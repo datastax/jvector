@@ -16,9 +16,11 @@
 
 package io.github.jbellis.jvector.vector;
 
+import io.github.jbellis.jvector.annotations.Experimental;
 import java.util.Objects;
 
 /** Portable reference and bounds contract for interleaved ASH nibble blocks. */
+@Experimental
 public final class ASHLutScoring {
     private ASHLutScoring() {}
 

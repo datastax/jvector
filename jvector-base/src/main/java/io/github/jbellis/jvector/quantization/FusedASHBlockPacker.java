@@ -16,11 +16,13 @@
 
 package io.github.jbellis.jvector.quantization;
 
+import io.github.jbellis.jvector.annotations.Experimental;
 import java.lang.invoke.MethodHandles;
 import java.lang.invoke.VarHandle;
 import java.nio.ByteOrder;
 
 /** Packs canonical ASH codes into the existing fused neighborhood layout. */
+@Experimental
 public final class FusedASHBlockPacker {
     private static final VarHandle LONGS =
             MethodHandles.byteArrayViewVarHandle(long[].class, ByteOrder.LITTLE_ENDIAN);

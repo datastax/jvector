@@ -16,6 +16,7 @@
 
 package io.github.jbellis.jvector.util;
 
+import io.github.jbellis.jvector.annotations.Experimental;
 import java.util.Arrays;
 import java.util.concurrent.ThreadLocalRandom;
 import java.util.concurrent.atomic.AtomicLong;
@@ -30,6 +31,7 @@ import java.util.concurrent.atomic.AtomicLongArray;
  * offers the sample stays a sample of offered ordinals, but is not exactly uniform: two offers may replace the
  * same slot. That does not matter for training.</p>
  */
+@Experimental
 public final class OrdinalReservoir implements Accountable {
     private static final long EMPTY = -1L;
 

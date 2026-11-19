@@ -16,6 +16,7 @@
 
 package io.github.jbellis.jvector.quantization;
 
+import io.github.jbellis.jvector.annotations.Experimental;
 import io.github.jbellis.jvector.vector.Matrix;
 import io.github.jbellis.jvector.vector.VectorUtil;
 import io.github.jbellis.jvector.vector.VectorizationProvider;
@@ -39,6 +40,7 @@ import static java.lang.Math.max;
  * 1. Mini-Batch Stochastic Updates (fast convergence).
  * 2. K-Means++ Subsampling Initialization (fast startup).
  */
+@Experimental
 public class MiniBatchKMeansClusterer {
     private static final VectorTypeSupport vectorTypeSupport = VectorizationProvider.getInstance().getVectorTypeSupport();
 

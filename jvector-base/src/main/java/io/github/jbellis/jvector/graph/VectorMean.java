@@ -16,6 +16,7 @@
 
 package io.github.jbellis.jvector.graph;
 
+import io.github.jbellis.jvector.annotations.Experimental;
 import io.github.jbellis.jvector.vector.VectorizationProvider;
 import io.github.jbellis.jvector.vector.types.VectorFloat;
 
@@ -31,6 +32,7 @@ import java.util.concurrent.ConcurrentLinkedQueue;
  * vectors to {@link #accept}; bulk encoders can use {@link #duringScan} instead.
  * Neither loaders nor vector compressors need to implement a statistics interface.
  */
+@Experimental
 public final class VectorMean {
     /** A bounded uniform sample, independent of the input size and quantizer. */
     public static final int DEFAULT_SAMPLE_SIZE = 16384;

@@ -15,6 +15,7 @@
  */
 package io.github.jbellis.jvector.util;
 
+import io.github.jbellis.jvector.annotations.Experimental;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Collections;
@@ -53,6 +54,7 @@ import java.util.concurrent.locks.ReentrantLock;
  * Do not close from a callback or block a host executor thread needed to drain this
  * service. The host must not cancel or discard already accepted drain tasks.
  */
+@Experimental
 public final class BatchingExecutor<T> implements AutoCloseable {
     /** Callbacks must be thread-safe. Completion must return promptly. */
     public interface Operation<T> {

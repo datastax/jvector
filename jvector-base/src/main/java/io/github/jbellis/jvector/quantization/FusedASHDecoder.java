@@ -16,6 +16,7 @@
 
 package io.github.jbellis.jvector.quantization;
 
+import io.github.jbellis.jvector.annotations.Experimental;
 import io.github.jbellis.jvector.graph.disk.feature.FusedFeature;
 import io.github.jbellis.jvector.graph.similarity.ScoreFunction;
 import io.github.jbellis.jvector.vector.VectorSimilarityFunction;
@@ -64,6 +65,7 @@ import java.util.Objects;
  *   similarity = (1 + rawDotProduct) / 2   (unclamped, the exact DOT_PRODUCT scale)
  * </pre>
  */
+@Experimental
 public final class FusedASHDecoder implements ScoreFunction.AdaptiveApproximateScoreFunction {
 
     /**

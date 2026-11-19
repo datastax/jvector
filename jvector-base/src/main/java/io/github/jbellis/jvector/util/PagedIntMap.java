@@ -15,6 +15,7 @@
  */
 package io.github.jbellis.jvector.util;
 
+import io.github.jbellis.jvector.annotations.Experimental;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReferenceArray;
 
@@ -35,6 +36,7 @@ import java.util.concurrent.atomic.AtomicReferenceArray;
  * As with {@link DenseIntMap}, space is allocated for all keys from 0 to the highest page in use,
  * and gap keys map to null.
  */
+@Experimental
 public final class PagedIntMap<T> implements IntMap<T> {
     static final int PAGE_BITS = 12;
     static final int PAGE_SIZE = 1 << PAGE_BITS;

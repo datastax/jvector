@@ -16,6 +16,8 @@
 
 package io.github.jbellis.jvector.quantization;
 
+import io.github.jbellis.jvector.annotations.Experimental;
+
 /**
  * Layout and scalar reference helpers for FusedASH neighborhood blocks.
  *
@@ -56,6 +58,7 @@ package io.github.jbellis.jvector.quantization;
  * <p>Block and neighborhood byte-size calculations use checked arithmetic. Shapes whose
  * serialized storage cannot fit a Java array fail with {@link ArithmeticException}.</p>
  */
+@Experimental
 public final class FusedASHLayout {
     private FusedASHLayout() {}
 

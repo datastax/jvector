@@ -16,6 +16,7 @@
 
 package io.github.jbellis.jvector.quantization;
 
+import io.github.jbellis.jvector.annotations.Experimental;
 import io.github.jbellis.jvector.vector.VectorizationProvider;
 
 import io.github.jbellis.jvector.vector.VectorSimilarityFunction;
@@ -53,6 +54,7 @@ import io.github.jbellis.jvector.vector.types.VectorFloat;
  *
  * NOTE: Only DOT_PRODUCT is supported for now.
  */
+@Experimental
 public final class ASHScorer {
     /**
      * Converts a raw ASH dot-product estimate to the graph's DOT_PRODUCT similarity scale, (1 + dot) / 2, the same

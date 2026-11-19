@@ -15,6 +15,8 @@
  */
 package io.github.jbellis.jvector.quantization;
 
+import io.github.jbellis.jvector.annotations.Experimental;
+
 /**
  * Block-oriented scorer for ASH vectors.
  * A block scorer computes scores for a contiguous range of vector ordinals
@@ -24,6 +26,7 @@ package io.github.jbellis.jvector.quantization;
  *  - Query reuse across multiple neighbors
  *  - Graph-local scoring (e.g., FusedASH)
  */
+@Experimental
 public interface ASHBlockScorer {
 
     /** Human-readable implementation and dispatch details for benchmark diagnostics. */

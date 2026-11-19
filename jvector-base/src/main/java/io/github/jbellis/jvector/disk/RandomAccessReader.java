@@ -31,7 +31,7 @@ import java.nio.ByteBuffer;
  * Thus, RandomAccessReader implementations are expected to be stateful and NOT threadsafe; JVector
  * uses the ReaderSupplier API to create a RandomAccessReader per thread, as needed.
  */
-public interface RandomAccessReader extends AutoCloseable, ByteReadable {
+public interface RandomAccessReader extends AutoCloseable {
     /**
      * Seeks to the specified offset.
      * @param offset the offset to seek to
@@ -53,7 +53,6 @@ public interface RandomAccessReader extends AutoCloseable, ByteReadable {
      * RandomAccessReader implementations. Production readers should override this
      * with a zero-allocation implementation.</p>
      */
-    @Override
     default byte readByte() throws IOException {
         byte[] one = new byte[1];
         readFully(one);

@@ -16,6 +16,7 @@
 
 package io.github.jbellis.jvector.quantization;
 
+import io.github.jbellis.jvector.annotations.Experimental;
 import io.github.jbellis.jvector.graph.similarity.ScoreFunction;
 import io.github.jbellis.jvector.util.RamUsageEstimator;
 import io.github.jbellis.jvector.vector.VectorUtil;
@@ -30,6 +31,7 @@ import io.github.jbellis.jvector.vector.VectorUtil;
  * from their own arrays. Both go through the same kernels, so scores do not depend on where
  * an operand is stored.</p>
  */
+@Experimental
 public final class ASHSymmetricScorer {
     public enum Kernel { AUTO, SCALAR, SIMD }
     private static final java.lang.invoke.VarHandle SYMMETRIC_WORD = java.lang.invoke.MethodHandles.byteArrayViewVarHandle(long[].class, java.nio.ByteOrder.LITTLE_ENDIAN);

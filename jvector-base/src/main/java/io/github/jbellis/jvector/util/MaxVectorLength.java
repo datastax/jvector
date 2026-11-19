@@ -15,6 +15,7 @@
  */
 package io.github.jbellis.jvector.util;
 
+import io.github.jbellis.jvector.annotations.Experimental;
 import io.github.jbellis.jvector.vector.VectorUtil;
 import io.github.jbellis.jvector.vector.types.VectorFloat;
 
@@ -34,6 +35,7 @@ import java.util.concurrent.atomic.AtomicInteger;
  *
  * <p>{@link #get} and {@link #restore} round-trip all three states through one float, for storage.
  */
+@Experimental
 public final class MaxVectorLength {
     private static final int NONE = -1;
     private static final int UNKNOWN = Float.floatToIntBits(Float.POSITIVE_INFINITY);

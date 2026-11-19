@@ -16,6 +16,7 @@
 
 package io.github.jbellis.jvector.util;
 
+import io.github.jbellis.jvector.annotations.Experimental;
 import java.lang.invoke.MethodHandles;
 import java.lang.invoke.VarHandle;
 import java.util.AbstractList;
@@ -45,6 +46,7 @@ import java.util.concurrent.locks.LockSupport;
  * executor, worker, completion future, timer, or per-operation request object.
  * A slot is allocated on each participating thread's first use of this instance.
  */
+@Experimental
 public final class CallerBatchProcessor<I, O> implements Accountable {
     /** An operation that writes caller-owned outputs before returning. */
     public interface Operation<I, O> {
