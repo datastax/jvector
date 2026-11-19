@@ -31,7 +31,6 @@ import io.github.jbellis.jvector.util.RamUsageEstimator;
 import io.github.jbellis.jvector.vector.VectorUtil;
 import io.github.jbellis.jvector.vector.VectorUtilSupport;
 import io.github.jbellis.jvector.vector.VectorizationProvider;
-import io.github.jbellis.jvector.vector.types.ByteSequence;
 import io.github.jbellis.jvector.vector.types.FloatArray;
 import io.github.jbellis.jvector.vector.types.VectorFloat;
 import io.github.jbellis.jvector.vector.types.VectorTypeSupport;
@@ -171,17 +170,6 @@ public class AsymmetricHashing implements VectorCompressor<AsymmetricHashing.Qua
         return maxEncoded.get();
     }
 
-    // Both optimizers quantize the projected body the same way; they differ only in the
-    // learned transform.
-    private final BinaryQuantizer quantizer = new ProjectedBinaryQuantizer();
-
-    private BinaryQuantizer quantizer() {
-        if (optimizer != RANDOM && optimizer != ITQ) {
-            throw new IllegalStateException("Unknown optimizer " + optimizer);
-        }
-        return quantizer;
-    }
-
     /**
      * Class constructor.
      * @param originalDim the dimensionality of the vectors to be quantized
@@ -215,6 +203,11 @@ public class AsymmetricHashing implements VectorCompressor<AsymmetricHashing.Qua
             );
         }
 
+        // Both optimizers quantize the projected body the same way; they differ only in the
+        // learned transform.
+        if (optimizer != RANDOM && optimizer != ITQ) {
+            throw new IllegalArgumentException("Unknown optimizer " + optimizer);
+        }
         this.optimizer = optimizer;
         this.stiefelTransform = Objects.requireNonNull(stiefelTransform);
 
@@ -276,14 +269,13 @@ public class AsymmetricHashing implements VectorCompressor<AsymmetricHashing.Qua
                 + RamUsageEstimator.sizeOf(landmarkNormSq)
                 + estimateArray2DBytes(landmarkProj)
                 + RamUsageEstimator.sizeOf(landmarkProjSum)
-                + stiefelTransform.heapBytes
-                + RamUsageEstimator.shallowSizeOf(quantizer);
+                + stiefelTransform.heapBytes;
         for (VectorFloat<?> landmark : landmarks) bytes = Math.addExact(bytes, landmark.ramBytesUsed());
         this.heapBytes = bytes;
     }
 
     /**
-     * Initialize ASH index-wide parameters using the legacy 1-bit body layout.
+     * Initialize ASH index-wide parameters with the default 2 bits per projected dimension.
      *
      * @param ravv the vectors to quantize
      * @param optimizer the optimizer to use
@@ -678,7 +670,7 @@ public class AsymmetricHashing implements VectorCompressor<AsymmetricHashing.Qua
     // Index-level quantization entry point
     // ---------------------------------------------------------------------
 
-    public float quantizeVector(VectorFloat<?> vector,
+    float quantizeVector(VectorFloat<?> vector,
                                 float residualNorm,
                                 byte landmark,
                                 QuantizedVector dest) {
@@ -704,7 +696,6 @@ public class AsymmetricHashing implements VectorCompressor<AsymmetricHashing.Qua
                 bitsPerDimension,
                 mu,
                 stiefelTransform,
-                quantizer(),
                 dest
         );
     }
@@ -713,11 +704,6 @@ public class AsymmetricHashing implements VectorCompressor<AsymmetricHashing.Qua
     // Projection-code layout helpers
     // ---------------------------------------------------------------------
 
-    /**
-     * Fast-scan projection codes use C++-compatible 4-bit projection groups.
-     * Core ASH supports bitsPerDimension in [1,9], but this layout is only
-     * defined for the nibble-friendly multibit cases used by FusedASH.
-     */
     static boolean usesFastScanProjectionCode(int bitsPerDimension) {
         return bitsPerDimension == 2 || bitsPerDimension == 4;
     }
@@ -952,19 +938,8 @@ public class AsymmetricHashing implements VectorCompressor<AsymmetricHashing.Qua
     // Quantization strategies
     // ---------------------------------------------------------------------
 
-    public interface BinaryQuantizer {
-        float quantizeBody(VectorFloat<?> vector,
-                           VectorFloat<?> mu,
-                           float residualNorm,
-                           int quantizedDim,
-                           int bitsPerDimension,
-                           StiefelTransform stiefel,
-                           long[] outSignWords,
-                           byte[] outExtraBits);
-    }
-
     /** Quantizes the projected residual body into sign words and extra magnitude bits. */
-    public static final class ProjectedBinaryQuantizer implements BinaryQuantizer {
+    private static final class ProjectedBinaryQuantizer {
         // ThreadLocal to hold the reusable buffers.
         // Using a simple container class to avoid multiple ThreadLocal lookups.
         private static final ThreadLocal<Workspace> WORKSPACE = ThreadLocal.withInitial(Workspace::new);
@@ -985,8 +960,7 @@ public class AsymmetricHashing implements VectorCompressor<AsymmetricHashing.Qua
             }
         }
 
-        @Override
-        public float quantizeBody(VectorFloat<?> vector,
+        static float quantizeBody(VectorFloat<?> vector,
                                   VectorFloat<?> mu,
                                   float residualNorm,
                                   int quantizedDim,
@@ -1069,6 +1043,11 @@ public class AsymmetricHashing implements VectorCompressor<AsymmetricHashing.Qua
             return (float) Math.sqrt(Math.max(codeNorm2, 1e-20));
         }
 
+        /**
+         * Fast-scan projection codes use C++-compatible 4-bit projection groups.
+         * Core ASH supports bitsPerDimension in [1,9], but this layout is only
+         * defined for the nibble-friendly multibit cases used by FusedASH.
+         */
         private static float quantizeFastScanProjectionCode(
                 float[] proj,
                 double[] absNorm,
@@ -1200,7 +1179,6 @@ public class AsymmetricHashing implements VectorCompressor<AsymmetricHashing.Qua
                                 int bitsPerDimension,
                                 VectorFloat<?> mu,
                                 StiefelTransform stiefel,
-                                BinaryQuantizer quantizer,
                                 QuantizedVector dest) {
 
             assert Float.isFinite(dest.offset) : "offset is not finite";
@@ -1222,7 +1200,7 @@ public class AsymmetricHashing implements VectorCompressor<AsymmetricHashing.Qua
                 Arrays.fill(dest.extraBits, 0, bodyBytes, (byte) 0);
             }
 
-            return quantizer.quantizeBody(
+            return ProjectedBinaryQuantizer.quantizeBody(
                     vector,
                     mu,
                     residualNorm,
@@ -1314,10 +1292,6 @@ public class AsymmetricHashing implements VectorCompressor<AsymmetricHashing.Qua
             }
         }
 
-        static void setBit(long[] words, int bitIndex) {
-            words[bitIndex >>> 6] |= 1L << (bitIndex & 63);
-        }
-
         static boolean getBit(long[] words, int bitIndex) {
             return getBit(words, 0, bitIndex);
         }
@@ -1372,26 +1346,6 @@ public class AsymmetricHashing implements VectorCompressor<AsymmetricHashing.Qua
     }
 
     /**
-     * Private helper to provide byte storage for binary body.
-     * @param nBits the number of bits to store
-     * @return the byte sequence
-     */
-    private static ByteSequence<?> createBodyByteSequenceForBits(int nBits) {
-        int nBytes = (nBits + 7) >>> 3;
-        return vectorTypeSupport.createByteSequence(nBytes);
-    }
-
-    /**
-     * Orthonormal linear transform on the Stiefel manifold.
-     * W  : originalDim × quantizedDim
-     * A  : quantizedDim × originalDim, where A = Wᵀ
-     * Concurrent query projection and caller CPU budgeting are described in
-     * {@code docs/ash-query-integration.md}.
-     * The transform is applied as:
-     *     y = A · (x − μ)
-     */
-
-    /**
      * Sets how this model projects queries: the operand precision and the largest group of concurrent
      * synchronous queries projected together in one matrix multiply (1 disables combining). Call it
      * before the first query, for example right after loading an index; afterwards it throws
@@ -1413,6 +1367,15 @@ public class AsymmetricHashing implements VectorCompressor<AsymmetricHashing.Qua
         return stiefelTransform.queryBatchSize();
     }
 
+    /**
+     * Orthonormal linear transform on the Stiefel manifold.
+     * W  : originalDim × quantizedDim
+     * A  : quantizedDim × originalDim, where A = Wᵀ
+     * Concurrent query projection and caller CPU budgeting are described in
+     * {@code docs/ash-query-integration.md}.
+     * The transform is applied as:
+     *     y = A · (x − μ)
+     */
     public static final class StiefelTransform {
 
         /** Forward projection (column-orthonormal). Shape: [originalDim × quantizedDim]. */
@@ -1493,7 +1456,7 @@ public class AsymmetricHashing implements VectorCompressor<AsymmetricHashing.Qua
         }
 
         /** Snapshot of completed/claimed batch counts, or null when combining is disabled. */
-        public long[] queryProjectionBatchHistogram() {
+        long[] queryProjectionBatchHistogram() {
             var projection = queryProjection; // Inspection must not prepare a query view.
             return projection == null || queryBatches == null ? null : queryBatches.batchHistogram();
         }
