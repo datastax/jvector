@@ -337,11 +337,15 @@ struct Context {
                 for (int column = 0; column < columns; ++column)
                     packed[(size_t(row / 16) * (padded_columns / 4) + column / 4) * 64
                             + (row % 16) * 4 + column % 4] = target[size_t(row) * columns + column];
-            retained_bytes.fetch_add(bytes, std::memory_order_relaxed);
+            // The direct kernel serves every tile, so it keeps only the packed copy. The oneDNN
+            // path (no AVX-512 VNNI, or JVECTOR_ASH_INT8_ONEDNN) keeps the plain matrix for its
+            // weight reorders and checks its primitive here.
+            plain = memory();
+            retained_bytes.store(bytes + sizeof(Context) + size_t(rows) * (sizeof(float) + sizeof(int32_t)),
+                    std::memory_order_relaxed);
+        } else {
+            kernel(1); // Check required hardware/primitive during model initialization.
         }
-        // Single rows always use oneDNN: its 1-row kernel is load-bound, does not
-        // slow the following search, and is faster than vnni_tile<1>.
-        kernel(1); // Check required hardware/primitive during model initialization.
     }
 
     const Kernel& kernel(int count) {
