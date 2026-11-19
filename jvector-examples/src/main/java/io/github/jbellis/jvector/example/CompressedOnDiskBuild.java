@@ -228,12 +228,6 @@ final class CompressedOnDiskBuild implements IndexBuildStrategy {
         var inputMean = mean != null && mean.isComplete() ? mean.mean() : null;
         PQVectors pq = encoded instanceof PQVectors ? (PQVectors) encoded : null;
         ASHVectors ash = encoded instanceof ASHVectors ? (ASHVectors) encoded : null;
-        if (ash != null && Boolean.getBoolean("jvector.ash.debugSymmetric")) {
-            io.github.jbellis.jvector.example.diagnostics.ASHScoreDebug.run(floatVectors, ash,
-                    Integer.getInteger("jvector.ash.debugSymmetric.pairs", 2000),
-                    Integer.getInteger("jvector.ash.debugSymmetric.subsetN", 50000),
-                    Integer.getInteger("jvector.ash.debugSymmetric.topK", 100), new java.util.Random(123));
-        }
         for (var features : featureSets) for (var id : features) FeatureProviders.require(id).checkCompressedBuild(encoded);
         boolean allSymmetric = ash != null && "symmetric-all".equals(
                 System.getProperty("jvector.bench.ashConstruction", "symmetric-all"));

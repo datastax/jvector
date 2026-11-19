@@ -242,13 +242,6 @@ The ASH versus PQ case script (`run-ash-pq-benchmark.sh`) accepts `JVECTOR_BENCH
 These defaults belong to the script, not the library. See
 [Reproducing ASH versus PQ](ash-pq-benchmark.md) for launch and artifact details.
 
-## Diagnostics
-
-`jvector.ash.debugSymmetric` defaults to `false`. Its optional construction
-check is bounded by `jvector.ash.debugSymmetric.pairs` (`2000`),
-`jvector.ash.debugSymmetric.subsetN` (`50000`) and
-`jvector.ash.debugSymmetric.topK` (`100`). Keep diagnostics off for normal timing.
-
 Implementation references: [YAML compression parsing](../jvector-examples/src/main/java/io/github/jbellis/jvector/example/yaml/Compression.java),
 [ASH model](../jvector-base/src/main/java/io/github/jbellis/jvector/quantization/AsymmetricHashing.java),
 [construction modes](../jvector-examples/src/main/java/io/github/jbellis/jvector/example/diagnostics/ASHBuildScoreExperiment.java),
