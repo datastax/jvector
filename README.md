@@ -147,7 +147,7 @@ datasets use fused ASH by default.
 - [BenchYAML Guide](./docs/benchyaml-guide.md): every construction and search field, and every console and CSV result field.
 - [Benchmark launcher](./jvector-examples/bench-profiles/README.md): rebuild and run one experiment
   in one JVM from the command line or IntelliJ.
-- [Reproducing ASH versus PQ](./docs/ash-pq-benchmark.md): the published comparison.
+- [Reproducing ASH versus PQ](./docs/ash-pq-benchmark.md): run the ASH and PQ comparison on public datasets.
 
 ## SIMD and native acceleration
 

@@ -12,11 +12,41 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+
+# Runs one JVM of the ASH versus PQ study (docs/ash-pq-benchmark.md): either the
+# construction of one case, or one query measurement against the index that
+# construction saved. run-ash-pq-study.py calls this once per JVM for a whole study.
+#
+#   run-ash-pq-benchmark.sh <case.yml> <construction|direct|queued> <physical-cores> <cpu-list> <case-directory>
+#
+#   case.yml        a file name in yaml-configs/index-parameters/studies/ash-vs-pq
+#   mode            construction builds and saves the model and graph; direct or queued
+#                   (whichever the YAML's search.queryExecution selects) queries them
+#   physical-cores  the CPU budget: the JVM sees this many processors
+#   cpu-list        the CPUs it may run on, one per physical core (both threads of each
+#                   core with JVECTOR_BENCH_BUILD_SMT=1), for example 0-7
+#   case-directory  holds the case's saved model, graph, logs and per-run records;
+#                   use a new directory for each construction
+#
+# Required environment:
+#   JVECTOR_BENCH_DATA_DIR  absolute directory for the datasets. They are fetched from the
+#                           public JVector dataset catalog on first use and reused afterwards.
+# Optional environment:
+#   JVECTOR_BENCH_BUILD_SMT=1      construction uses both hardware threads of each core
+#   JVECTOR_BENCH_ADAPTIVE=1       searches use adaptive stopping
+#   JVECTOR_BENCH_OVERQUERY=<x>    query runs measure only this overquery (for example 2.0),
+#                                  so the timed pass is the first search the JVM makes
+#   JVECTOR_BENCH_NUMA_POLICY      bind:<nodes> (default bind:0) or interleave:<nodes>
+#   JVECTOR_BENCH_HEAP             maximum Java heap (default 128g)
+#
+# Requires Linux with numactl and lscpu, a clean git checkout, and one examples JAR built
+# with Maven (see the doc). BenchYAML writes its CSV under the case directory's logging/
+# folder and prints its tables; this script adds only a record of how each JVM was run.
 set -euo pipefail
 
 if [[ $# != 5 ]]; then
   echo "Usage: $0 <case.yml> <construction|direct|queued> <physical-cores> <cpu-list> <case-directory>" >&2
-  echo "Example: $0 mpnet-2bit-ash.yml queued 8 0-7 /data/bench/mpnet-2bit-ash" >&2
+  echo "Example: $0 cohere-2bit-ash.yml queued 8 0-7 /data/bench/cohere-2bit-ash" >&2
   exit 2
 fi
 REPO_ROOT="$(git -C "$(dirname "$0")" rev-parse --show-toplevel)"
@@ -34,13 +64,20 @@ if ! [[ "$CPU_LIST" =~ ^[0-9]+(-[0-9]+)?(,[0-9]+(-[0-9]+)?)*$ ]]; then
   echo "CPU list must contain CPU numbers or ranges, such as 0 or 0-7." >&2
   exit 2
 fi
-lscpu --parse=CPU,CORE,SOCKET,ONLINE | awk -F, -v selection="$CPU_LIST" -v budget="$CORES" '
+# JVECTOR_BENCH_BUILD_SMT=1 builds on both hardware threads of each budgeted physical
+# core (2 x cores threads). Queries always use one thread per physical core.
+THREADS="$CORES"
+if [[ "${JVECTOR_BENCH_BUILD_SMT:-0}" == 1 ]]; then
+  [[ "$MODE" == construction ]] || { echo "JVECTOR_BENCH_BUILD_SMT applies to construction only" >&2; exit 2; }
+  THREADS=$((2 * CORES))
+fi
+lscpu --parse=CPU,CORE,SOCKET,ONLINE | awk -F, -v selection="$CPU_LIST" -v budget="$CORES" -v threads="$THREADS" '
   BEGIN {
     count = split(selection, pieces, ",")
     for (i = 1; i <= count; i++) {
       n = split(pieces[i], bounds, "-")
       first = bounds[1] + 0; last = n == 1 ? first : bounds[2] + 0
-      if (last < first || last - first + 1 > budget) { bad = 1; exit 2 }
+      if (last < first || last - first + 1 > threads) { bad = 1; exit 2 }
       for (cpu = first; cpu <= last; cpu++) chosen[cpu] = 1
     }
   }
@@ -52,16 +89,17 @@ lscpu --parse=CPU,CORE,SOCKET,ONLINE | awk -F, -v selection="$CPU_LIST" -v budge
     for (cpu in chosen) wanted++
     for (cpu in seen) found++
     for (core in physical) cores++
-    if (bad || wanted != budget || found != budget || cores != budget) {
-      print "CPU selection must contain exactly the budgeted number of distinct online physical cores." > "/dev/stderr"
+    if (bad || wanted != threads || found != threads || cores != budget) {
+      print "CPU selection must contain exactly the budgeted physical cores (and, with SMT builds, both threads of each)." > "/dev/stderr"
       exit 2
     }
   }'
 DATA_ROOT="${JVECTOR_BENCH_DATA_DIR:-}"
-if [[ "$DATA_ROOT" != /* || ! -d "$DATA_ROOT" ]]; then
-  echo "Set JVECTOR_BENCH_DATA_DIR to the absolute local dataset directory; see the catalog template." >&2
+if [[ "$DATA_ROOT" != /* ]]; then
+  echo "Set JVECTOR_BENCH_DATA_DIR to an absolute directory for the datasets." >&2
   exit 2
 fi
+mkdir -p "$DATA_ROOT"
 if [[ -n "${JAVA_TOOL_OPTIONS:-}" || -n "${JDK_JAVA_OPTIONS:-}" ]]; then
   echo "Clear JAVA_TOOL_OPTIONS/JDK_JAVA_OPTIONS so the recorded Java command is complete." >&2
   exit 2
@@ -72,11 +110,8 @@ SOURCE_REF="$(git -C "$REPO_ROOT" rev-parse HEAD)"
 JAVA_BIN="$(command -v java)"
 CONFIG="$REPO_ROOT/jvector-examples/yaml-configs/index-parameters/studies/ash-vs-pq/$CONFIG_NAME"
 RUN_CONFIG="$REPO_ROOT/jvector-examples/yaml-configs/ash-pq/run-$MODE.yml"
-CATALOG_NAME="${JVECTOR_BENCH_CATALOG:-catalog-1m.yml}"
-case "$CATALOG_NAME" in catalog-1m.yml|catalog-large.yml) ;; *) echo "Unknown dataset catalog: $CATALOG_NAME" >&2; exit 2;; esac
-CATALOG="$REPO_ROOT/jvector-examples/yaml-configs/ash-pq/$CATALOG_NAME"
-[[ -f "$CATALOG" ]] || { echo "Dataset catalog not found: $CATALOG" >&2; exit 2; }
-[[ -f "$CONFIG" && "$CONFIG_NAME" != run-* && "$CONFIG_NAME" != catalog-* && "$CONFIG_NAME" != */* ]] || {
+CATALOG="$REPO_ROOT/jvector-examples/yaml-configs/dataset-catalogs/public-catalog.yaml"
+[[ -f "$CONFIG" && "$CONFIG_NAME" != */* ]] || {
   echo "Unknown index config: $CONFIG_NAME" >&2; exit 2;
 }
 
@@ -116,20 +151,31 @@ else
   }
 fi
 
-# The standard loader resolves metadata/catalogs relative to the working
-# directory. Install only the checked-in local mapping, avoiding ambiguous
-# duplicate aliases from other dataset catalogs. Numerical code is all in the JAR.
+# BenchYAML reads dataset metadata and catalogs relative to its working directory.
+# Install only the public catalog, with its download cache pointed at
+# JVECTOR_BENCH_DATA_DIR, so every case shares one copy of each dataset.
 CASE_CONFIG="$CASE_DIRECTORY/jvector-examples/yaml-configs"
 mkdir -p "$CASE_CONFIG/dataset-catalogs"
 cp "$REPO_ROOT/jvector-examples/yaml-configs/dataset-metadata.yml" "$CASE_CONFIG/"
 cp "$REPO_ROOT/jvector-examples/yaml-configs/datasets.yml" "$CASE_CONFIG/"
-cp "$CATALOG" "$CASE_CONFIG/dataset-catalogs/ash-pq-local.yml"
+sed "s|\${DATASET_CACHE_DIR:-dataset_cache}|$DATA_ROOT|g" "$CATALOG" > "$CASE_CONFIG/dataset-catalogs/public-catalog.yaml"
 printf '%s\n' "$CASE_ID" > "$CASE_DIRECTORY/case-id.txt"
 mkdir -p "$CASE_DIRECTORY/runs"
 RUN_DIRECTORY="$(mktemp -d "$CASE_DIRECTORY/runs/$MODE-c$CORES-XXXXXX")"
 cp "$CONFIG" "$RUN_DIRECTORY/index.yml"
+# JVECTOR_BENCH_OVERQUERY=<x> runs one search case per query JVM, so its single timed
+# pass is the first search the JVM makes. The case id stays that of the full index
+# YAML; only the search sweep is narrowed.
+LAUNCH_CONFIG="$CONFIG"
+if [[ -n "${JVECTOR_BENCH_OVERQUERY:-}" ]]; then
+  [[ "$MODE" != construction ]] || { echo "JVECTOR_BENCH_OVERQUERY applies to query runs only" >&2; exit 2; }
+  [[ "$JVECTOR_BENCH_OVERQUERY" =~ ^[0-9]+\.[0-9]+$ ]] || { echo "JVECTOR_BENCH_OVERQUERY must look like 1.0" >&2; exit 2; }
+  grep -qE "^    10: \[1\.0, 2\.0\]$" "$CONFIG" || { echo "Index YAML lacks the expected overquery sweep" >&2; exit 2; }
+  LAUNCH_CONFIG="$RUN_DIRECTORY/index-overquery-$JVECTOR_BENCH_OVERQUERY.yml"
+  sed -E "s/^    10: \[1\.0, 2\.0\]$/    10: [$JVECTOR_BENCH_OVERQUERY]/" "$CONFIG" > "$LAUNCH_CONFIG"
+fi
 cp "$RUN_CONFIG" "$RUN_DIRECTORY/run.yml"
-cp "$CATALOG" "$RUN_DIRECTORY/catalog.yml"
+cp "$CASE_CONFIG/dataset-catalogs/public-catalog.yaml" "$RUN_DIRECTORY/catalog.yaml"
 printf '%s\n' "$SOURCE_REF" > "$RUN_DIRECTORY/source-ref.txt"
 sha256sum "$JAR" > "$RUN_DIRECTORY/jar.sha256"
 "$JAVA_BIN" -version > "$RUN_DIRECTORY/java-version.txt" 2>&1
@@ -138,7 +184,7 @@ lscpu --extended=CPU,CORE,SOCKET,NODE,ONLINE > "$RUN_DIRECTORY/cpu-topology.txt"
 # Native query kernels execute on the Java search workers. Construction has
 # its own CPU budget for training and encoding. Avoid nested query thread pools.
 NATIVE_THREADS=1
-if [[ "$MODE" == construction ]]; then NATIVE_THREADS="$CORES"; fi
+if [[ "$MODE" == construction ]]; then NATIVE_THREADS="$THREADS"; fi
 export MKL_NUM_THREADS="$NATIVE_THREADS" OMP_NUM_THREADS="$NATIVE_THREADS"
 export OPENBLAS_NUM_THREADS="$NATIVE_THREADS" GOTO_NUM_THREADS="$NATIVE_THREADS"
 export MKL_DYNAMIC=FALSE ONEDNN_VERBOSE=0
@@ -150,12 +196,13 @@ case "$NUMA_POLICY" in
   *) echo "JVECTOR_BENCH_NUMA_POLICY must be bind:<nodes> or interleave:<nodes>" >&2; exit 2;;
 esac
 JAVA_ARGS=(--add-modules=jdk.incubator.vector --enable-native-access=ALL-UNNAMED
-  -da -Xms2g "-Xmx${JVECTOR_BENCH_HEAP:-128g}" "-XX:ActiveProcessorCount=$CORES"
+  -da -Xms2g "-Xmx${JVECTOR_BENCH_HEAP:-128g}" "-XX:ActiveProcessorCount=$THREADS"
   -Djvector.vectorization_provider=native -Djvector.parallel_writer=true
-  "-Djvector.physical_core_count=$CORES" "-Djvector.bench.queryThreads=$((4 * CORES))"
+  "-Djvector.physical_core_count=$THREADS" "-Djvector.bench.queryThreads=$((4 * THREADS))"
   -Djvector.bench.verifyConcurrentResults=true
+  "-Djvector.bench.adaptive=$([[ "${JVECTOR_BENCH_ADAPTIVE:-0}" == 1 ]] && echo true || echo false)"
   "-Djvector.bench.sourceRef=$SOURCE_REF" "-Djvector.bench.runConfig=$RUN_CONFIG"
-  -cp "$JAR" io.github.jbellis.jvector.example.BenchYAML "$CONFIG")
+  -cp "$JAR" io.github.jbellis.jvector.example.BenchYAML "$LAUNCH_CONFIG")
 LAUNCH=(numactl "--physcpubind=$CPU_LIST" "${MEMORY_ARGS[@]}" "$JAVA_BIN" "${JAVA_ARGS[@]}")
 {
   printf 'cd %q\n' "$CASE_DIRECTORY"

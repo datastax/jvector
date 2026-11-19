@@ -142,6 +142,6 @@ after cleanup. The parallel writer defaults to 64 records per batch. See the
 ## Fused PQ and ASH comparison
 
 [Reproducing ASH versus PQ](ash-pq-benchmark.md) provides byte-matched recipes
-for the 1M and the 6M/10M datasets, scripts that run one case or a whole study,
-and the measurement protocol. [ASH performance](ash-performance.md) reports the
-results.
+for five public 1M datasets, scripts that run one case or a whole study, and the
+measurement protocol. [ASH performance](ash-performance.md) reports results on
+larger datasets.

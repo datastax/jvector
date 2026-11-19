@@ -1,5 +1,12 @@
 #!/usr/bin/env python3
-"""Orchestrate the checked-in standalone BenchYAML recipe; no query loop or performance measurement code."""
+"""Run the ASH versus PQ study on this machine, one JVM per measurement.
+
+For each dataset and algorithm, one JVM builds the index on every physical core and
+saves it; then fresh JVMs query it with 1 and with 8 physical cores, one overquery per
+JVM. Each JVM is launched by run-ash-pq-benchmark.sh. Results are BenchYAML's own
+output: its CSV under each case directory's logging/ folder and the tables it prints.
+See docs/ash-pq-benchmark.md.
+"""
 # Copyright DataStax, Inc.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -15,35 +22,30 @@
 # limitations under the License.
 from pathlib import Path
 import argparse
-import collections
-import csv
-import hashlib
-import json
 import os
 import re
-import shutil
-import signal
-import statistics
-import sys
 import subprocess
-import time
+import sys
+
+DATASETS = ("ada002", "cohere", "dprgemma", "openai1536", "openai3072")
+REPO = Path(__file__).resolve().parent.parent
+CONFIGS = REPO / "jvector-examples/yaml-configs/index-parameters/studies/ash-vs-pq"
+LAUNCHER = REPO / "jvector-examples/run-ash-pq-benchmark.sh"
 
 
-
-def physical_cores():
-    """One online hardware thread per physical core, in CPU order, as (cpu, node) pairs."""
-    seen, cores = set(), []
-    for line in subprocess.check_output(["lscpu", "-p=CPU,CORE,SOCKET,NODE"], text=True).splitlines():
+def cpu_topology():
+    """Online CPUs as (cpu, physical core key, NUMA node), in CPU order."""
+    rows = []
+    for line in subprocess.check_output(["lscpu", "-p=CPU,CORE,SOCKET,NODE,ONLINE"], text=True).splitlines():
         if line.startswith("#"):
             continue
-        cpu, core, socket, node = (field or "0" for field in line.split(","))
-        if (socket, core) not in seen:
-            seen.add((socket, core))
-            cores.append((int(cpu), int(node)))
-    return cores
+        cpu, core, socket, node, online = (field or "0" for field in line.split(","))
+        if online != "N":
+            rows.append((int(cpu), (socket, core), int(node)))
+    return rows
 
 
-def cpu_ranges(cpus):
+def cpu_list(cpus):
     """Format CPU numbers as a numactl list, for example 0-7,48."""
     ranges, cpus = [], sorted(cpus)
     start = end = cpus[0]
@@ -57,278 +59,90 @@ def cpu_ranges(cpus):
     return ",".join(ranges)
 
 
-# Defaults follow the published protocol on whatever machine runs it: construction on
-# one thread of every physical core with memory interleaved across all NUMA nodes, and
-# 1- and 8-core queries on the first physical cores of one node, with memory on that node.
-cores = physical_cores()
-query_node = cores[0][1]
-query_cpus = [cpu for cpu, node in cores if node == query_node]
-parser = argparse.ArgumentParser(description=__doc__)
-parser.add_argument("--output", type=Path, required=True)
-parser.add_argument("--data", type=Path, required=True)
-parser.add_argument("--build-cores", type=int, default=len(cores))
-parser.add_argument("--build-cpus", default=cpu_ranges([cpu for cpu, _ in cores]))
-parser.add_argument("--build-nodes", default=",".join(str(n) for n in sorted({node for _, node in cores})))
-parser.add_argument("--one-core-cpu", default=str(query_cpus[0]))
-parser.add_argument("--eight-core-cpus", default=cpu_ranges(query_cpus[:8]) if len(query_cpus) >= 8 else None)
-parser.add_argument("--query-node", default=str(query_node))
-parser.add_argument("--build-repetitions", type=int, default=2)
-parser.add_argument("--query-repetitions", type=int, default=1)
-parser.add_argument("--dataset-set", choices=("1m", "large"), default="1m")
-parser.add_argument("--algorithms", nargs="+", choices=("pq", "ash"), default=["pq", "ash"])
-parser.add_argument("--query-modes", nargs="+", choices=("direct", "queued"), default=["direct", "queued"])
-parser.add_argument("--plan-only", action="store_true")
+def query_execution(config):
+    """The search.queryExecution the index YAML selects (direct when absent)."""
+    match = re.search(r"^\s+queryExecution:\s*(direct|queued)\b", config.read_text(), re.M)
+    return match.group(1) if match else "direct"
+
+
+parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+parser.add_argument("--output", type=Path, required=True,
+                    help="directory for the case directories (fast local storage)")
+parser.add_argument("--data", type=Path, required=True,
+                    help="directory where datasets are downloaded once and reused")
+parser.add_argument("--datasets", nargs="+", choices=DATASETS, default=list(DATASETS))
+parser.add_argument("--algorithms", nargs="+", choices=("ash", "pq"), default=["ash", "pq"])
+parser.add_argument("--build-smt", nargs="*", choices=("ash", "pq"), default=["ash"],
+                    help="algorithms built on both hardware threads of each core "
+                         "(default: ash; each algorithm is built at its fastest setting)")
+parser.add_argument("--no-ash-adaptive", action="store_true",
+                    help="search ASH without adaptive stopping (on by default)")
+parser.add_argument("--overqueries", nargs="+", default=["1.0", "2.0"],
+                    help="overquery values; each is measured in its own JVM")
+parser.add_argument("--query-cores", nargs="+", type=int, default=[1, 8],
+                    help="physical-core budgets for the query JVMs")
+parser.add_argument("--repetitions", type=int, default=1,
+                    help="query JVMs per measurement (construction runs once per case)")
+parser.add_argument("--dry-run", action="store_true", help="print the JVM launches without running them")
 args = parser.parse_args()
-if min(args.build_cores, args.build_repetitions, args.query_repetitions) <= 0:
-    parser.error("Core and repetition counts must be positive")
-if args.eight_core_cpus is None:
-    parser.error("NUMA node %s has fewer than 8 physical cores; pass --eight-core-cpus and --query-node" % args.query_node)
-repo = Path(__file__).resolve().parent.parent
-helper = repo / "jvector-examples/run-ash-pq-benchmark.sh"
-source_ref = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=repo, text=True).strip()
-jars = list((repo / "jvector-examples/target").glob("jvector-examples-*-jar-with-dependencies.jar"))
-if len(jars) != 1:
-    parser.error("Build exactly one standalone examples assembly before starting")
-jar_sha = hashlib.sha256(jars[0].read_bytes()).hexdigest()
+if args.repetitions < 1 or min(args.query_cores) < 1:
+    parser.error("Repetitions and core budgets must be positive")
+
+# Construction: every physical core (and its sibling thread with SMT builds), memory
+# interleaved across all NUMA nodes. Queries: the first physical cores of the node that
+# holds CPU 0, with memory bound to that node.
+topology = cpu_topology()
+first_threads = {}
+for cpu, core, node in topology:
+    first_threads.setdefault(core, (cpu, node))
+build_cores = len(first_threads)
+has_smt = len(topology) == 2 * build_cores
+if args.build_smt and not has_smt:
+    print("This machine does not have two hardware threads on every core; building without SMT.", file=sys.stderr)
+nodes = sorted({node for _, _, node in topology})
+query_node = first_threads[next(iter(first_threads))][1]
+query_cpus = [cpu for cpu, node in first_threads.values() if node == query_node]
+if max(args.query_cores) > len(query_cpus):
+    parser.error(f"NUMA node {query_node} has only {len(query_cpus)} physical cores")
 output = args.output.resolve()
 data = args.data.resolve()
-if not data.is_dir():
-    parser.error("Dataset directory does not exist")
-jobs = []
-prefixes = ("openai3072", "mpnet", "cohere", "ada002") if args.dataset_set == "1m" else ("mpnet10m", "cohere10m", "cap6m")
-for group, (prefix, bits) in enumerate((p, b) for p in prefixes for b in (2, 4)):
-    for repetition in range(1, args.build_repetitions + 1):
-        algorithms = ("pq", "ash") if (group + repetition) % 2 else ("ash", "pq")
-        for algorithm in algorithms:
-            jobs.append(dict(prefix=prefix, bits=bits, algorithm=algorithm, mode="construction",
-                             cores=args.build_cores, cpus=args.build_cpus, repetition=repetition,
-                             numa="interleave:" + args.build_nodes))
-    for repetition in range(1, args.query_repetitions + 1):
-        algorithms = ("pq", "ash") if (group + repetition) % 2 else ("ash", "pq")
-        for cores, cpus in ((1, args.one_core_cpu), (8, args.eight_core_cpus)):
-            for algorithm in algorithms:
-                mode = "queued" if algorithm == "ash" else "direct"
-                jobs.append(dict(prefix=prefix, bits=bits, algorithm=algorithm, mode=mode,
-                                 cores=cores, cpus=cpus, repetition=repetition,
-                                 numa="bind:" + args.query_node))
-jobs = [job for job in jobs if job["algorithm"] in args.algorithms
-        and (job["mode"] == "construction" or job["mode"] in args.query_modes)]
-for job in jobs:
-    job["id"] = "{prefix}-{bits}bit-{algorithm}-{mode}-c{cores}-r{repetition}".format(**job)
-    case_repetition = job["repetition"] if job["mode"] == "construction" else 1
-    job["case"] = str(output / "cases" / f"{job['prefix']}-{job['bits']}bit-{job['algorithm']}-r{case_repetition}")
-    job["config"] = f"{job['prefix']}-{job['bits']}bit-{job['algorithm']}.yml"
-watchdog_minutes = {"construction": 180 if args.dataset_set == "large" else 30, "query": 30}
-plan = dict(source_ref=source_ref, jar_sha256=jar_sha, data=str(data), dataset_set=args.dataset_set, watchdog_minutes=watchdog_minutes, jobs=jobs,
-            construction_jobs=sum(j["mode"] == "construction" for j in jobs),
-            query_jobs=sum(j["mode"] != "construction" for j in jobs))
-if args.plan_only:
-    print(json.dumps(plan, indent=2))
-    raise SystemExit(0)
-output.mkdir(parents=True, exist_ok=True)
 
 
-def save(path, value):
-    temp = path.with_suffix(path.suffix + ".tmp")
-    temp.write_text(json.dumps(value, indent=2) + "\n")
-    temp.replace(path)
+def run(config, mode, cores, cpus, case, smt=False, adaptive=False, overquery=None):
+    environment = dict(os.environ, JVECTOR_BENCH_DATA_DIR=str(data),
+                       JVECTOR_BENCH_BUILD_SMT="1" if smt else "0",
+                       JVECTOR_BENCH_ADAPTIVE="1" if adaptive else "0",
+                       JVECTOR_BENCH_NUMA_POLICY=("interleave:" + ",".join(map(str, nodes)))
+                       if mode == "construction" else f"bind:{query_node}")
+    environment.pop("JVECTOR_BENCH_OVERQUERY", None)
+    if overquery is not None:
+        environment["JVECTOR_BENCH_OVERQUERY"] = overquery
+    command = ["bash", str(LAUNCHER), config.name, mode, str(cores), cpus, str(case)]
+    print(f"\n=== {config.stem} {mode} cores={cores}"
+          + (f" overquery={overquery}" if overquery else "") + f" ({case})", flush=True)
+    if args.dry_run:
+        print(" ".join(command))
+        return
+    subprocess.run(command, env=environment, check=True)
 
 
-if (output / "plan.json").exists():
-    if json.loads((output / "plan.json").read_text()) != plan:
-        raise RuntimeError("Existing campaign has different source/artifact/settings; use a new output directory")
-else:
-    save(output / "plan.json", plan)
-results_file = output / "results.json"
-results = json.loads(results_file.read_text()) if results_file.exists() else []
-complete_ids = {result["job"]["id"] for result in results}
-process = None
-
-
-def stop(signum, frame):
-    if process is not None and process.poll() is None:
-        process.send_signal(signal.SIGTERM)  # The checked-in shell forwards it to its JVM.
-        try:
-            process.wait(timeout=10)
-        except subprocess.TimeoutExpired:
-            process.kill()
-    save(output / "status.json", dict(state="stopped", completed=len(results), planned=len(jobs)))
-    raise SystemExit(128 + signum)
-
-
-signal.signal(signal.SIGINT, stop)
-signal.signal(signal.SIGTERM, stop)
-
-
-def report_failure(kind, error, traceback):
-    if process is not None and process.poll() is None:
-        process.terminate()
-        try:
-            process.wait(timeout=10)
-        except subprocess.TimeoutExpired:
-            process.kill()
-    save(output / "status.json", dict(state="failed", error=str(error),
-        current=globals().get("job"), completed=len(results), planned=len(jobs)))
-    sys.__excepthook__(kind, error, traceback)
-
-
-sys.excepthook = report_failure
-
-
-def cpu_set(specification):
-    result = set()
-    for item in specification.split(","):
-        limits = item.split("-")
-        first, last = int(limits[0]), int(limits[-1])
-        result.update(range(first, last + 1))
-    return result
-
-
-def wait_idle():
-    """Read-only check between JVMs; never gates compilation inside a benchmark."""
-    while True:
-        conflicts = []
-        for directory in Path("/proc").iterdir():
-            if not directory.name.isdigit() or int(directory.name) == os.getpid():
-                continue
-            try:
-                command = (directory / "cmdline").read_bytes().replace(b"\0", b" ").decode(errors="replace")
-                if "/JetBrains/" not in command and re.search(
-                        r"BenchYAML|DistancesASH|DistancesPQ|org\.junit\.runner|surefirebooter|(?:^|/)cc1plus(?: |$)", command):
-                    conflicts.append(int(directory.name))
-            except (FileNotFoundError, PermissionError, ProcessLookupError):
-                pass
-        if not conflicts:
-            return
-        save(output / "status.json", dict(state="waiting_for_other_work", pids=conflicts,
-                                           completed=len(results), planned=len(jobs)))
-        time.sleep(5)
-
-
-def summarize():
-    groups = collections.defaultdict(list)
-    for result in results:
-        job = result["job"]
-        for row in result["rows"]:
-            if job["mode"] == "construction" and float(row["overquery"]) != 1:
-                continue  # Two overquery rows describe one construction invocation.
-            key = (job["prefix"], job["bits"], job["algorithm"], job["mode"], job["cores"], row["overquery"])
-            groups[key].append(row)
-    records = []
-    for key, rows in sorted(groups.items()):
-        record = dict(zip(("dataset", "bits", "algorithm", "mode", "cores", "overquery"), key))
-        record["jvms"] = len(rows)
-        metrics = {}
-        for name in rows[0]:
-            if not name.startswith(("construction.", "search.")):
-                continue
-            if not all(row.get(name) for row in rows):
-                continue
-            values = [float(row[name]) for row in rows]
-            if any(marker in name for marker in ("p999", "p95", "p99")):
-                metrics[name] = dict(median_of_jvm_values=statistics.median(values),
-                                     minimum=min(values), maximum=max(values))
-            else:
-                metrics[name] = dict(mean=statistics.mean(values),
-                    sample_sd=statistics.stdev(values) if len(values) > 1 else None,
-                    minimum=min(values), maximum=max(values))
-        record["metrics"] = metrics
-        records.append(record)
-    save(output / "summary.json", records)
-
-
-for job in jobs:
-    if job["id"] in complete_ids:
-        continue
-    wait_idle()
-    assert subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=repo, text=True).strip() == source_ref, "Source changed during the campaign"
-    save(output / "status.json", dict(state="running", current=job,
-                                       completed=len(results), planned=len(jobs)))
-    case = Path(job["case"])
-    before = set((case / "runs").glob("*")) if (case / "runs").exists() else set()
-    argv = ["bash", str(helper), job["config"], job["mode"], str(job["cores"]), job["cpus"], str(case)]
-    env = os.environ.copy()
-    env.update(JVECTOR_BENCH_DATA_DIR=str(data), JVECTOR_BENCH_NUMA_POLICY=job["numa"],
-               JVECTOR_BENCH_CATALOG="catalog-large.yml" if args.dataset_set == "large" else "catalog-1m.yml")
-    log_path = output / (job["id"] + ".log")
-    print("START " + job["id"], flush=True)
-    libraries = set()
-    run_directory = None
-    with log_path.open("w") as log:
-        process = subprocess.Popen(argv, cwd=repo, env=env, stdout=log, stderr=subprocess.STDOUT)
-        started = time.monotonic()
-        while process.poll() is None:
-            limit_minutes = watchdog_minutes["construction" if job["mode"] == "construction" else "query"]
-            if time.monotonic() - started > limit_minutes * 60:
-                process.terminate()
-                process.wait(timeout=15)
-                raise RuntimeError(f"BenchYAML exceeded the {limit_minutes}-minute process watchdog; inspect {log_path}")
-            if run_directory is None:
-                created = set((case / "runs").glob("*")) - before
-                if len(created) == 1:
-                    run_directory = created.pop()
-            if run_directory is not None and (run_directory / "jvm.pid").exists():
-                pid = (run_directory / "jvm.pid").read_text().strip()
-                try:
-                    proc = Path("/proc") / pid
-                    status = (proc / "status").read_text()
-                    if "\nName:\tjava\n" in "\n" + status:
-                        mask = next(line.split(":", 1)[1].strip() for line in status.splitlines()
-                                    if line.startswith("Cpus_allowed_list:"))
-                        assert cpu_set(mask) == cpu_set(job["cpus"]), (mask, job["cpus"])
-                        libraries.update(line.split(maxsplit=5)[-1] for line in (proc / "maps").read_text().splitlines()
-                                         if any(token in line for token in ("libjvector", "libdnnl", "libmkl", "libopenblas", "libnetlib")))
-                        with (run_directory / "placement.jsonl").open("a") as placement:
-                            placement.write(json.dumps(dict(cpu_mask=mask, libraries=sorted(libraries))) + "\n")
-                except (FileNotFoundError, ProcessLookupError):
-                    pass
-            time.sleep(1)
-    if process.returncode:
-        save(output / "status.json", dict(state="failed", job=job, log=str(log_path), exit_code=process.returncode))
-        raise RuntimeError("Standalone BenchYAML failed: " + str(log_path))
-    created = set((case / "runs").glob("*")) - before
-    assert len(created) == 1
-    run_directory = created.pop()
-    assert (run_directory / "source-ref.txt").read_text().strip() == source_ref
-    assert (run_directory / "jar.sha256").read_text().split()[0] == jar_sha, "Artifact changed during the campaign"
-    # A new invocation contributes exactly one CSV, identified by its run mode
-    # and the source reference recorded by the normal reporting system.
-    csvs = sorted((case / "logging").rglob("experiments.csv"), key=lambda path: path.stat().st_mtime_ns)
-    assert csvs
-    rows = list(csv.DictReader(csvs[-1].open()))
-    assert len(rows) == 2 and {float(row["overquery"]) for row in rows} == {1, 2}
-    assert all("FUSED_" + job["algorithm"].upper() in row["feature_set"] and "NVQ_VECTORS" in row["feature_set"] for row in rows)
-    assert any("libjvector-" in library for library in libraries), "Native provider was not observed"
-    if job["mode"] == "construction":
-        assert all(row.get("construction.index_build_time_s") for row in rows)
-    else:
-        assert all(row["query_execution"] == job["mode"] for row in rows)
-        assert all(row.get("search.throughput.avg_qps") and row.get("search.latency.mean_ms") for row in rows)
-        reference = next(result for result in results if result["job"]["prefix"] == job["prefix"]
-                         and result["job"]["bits"] == job["bits"] and result["job"]["algorithm"] == job["algorithm"]
-                         and result["job"]["mode"] == "construction" and result["job"]["repetition"] == 1)
-        actual_recall = [float(row["search.accuracy.recall_at_10"]) for row in rows]
-        reference_recall = [float(row["search.accuracy.recall_at_10"]) for row in reference["rows"]]
-        if job["algorithm"] == "ash" and job["mode"] == "queued":
-            # Batch GEMM may differ from singleton GEMV by FP32 reduction rounding.
-            # Keep the actual values; an improvement is not a regression. Stop on
-            # any decline for investigation rather than silently applying a tolerance.
-            assert all(actual >= expected for actual, expected in zip(actual_recall, reference_recall)), "Execution-policy recall regression"
+for dataset in args.datasets:
+    for algorithm in args.algorithms:
+        config = CONFIGS / f"{dataset}-2bit-{algorithm}.yml"
+        case = output / config.stem
+        smt = algorithm in args.build_smt and has_smt
+        adaptive = algorithm == "ash" and not args.no_ash_adaptive
+        # A case directory that already holds a saved index was constructed by an earlier
+        # run; reuse it, so an interrupted study can be restarted with the same command.
+        if (case / "index_cache").is_dir() and any((case / "index_cache").iterdir()):
+            print(f"\n=== {config.stem} construction: reusing the index in {case}")
         else:
-            assert actual_recall == reference_recall, "Execution-policy recall regression"
-    result = dict(job=job, rows=rows, csv=str(csvs[-1]), artifacts=str(run_directory), libraries=sorted(libraries))
-    results.append(result)
-    complete_ids.add(job["id"])
-    save(results_file, results)
-    summarize()
-    if job["mode"] == "construction" and job["repetition"] != 1:
-        # Only these extra graphs have no future use. Keep first-build indexes,
-        # raw CSVs, metadata and console logs; remove no unrelated workspace.
-        assert case.parent == output / "cases"
-        for name in ("index_cache", "compressor_cache"):
-            shutil.rmtree(case / name)
-    print("PASS " + job["id"], flush=True)
-save(output / "complete.json", dict(source_ref=source_ref, jar_sha256=jar_sha,
-    construction_jobs=plan["construction_jobs"], query_jobs=plan["query_jobs"], completed=len(results)))
-save(output / "status.json", dict(state="complete", completed=len(results), planned=len(jobs)))
-print("COMPLETE", flush=True)
+            cpus = [cpu for cpu, _, _ in topology] if smt else [cpu for cpu, _ in first_threads.values()]
+            run(config, "construction", build_cores, cpu_list(cpus), case, smt=smt)
+        mode = query_execution(config)
+        for overquery in args.overqueries:
+            for _ in range(args.repetitions):
+                for cores in args.query_cores:
+                    run(config, mode, cores, cpu_list(query_cpus[:cores]), case,
+                        adaptive=adaptive, overquery=overquery)
+print(f"\nDone. BenchYAML's CSV files are under {output}/*/logging/.")

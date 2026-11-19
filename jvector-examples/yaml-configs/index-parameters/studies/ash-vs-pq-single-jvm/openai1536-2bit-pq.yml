@@ -1,11 +1,13 @@
-# mpnet-1m: 768 input dimensions, 197 code bytes per vector.
-# The 4-bit label describes the ASH budget; PQ uses 197 8-bit subspaces.
+# openai-1536-1m: 1536 input dimensions, 197 code bytes per vector.
+# The 2-bit label describes the ASH budget; PQ uses 197 8-bit subspaces.
 # ASH uses C=1 and D/2 projected dimensions, including its five-byte header.
-# One JVM per experiment: build with every physical core, then query the same index
-# with 1 and 8 search workers. The settings otherwise match studies/ash-vs-pq.
+# One JVM: run with benchyaml-play.sh; see docs/ash-pq-benchmark.md. It builds with every
+# physical core, then runs one search case on the same index (8 search workers,
+# overquery 1), so every query is new to the JVM. The index settings match
+# studies/ash-vs-pq.
 yamlSchemaVersion: 3
 onDiskIndexVersion: 7
-dataset: mpnet-1m
+dataset: openai-1536-1m
 
 construction:
   type: onDisk
@@ -31,9 +33,9 @@ construction:
 
 search:
   topKOverquery:
-    10: [1.0, 2.0]
+    10: [1.0]
   useSearchPruning: [No]
-  workers: [1, 8]
+  workers: [8]
   compression:
     - type: PQ
       parameters:

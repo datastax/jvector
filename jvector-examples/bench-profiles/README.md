@@ -7,19 +7,22 @@ from the current source. The run records the commit, with `-dirty` when tracked 
 uncommitted changes, and the JAR checksum.
 
 ```bash
-BENCH_RUN_CONFIG=jvector-examples/yaml-configs/ash-pq/run-single-jvm.yml \
+BENCH_RUN_CONFIG=jvector-examples/yaml-configs/ash-pq/run-single-jvm.yml BENCH_ADAPTIVE=true \
   jvector-examples/benchyaml-play.sh \
-  jvector-examples/yaml-configs/index-parameters/studies/ash-vs-pq-single-jvm/mpnet10m-2bit-ash.yml
+  jvector-examples/yaml-configs/index-parameters/studies/ash-vs-pq-single-jvm/cohere-2bit-ash.yml
 ```
 
 The index YAML sets concurrency: `construction.workers` for training, encoding, graph insertion
 and writing, and `search.workers` for queries, each a number or `max` (the platform's physical
 cores). `search.workers` is a sweep, so `[1, 8]` queries the same index with 1 and then 8 workers.
+Later search cases repeat queries that earlier cases already ran, so for cold-query measurements
+use one search case per JVM.
 The launcher sets where the JVM may run, and the run YAML sets what is printed and logged.
 JVector sets native BLAS threads itself (the construction pool's size during training), so the
 launcher clears `MKL_NUM_THREADS` and the other BLAS thread variables.
 
 `BENCH_RUN_CONFIG` selects the run YAML (default `yaml-configs/run-config.yml`).
+`BENCH_ADAPTIVE=true` turns on adaptive stopping for the searches (default `false`).
 `BENCH_DEBUG=<port>` waits for a debugger on that port.
 
 Long construction phases print progress every 10 seconds: vectors inserted with an estimate of

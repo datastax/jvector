@@ -1,37 +1,39 @@
 # Reproducing ASH versus PQ
 
 This study compares fused ASH and fused PQ graph indexes at matched code sizes:
-both store the same bytes per vector, including ASH's five-byte header. It uses
-ordinary packaged JVector code and `io.github.jbellis.jvector.example.BenchYAML`;
-no separate query harness, source overlay or profiling agent is involved.
+both store the same bytes per vector, including ASH's five-byte header. It runs
+on five public 1M datasets, which BenchYAML downloads from the public JVector
+dataset catalog, and uses only packaged JVector code and
+`io.github.jbellis.jvector.example.BenchYAML`. Results are BenchYAML's own
+output: CSV files and the tables it prints.
 
-Each case comes in two forms. The published results used
-[separate JVMs](../jvector-examples/yaml-configs/index-parameters/studies/ash-vs-pq)
-for construction and for each query core budget, run by `run-ash-pq-benchmark.sh`
-(one case) and `run-ash-pq-study.py` (a whole study). Future runs use
-[one JVM per case](../jvector-examples/yaml-configs/index-parameters/studies/ash-vs-pq-single-jvm):
-it builds the index once and queries it with 1 and 8 search workers. The
-[run configurations and dataset catalogs](../jvector-examples/yaml-configs/ash-pq)
-define what is measured and where the input files are. The [BenchYAML Guide](benchyaml-guide.md) describes
-the index configuration, and [ASH configuration and defaults](ash-configuration.md)
-describes model and runtime settings.
+## Two ways to run it
 
-## Results
+Every case comes in two forms with the same index settings:
 
-[ASH performance](ash-performance.md) reports the 6M and 10M results: ASH wins
-total construction in 6/6 configurations, recall in 12/12 cases and QPS in 22/24
-cases. It also describes the machine, JVM, placement and protocol used, so you
-can note any differences in your own runs. The 1M recipes (MPNet, Cohere, Ada002
-and OpenAI-3072) use the same parameters and protocol.
+- **One JVM per measurement**
+  ([`studies/ash-vs-pq`](../jvector-examples/yaml-configs/index-parameters/studies/ash-vs-pq)),
+  run by `run-ash-pq-study.py`. One JVM builds and saves the index, then a fresh
+  JVM measures each query core budget and overquery. Each JVM sees only its CPU
+  budget (`-XX:ActiveProcessorCount` and a CPU list), so a 1-core measurement
+  really has one core, including for garbage collection and JIT compilation, and
+  no measurement inherits JIT, heap or cache state from construction or from an
+  earlier measurement. Use this form for comparisons you report.
+- **One JVM per case**
+  ([`studies/ash-vs-pq-single-jvm`](../jvector-examples/yaml-configs/index-parameters/studies/ash-vs-pq-single-jvm)),
+  run by `benchyaml-play.sh`. One JVM builds the index, then queries it once with 8
+  search workers at overquery 1. It is quicker and closer to an application that
+  builds and serves in one process, but its queries run in the JVM that just built
+  the index, sharing its heap, JIT state and threads. Use it for quick end-to-end checks, and compare its results only with each other.
 
 ## Build the checkout
 
-Use JDK 22 for performance measurements. Follow the
+Use JDK 22 or later on Linux, with `numactl` and `lscpu`. Follow the
 [native prerequisites](../jvector-native/src/main/native/README.md), including the
 compiler, Meson, Ninja and CMake. Native packaging fetches the pinned oneDNN
-source and includes the statically linked ASH add-on. ASH training also uses
-the installed BLAS/LAPACK provider; record it with the results, since a Java
-fallback does not reproduce native training throughput.
+source and includes the ASH add-on. ASH training also uses the installed
+BLAS/LAPACK provider; note which one you have, since a Java fallback trains
+more slowly.
 
 ```bash
 export JAVA_HOME=/path/to/jdk-22
@@ -40,154 +42,136 @@ mvn -B -pl jvector-examples -am -DskipTests package -Dnative.onednn=true
 ```
 
 This writes `jvector-examples/target/jvector-examples-<version>-jar-with-dependencies.jar`.
-Build once, before any benchmark, and keep the checkout and JAR fixed throughout
-a comparison. The scripts require a clean checkout so each run records an exact
-commit. The run command requires the native provider, so a failed native
-installation cannot silently become a scalar measurement.
+Build once and keep the checkout and JAR fixed throughout a comparison. The
+scripts require a clean checkout so each run records an exact commit, and they
+require the native vector provider, so a failed native build cannot silently
+become a scalar measurement.
 
-## Inputs and index parameters
+## Datasets and index settings
 
-Obtain the normalized fvecs/ivecs files named in
-[`catalog-1m.yml`](../jvector-examples/yaml-configs/ash-pq/catalog-1m.yml) and
-[`catalog-large.yml`](../jvector-examples/yaml-configs/ash-pq/catalog-large.yml).
-Cohere 1M, Ada002 1M and OpenAI-3072 1M are in the public dataset catalog
-(see [dataset catalogs](../jvector-examples/yaml-configs/dataset-catalogs/datasets.md));
-the others must be obtained separately. Set `JVECTOR_BENCH_DATA_DIR` to the
-absolute directory that holds them, keeping the relative file names in the
-catalog. All use `DOT_PRODUCT` and `NO_SCRUB`. Use the exact base, query and
-top-100 ground-truth files: a deduplicated base file without rebuilt ground
-truth would change the experiment.
-
-| Dataset | Recipe prefix | Base vectors | Dimensions | Queries | Code bytes, b=2 / b=4 |
+| Dataset | Recipe prefix | Base vectors | Dimensions | Queries | Code bytes per vector |
 | --- | --- | ---: | ---: | ---: | ---: |
-| MPNet 1M | `mpnet` | 999,812 | 768 | 10,000 | 101 / 197 |
-| Cohere 1M | `cohere` | 1,000,000 | 1024 | 10,000 | 133 / 261 |
-| Ada002 1M | `ada002` | 982,790 | 1536 | 10,000 | 197 / 389 |
-| OpenAI-3072 1M | `openai3072` | 999,000 | 3072 | 1,000 | 389 / 773 |
-| MPNet 10M | `mpnet10m` | 9,997,697 | 768 | 10,000 | 101 / 197 |
-| Cohere 10M | `cohere10m` | 10,000,000 | 1024 | 10,000 | 133 / 261 |
-| CAP 6M | `cap6m` | 6,070,488 | 1536 | 10,000 | 197 / 389 |
+| Ada002 1M | `ada002` | 982,790 | 1536 | 10,000 | 197 |
+| Cohere English v3 1M | `cohere` | 1,000,000 | 1024 | 10,000 | 133 |
+| DPR-Gemma 1M | `dprgemma` | 999,762 | 768 | 10,000 | 101 |
+| OpenAI-1536 1M | `openai1536` | 999,000 | 1536 | 1,000 | 197 |
+| OpenAI-3072 1M | `openai3072` | 999,000 | 3072 | 1,000 | 389 |
 
-ASH uses one landmark, an ITQ-trained transform to D/2 dimensions, and 2 or 4
-bits per projected dimension. PQ uses as many 8-bit subspaces as ASH's code
-bytes, 256 centroids, no centering, and non-anisotropic training. The 2-bit and
-4-bit labels describe the ASH cases, not PQ centroid precision.
+All use dot-product similarity with the dataset's own top-100 ground truth. The
+first run downloads each dataset into the data directory you name; later runs
+reuse it.
+
+ASH uses one landmark, an ITQ-trained transform to D/2 dimensions, and 2 bits per
+projected dimension. PQ uses as many 8-bit subspaces as ASH's code bytes, 256
+centroids, no centering and non-anisotropic training.
 
 Both use an on-disk index (format 7) with fused graph features, NVQ reranking,
 degree 32, `efConstruction=100`, neighbor overflow 1.2, hierarchy, final
 refinement and the parallel writer, and return the top 10 at overquery 1 and 2.
-ASH queries use queued execution with a maximum batch of 8 and automatic query
-projection, which selects FP16 on supported CPUs. PQ queries use direct execution.
+ASH queries use queued execution with a maximum batch of 8, automatic query
+projection and adaptive stopping. PQ queries use direct execution.
 
-## Run a study
+Each algorithm is built at its fastest thread setting. On the machines we
+measured, ASH construction was fastest on both hardware threads of every core
+(SMT) and PQ construction on one thread per core; check this on your own
+hardware with `--build-smt`.
 
-`run-ash-pq-study.py` runs every case of one dataset set in sequence, each in a
-fresh JVM, and aggregates the CSV files. It contains no query loop or timer.
+## Run the study (one JVM per measurement)
+
+```bash
+python3 jvector-examples/run-ash-pq-study.py \
+  --data /data/vectors --output /data/jvector-bench/ash-vs-pq
+```
+
+For each dataset and algorithm, this builds the index in one JVM, then measures
+overquery 1 and 2 with 1 and with 8 physical cores, each in a fresh JVM: 2
+construction and 8 query JVMs per dataset. Placement comes from `lscpu`:
+construction uses every physical core with memory interleaved across all NUMA
+nodes, and queries use the first physical cores of one node, with memory on that
+node. Options:
+
+- `--datasets` and `--algorithms` select a subset.
+- `--build-smt` lists the algorithms built with SMT (default `ash`).
+- `--no-ash-adaptive` searches ASH without adaptive stopping.
+- `--query-cores` and `--overqueries` change the query budgets and overqueries.
+- `--repetitions` repeats each query JVM, for run-to-run variation.
+- `--dry-run` prints the JVM launches without running them.
+
+Rerunning the same command after an interruption reuses indexes that were
+already built. Do not run anything else on the machine during a study.
+
+### One JVM by hand
+
+`run-ash-pq-benchmark.sh` runs one JVM of the study; the study script calls it
+for every launch. It checks that the CPU list names exactly the requested
+physical cores, so two hardware threads of one core cannot count as two cores.
 
 ```bash
 export JVECTOR_BENCH_DATA_DIR=/data/vectors
-python3 jvector-examples/run-ash-pq-study.py --dataset-set large \
-  --data "$JVECTOR_BENCH_DATA_DIR" --output /data/jvector-bench/ash-pq-large
+CASE=/data/jvector-bench/cohere-2bit-ash
+
+# Construction on 48 physical cores using both threads of each (pick CPUs from lscpu).
+JVECTOR_BENCH_BUILD_SMT=1 JVECTOR_BENCH_NUMA_POLICY=interleave:0,1 \
+  bash jvector-examples/run-ash-pq-benchmark.sh cohere-2bit-ash.yml construction 48 0-95 "$CASE"
+
+# Queries reuse the saved model and graph, each in a fresh JVM.
+JVECTOR_BENCH_ADAPTIVE=1 JVECTOR_BENCH_OVERQUERY=1.0 \
+  bash jvector-examples/run-ash-pq-benchmark.sh cohere-2bit-ash.yml queued 1 0 "$CASE"
+JVECTOR_BENCH_ADAPTIVE=1 JVECTOR_BENCH_OVERQUERY=1.0 \
+  bash jvector-examples/run-ash-pq-benchmark.sh cohere-2bit-ash.yml queued 8 0-7 "$CASE"
 ```
 
-`--dataset-set 1m` (the default) runs the four 1M datasets. By default, each
-configuration is built twice, in separate case directories, and one query JVM per
-core count reuses the first build's index; PQ and ASH alternate order. CPU and
-memory placement come from `lscpu` on the host: construction uses one thread on
-every physical core with memory interleaved across all NUMA nodes, and queries
-use the first 1 and 8 physical cores of one node with memory on that node.
-`--help` lists the options for other placements and repetition counts, and
-`--plan-only` prints the job list without running it.
+For the matching PQ case, use `cohere-2bit-pq.yml`, `direct` instead of
+`queued`, no SMT or adaptive settings, and its own case directory. The comments
+at the top of the script list every option.
 
-`plan.json` fixes the commit, JAR checksum and settings. `status.json`,
-`results.json` and `summary.json` are updated after each invocation, and an
-interrupted study resumes only with the same source and JAR. A process watchdog
-(3 hours for large construction, 30 minutes otherwise) detects a hung
-invocation; its wall clock is never reported as a measurement. Extra
-construction repetitions release their caches after recording results.
+## Run a case in one JVM
 
-## Run one case
-
-`run-ash-pq-benchmark.sh` prepares a case directory, records the command and runs
-standalone BenchYAML. It checks that the CPU list names the requested number of
-distinct online physical cores, so two SMT siblings cannot count as two cores.
+`benchyaml-play.sh` rebuilds the checkout, then runs one recipe in a single JVM on
+one hardware thread of each physical core. Copy
+[`bench-profiles/example.env`](../jvector-examples/bench-profiles/example.env) to
+`bench-profiles/local/profile.env` and set the JDK, a working directory and the
+data directory (see the [benchmark launcher](../jvector-examples/bench-profiles/README.md)).
 
 ```bash
-export JVECTOR_BENCH_DATA_DIR=/data/vectors
-export JVECTOR_BENCH_HEAP=128g
-BENCH_CASE=/data/jvector-bench/mpnet-2bit-ash-r1
-
-# Construction: every physical core, memory on all nodes. Pick lists from lscpu.
-JVECTOR_BENCH_NUMA_POLICY=interleave:0,1 \
-  bash jvector-examples/run-ash-pq-benchmark.sh \
-  mpnet-2bit-ash.yml construction 48 0-47 "$BENCH_CASE"
-
-# Queries reuse that model and graph, each in a fresh JVM.
-bash jvector-examples/run-ash-pq-benchmark.sh mpnet-2bit-ash.yml queued 1 0 "$BENCH_CASE"
-bash jvector-examples/run-ash-pq-benchmark.sh mpnet-2bit-ash.yml queued 8 0-7 "$BENCH_CASE"
-```
-
-Query memory defaults to NUMA node 0 (`JVECTOR_BENCH_NUMA_POLICY=bind:0`). For the
-matching PQ case, replace `ash` with `pq`, use `direct` instead of `queued`, and
-use a separate case directory. For the larger datasets, set
-`JVECTOR_BENCH_CATALOG=catalog-large.yml` for every invocation of the case.
-
-Construction refuses nonempty model and index caches, and query runs require
-them. The recipes set `useSavedIndexIfExists: Yes` so the graph outlives its
-construction JVM; nothing is deleted automatically. Do not run cases at the same
-time or share their CPUs with other work. Report any heap, CPU, NUMA or library
-differences from the measurement environment in
-[ASH performance](ash-performance.md).
-
-Each run writes a complete `runs/<invocation>/command.sh`, including its
-environment, so the Java command can be rerun directly. The case directory holds
-copies of the catalog, dataset metadata and dataset list, because BenchYAML
-resolves them relative to its working directory.
-
-## Run one case in one JVM
-
-`benchyaml-play.sh` builds the checkout, then runs one recipe in a single JVM on one
-hardware thread of each physical core, with machine settings from a
-[server profile](../jvector-examples/bench-profiles/README.md):
-
-```bash
-BENCH_RUN_CONFIG=jvector-examples/yaml-configs/ash-pq/run-single-jvm.yml \
+BENCH_RUN_CONFIG=jvector-examples/yaml-configs/ash-pq/run-single-jvm.yml BENCH_ADAPTIVE=true \
   jvector-examples/benchyaml-play.sh \
-  jvector-examples/yaml-configs/index-parameters/studies/ash-vs-pq-single-jvm/mpnet10m-2bit-ash.yml
+  jvector-examples/yaml-configs/index-parameters/studies/ash-vs-pq-single-jvm/cohere-2bit-ash.yml
 ```
 
-Each recipe sets `construction.workers: max` and `search.workers: [1, 8]`.
-Construction, including BLAS during training, uses every physical core. Queries
-then use one and eight search threads: direct PQ search runs on that many caller
-threads, and queued ASH search on that many workers. All of the JVM's CPUs stay
-available to other threads, such as garbage collection, so a 1-worker measurement
-is not confined to one core as it is in the separate-JVM protocol. Compare
-one-JVM results with each other, and check them against the published results
-before replacing those.
+For PQ, run `cohere-2bit-pq.yml` without `BENCH_ADAPTIVE`. These recipes differ
+from the study's in four lines: `construction.workers: max`,
+`search.workers: [8]`, overquery `[1.0]` and `useSavedIndexIfExists: No`. Queries are
+measured as in the study. Keep one search case per JVM: a second case would repeat
+queries the first already ran, so its queries would no longer be cold.
 
-## Measurements and artifacts
+## What is measured
 
-* **Construction:** BenchYAML's training, encoding, NVQ and graph-write timers;
-  dataset loading and setup are excluded. Each construction invocation reports
-  two overquery rows from one build. Cached-index invocations report no
-  construction time.
-* **Throughput:** random-query warmups, then timed full query passes including
-  preparation, traversal and reranking. Each sample lasts at least three seconds.
-  Direct mode uses 4 × cores callers; queued mode uses at most one worker per
-  core, admission 8 × cores and a maximum batch of 8.
-* **Unloaded latency:** one query at a time through the same execution path,
-  after three warmup passes of at least three seconds. It is not latency under a
-  controlled arrival rate.
-* **Queued response:** sampled during throughput, from admission to the worker's
-  completion callback. It measures a bounded backlog, not an arrival-rate curve.
-* **Recall:** the same inputs and ground truth for every mode. Concurrent results
-  are checked against single-threaded searches with the same prepared query.
+The run configurations in
+[`yaml-configs/ash-pq`](../jvector-examples/yaml-configs/ash-pq) select what BenchYAML
+measures and records.
 
-CSV results, system information and dataset information go to each case's
-`logging` directory. The scripts also record the source commit, JAR checksum,
-index and run YAML, Java version, CPU topology, console output and exit code
-under `runs`. Keep these artifacts together with any reported numbers.
+- **Construction:** BenchYAML's training, encoding, NVQ and graph-write timers.
+  Dataset loading and download are excluded.
+- **Queries (warm index, cold queries):** the index stays in the page cache, the
+  JVM warms up on base vectors until JIT compilation settles, then each held-out
+  query runs once. That single pass is the throughput measurement; recall and
+  visit counts come from later passes in the same JVM. Direct execution uses 4 ×
+  cores caller threads; queued execution uses at most one worker per core and a
+  maximum batch of 8.
+- **Recall:** recall@10 against the dataset's ground truth, the same for every
+  mode. Concurrent results are checked against single-threaded searches.
+
+BenchYAML writes its CSV files under each case directory's `logging` folder and
+prints its tables. The scripts also keep, under `runs`, the source commit, JAR
+checksum, index and run YAML, Java version, CPU topology, console output, exit
+code and a `command.sh` that reruns the exact Java command.
 
 Hardware, OS scheduling and parallel graph construction cause run-to-run
-variation; reproducing the study means the same protocol and comparable
-distributions, not identical numbers.
+variation, so reproducing the study means the same protocol and comparable
+results, not identical numbers.
+
+## Published results
+
+[ASH performance](ash-performance.md) reports results on 6M and 10M datasets that
+are not in the public catalog, measured with an earlier version of this protocol.

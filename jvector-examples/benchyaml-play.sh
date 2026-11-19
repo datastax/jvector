@@ -22,6 +22,7 @@
 #   benchyaml-play.sh --build-only   build and print JAR=, SOURCE_REF= and JAR_SHA256=
 #
 # BENCH_RUN_CONFIG selects the run YAML (default jvector-examples/yaml-configs/run-config.yml).
+# BENCH_ADAPTIVE=true turns on adaptive stopping for the searches (default false).
 # Machine settings come from the server profile (BENCH_PROFILE, or bench-profiles/local/profile.env).
 set -euo pipefail
 
@@ -117,7 +118,10 @@ while read -r catalog data; do
   [[ -n $catalog ]] || continue
   [[ $catalog == /* ]] || catalog="$repo/$catalog"
   n=$((n + 1))
-  sed "s|\${JVECTOR_BENCH_DATA_DIR}|$data|g" "$catalog" > "$catalogs/$n-$(basename "${catalog%.*}").yml"
+  # Local catalogs name ${JVECTOR_BENCH_DATA_DIR}; the public catalog's download cache is
+  # ${DATASET_CACHE_DIR:-dataset_cache}. Both become the directory given for the catalog.
+  sed -e "s|\${JVECTOR_BENCH_DATA_DIR}|$data|g" -e "s|\${DATASET_CACHE_DIR:-dataset_cache}|$data|g" \
+    "$catalog" > "$catalogs/$n-$(basename "${catalog%.*}").yml"
 done <<< "${BENCH_CATALOGS:?The server profile must list BENCH_CATALOGS.}"
 
 printf '\nRecipe   %s\nCPUs     %s (%s physical cores), memory interleaved on NUMA nodes %s\nSource   %s\nJAR      %s\n         sha256 %s\nRun YAML %s\nWork     %s\nIndexes  %s\n\n' \
@@ -136,6 +140,6 @@ exec env -u JAVA_TOOL_OPTIONS -u JDK_JAVA_OPTIONS -u _JAVA_OPTIONS \
   -Dstdout.encoding=UTF-8 -Dstderr.encoding=UTF-8 \
   -Djvector.vectorization_provider=native -Djvector.parallel_writer=true \
   "-Djvector.physical_core_count=$cores" \
-  -Djvector.bench.verifyConcurrentResults=true \
+  -Djvector.bench.verifyConcurrentResults=true "-Djvector.bench.adaptive=${BENCH_ADAPTIVE:-false}" \
   "-Djvector.bench.sourceRef=$SOURCE_REF" "-Djvector.bench.runConfig=$run_config" \
   -cp "$JAR" io.github.jbellis.jvector.example.BenchYAML "$index"

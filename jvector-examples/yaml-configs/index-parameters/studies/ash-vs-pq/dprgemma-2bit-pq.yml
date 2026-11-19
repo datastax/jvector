@@ -1,16 +1,14 @@
-# cap-6M: 1536 input dimensions, 389 code bytes per vector.
-# The 4-bit label describes the ASH budget; PQ uses 389 8-bit subspaces.
+# dpr-gemma-1m: 768 input dimensions, 101 code bytes per vector.
+# The 2-bit label describes the ASH budget; PQ uses 101 8-bit subspaces.
 # ASH uses C=1 and D/2 projected dimensions, including its five-byte header.
-# One JVM per experiment: build with every physical core, then query the same index
-# with 1 and 8 search workers. The settings otherwise match studies/ash-vs-pq.
+# Separate JVMs: run with run-ash-pq-study.py or run-ash-pq-benchmark.sh; see docs/ash-pq-benchmark.md.
 yamlSchemaVersion: 3
 onDiskIndexVersion: 7
-dataset: cap-6M
+dataset: dpr-gemma-1m
 
 construction:
   type: onDisk
   writerMode: parallel
-  workers: max
   outDegree: [32]
   efConstruction: [100]
   neighborOverflow: [1.2f]
@@ -20,24 +18,24 @@ construction:
   compression:
     - type: PQ
       parameters:
-        m: 389
+        m: 101
         k: 256
         centerData: "No"
         anisotropicThreshold: -1.0
   reranking:
     type: NVQ
-  # One JVM builds and queries, so nothing needs to be saved for later JVMs.
-  useSavedIndexIfExists: No
+  # A fresh case directory measures training/encoding/construction. Later JVMs
+  # in that directory reuse exactly the same model and index for querying.
+  useSavedIndexIfExists: Yes
 
 search:
   topKOverquery:
     10: [1.0, 2.0]
   useSearchPruning: [No]
-  workers: [1, 8]
   compression:
     - type: PQ
       parameters:
-        m: 389
+        m: 101
         k: 256
         centerData: "No"
         anisotropicThreshold: -1.0

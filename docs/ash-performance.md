@@ -2,8 +2,8 @@
 
 This page compares fused ASH and fused PQ graph indexes on three large datasets,
 at matched code sizes: both store the same bytes per vector, including ASH's
-five-byte header. [Reproducing ASH versus PQ](ash-pq-benchmark.md) explains how
-to run the same study on your own hardware.
+five-byte header. These datasets are not public; [Reproducing ASH versus PQ](ash-pq-benchmark.md)
+explains how to run the same comparison on public 1M datasets on your own hardware.
 
 ## Summary
 

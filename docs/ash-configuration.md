@@ -235,11 +235,11 @@ page reads per query and, for queued execution, mean batch size. Unloaded latenc
 response time describe different measurements. Independent build/query JVM
 repetitions are launch choices, not model defaults; preserve individual CSVs.
 
-The ASH versus PQ case script (`run-ash-pq-benchmark.sh`) accepts `JVECTOR_BENCH_DATA_DIR` (required local input
-directory), `JVECTOR_BENCH_CATALOG` (`catalog-1m.yml`; optionally
-`catalog-large.yml`), `JVECTOR_BENCH_HEAP` (`128g`), and
+The ASH versus PQ case script (`run-ash-pq-benchmark.sh`) accepts `JVECTOR_BENCH_DATA_DIR`
+(required: where datasets are downloaded and reused), `JVECTOR_BENCH_BUILD_SMT`,
+`JVECTOR_BENCH_ADAPTIVE`, `JVECTOR_BENCH_OVERQUERY`, `JVECTOR_BENCH_HEAP` (`128g`) and
 `JVECTOR_BENCH_NUMA_POLICY` (`bind:0`; alternatively `interleave:<nodes>`).
-These defaults belong to the script, not the library. See the
+These defaults belong to the script, not the library. See
 [Reproducing ASH versus PQ](ash-pq-benchmark.md) for launch and artifact details.
 
 ## Diagnostics

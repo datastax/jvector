@@ -32,6 +32,7 @@ import static org.junit.Assert.*;
 /** Fair code budgets and independent selection of checked-in run/index YAML. */
 public class StandaloneASHBenchmarkConfigTest {
     private static final Path INDEX_CONFIGS = Path.of("jvector-examples/yaml-configs/index-parameters/studies/ash-vs-pq");
+    private static final Path SINGLE_JVM_CONFIGS = Path.of("jvector-examples/yaml-configs/index-parameters/studies/ash-vs-pq-single-jvm");
     private static final Path RUN_CONFIGS = Path.of("jvector-examples/yaml-configs/ash-pq");
     private static final Path ALL_INDEX_CONFIGS = Path.of("jvector-examples/yaml-configs/index-parameters");
     @Rule public final TemporaryFolder directory = new TemporaryFolder();
@@ -55,7 +56,7 @@ public class StandaloneASHBenchmarkConfigTest {
     @Test
     public void yamlPathsAreNotRegexesAndMissingExplicitRunFileFailsBeforeDataLoading() throws Exception {
         var index = directory.newFile("index with [literal.yml").toPath();
-        Files.copy(INDEX_CONFIGS.resolve("mpnet-2bit-ash.yml"), index,
+        Files.copy(INDEX_CONFIGS.resolve("cohere-2bit-ash.yml"), index,
                 java.nio.file.StandardCopyOption.REPLACE_EXISTING);
         var missing = directory.getRoot().toPath().resolve("missing-run.yml");
         String previous = System.getProperty("jvector.bench.runConfig");
@@ -83,10 +84,13 @@ public class StandaloneASHBenchmarkConfigTest {
     @Test
     @SuppressWarnings("unchecked")
     public void allPairsMatchBytesAndUseFusedGraphsNvqAndTheSameSearchParameters() throws Exception {
-        var dimensions = Map.of("mpnet", 768, "cohere", 1024, "ada002", 1536, "openai3072", 3072,
-                "mpnet10m", 768, "cohere10m", 1024, "cap6m", 1536);
+        var dimensions = Map.of("ada002", 1536, "cohere", 1024, "dprgemma", 768,
+                "openai1536", 1536, "openai3072", 3072);
+        try (var files = Files.list(INDEX_CONFIGS)) {
+            assertEquals(2 * dimensions.size(), files.count());
+        }
         for (var entry : dimensions.entrySet()) {
-            for (int bits : new int[]{2, 4}) {
+            for (int bits : new int[]{2}) {
                 Map<String, Object> previousConstruction = null;
                 String previousDataset = null;
                 for (String algorithm : List.of("ash", "pq")) {
@@ -134,12 +138,16 @@ public class StandaloneASHBenchmarkConfigTest {
 
     @Test
     public void runRecipesKeepStandardBenchmarkSelections() throws Exception {
-        for (String mode : List.of("construction", "direct", "queued")) {
+        for (String mode : List.of("construction", "direct", "queued", "single-jvm")) {
             var config = RunConfig.load(RUN_CONFIGS.resolve("run-" + mode + ".yml").toString());
             assertEquals(List.of("recall"), config.benchmarks.get("accuracy"));
             if (!mode.equals("construction")) {
+                // Warm index, cold queries: one timed pass of held-out queries after a JIT warmup.
                 assertEquals(List.of("AVG"), config.benchmarks.get("throughput"));
-                assertEquals(List.of("AVG", "STD", "P999"), config.benchmarks.get("latency"));
+                assertEquals(Boolean.FALSE, config.measurement.evictIndex);
+                assertEquals("base", config.measurement.throughput.warmup);
+                assertTrue(config.measurement.throughput.untilCompiled());
+                assertEquals(1, config.measurement.throughput.passes());
             }
         }
     }
@@ -162,7 +170,7 @@ public class StandaloneASHBenchmarkConfigTest {
                 config.logging.benchmarks = config.benchmarks;
                 config.logging.runId = mode;
                 String codec = mode.equals("queued") ? "ash" : "pq";
-                var index = MultiConfig.getConfig(INDEX_CONFIGS.resolve("mpnet-2bit-" + codec + ".yml")
+                var index = MultiConfig.getConfig(INDEX_CONFIGS.resolve("cohere-2bit-" + codec + ".yml")
                         .toAbsolutePath().toString());
                 var artifacts = io.github.jbellis.jvector.example.reporting.RunArtifacts.open(config, List.of(index));
                 var info = yaml(artifacts.experimentsWriter().path().resolveSibling("sys_info.json"));
@@ -182,6 +190,34 @@ public class StandaloneASHBenchmarkConfigTest {
     }
 
     @Test
+    public void singleJvmRecipesDifferOnlyInSearchCaseWorkersAndIndexReuse() throws Exception {
+        try (var files = Files.list(INDEX_CONFIGS)) {
+            for (Path study : (Iterable<Path>) files.sorted()::iterator) {
+                var single = SINGLE_JVM_CONFIGS.resolve(study.getFileName());
+                assertNotNull(MultiConfig.getConfig(single.toAbsolutePath().toString()));
+                var expected = withoutComments(Files.readAllLines(study));
+                expected.set(expected.indexOf("  writerMode: parallel"), "  writerMode: parallel\n  workers: max");
+                expected.set(expected.indexOf("  useSavedIndexIfExists: Yes"), "  useSavedIndexIfExists: No");
+                expected.set(expected.indexOf("  useSearchPruning: [No]"), "  useSearchPruning: [No]\n  workers: [8]");
+                expected.set(expected.indexOf("    10: [1.0, 2.0]"), "    10: [1.0]");
+                assertEquals(single.toString(), String.join("\n", expected),
+                        String.join("\n", withoutComments(Files.readAllLines(single))));
+            }
+        }
+        try (var files = Files.list(SINGLE_JVM_CONFIGS)) {
+            try (var studies = Files.list(INDEX_CONFIGS)) {
+                assertEquals(studies.count(), files.count());
+            }
+        }
+    }
+
+    private static List<String> withoutComments(List<String> lines) {
+        var kept = new java.util.ArrayList<String>();
+        for (String line : lines) if (!line.trim().startsWith("#")) kept.add(line);
+        return kept;
+    }
+
+    @Test
     @SuppressWarnings("unchecked")
     public void onlyMultiJvmRecipesKeepSavedIndexes() throws Exception {
         // Saved indexes consume disk space without notice, so starting points leave reuse off.
@@ -190,7 +226,7 @@ public class StandaloneASHBenchmarkConfigTest {
         try (var files = Files.walk(ALL_INDEX_CONFIGS)) {
             paths = files.filter(p -> p.toString().endsWith(".yml")).sorted().collect(java.util.stream.Collectors.toList());
         }
-        assertTrue(paths.size() > 36);
+        assertTrue(paths.size() > 20);
         for (Path path : paths) {
             var construction = (Map<String, Object>) yaml(path).get("construction");
             if (construction != null && construction.containsKey("useSavedIndexIfExists")) {
