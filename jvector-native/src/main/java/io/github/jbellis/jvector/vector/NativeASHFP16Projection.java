@@ -15,20 +15,12 @@
  */
 package io.github.jbellis.jvector.vector;
 
-import io.github.jbellis.jvector.vector.cnative.LibraryLoader;
+import io.github.jbellis.jvector.vector.cnative.jvector_ash_fp16_result;
 import java.lang.foreign.Arena;
-import java.lang.foreign.FunctionDescriptor;
-import java.lang.foreign.Linker;
-import java.lang.foreign.MemoryLayout;
 import java.lang.foreign.MemorySegment;
-import java.lang.foreign.SymbolLookup;
-import java.lang.invoke.MethodHandle;
 import java.util.Objects;
 
-import static java.lang.foreign.ValueLayout.ADDRESS;
-import static java.lang.foreign.ValueLayout.JAVA_INT;
-import static java.lang.foreign.ValueLayout.JAVA_BYTE;
-import static java.lang.foreign.ValueLayout.JAVA_LONG;
+import static io.github.jbellis.jvector.vector.cnative.NativeAshOneDnn.*;
 
 /**
  * Immutable, model-owned FP16 query matrix with strict FP32 accumulation/output.
@@ -41,53 +33,18 @@ import static java.lang.foreign.ValueLayout.JAVA_LONG;
  * FP32. Singleton and batch calls execute on the calling thread.
  */
 final class NativeASHFP16Projection implements VectorUtilSupport.AshProjection {
-    private static final int OK = 0, UNSUPPORTED = 1, INVALID_ARGUMENT = 2,
-            RANGE = 3, NO_MEMORY = 4;
+    private static final int OK = JV_ASH_FP16_OK(), UNSUPPORTED = JV_ASH_FP16_UNSUPPORTED(),
+            INVALID_ARGUMENT = JV_ASH_FP16_INVALID_ARGUMENT(), RANGE = JV_ASH_FP16_RANGE(),
+            NO_MEMORY = JV_ASH_FP16_NO_MEMORY();
 
-    private static final MemoryLayout RESULT_LAYOUT = MemoryLayout.structLayout(
-            JAVA_INT, MemoryLayout.sequenceLayout(256, JAVA_BYTE));
-
-    /** Loaded only if a query actually asks for an FP16 view. */
+    /** Checked only if a query actually asks for an FP16 view. */
     private static final class Bindings {
-        static final Bindings INSTANCE = load();
-        final MethodHandle create, destroy, project, bytes, batch;
-
-        private Bindings(SymbolLookup lookup) throws Throwable {
-            MethodHandle abi = bind(lookup, "jvector_ash_fp16_abi", FunctionDescriptor.of(JAVA_INT));
-            if ((int) abi.invokeExact() != 1)
-                throw new UnsatisfiedLinkError("Unsupported ASH FP16 library ABI");
-            create = bind(lookup, "jvector_ash_fp16_create",
-                    FunctionDescriptor.of(ADDRESS, ADDRESS, JAVA_INT, JAVA_INT, ADDRESS));
-            destroy = bind(lookup, "jvector_ash_fp16_destroy", FunctionDescriptor.ofVoid(ADDRESS));
-            project = bind(lookup, "jvector_ash_fp16_project",
-                    FunctionDescriptor.of(JAVA_INT, ADDRESS, ADDRESS, ADDRESS, ADDRESS));
-            bytes = bind(lookup, "jvector_ash_fp16_bytes", FunctionDescriptor.of(JAVA_LONG, ADDRESS));
-            // Older optional libraries retain correct singleton FP16 behavior.
-            batch = lookup.find("jvector_ash_fp16_project_batch")
-                    .map(symbol -> Linker.nativeLinker().downcallHandle(symbol,
-                            FunctionDescriptor.of(JAVA_INT, ADDRESS, ADDRESS, JAVA_INT, ADDRESS, ADDRESS)))
-                    .orElse(null);
-        }
-
-        private static MethodHandle bind(SymbolLookup lookup, String name, FunctionDescriptor descriptor) {
-            MemorySegment symbol = lookup.find(name)
-                    .orElseThrow(() -> new UnsatisfiedLinkError("Missing ASH FP16 symbol: " + name));
-            return Linker.nativeLinker().downcallHandle(symbol, descriptor);
-        }
-
-        private static Bindings load() {
-            if (!LibraryLoader.loadAshFp16()) return null;
-            try {
-                return new Bindings(SymbolLookup.loaderLookup());
-            } catch (UnsatisfiedLinkError | IllegalCallerException | SecurityException
-                     | UnsupportedOperationException unavailable) {
-                return null;
-            } catch (RuntimeException | Error failure) {
-                throw failure;
-            } catch (Throwable failure) {
-                throw new AssertionError("Unexpected ASH FP16 binding failure", failure);
-            }
-        }
+        /** Null when usable, otherwise why the add-on cannot serve FP16 queries. */
+        static final String UNAVAILABLE = NativeASHAddOn.unavailable("jvector_ash_fp16_create",
+                "jvector_ash_fp16_destroy", "jvector_ash_fp16_project", "jvector_ash_fp16_bytes");
+        // Older optional libraries retain correct singleton FP16 behavior.
+        static final boolean BATCH = UNAVAILABLE == null
+                && NativeASHAddOn.unavailable("jvector_ash_fp16_project_batch") == null;
     }
 
     private final MemorySegment context;
@@ -114,7 +71,7 @@ final class NativeASHFP16Projection implements VectorUtilSupport.AshProjection {
         this.rows = rows;
         this.columns = columns;
         this.retainedBytes = weightBytes;
-        this.batchAvailable = Bindings.INSTANCE.batch != null;
+        this.batchAvailable = Bindings.BATCH;
         this.fallback = fallback;
     }
 
@@ -122,51 +79,43 @@ final class NativeASHFP16Projection implements VectorUtilSupport.AshProjection {
     static VectorUtilSupport.AshProjection prepare(MemorySegment matrix, int rows, int columns,
                                                    VectorUtilSupport.AshProjection fallback,
                                                    boolean required) {
-        Bindings bindings = Bindings.INSTANCE;
-        if (bindings == null) {
+        if (Bindings.UNAVAILABLE != null) {
             if (!required) return fallback;
-            throw new UnsupportedOperationException("ASH FP16 query projection library is unavailable; "
+            throw new UnsupportedOperationException("ASH FP16 query projection library is unavailable ("
+                    + Bindings.UNAVAILABLE + "); "
                     + "build with -Dnative.onednn=true or select fp32/auto");
         }
         try (Arena setup = Arena.ofConfined()) {
-            MemorySegment status = setup.allocate(RESULT_LAYOUT);
-            MemorySegment pointer = (MemorySegment) bindings.create.invokeExact(matrix, rows, columns, status);
-            int code = status.get(JAVA_INT, 0);
+            MemorySegment status = jvector_ash_fp16_result.allocate(setup);
+            MemorySegment pointer = jvector_ash_fp16_create(matrix, rows, columns, status);
+            int code = jvector_ash_fp16_result.status(status);
             if (pointer.address() == 0) {
                 if (!required && (code == UNSUPPORTED || code == RANGE)) return fallback;
                 throw failure(code, status);
             }
             if (code != OK) {
-                bindings.destroy.invokeExact(pointer);
+                jvector_ash_fp16_destroy(pointer);
                 throw failure(code, status);
             }
             long bytes;
             MemorySegment owned;
             try {
-                bytes = (long) bindings.bytes.invokeExact(pointer);
+                bytes = jvector_ash_fp16_bytes(pointer);
                 owned = pointer.reinterpret(1, Arena.ofAuto(), NativeASHFP16Projection::destroy);
             } catch (Throwable failure) {
-                bindings.destroy.invokeExact(pointer);
+                jvector_ash_fp16_destroy(pointer);
                 throw failure;
             }
             return new NativeASHFP16Projection(owned, rows, columns, bytes, required ? null : fallback);
-        } catch (RuntimeException | Error failure) {
-            throw failure;
-        } catch (Throwable failure) {
-            throw new AssertionError("Unexpected ASH FP16 initialization failure", failure);
         }
     }
 
     private static void destroy(MemorySegment pointer) {
-        try {
-            Bindings.INSTANCE.destroy.invokeExact(pointer);
-        } catch (Throwable failure) {
-            throw new AssertionError("Unexpected ASH FP16 cleanup failure", failure);
-        }
+        jvector_ash_fp16_destroy(pointer);
     }
 
     private static RuntimeException failure(int code, MemorySegment result) {
-        String message = "ASH FP16 projection: " + result.getString(JAVA_INT.byteSize());
+        String message = "ASH FP16 projection: " + jvector_ash_fp16_result.message(result).getString(0);
         if (code == NO_MEMORY) throw new OutOfMemoryError(message);
         if (code == UNSUPPORTED) return new UnsupportedOperationException(message);
         if (code == INVALID_ARGUMENT || code == RANGE) return new IllegalArgumentException(message);
@@ -204,28 +153,22 @@ final class NativeASHFP16Projection implements VectorUtilSupport.AshProjection {
         for (int i = 0; i < count; i++)
             MemorySegment.copy(MemorySegment.ofArray(inputs[i]), 0, buffers.input,
                     i * inputRowBytes, inputRowBytes);
-        if (buffers.status.byteSize() == 0) buffers.status = Arena.ofAuto().allocate(RESULT_LAYOUT);
-        try {
-            int status = (int) Bindings.INSTANCE.batch.invokeExact(
-                    context, buffers.input, count, buffers.output, buffers.status);
-            // Publish lazy packing even on a partially successful/failed native
-            // call. Concurrent callers cannot overwrite a newer, larger total.
-            long current = (long) Bindings.INSTANCE.bytes.invokeExact(context);
-            for (long previous; (previous = retainedBytes) < current;)
-                if (RETAINED_BYTES.compareAndSet(this, previous, current)) break;
-            if (status == UNSUPPORTED) batchAvailable = false;
-            if (status == UNSUPPORTED || (status == RANGE && fallback != null)) {
-                // Preserve each query's FP16/automatic-range behavior, including
-                // compatibility with libraries lacking an optimized batch shape.
-                for (int i = 0; i < count; i++) project(inputs[i], outputs[i]);
-                return;
-            }
-            if (status != OK) throw failure(status, buffers.status);
-        } catch (RuntimeException | Error failure) {
-            throw failure;
-        } catch (Throwable failure) {
-            throw new AssertionError("Unexpected ASH FP16 batch execution failure", failure);
+        if (buffers.status.byteSize() == 0) buffers.status = jvector_ash_fp16_result.allocate(Arena.ofAuto());
+        int status = jvector_ash_fp16_project_batch(
+                context, buffers.input, count, buffers.output, buffers.status);
+        // Publish lazy packing even on a partially successful/failed native
+        // call. Concurrent callers cannot overwrite a newer, larger total.
+        long current = jvector_ash_fp16_bytes(context);
+        for (long previous; (previous = retainedBytes) < current;)
+            if (RETAINED_BYTES.compareAndSet(this, previous, current)) break;
+        if (status == UNSUPPORTED) batchAvailable = false;
+        if (status == UNSUPPORTED || (status == RANGE && fallback != null)) {
+            // Preserve each query's FP16/automatic-range behavior, including
+            // compatibility with libraries lacking an optimized batch shape.
+            for (int i = 0; i < count; i++) project(inputs[i], outputs[i]);
+            return;
         }
+        if (status != OK) throw failure(status, buffers.status);
         for (int i = 0; i < count; i++)
             MemorySegment.copy(buffers.output, i * outputRowBytes,
                     MemorySegment.ofArray(outputs[i]), 0, outputRowBytes);
@@ -241,21 +184,15 @@ final class NativeASHFP16Projection implements VectorUtilSupport.AshProjection {
         long outputBytes = (long) rows * Float.BYTES;
         NativeASHProjection.Buffers buffers = NativeASHProjection.buffers(inputBytes, outputBytes);
         MemorySegment.copy(MemorySegment.ofArray(query), 0, buffers.input, 0, inputBytes);
-        if (buffers.status.byteSize() == 0) buffers.status = Arena.ofAuto().allocate(RESULT_LAYOUT);
-        try {
-            int status = (int) Bindings.INSTANCE.project.invokeExact(
-                    context, buffers.input, buffers.output, buffers.status);
-            if (status == RANGE && fallback != null) {
-                fallback.project(query, out);
-                fp32FallbackUsed = true;
-                return;
-            }
-            if (status != OK) throw failure(status, buffers.status);
-        } catch (RuntimeException | Error failure) {
-            throw failure;
-        } catch (Throwable failure) {
-            throw new AssertionError("Unexpected ASH FP16 execution failure", failure);
+        if (buffers.status.byteSize() == 0) buffers.status = jvector_ash_fp16_result.allocate(Arena.ofAuto());
+        int status = jvector_ash_fp16_project(
+                context, buffers.input, buffers.output, buffers.status);
+        if (status == RANGE && fallback != null) {
+            fallback.project(query, out);
+            fp32FallbackUsed = true;
+            return;
         }
+        if (status != OK) throw failure(status, buffers.status);
         MemorySegment.copy(buffers.output, 0, MemorySegment.ofArray(out), 0, outputBytes);
     }
 }

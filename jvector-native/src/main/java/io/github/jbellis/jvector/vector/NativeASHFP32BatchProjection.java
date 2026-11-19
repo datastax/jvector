@@ -18,15 +18,9 @@ package io.github.jbellis.jvector.vector;
 
 import io.github.jbellis.jvector.quantization.ASHQueryProjection;
 import io.github.jbellis.jvector.util.RamUsageEstimator;
-import io.github.jbellis.jvector.vector.cnative.LibraryLoader;
-import java.lang.foreign.FunctionDescriptor;
-import java.lang.foreign.Linker;
 import java.lang.foreign.MemorySegment;
-import java.lang.foreign.SymbolLookup;
-import java.lang.invoke.MethodHandle;
 
-import static java.lang.foreign.ValueLayout.ADDRESS;
-import static java.lang.foreign.ValueLayout.JAVA_INT;
+import static io.github.jbellis.jvector.vector.cnative.NativeAshOneDnn.*;
 
 /**
  * Preferred oneDNN FP32 GEMM for bulk base-vector projection, with Highway fallback.
@@ -35,34 +29,10 @@ import static java.lang.foreign.ValueLayout.JAVA_INT;
  * Library scratch and JIT preparation are included in the caller's first use.
  */
 final class NativeASHFP32BatchProjection implements VectorUtilSupport.AshProjection {
+    // The optional package already embeds sequential oneDNN for FP16
+    // queries. Older packages simply lack the new FP32 entry point.
     private static final class Bindings {
-        static final MethodHandle BATCH = load();
-        private static MethodHandle load() {
-            // The optional package already embeds sequential oneDNN for FP16
-            // queries. Older packages simply lack the new FP32 entry point.
-            if (!LibraryLoader.loadAshFp16()) return null;
-            try {
-                SymbolLookup lookup = SymbolLookup.loaderLookup();
-                MethodHandle abi = Linker.nativeLinker().downcallHandle(
-                        lookup.find("jvector_ash_fp16_abi")
-                                .orElseThrow(() -> new UnsatisfiedLinkError("Missing ASH add-on ABI")),
-                        FunctionDescriptor.of(JAVA_INT));
-                if ((int) abi.invokeExact() != 1)
-                    throw new UnsatisfiedLinkError("Unsupported ASH add-on ABI");
-                return lookup.find("jvector_ash_fp32_project_batch")
-                        .map(symbol -> Linker.nativeLinker().downcallHandle(symbol,
-                                FunctionDescriptor.of(JAVA_INT, ADDRESS, ADDRESS,
-                                        JAVA_INT, JAVA_INT, JAVA_INT, ADDRESS)))
-                        .orElse(null);
-            } catch (UnsatisfiedLinkError | IllegalCallerException | SecurityException
-                     | UnsupportedOperationException unavailable) {
-                return null;
-            } catch (RuntimeException | Error failure) {
-                throw failure;
-            } catch (Throwable failure) {
-                throw new AssertionError("Unexpected ASH FP32 binding failure", failure);
-            }
-        }
+        static final boolean BATCH = NativeASHAddOn.unavailable("jvector_ash_fp32_project_batch") == null;
     }
 
     // The model charges this adapter; its retained delegate is separate.
@@ -73,7 +43,7 @@ final class NativeASHFP32BatchProjection implements VectorUtilSupport.AshProject
     static final int HIGHWAY_MIN_ROWS = 4, HIGHWAY_MAX_ROWS = 32;
 
     static VectorUtilSupport.AshProjection prepare(NativeASHProjection fallback) {
-        return Bindings.BATCH == null ? fallback : new NativeASHFP32BatchProjection(fallback);
+        return Bindings.BATCH ? new NativeASHFP32BatchProjection(fallback) : fallback;
     }
 
     private NativeASHFP32BatchProjection(NativeASHProjection fallback) {
@@ -122,15 +92,8 @@ final class NativeASHFP32BatchProjection implements VectorUtilSupport.AshProject
         for (int i = 0; i < count; i++)
             MemorySegment.copy(MemorySegment.ofArray(inputs[i]), 0, buffers.input,
                     i * inputRowBytes, inputRowBytes);
-        final int status;
-        try {
-            status = (int) Bindings.BATCH.invokeExact(fallback.matrix(), buffers.input,
-                    rows, columns, count, buffers.output);
-        } catch (RuntimeException | Error error) {
-            throw error;
-        } catch (Throwable error) {
-            throw new AssertionError("Unexpected exception from oneDNN FP32 projection", error);
-        }
+        final int status = jvector_ash_fp32_project_batch(fallback.matrix(), buffers.input,
+                rows, columns, count, buffers.output);
         // oneDNN status values are translated by the C wrapper. Unsupported
         // kernels retain Highway; allocation/runtime failures are never hidden.
         if (status == 3) {

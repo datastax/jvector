@@ -376,17 +376,15 @@ class NativeASHInt8ProjectionTest {
     }
 
     @Test
-    void abiVersionAndMissingSymbolsAreRejectedBeforeCalls() throws Exception {
-        Class<?> type = Class.forName(NativeASHInt8Projection.class.getName() + "$Bindings");
-        var constructor = type.getDeclaredConstructor(SymbolLookup.class);
-        constructor.setAccessible(true);
+    void abiVersionAndMissingSymbolsAreRejectedBeforeCalls() {
         try (var arena = Arena.ofConfined()) {
             for (int version : new int[]{0,1}) {
                 MemorySegment abi = Linker.nativeLinker().upcallStub(MethodHandles.constant(int.class, version),
                         FunctionDescriptor.of(JAVA_INT), arena);
                 SymbolLookup lookup = name -> name.equals("jvector_ash_fp16_abi") ? Optional.of(abi) : Optional.empty();
-                var failure = assertThrows(InvocationTargetException.class, () -> constructor.newInstance(lookup));
-                assertInstanceOf(UnsatisfiedLinkError.class, failure.getCause());
+                assertEquals(version == 1 ? null : "add-on ABI 0, expected 1", NativeASHAddOn.unavailable(lookup));
+                assertEquals(version == 1 ? "missing symbol jvector_ash_int8_create" : "add-on ABI 0, expected 1",
+                        NativeASHAddOn.unavailable(lookup, NativeASHInt8Projection.SYMBOLS));
             }
         }
     }

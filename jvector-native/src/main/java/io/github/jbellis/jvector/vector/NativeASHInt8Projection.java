@@ -16,20 +16,12 @@
 
 package io.github.jbellis.jvector.vector;
 
-import io.github.jbellis.jvector.vector.cnative.LibraryLoader;
+import io.github.jbellis.jvector.vector.cnative.jvector_ash_fp16_result;
 import java.lang.foreign.Arena;
-import java.lang.foreign.FunctionDescriptor;
-import java.lang.foreign.Linker;
-import java.lang.foreign.MemoryLayout;
 import java.lang.foreign.MemorySegment;
-import java.lang.foreign.SymbolLookup;
-import java.lang.invoke.MethodHandle;
 import java.util.Objects;
 
-import static java.lang.foreign.ValueLayout.ADDRESS;
-import static java.lang.foreign.ValueLayout.JAVA_BYTE;
-import static java.lang.foreign.ValueLayout.JAVA_INT;
-import static java.lang.foreign.ValueLayout.JAVA_LONG;
+import static io.github.jbellis.jvector.vector.cnative.NativeAshOneDnn.*;
 
 /**
  * Immutable, model-owned oneDNN INT8 query view. Training/encoding retain FP32.
@@ -38,47 +30,17 @@ import static java.lang.foreign.ValueLayout.JAVA_LONG;
  * Explicit INT8 selection never silently substitutes another precision.
  */
 final class NativeASHInt8Projection implements VectorUtilSupport.AshProjection {
-    private static final int OK = 0, UNSUPPORTED = 1, INVALID_ARGUMENT = 2,
-            RANGE = 3, NO_MEMORY = 4;
+    private static final int OK = JV_ASH_FP16_OK(), UNSUPPORTED = JV_ASH_FP16_UNSUPPORTED(),
+            INVALID_ARGUMENT = JV_ASH_FP16_INVALID_ARGUMENT(), RANGE = JV_ASH_FP16_RANGE(),
+            NO_MEMORY = JV_ASH_FP16_NO_MEMORY();
+
     // The optional add-on shares the existing ABI-1 caller-owned result structure.
-    private static final MemoryLayout RESULT_LAYOUT = MemoryLayout.structLayout(
-            JAVA_INT, MemoryLayout.sequenceLayout(256, JAVA_BYTE));
+    static final String[] SYMBOLS = {"jvector_ash_int8_create", "jvector_ash_int8_destroy",
+            "jvector_ash_int8_project_batch", "jvector_ash_int8_bytes"};
 
     private static final class Bindings {
-        static final Bindings INSTANCE = load();
-        final MethodHandle create, destroy, batch, bytes;
-
-        private Bindings(SymbolLookup lookup) throws Throwable {
-            MethodHandle abi = bind(lookup, "jvector_ash_fp16_abi", FunctionDescriptor.of(JAVA_INT));
-            if ((int) abi.invokeExact() != 1)
-                throw new UnsatisfiedLinkError("Unsupported ASH projection add-on ABI");
-            create = bind(lookup, "jvector_ash_int8_create",
-                    FunctionDescriptor.of(ADDRESS, ADDRESS, JAVA_INT, JAVA_INT, ADDRESS));
-            destroy = bind(lookup, "jvector_ash_int8_destroy", FunctionDescriptor.ofVoid(ADDRESS));
-            batch = bind(lookup, "jvector_ash_int8_project_batch",
-                    FunctionDescriptor.of(JAVA_INT, ADDRESS, ADDRESS, JAVA_INT, ADDRESS, ADDRESS));
-            bytes = bind(lookup, "jvector_ash_int8_bytes", FunctionDescriptor.of(JAVA_LONG, ADDRESS));
-        }
-
-        private static MethodHandle bind(SymbolLookup lookup, String name, FunctionDescriptor descriptor) {
-            MemorySegment symbol = lookup.find(name)
-                    .orElseThrow(() -> new UnsatisfiedLinkError("Missing ASH INT8 symbol: " + name));
-            return Linker.nativeLinker().downcallHandle(symbol, descriptor);
-        }
-
-        private static Bindings load() {
-            if (!LibraryLoader.loadAshFp16()) return null;
-            try {
-                return new Bindings(SymbolLookup.loaderLookup());
-            } catch (UnsatisfiedLinkError | IllegalCallerException | SecurityException
-                     | UnsupportedOperationException unavailable) {
-                return null;
-            } catch (RuntimeException | Error failure) {
-                throw failure;
-            } catch (Throwable failure) {
-                throw new AssertionError("Unexpected ASH INT8 binding failure", failure);
-            }
-        }
+        /** Null when usable, otherwise why the add-on cannot serve INT8 queries. */
+        static final String UNAVAILABLE = NativeASHAddOn.unavailable(SYMBOLS);
     }
 
     private final MemorySegment context;
@@ -91,44 +53,36 @@ final class NativeASHInt8Projection implements VectorUtilSupport.AshProjection {
     }
 
     static VectorUtilSupport.AshProjection prepare(MemorySegment matrix, int rows, int columns) {
-        Bindings bindings = Bindings.INSTANCE;
-        if (bindings == null)
-            throw new UnsupportedOperationException("ASH INT8 query projection add-on is unavailable; "
+        if (Bindings.UNAVAILABLE != null)
+            throw new UnsupportedOperationException("ASH INT8 query projection add-on is unavailable ("
+                    + Bindings.UNAVAILABLE + "); "
                     + "build with -Dnative.onednn=true or select fp32/auto");
         try (Arena setup = Arena.ofConfined()) {
-            MemorySegment status = setup.allocate(RESULT_LAYOUT);
-            MemorySegment pointer = (MemorySegment) bindings.create.invokeExact(matrix, rows, columns, status);
-            int code = status.get(JAVA_INT, 0);
+            MemorySegment status = jvector_ash_fp16_result.allocate(setup);
+            MemorySegment pointer = jvector_ash_int8_create(matrix, rows, columns, status);
+            int code = jvector_ash_fp16_result.status(status);
             if (pointer.address() == 0) throw failure(code, status);
             if (code != OK) {
-                bindings.destroy.invokeExact(pointer);
+                jvector_ash_int8_destroy(pointer);
                 throw failure(code, status);
             }
             MemorySegment owned;
             try {
                 owned = pointer.reinterpret(1, Arena.ofAuto(), NativeASHInt8Projection::destroy);
             } catch (Throwable failure) {
-                bindings.destroy.invokeExact(pointer);
+                jvector_ash_int8_destroy(pointer);
                 throw failure;
             }
             return new NativeASHInt8Projection(owned, rows, columns);
-        } catch (RuntimeException | Error failure) {
-            throw failure;
-        } catch (Throwable failure) {
-            throw new AssertionError("Unexpected ASH INT8 initialization failure", failure);
         }
     }
 
     private static void destroy(MemorySegment pointer) {
-        try {
-            Bindings.INSTANCE.destroy.invokeExact(pointer);
-        } catch (Throwable failure) {
-            throw new AssertionError("Unexpected ASH INT8 cleanup failure", failure);
-        }
+        jvector_ash_int8_destroy(pointer);
     }
 
     private static RuntimeException failure(int code, MemorySegment status) {
-        String message = "ASH INT8 projection: " + status.getString(JAVA_INT.byteSize());
+        String message = "ASH INT8 projection: " + jvector_ash_fp16_result.message(status).getString(0);
         if (code == NO_MEMORY) throw new OutOfMemoryError(message);
         if (code == UNSUPPORTED) return new UnsupportedOperationException(message);
         if (code == INVALID_ARGUMENT || code == RANGE) return new IllegalArgumentException(message);
@@ -138,11 +92,7 @@ final class NativeASHInt8Projection implements VectorUtilSupport.AshProjection {
     /** Retained native model storage, including lazily packed batch weights. */
     @Override
     public long ramBytesUsed() {
-        try {
-            return (long) Bindings.INSTANCE.bytes.invokeExact(context);
-        } catch (Throwable failure) {
-            throw new AssertionError("Unexpected ASH INT8 accounting failure", failure);
-        }
+        return jvector_ash_int8_bytes(context);
     }
 
     /** All of this view's storage is native. */
@@ -170,16 +120,10 @@ final class NativeASHInt8Projection implements VectorUtilSupport.AshProjection {
     }
 
     private void execute(NativeASHProjection.Buffers buffers, int count) {
-        if (buffers.status.byteSize() == 0) buffers.status = Arena.ofAuto().allocate(RESULT_LAYOUT);
-        try {
-            int status = (int) Bindings.INSTANCE.batch.invokeExact(
-                    context, buffers.input, count, buffers.output, buffers.status);
-            if (status != OK) throw failure(status, buffers.status);
-        } catch (RuntimeException | Error failure) {
-            throw failure;
-        } catch (Throwable failure) {
-            throw new AssertionError("Unexpected ASH INT8 execution failure", failure);
-        }
+        if (buffers.status.byteSize() == 0) buffers.status = jvector_ash_fp16_result.allocate(Arena.ofAuto());
+        int status = jvector_ash_int8_project_batch(
+                context, buffers.input, count, buffers.output, buffers.status);
+        if (status != OK) throw failure(status, buffers.status);
     }
 
     @Override
