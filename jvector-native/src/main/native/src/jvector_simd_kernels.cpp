@@ -430,10 +430,10 @@ HWY_FLATTEN int closest_centroid_f32(const float *point, size_t pointOffset,
 //
 // Clang does not support the GCC "rename-registers" optimisation attribute and
 // warns on unknown attributes, so we suppress it on Clang builds.
-#ifdef __clang__
-#  define JV_RENAME_REGS
-#else
+#if defined(__GNUC__) && !defined(__clang__)
 #  define JV_RENAME_REGS __attribute__((optimize("rename-registers")))
+#else
+#  define JV_RENAME_REGS
 #endif
 
 JV_RENAME_REGS
