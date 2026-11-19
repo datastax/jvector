@@ -180,11 +180,13 @@ final class CompactWriter implements AutoCloseable {
         return fusedPQEnabled && pqCodeCache == null;
     }
 
-    // The header as writeHeader() serialized it, for the assertion in writeFooter(): every header field
-    // (version, dimension, entry node, layer sizes, features) is fixed in the constructor and nothing fills
-    // one in while the records are written. A footer-based format (version 5 and above) writes the header
-    // again at the end, so a late change would at least reach the file there; a header-based format
-    // (4 and below) has only the copy written at the start, so for it a late change would be lost.
+    // The header as writeHeader() serialized it, kept only with assertions enabled, for the check in
+    // writeFooter(): every header field (version, dimension, entry node, layer sizes, features) is fixed
+    // in the constructor and nothing fills one in while the records are written. A footer-based format
+    // (version 5 and above) writes the header again at the end, so a late change would at least reach
+    // the file there; a header-based format (4 and below) has only the copy written at the start, so
+    // for it a late change would be lost.
+    private static final boolean ASSERTIONS_ENABLED = CompactWriter.class.desiredAssertionStatus();
     private byte[] headerAtStart;
 
     public void writeHeader() throws IOException {
@@ -192,7 +194,9 @@ final class CompactWriter implements AutoCloseable {
         header.write(writer);
         assert writer.position() == startOffset + headerSize : String.format("%d != %d", writer.position(), startOffset + headerSize);
         writer.flush();
-        headerAtStart = serializedHeader();
+        if (ASSERTIONS_ENABLED) {
+            headerAtStart = serializedHeader();
+        }
     }
 
     private byte[] serializedHeader() throws IOException {
@@ -224,7 +228,8 @@ final class CompactWriter implements AutoCloseable {
         }
         if (!usesFooter) {
             // A header-based format: the header written at the start is the metadata, and it is not
-            // written again, so it must not have changed since (see headerAtStart).
+            // written again, so it must not have changed since (see headerAtStart; null when writeHeader
+            // was not called, which the assertion then does not judge).
             assert headerAtStart == null || Arrays.equals(headerAtStart, serializedHeader())
                     : "the header changed after writeHeader(); a header-based format cannot record that";
             return;
