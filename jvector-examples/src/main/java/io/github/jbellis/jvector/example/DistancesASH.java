@@ -52,6 +52,12 @@ import java.util.concurrent.ForkJoinTask;
  * {@code recall.block-scoring} to rank with block scoring), {@code single-scoring} and
  * {@code block-scoring} (throughput), {@code symmetric-scoring} (code-to-code scoring),
  * {@code maxQueries}, {@code recall.k} and {@code scoringThreads}.</p>
+ *
+ * <p>{@code jvector.bench.int8-projection=true} instead compares query projection precisions on one
+ * model: FP32 against {@code jvector.bench.projectionCompare} ({@code int8}, the default, or {@code fp16}).
+ * It prints the precision each arm actually uses ({@code PROJECTION_PRECISION}) and fails if one was
+ * substituted, checks INT8 outputs against an exact two-digit integer oracle, times single and batched
+ * projection for {@code jvector.bench.projectionSeconds} per sample, and then runs full-scan recall.</p>
  */
 public class DistancesASH {
 
@@ -438,7 +444,7 @@ public class DistancesASH {
 
     private static volatile double projectionSink;
 
-    /** Paired projection comparison; optional recall uses the normal full-scan scorers. */
+    /** Paired FP32 vs INT8/FP16 query projection comparison; optional recall uses the normal full-scan scorers. */
     private static void benchmarkInt8Projection(ASHVectors encoded, List<VectorFloat<?>> queries,
             List<? extends List<Integer>> truth, int[] newToOld, ForkJoinPool executor) throws IOException {
         var outputDir=java.nio.file.Path.of(System.getProperty("jvector.bench.outputDir", "."));
@@ -454,13 +460,24 @@ public class DistancesASH {
         var sharedCodes=new AsymmetricHashing.QuantizedVector[encoded.count()];
         for(int i=0;i<sharedCodes.length;i++)sharedCodes[i]=encoded.get(i);
         ASHVectors[] arms={encoded,new ASHVectors(copy,sharedCodes)};
-        String[] names={"fp32","int8"};
+        // The compared query precision: int8 (default) or fp16, each against fp32 on the same model.
+        String compare=System.getProperty("jvector.bench.projectionCompare","int8").trim().toLowerCase(java.util.Locale.ROOT);
+        if(!compare.equals("int8")&&!compare.equals("fp16"))
+            throw new IllegalArgumentException("jvector.bench.projectionCompare must be int8 or fp16: "+compare);
+        String[] names={"fp32",compare};
         var projections=new AsymmetricHashing.StiefelTransform[]{encoded.getCompressor().stiefelTransform,copy.stiefelTransform};
         // Each independent model caches its own selected query view. Base codes are shared by reference.
         for(int mode=0;mode<2;mode++) {
             System.setProperty("jvector.ash.queryProjection",names[mode]);
             projections[mode].projectQueryDirect(new float[copy.originalDimension],new float[copy.quantizedDim]);
             arms[mode].blockScorerFor(queries.get(0),VectorSimilarityFunction.DOT_PRODUCT,32);
+        }
+        // Timing must cover the requested paths: fail rather than time a substituted precision.
+        for(int mode=0;mode<2;mode++) {
+            String actual=projections[mode].initializedQueryProjectionPrecision();
+            System.out.printf(java.util.Locale.ROOT,"PROJECTION_PRECISION arm=%d requested=%s actual=%s%n",mode,names[mode],actual);
+            if(!names[mode].equals(actual))
+                throw new IllegalStateException("Requested "+names[mode]+" query projection but the model uses "+actual);
         }
         System.out.printf(java.util.Locale.ROOT,
             "PROJECTION_FIXTURE vectors=%d queries=%d D=%d d=%d b=%d model_identical=true base_codes_shared=true%n",
@@ -476,21 +493,23 @@ public class DistancesASH {
             for(int row=0;row<copy.quantizedDim;row++) {
                 double error=outputs[1][row]-outputs[0][row];squared+=error*error;
                 referenceSquared+=(double)outputs[0][row]*outputs[0][row];maxError=Math.max(maxError,Math.abs(error));
-                if(!Float.isFinite(outputs[1][row]))throw new AssertionError("Nonfinite INT8 output");
+                if(!Float.isFinite(outputs[1][row]))throw new AssertionError("Nonfinite "+compare+" output");
             }
-            if(q<8) {
+            if(q<8&&compare.equals("int8")) {
                 float qmax=0;for(float x:inputs[q])qmax=Math.max(qmax,Math.abs(x));
                 float qs=qmax==0?1:qmax/127;
                 for(int row=0;row<matrix.length;row++) {
                     float wmax=0;for(float x:matrix[row])wmax=Math.max(wmax,Math.abs(x));
                     float ws=wmax==0?1:wmax/127;
-                    long sum=0;
+                    // The query is two INT8 digits, as in the native kernels: value / qs ~ coarse + fine / 254.
+                    long coarse=0,fine=0;
                     for(int col=0;col<inputs[q].length;col++) {
                         int a=Math.max(-127,Math.min(127,(int)Math.rint(inputs[q][col]/qs)));
+                        int f=Math.max(-127,Math.min(127,(int)Math.rint((inputs[q][col]/qs-a)*254f)));
                         int b=Math.max(-127,Math.min(127,(int)Math.rint(matrix[row][col]/ws)));
-                        sum+=(long)a*b;
+                        coarse+=(long)a*b;fine+=(long)f*b;
                     }
-                    float oracle=(float)sum*qs*ws;
+                    float oracle=(float)(coarse*254+fine)*(1.0f/254.0f)*qs*ws;
                     double difference=Math.abs(outputs[1][row]-oracle);maxOracleError=Math.max(maxOracleError,difference);
                     if(difference>1e-6+Math.abs(oracle)*1e-5)throw new AssertionError("VNNI integer-dot oracle mismatch");
                 }
@@ -511,7 +530,7 @@ public class DistancesASH {
                     for(int i=0;i<batch;i++) {
                         projections[1].projectQueryDirect(in[i],outputs[1]);
                         for(int d=0;d<out[i].length;d++)if(Math.abs(out[i][d]-outputs[1][d])>1e-6)
-                            throw new AssertionError("INT8 batch/single mismatch");
+                            throw new AssertionError(compare+" batch/single mismatch");
                     }
                     for(int pass=-1;pass<3;pass++)for(int order=0;order<2;order++) {
                         int mode=(order+Math.max(0,pass))%2;
@@ -559,7 +578,7 @@ public class DistancesASH {
             }
         }
         }
-        System.out.println("PROJECTION_TIMING one calling thread; INT8 quantization, FFM staging, matmul and rescaling included; immutable matrix packing excluded");
+        System.out.println("PROJECTION_TIMING one calling thread; query conversion, FFM staging, matmul and rescaling included; immutable matrix packing excluded");
     }
 
     private static double[] scanProjectionRecall(ASHVectors vectors,List<VectorFloat<?>> queries,
