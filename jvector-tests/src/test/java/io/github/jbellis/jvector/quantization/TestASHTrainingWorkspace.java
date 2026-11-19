@@ -197,7 +197,7 @@ public class TestASHTrainingWorkspace {
         for (int[] shape : new int[][] {{7, 3}, {2, 5}, {1, 1}}) {
             double[] input = randomArray(shape[0] * shape[1], random);
             double[] copy = input.clone();
-            call(method("computeNativeVt", double[].class, int.class, int.class), null, input, shape[0], shape[1]);
+            call(method(ASHTraining.class, "computeNativeVt", double[].class, int.class, int.class), null, input, shape[0], shape[1]);
             assertArrayEquals(copy, input, 0);
         }
     }
@@ -220,8 +220,8 @@ public class TestASHTrainingWorkspace {
         return values;
     }
 
-    private static Method method(String name, Class<?>... types) throws NoSuchMethodException {
-        Method method = AsymmetricHashing.class.getDeclaredMethod(name, types);
+    private static Method method(Class<?> owner, String name, Class<?>... types) throws NoSuchMethodException {
+        Method method = owner.getDeclaredMethod(name, types);
         method.setAccessible(true);
         return method;
     }
@@ -235,11 +235,11 @@ public class TestASHTrainingWorkspace {
     }
 
     private static void product(String name, double[] x, int rows, int dims, double[] other, double[] output) throws Exception {
-        call(method(name, double[].class, int.class, int.class, double[].class, double[].class), null, x, rows, dims, other, output);
+        call(method(ASHTraining.class, name, double[].class, int.class, int.class, double[].class, double[].class), null, x, rows, dims, other, output);
     }
 
     private static Object encoder(int rows, int dims, int bits) throws Exception {
-        Class<?> type = Class.forName(AsymmetricHashing.class.getName() + "$TrainingDirectionEncoder");
+        Class<?> type = Class.forName(ASHTraining.class.getName() + "$TrainingDirectionEncoder");
         Constructor<?> constructor = type.getDeclaredConstructor(int.class, int.class, int.class);
         constructor.setAccessible(true);
         try { return constructor.newInstance(rows, dims, bits); }
@@ -256,7 +256,7 @@ public class TestASHTrainingWorkspace {
     }
 
     private static double scale(double[] values, int dims, int bits) {
-        try { return (double) call(method("computeOptimalScalingFactor", double[].class, int.class, int.class), null, values, dims, bits); }
+        try { return (double) call(method(AsymmetricHashing.class, "computeOptimalScalingFactor", double[].class, int.class, int.class), null, values, dims, bits); }
         catch (Exception failure) { throw new AssertionError(failure); }
     }
 

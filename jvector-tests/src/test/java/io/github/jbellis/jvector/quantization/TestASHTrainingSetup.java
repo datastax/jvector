@@ -69,7 +69,7 @@ public class TestASHTrainingSetup {
     }
 
     private static Object prepare(Values source, int dimensions, Random random, boolean learn) throws Exception {
-        var method = AsymmetricHashing.class.getDeclaredMethod("prepareSingleLandmarkTraining",
+        var method = ASHTraining.class.getDeclaredMethod("prepareSingleLandmarkTraining",
                 RandomAccessVectorValues.class, int.class, Random.class, boolean.class);
         method.setAccessible(true);
         try { return method.invoke(null, source, dimensions, random, learn); }
@@ -271,7 +271,7 @@ public class TestASHTrainingSetup {
 
     @Test
     public void sampleSizingDoesNotOverflowAndRejectsUnrepresentableMatrices() throws Exception {
-        var method = AsymmetricHashing.class.getDeclaredMethod("trainingSampleSize", int.class, int.class);
+        var method = ASHTraining.class.getDeclaredMethod("trainingSampleSize", int.class, int.class);
         method.setAccessible(true);
         assertEquals(Integer.valueOf(Integer.MAX_VALUE),
                 method.invoke(null, Integer.MAX_VALUE, Integer.MAX_VALUE));

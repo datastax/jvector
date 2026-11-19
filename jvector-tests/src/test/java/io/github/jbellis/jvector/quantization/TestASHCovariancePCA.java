@@ -127,7 +127,7 @@ public class TestASHCovariancePCA {
     }
 
     private static double[] basis(double[] x, int rows, int dims, int latent) throws Exception {
-        var method = AsymmetricHashing.class.getDeclaredMethod("computePcaBasis", double[].class, int.class, int.class, int.class);
+        var method = ASHTraining.class.getDeclaredMethod("computePcaBasis", double[].class, int.class, int.class, int.class);
         method.setAccessible(true);
         try { return (double[]) method.invoke(null, x, rows, dims, latent); }
         catch (InvocationTargetException failure) {

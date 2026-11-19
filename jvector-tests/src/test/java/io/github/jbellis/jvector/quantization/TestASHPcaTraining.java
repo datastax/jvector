@@ -55,7 +55,7 @@ public class TestASHPcaTraining {
     }
 
     private static double[] pca(double[] x, int rows, int cols) throws ReflectiveOperationException {
-        var method = AsymmetricHashing.class.getDeclaredMethod("computeNativeVt", double[].class, int.class, int.class);
+        var method = ASHTraining.class.getDeclaredMethod("computeNativeVt", double[].class, int.class, int.class);
         method.setAccessible(true);
         try {
             return (double[]) method.invoke(null, x, rows, cols);
