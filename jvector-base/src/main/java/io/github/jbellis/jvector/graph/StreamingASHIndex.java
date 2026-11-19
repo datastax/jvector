@@ -848,7 +848,8 @@ public final class StreamingASHIndex implements Accountable {
         var provider = new DefaultSearchScoreProvider(score, vectors.get().rerankerFor(query, similarity));
         var searcher = l.searchers.get();
         searcher.setView(l.builder.getGraph().getView());
-        return searcher.search(provider, topK, rerankK, 0f, 0f, acceptOrds);
+        // No threshold or rerank floor: unclamped dot-product scores can be negative.
+        return searcher.search(provider, topK, rerankK, Float.NEGATIVE_INFINITY, Float.NEGATIVE_INFINITY, acceptOrds);
     }
 
     // ---------------------------------------------------------------------------------------------

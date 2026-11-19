@@ -181,6 +181,43 @@ public class TestStreamingASHIndex extends RandomizedTest {
     }
 
     @Test
+    public void searchKeepsNeighboursWhoseDotProductScoresAreNegative() {
+        // Vectors of varied length, and queries pointing away from all of them: every dot product is below -1, so
+        // every score (1 + dot) / 2 is negative. A search must still return topK neighbours, reranked exactly.
+        var vts = VectorizationProvider.getInstance().getVectorTypeSupport();
+        var random = new Random(41);
+        var data = new ArrayList<VectorFloat<?>>();
+        for (int i = 0; i < 3000; i++) {
+            var v = vts.createFloatVector(DIM);
+            for (int d = 0; d < DIM; d++) v.set(d, 1f + Math.abs((float) random.nextGaussian()));
+            VectorUtil.l2normalize(v);
+            VectorUtil.scale(v, 2f + 8f * random.nextFloat());
+            data.add(v);
+        }
+        var queries = new ArrayList<VectorFloat<?>>();
+        for (int i = 0; i < 10; i++) {
+            var q = vts.createFloatVector(DIM);
+            for (int d = 0; d < DIM; d++) q.set(d, -1f - Math.abs((float) random.nextGaussian()));
+            VectorUtil.l2normalize(q);
+            queries.add(q);
+        }
+        for (var q : queries) for (var v : data) assertTrue(DOT.compare(q, v) < 0);
+
+        var options = new StreamingASHIndex.Options();
+        options.coldStartSize = 256;
+        var index = StreamingASHIndex.coldStart(new ListRandomAccessVectorValues(data, DIM), DOT, encodedBits(4), 4,
+                builders(), options);
+        for (int i = 0; i < data.size(); i++) index.add(i);
+        while (index.isTraining()) Thread.onSpinWait();
+        assertTrue(index.hasModel());
+        for (var q : queries) {
+            var found = index.search(q, 10, 50, Bits.ALL).getNodes();
+            assertEquals(10, found.length);
+            for (var ns : found) assertEquals(DOT.compare(q, data.get(ns.node)), ns.score, 0f);
+        }
+    }
+
+    @Test
     public void aColdIndexKeepsTakingInsertsWhileItsFirstModelCatchesUp() throws Exception {
         // Recording is cheap, so many writers could outrun the first model's catch-up. Inserts never wait for
         // training; once the model is trained each one also places a recorded vector, so the catch-up finishes:
