@@ -202,7 +202,10 @@ class NativeVectorUtilSupport extends PanamaVectorUtilSupport
                 + "; dense projection=" + (NativeASHProjection.isAvailable() ? "Highway" : "Java")
                 + "; symmetric pair=" + (NativeASHSymmetricKernels.hasPairKernel() ? "Highway" : "Java")
                 + "; symmetric LUT=" + (NativeASHSymmetricKernels.hasLutKernel() ? "Highway" : "Java")
-                + "; INT8 offset-binary neighborhood=" + (supportsAshInt8NeighborhoodScoring() ? "Highway" : "Java");
+                + "; INT8 offset-binary neighborhood=" + (supportsAshInt8NeighborhoodScoring() ? "Highway" : "Java")
+                + "; INT8 query projection=" + (NativeASHInt8HighwayProjection.isAvailable()
+                        ? "Highway" + (System.getenv("JVECTOR_ASH_INT8_ONEDNN") != null ? " (oneDNN forced)" : "")
+                        : "oneDNN add-on if built");
     }
 
     @Override

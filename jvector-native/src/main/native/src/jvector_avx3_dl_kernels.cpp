@@ -33,7 +33,9 @@
 namespace hn = hwy::HWY_NAMESPACE;
 
 #include <algorithm>
+#include <cmath>
 #include <cstring>
+#include <limits>
 
 namespace AVX3_DL {
 #define JVECTOR_ASH_PAIR_ONLY
@@ -43,5 +45,9 @@ namespace AVX3_DL {
 #include "ash_neighborhood-inl.h"
 #undef JVECTOR_ASH_INT8_NEIGHBORHOOD_ONLY
 #undef JVECTOR_ASH_PAIR_ONLY
+// INT8 query projection on 256-bit registers (see ash_projection_i8-inl.h).
+#define JV_ASH_I8_WIDE 0
+#include "ash_projection_i8-inl.h"
+#undef JV_ASH_I8_WIDE
 
 } // namespace AVX3_DL

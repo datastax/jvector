@@ -386,6 +386,13 @@ namespace JV_ISA {
 #include "ash_projection-inl.h"
 #include "ash_symmetric-inl.h"
 
+// INT8 projection needs VNNI; the AVX3_DL and AVX3_SPR tiers override these slots.
+int ash_project_i8_available() { return 0; }
+int ash_project_batch_i8(const int8_t *, const float *, const int32_t *, int, int, const float *, int,
+                         unsigned char *, float *) {
+    return 4;
+}
+
 HWY_FLATTEN float cosine_f32(
         const float *a, size_t aoffset, const float *b, size_t boffset, size_t length)
 {

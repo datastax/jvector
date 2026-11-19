@@ -105,7 +105,7 @@ class NativeASHFP32BatchProjectionTest {
             var automatic = fullRange.forQueryScoring();
             float[] out = new float[1];
             automatic.project(new float[]{2f}, out);
-            if (automatic instanceof NativeASHInt8Projection) {
+            if (automatic instanceof NativeASHInt8Projection || automatic instanceof NativeASHInt8HighwayProjection) {
                 // auto prefers INT8 where available; a one-column operand is exact in INT8.
                 assertEquals(140000f, out[0], 140000f * 1e-6f);
             } else {

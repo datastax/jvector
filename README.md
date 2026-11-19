@@ -172,9 +172,9 @@ The native provider stores vectors as `MemorySegmentVectorFloat`. Use the `Vecto
 rather than casting to `ArrayVectorFloat`; `FloatArray.array()` gives array access, and native
 operations need vectors created by the selected provider.
 
-ASH uses native kernels for query projection and scoring, and an optional add-on built on
-[oneDNN](https://github.com/uxlfoundation/oneDNN) for FP16 and INT8 query projection and batch
-encoding. Each falls back to a portable implementation when unavailable.
+ASH uses native kernels for query projection (including INT8 on AVX-512 VNNI CPUs) and scoring,
+and an optional add-on built on [oneDNN](https://github.com/uxlfoundation/oneDNN) for FP16 query
+projection, INT8 on other VNNI CPUs, and batch encoding. Each falls back to a portable implementation when unavailable.
 
 ## Research
 

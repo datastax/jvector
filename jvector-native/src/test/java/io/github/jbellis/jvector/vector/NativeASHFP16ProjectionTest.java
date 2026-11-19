@@ -410,19 +410,24 @@ class NativeASHFP16ProjectionTest {
                 Arrays.stream(raw.split(java.util.regex.Pattern.quote(File.pathSeparator)))
                         .filter(p -> !Path.of(p).toAbsolutePath().normalize().equals(source.toAbsolutePath().normalize()))
                         .toList());
-        Path log = temporary.resolve("unavailable.log");
-        Process child = new ProcessBuilder(Path.of(System.getProperty("java.home"), "bin/java").toString(),
-                "--add-modules=jdk.incubator.vector", "--enable-native-access=ALL-UNNAMED",
-                "-Djava.library.path=" + temporary, "-cp", cp, UnavailableProbe.class.getName())
-                .redirectErrorStream(true).redirectOutput(log.toFile()).start();
-        try {
-            assertTrue(child.waitFor(30, TimeUnit.SECONDS));
-            assertEquals(0, child.exitValue(), Files.readString(log));
-            assertTrue(Files.readString(log).contains("FP16_UNAVAILABLE_OK"));
-        } finally {
-            if (child.isAlive()) {
-                child.destroyForcibly();
-                child.waitFor(5, TimeUnit.SECONDS);
+        // Once as deployed, and once with INT8 forced to the (missing) add-on.
+        for (boolean forceOneDnn : new boolean[]{false, true}) {
+            Path log = temporary.resolve("unavailable-" + forceOneDnn + ".log");
+            var builder = new ProcessBuilder(Path.of(System.getProperty("java.home"), "bin/java").toString(),
+                    "--add-modules=jdk.incubator.vector", "--enable-native-access=ALL-UNNAMED",
+                    "-Djava.library.path=" + temporary, "-cp", cp, UnavailableProbe.class.getName());
+            if (forceOneDnn) builder.environment().put("JVECTOR_ASH_INT8_ONEDNN", "1");
+            else builder.environment().remove("JVECTOR_ASH_INT8_ONEDNN");
+            Process child = builder.redirectErrorStream(true).redirectOutput(log.toFile()).start();
+            try {
+                assertTrue(child.waitFor(30, TimeUnit.SECONDS));
+                assertEquals(0, child.exitValue(), Files.readString(log));
+                assertTrue(Files.readString(log).contains("FP16_UNAVAILABLE_OK"));
+            } finally {
+                if (child.isAlive()) {
+                    child.destroyForcibly();
+                    child.waitFor(5, TimeUnit.SECONDS);
+                }
             }
         }
     }
@@ -431,12 +436,22 @@ class NativeASHFP16ProjectionTest {
         public static void main(String[] args) {
             if (!LibraryLoader.loadJvector()) throw new AssertionError("Missing Highway fixture");
             var original = new NativeASHProjection(new float[][]{{1, 2}});
-            if (view(original, "auto") != original) throw new AssertionError("Automatic fallback failed");
+            // Without the add-on, auto uses Highway INT8 on AVX-512 VNNI CPUs, else this FP32 projection.
+            boolean highway = System.getenv("JVECTOR_ASH_INT8_ONEDNN") == null
+                    && NativeASHInt8HighwayProjection.isAvailable();
+            var automatic = view(original, "auto");
+            if (highway ? !(automatic instanceof NativeASHInt8HighwayProjection) : automatic != original)
+                throw new AssertionError("Automatic fallback failed: " + automatic);
             try {
                 view(original, "fp16");
                 throw new AssertionError("Explicit FP16 silently fell back");
             } catch (UnsupportedOperationException expected) { /* expected */ }
             for (int attempt = 0; attempt < 2; attempt++) {
+                if (highway) {
+                    if (!(view(original, "int8") instanceof NativeASHInt8HighwayProjection))
+                        throw new AssertionError("Explicit INT8 did not use Highway");
+                    continue;
+                }
                 try {
                     view(original, "int8");
                     throw new AssertionError("Explicit INT8 silently fell back");

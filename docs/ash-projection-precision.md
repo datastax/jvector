@@ -45,10 +45,14 @@ a coarse digit and its rounding remainder, times 254. Nearly all INT8 projection
 error came from rounding the query; with the second digit, exhaustive recall
 matches FP32 projection, while the matrix keeps one INT8 digit per row.
 
-On AVX-512 VNNI CPUs, INT8 uses JVector's exact-integer tile kernel for single queries
-and batches: 512-bit tiles on CPUs with AMX, and 256-bit tiles otherwise, where wide
-integer dot products slow the graph search that follows. oneDNN serves INT8 on other
-CPUs and chooses the CPU implementation within FP16 at runtime.
+On AVX-512 VNNI CPUs, INT8 uses JVector's exact-integer Highway kernel for single
+queries and batches, in the native library itself: 512-bit tiles on Sapphire Rapids and
+later, and 256-bit tiles on Ice Lake class CPUs, where wide integer dot products slow
+the graph search that follows. The oneDNN add-on serves INT8 on CPUs with AVX-VNNI
+but not AVX-512, and chooses the CPU implementation within FP16 at runtime. Setting
+the environment variable `JVECTOR_ASH_INT8_ONEDNN` makes INT8 use the add-on
+everywhere, for example to compare its AMX kernels; both compute the same integers,
+so the results are identical.
 Explicit FP16 and INT8 settings fail clearly if the required backend is unavailable, including
 when a virtual machine does not expose the needed hardware features.
 
@@ -92,8 +96,9 @@ under each precision in separate JVM runs.
 
 ## Deployment
 
-FP16 and INT8 require the native vector provider and the oneDNN add-on included
-by the standard native build. See the [native development guide](../jvector-native/src/main/native/README.md#recommended-onednn-build-and-package)
+FP16 requires the native vector provider and the oneDNN add-on included by the
+standard native build. INT8 requires the native vector provider, and the add-on
+only on CPUs without AVX-512 VNNI. See the [native development guide](../jvector-native/src/main/native/README.md#recommended-onednn-build-and-package)
 for build commands, supported runtime behavior, diagnostics and tests.
 
 ## Validate a selection

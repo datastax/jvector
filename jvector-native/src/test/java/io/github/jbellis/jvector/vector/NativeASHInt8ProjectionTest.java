@@ -81,10 +81,25 @@ class NativeASHInt8ProjectionTest {
                 + System.getenv("JVECTOR_ASH_INT8_ONEDNN") + "; os.arch=" + System.getProperty("os.arch") + "]";
     }
 
+    /** True when INT8 queries use the Highway kernel, as the model selects them. */
+    private static boolean highway() {
+        return System.getenv("JVECTOR_ASH_INT8_ONEDNN") == null && NativeASHInt8HighwayProjection.isAvailable();
+    }
+
+    private static Class<?> selectedView() {
+        return highway() ? NativeASHInt8HighwayProjection.class : NativeASHInt8Projection.class;
+    }
+
+    /** The INT8 view the model selects: Highway on AVX-512 VNNI CPUs, else the oneDNN add-on. */
     private static VectorUtilSupport.AshProjection prepare(float[][] weights) {
+        return prepare(weights, highway());
+    }
+
+    private static VectorUtilSupport.AshProjection prepare(float[][] weights, boolean highway) {
         var base = new NativeASHProjection(weights);
         try {
-            return NativeASHInt8Projection.prepare(base.matrix(), base.rows(), base.columns());
+            return highway ? NativeASHInt8HighwayProjection.prepare(base.matrix(), base.rows(), base.columns())
+                    : NativeASHInt8Projection.prepare(base.matrix(), base.rows(), base.columns());
         } catch (UnsupportedOperationException unsupported) {
             if (Boolean.getBoolean("jvector.test.requireInt8")) throw unsupported;
             assumeTrue(false, unsupported.getMessage());
@@ -331,6 +346,33 @@ class NativeASHInt8ProjectionTest {
     }
 
     @Test
+    void highwayAndOneDnnViewsAgreeExactly() {
+        assumeTrue(NativeASHInt8HighwayProjection.isAvailable(), "Highway INT8 needs AVX-512 VNNI");
+        for (int[] shape : new int[][]{{1, 1}, {15, 3}, {16, 4}, {17, 5}, {64, 128}, {191, 383}, {384, 768}}) {
+            float[][] weights = matrix(shape[0], shape[1], shape[0] + shape[1]);
+            var highway = prepare(weights, true);
+            VectorUtilSupport.AshProjection onednn;
+            try {
+                onednn = NativeASHInt8Projection.prepare(new NativeASHProjection(weights).matrix(), shape[0], shape[1]);
+            } catch (UnsupportedOperationException unavailable) {
+                assumeTrue(false, unavailable.getMessage());
+                return;
+            }
+            for (int count : new int[]{1, 2, 3, 5, 8, 9, 17}) {
+                float[][] inputs = matrix(count, shape[1], count * 31 + shape[1]);
+                float[][] expected = new float[count][shape[0]], actual = new float[count][shape[0]];
+                onednn.projectBatch(inputs, expected, count);
+                highway.projectBatch(inputs, actual, count);
+                for (int i = 0; i < count; i++) {
+                    final int row = i;
+                    assertArrayEquals(expected[i], actual[i],
+                            () -> "rows=" + shape[0] + " columns=" + shape[1] + " count=" + count + " query=" + row + cpuContext());
+                }
+            }
+        }
+    }
+
+    @Test
     void packedMemoryAccountingStabilizesAfterAllBatchShapes() {
         var projection = prepare(matrix(64,128,5));
         long previous = projection.ramBytesUsed();
@@ -356,7 +398,7 @@ class NativeASHInt8ProjectionTest {
             original.project(query, before);
             System.setProperty(PROPERTY, "int8");
             var int8 = original.forQueryScoring();
-            assertInstanceOf(NativeASHInt8Projection.class, int8);
+            assertInstanceOf(selectedView(), int8);
             assertEquals("int8", int8.operandPrecision());
             original.project(query, after);
             assertArrayEquals(before, after);
@@ -364,7 +406,7 @@ class NativeASHInt8ProjectionTest {
             assertSame(original, original.forQueryScoring());
             // auto prefers INT8 wherever this backend is available.
             System.setProperty(PROPERTY, "auto");
-            assertInstanceOf(NativeASHInt8Projection.class, original.forQueryScoring());
+            assertInstanceOf(selectedView(), original.forQueryScoring());
         } finally {
             if (saved == null) System.clearProperty(PROPERTY); else System.setProperty(PROPERTY, saved);
         }
@@ -449,7 +491,7 @@ class NativeASHInt8ProjectionTest {
         public static void main(String[] args) {
             assertTrue(LibraryLoader.loadJvector());
             try {
-                prepare(new float[32][64]);
+                prepare(new float[32][64], false);
                 throw new AssertionError("INT8 silently accepted legacy ISA");
             } catch (UnsupportedOperationException expected) { /* required mode fails clearly */ }
         }

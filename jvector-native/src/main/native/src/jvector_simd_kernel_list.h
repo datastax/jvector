@@ -48,6 +48,9 @@
 //         canonical little-endian packed bytes otherwise. Padding bits are ignored.
 //   LUT: nonnegative groups/count, positive stride, 0 <= lane <= lane+count <= stride;
 //        codes[ceil(groups/2)*stride], lut[groups*32] signed shorts, out[count].
+//   i8 batch: model packed by the caller (see ash_projection_i8-inl.h), scratch of
+//          16 * paddedCols bytes + 64 * paddedRows bytes; returns 0, 2 (invalid shape,
+//          nothing written) or 3 (query scale underflow); 4 where unavailable.
 //   Writable outputs must not alias read-only inputs. Callers validate buffer sizes.
 
 // clang-format off
@@ -82,6 +85,9 @@
     /* ASH preparation and exact packed construction scoring; synchronous leaf calls. */ \
     KERNEL_ENTRY(void, ash_project_f32, (const float *matrix, const float *query, int rows, int cols, float *out), (matrix, query, rows, cols, out)) \
     KERNEL_ENTRY(void, ash_project_batch_f32, (const float *matrix, const float *inputs, int rows, int cols, int count, float *out), (matrix, inputs, rows, cols, count, out)) \
+    /* INT8 query projection with exact VNNI dot products: 1 on the VNNI tiers, else 0. */ \
+    KERNEL_ENTRY(int, ash_project_i8_available, (void), ()) \
+    KERNEL_ENTRY(int, ash_project_batch_i8, (const int8_t *packed, const float *rowScales, const int32_t *rowSums, int rows, int cols, const float *inputs, int count, unsigned char *scratch, float *out), (packed, rowScales, rowSums, rows, cols, inputs, count, scratch, out)) \
     KERNEL_ENTRY(float, ash_symmetric_dot, (const void *a, const void *b, int dimensions, int bits), (a, b, dimensions, bits)) \
     KERNEL_ENTRY(void, ash_symmetric_dot_rows, (const void *query, const void *rows, int stride, int count, int dimensions, int bits, float *out), (query, rows, stride, count, dimensions, bits, out)) \
     KERNEL_ENTRY(void, ash_symmetric_lut_i16, (const unsigned char *codes, const int16_t *lut, int groups, int stride, int lane, int count, float *out), (codes, lut, groups, stride, lane, count, out)) \

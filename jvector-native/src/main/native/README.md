@@ -102,7 +102,7 @@ Parameters (all optional):
 |-----------|---------|-------------|
 | `buildtype` | `release` | `release`, `debug`, or `debugoptimized` |
 | `crossarch` | `false` | Set to `true` to also cross-compile for the other arch |
-| `onednn` | `false` | Set to `true` to also build and bundle the oneDNN add-on (FP32 batch and FP16/INT8 query projection) |
+| `onednn` | `false` | Set to `true` to also build and bundle the oneDNN add-on (FP32 batch, FP16 query projection, and INT8 on CPUs without AVX-512 VNNI) |
 
 To include oneDNN:
 
@@ -1040,8 +1040,8 @@ benchmark in the query measurement interval.
 ### Concurrent query integration
 
 ASH can combine independent queries when the selected projection advertises
-batch support. FP16 and INT8 use true oneDNN matrix multiplication while
-retaining a singleton path. Applications continue
+batch support. FP16 uses true oneDNN matrix multiplication and INT8 the Highway
+VNNI kernel (or oneDNN on CPUs without AVX-512 VNNI), each retaining a singleton path. Applications continue
 to issue synchronous searches; no query executor or nested native thread pool
 is created. Base-vector encoding and training remain FP32.
 

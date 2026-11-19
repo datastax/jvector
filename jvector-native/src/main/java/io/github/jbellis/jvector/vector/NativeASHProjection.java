@@ -63,6 +63,14 @@ final class NativeASHProjection implements VectorUtilSupport.AshProjection {
         MemorySegment input = MemorySegment.NULL, output = MemorySegment.NULL;
         // Allocated only by the FP16/INT8 views; carries errors without native thread affinity.
         MemorySegment status = MemorySegment.NULL;
+        // Allocated only by the Highway INT8 view: one tile's query digits and dot products.
+        private MemorySegment scratch = MemorySegment.NULL;
+
+        MemorySegment scratch(long bytes) {
+            if (scratch.byteSize() < bytes)
+                scratch = Arena.ofAuto().allocate(Math.addExact(Math.max(bytes, scratch.byteSize()), 63) & ~63L, 64);
+            return scratch;
+        }
 
         void ensure(long inputBytes, long outputBytes) {
             if (input.byteSize() >= inputBytes && output.byteSize() >= outputBytes) return;
@@ -206,17 +214,27 @@ final class NativeASHProjection implements VectorUtilSupport.AshProjection {
     public VectorUtilSupport.AshProjection forQueryScoring(ASHQueryProjection precision) {
         switch (precision) {
             case FP32: return this;
-            case INT8: return NativeASHInt8Projection.prepare(matrix, rows, columns);
+            case INT8: return int8();
             case AUTO:
                 // INT8 where an integer dot-product backend exists, else FP16, else this FP32 projection.
                 try {
-                    return NativeASHInt8Projection.prepare(matrix, rows, columns);
+                    return int8();
                 } catch (UnsupportedOperationException unavailable) {
                     return fp16WithFallback();
                 }
             case FP16: return NativeASHFP16Projection.prepare(matrix, rows, columns, this, true);
             default: throw new AssertionError(precision);
         }
+    }
+
+    /**
+     * INT8 from the Highway kernel on CPUs with AVX-512 VNNI, else from the oneDNN add-on (CPUs with
+     * AVX-VNNI only). JVECTOR_ASH_INT8_ONEDNN forces the add-on, for example to compare its AMX kernels.
+     */
+    private VectorUtilSupport.AshProjection int8() {
+        if (System.getenv("JVECTOR_ASH_INT8_ONEDNN") == null && NativeASHInt8HighwayProjection.isAvailable())
+            return NativeASHInt8HighwayProjection.prepare(matrix, rows, columns);
+        return NativeASHInt8Projection.prepare(matrix, rows, columns);
     }
 
     /** Optimized FP16 where available and in range, else this FP32 projection: automatic mode's second choice. */

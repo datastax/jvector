@@ -115,14 +115,17 @@ static const KernelVTable AVX3_DL_vtable = []() {
     t.ash_symmetric_dot = AVX3_DL::ash_symmetric_dot;
     t.ash_symmetric_dot_rows = AVX3_DL::ash_symmetric_dot_rows;
     t.ash_score_neighborhood_i8_c1 = AVX3_DL::ash_score_neighborhood_i8_c1;
+    t.ash_project_i8_available = AVX3_DL::ash_project_i8_available;
+    t.ash_project_batch_i8 = AVX3_DL::ash_project_batch_i8;
     return t;
 }();
 
-// AVX3_SPR (Sapphire Rapids) inherits all slots from AVX3_DL unchanged for now.
+// AVX3_SPR (Sapphire Rapids) inherits the AVX3_DL slots; INT8 projection uses 512-bit tiles.
 // To override a slot: t.kernel_name = AVX3_SPR::kernel_name;
 // The implementation must exist in jvector_avx3_spr_kernels.cpp.
 static const KernelVTable AVX3_SPR_vtable = []() {
     KernelVTable t = AVX3_DL_vtable;   // inherits DL overrides automatically
+    t.ash_project_batch_i8 = AVX3_SPR::ash_project_batch_i8;
     return t;
 }();
 

@@ -14,7 +14,10 @@
  * limitations under the License.
  */
 
-// Query-only INT8 representation; FP32/FP16 implementations remain independent.
+// Query-only INT8 representation through oneDNN; FP32/FP16 implementations remain independent.
+// CPUs with AVX-512 VNNI project INT8 queries with the Highway kernel (ash_projection_i8-inl.h);
+// Java uses this view on CPUs with AVX-VNNI only, or when JVECTOR_ASH_INT8_ONEDNN forces oneDNN,
+// for example to compare its AMX kernels. Both views compute the same exact integer dot products.
 #include "jvector_ash_fp16.h"
 #include <oneapi/dnnl/dnnl.hpp>
 #include <algorithm>
@@ -31,9 +34,6 @@
 #include <new>
 #include <stdexcept>
 #include <vector>
-#if defined(__x86_64__) || defined(_M_X64)
-#include <immintrin.h>
-#endif
 
 static_assert(DNNL_CPU_RUNTIME == DNNL_RUNTIME_SEQ, "Calling workers own parallelism");
 static_assert(offsetof(jvector_ash_fp16_result, message) == sizeof(int32_t));
@@ -142,43 +142,6 @@ struct Kernel {
     }
 };
 
-// On every AVX-512 VNNI CPU an exact-integer tile kernel serves every query tile of 1-8 rows:
-// u8*s8 sums in int32 are exact, so outputs equal oneDNN's. Across nine 1M datasets it beat
-// oneDNN (AMX included) for single rows and batches. Its register width follows the CPU:
-//  - Without AMX (Ice Lake class), dense 512-bit integer dot products (oneDNN's 4- and 8-row
-//    avx512_core_vnni matmul, or a zmm kernel) slowed the graph search that follows them by
-//    9-15%; the same tiles on 256-bit registers did not, and are the fastest.
-//  - With AMX (Sapphire Rapids and later), 512-bit tiles are 1-4% faster than oneDNN's AMX path.
-// AVX2-VNNI CPUs without AVX-512 keep oneDNN, as does JVECTOR_ASH_INT8_ONEDNN (a diagnostic
-// override) when set.
-bool direct_vnni_available() {
-#if defined(__x86_64__) || defined(_M_X64)
-    if (std::getenv("JVECTOR_ASH_INT8_ONEDNN")) return false; // Diagnostic: force oneDNN.
-    switch (get_effective_cpu_isa()) {
-        case cpu_isa::avx512_core_vnni:
-        case cpu_isa::avx512_core_bf16:
-        case cpu_isa::avx512_core_amx:
-        case cpu_isa::avx512_core_amx_fp16: return __builtin_cpu_supports("avx512vnni");
-        default: return false;
-    }
-#else
-    return false;
-#endif
-}
-
-// 512-bit tiles where AMX marks a core whose 512-bit integer units do not slow later search.
-bool direct_uses_zmm() {
-#if defined(__x86_64__) || defined(_M_X64)
-    switch (get_effective_cpu_isa()) {
-        case cpu_isa::avx512_core_amx:
-        case cpu_isa::avx512_core_amx_fp16: return true;
-        default: return false;
-    }
-#else
-    return false;
-#endif
-}
-
 // The query as two INT8 digits with one scale: input / scale ~ coarse + fine / 254. The second digit
 // holds the coarse digit's rounding remainder, which accounts for nearly all INT8 projection error
 // (rounding the matrix rows costs far less). Both digits are stored with the +128 offset.
@@ -203,100 +166,6 @@ inline float combine_digits(int32_t coarse, int32_t fine, float query_scale, flo
     return float(int64_t(coarse) * 254 + fine) * kInv254 * query_scale * row_scale;
 }
 
-#if defined(__x86_64__) || defined(_M_X64)
-// NB blocks of 16 output rows (two 8-lane halves each) for every query row of
-// the tile: 2*M*NB independent int32 accumulators hide the dot-product latency.
-// Missing final blocks recompute block 0 and are not stored.
-template <int M, int NB>
-__attribute__((target("avx512f,avx512vl,avx512vnni")))
-void vnni_tile(const uint8_t* query, int stride, const int8_t* packed, int groups, int blocks, int32_t* out, int out_stride) {
-    for (int block = 0; block < blocks; block += NB) {
-        const int8_t* w[NB];
-        for (int j = 0; j < NB; ++j)
-            w[j] = packed + size_t(block + j < blocks ? block + j : block) * groups * 64;
-        __m256i lo[M][NB], hi[M][NB];
-        for (int i = 0; i < M; ++i)
-            for (int j = 0; j < NB; ++j) lo[i][j] = hi[i][j] = _mm256_setzero_si256();
-        for (int g = 0; g < groups; ++g) {
-            __m256i b0[NB], b1[NB];
-            for (int j = 0; j < NB; ++j) {
-                b0[j] = _mm256_loadu_si256(reinterpret_cast<const __m256i*>(w[j] + size_t(g) * 64));
-                b1[j] = _mm256_loadu_si256(reinterpret_cast<const __m256i*>(w[j] + size_t(g) * 64 + 32));
-            }
-            for (int i = 0; i < M; ++i) {
-                int32_t four;
-                std::memcpy(&four, query + size_t(i) * stride + size_t(g) * 4, sizeof(four));
-                __m256i a = _mm256_set1_epi32(four);
-                for (int j = 0; j < NB; ++j) {
-                    lo[i][j] = _mm256_dpbusd_epi32(lo[i][j], a, b0[j]);
-                    hi[i][j] = _mm256_dpbusd_epi32(hi[i][j], a, b1[j]);
-                }
-            }
-        }
-        for (int i = 0; i < M; ++i)
-            for (int j = 0; j < NB && block + j < blocks; ++j) {
-                auto* row = out + size_t(i) * out_stride + size_t(block + j) * 16;
-                _mm256_storeu_si256(reinterpret_cast<__m256i*>(row), lo[i][j]);
-                _mm256_storeu_si256(reinterpret_cast<__m256i*>(row + 8), hi[i][j]);
-            }
-    }
-}
-
-// The same tile on 512-bit registers: one load covers a block's 16 rows x 4 columns.
-template <int M, int NB>
-__attribute__((target("avx512f,avx512vl,avx512vnni")))
-void vnni_tile_zmm(const uint8_t* query, int stride, const int8_t* packed, int groups, int blocks, int32_t* out, int out_stride) {
-    for (int block = 0; block < blocks; block += NB) {
-        const int8_t* w[NB];
-        for (int j = 0; j < NB; ++j)
-            w[j] = packed + size_t(block + j < blocks ? block + j : block) * groups * 64;
-        __m512i acc[M][NB];
-        for (int i = 0; i < M; ++i)
-            for (int j = 0; j < NB; ++j) acc[i][j] = _mm512_setzero_si512();
-        for (int g = 0; g < groups; ++g) {
-            __m512i b[NB];
-            for (int j = 0; j < NB; ++j) b[j] = _mm512_loadu_si512(w[j] + size_t(g) * 64);
-            for (int i = 0; i < M; ++i) {
-                int32_t four;
-                std::memcpy(&four, query + size_t(i) * stride + size_t(g) * 4, sizeof(four));
-                __m512i a = _mm512_set1_epi32(four);
-                for (int j = 0; j < NB; ++j) acc[i][j] = _mm512_dpbusd_epi32(acc[i][j], a, b[j]);
-            }
-        }
-        for (int i = 0; i < M; ++i)
-            for (int j = 0; j < NB && block + j < blocks; ++j)
-                _mm512_storeu_si512(out + size_t(i) * out_stride + size_t(block + j) * 16, acc[i][j]);
-    }
-}
-
-void vnni_gemm_zmm(int count, const uint8_t* query, int stride, const int8_t* packed, int groups, int blocks,
-                   int32_t* out, int out_stride) {
-    switch (count) {
-        case 1: vnni_tile_zmm<1, 4>(query, stride, packed, groups, blocks, out, out_stride); break;
-        case 2: vnni_tile_zmm<2, 4>(query, stride, packed, groups, blocks, out, out_stride); break;
-        case 3: vnni_tile_zmm<3, 2>(query, stride, packed, groups, blocks, out, out_stride); break;
-        case 4: vnni_tile_zmm<4, 2>(query, stride, packed, groups, blocks, out, out_stride); break;
-        case 5: vnni_tile_zmm<5, 2>(query, stride, packed, groups, blocks, out, out_stride); break;
-        case 6: vnni_tile_zmm<6, 2>(query, stride, packed, groups, blocks, out, out_stride); break;
-        case 7: vnni_tile_zmm<7, 2>(query, stride, packed, groups, blocks, out, out_stride); break;
-        default: vnni_tile_zmm<8, 2>(query, stride, packed, groups, blocks, out, out_stride); break;
-    }
-}
-
-void vnni_gemm(int count, const uint8_t* query, int stride, const int8_t* packed, int groups, int blocks,
-               int32_t* out, int out_stride) {
-    switch (count) {
-        case 1: vnni_tile<1, 4>(query, stride, packed, groups, blocks, out, out_stride); break;
-        case 2: vnni_tile<2, 2>(query, stride, packed, groups, blocks, out, out_stride); break;
-        case 3: vnni_tile<3, 2>(query, stride, packed, groups, blocks, out, out_stride); break;
-        case 4: vnni_tile<4, 2>(query, stride, packed, groups, blocks, out, out_stride); break;
-        case 5: vnni_tile<5, 1>(query, stride, packed, groups, blocks, out, out_stride); break;
-        case 6: vnni_tile<6, 1>(query, stride, packed, groups, blocks, out, out_stride); break;
-        case 7: vnni_tile<7, 1>(query, stride, packed, groups, blocks, out, out_stride); break;
-        default: vnni_tile<8, 1>(query, stride, packed, groups, blocks, out, out_stride); break;
-    }
-}
-#endif
 
 struct Context {
     const uint64_t id = next_id.fetch_add(1, std::memory_order_relaxed);
@@ -311,11 +180,6 @@ struct Context {
     std::array<std::atomic<Kernel*>, kBatchTile + 1> ready{};
     std::mutex mutex;
     std::atomic<uint64_t> retained_bytes{0};
-    // Set when the direct VNNI kernel replaces oneDNN for every tile (see direct_vnni_available).
-    const bool direct = direct_vnni_available();
-    const bool zmm = direct && direct_uses_zmm();
-    const int padded_columns = (columns + 3) & ~3, padded_rows = (rows + 15) & ~15;
-    std::unique_ptr<int8_t[]> packed;
 
     Context(const float* matrix, int r, int c) : rows(r), columns(c), scales(r), sums(r) {
         for (auto& entry : ready) entry.store(nullptr, std::memory_order_relaxed);
@@ -329,23 +193,7 @@ struct Context {
         }
         retained_bytes.store(descriptor.get_size() + sizeof(Context)
                 + size_t(rows) * (sizeof(float) + sizeof(int32_t)), std::memory_order_relaxed);
-        if (direct) {
-            // [row block of 16][column group of 4][16 rows][4 columns], zero padded.
-            size_t bytes = size_t(padded_rows) * padded_columns;
-            packed.reset(new int8_t[bytes]());
-            for (int row = 0; row < rows; ++row)
-                for (int column = 0; column < columns; ++column)
-                    packed[(size_t(row / 16) * (padded_columns / 4) + column / 4) * 64
-                            + (row % 16) * 4 + column % 4] = target[size_t(row) * columns + column];
-            // The direct kernel serves every tile, so it keeps only the packed copy. The oneDNN
-            // path (no AVX-512 VNNI, or JVECTOR_ASH_INT8_ONEDNN) keeps the plain matrix for its
-            // weight reorders and checks its primitive here.
-            plain = memory();
-            retained_bytes.store(bytes + sizeof(Context) + size_t(rows) * (sizeof(float) + sizeof(int32_t)),
-                    std::memory_order_relaxed);
-        } else {
-            kernel(1); // Check required hardware/primitive during model initialization.
-        }
+        kernel(1); // Check required hardware/primitive during model initialization.
     }
 
     const Kernel& kernel(int count) {
@@ -431,40 +279,10 @@ JV_ASH_INT8_TARGET int jvector_ash_int8_project_batch(void* pointer, const float
             throw std::invalid_argument("INT8 batch size overflow");
         for (int first = 0; first < count;) {
             int size = std::min(kBatchTile, count - first);
-#if defined(__x86_64__) || defined(_M_X64)
-            if (context.direct) {
-                thread_local std::vector<uint8_t> coarse, fine;
-                thread_local std::vector<int32_t> coarseDots, fineDots;
-                thread_local std::array<float, kBatchTile> scales;
-                size_t qbytes = size_t(kBatchTile) * context.padded_columns;
-                size_t dbytes = size_t(kBatchTile) * context.padded_rows;
-                // Padding columns meet zero weights, so stale bytes there add nothing.
-                if (coarse.size() < qbytes) { coarse.assign(qbytes, 0); fine.assign(qbytes, 0); }
-                if (coarseDots.size() < dbytes) { coarseDots.resize(dbytes); fineDots.resize(dbytes); }
-                for (int i = 0; i < size; ++i)
-                    scales[i] = quantize_two_digits(input + size_t(first + i) * context.columns, context.columns,
-                            coarse.data() + size_t(i) * context.padded_columns,
-                            fine.data() + size_t(i) * context.padded_columns);
-                const auto gemm = context.zmm ? vnni_gemm_zmm : vnni_gemm;
-                gemm(size, coarse.data(), context.padded_columns, context.packed.get(), context.padded_columns / 4,
-                        context.padded_rows / 16, coarseDots.data(), context.padded_rows);
-                gemm(size, fine.data(), context.padded_columns, context.packed.get(), context.padded_columns / 4,
-                        context.padded_rows / 16, fineDots.data(), context.padded_rows);
-                for (int i = 0; i < size; ++i)
-                    for (int row = 0; row < context.rows; ++row) {
-                        size_t at = size_t(i) * context.padded_rows + row;
-                        int32_t c = coarseDots[at] - 128 * context.sums[row];
-                        int32_t f = fineDots[at] - 128 * context.sums[row];
-                        output[size_t(first + i) * context.rows + row] = combine_digits(c, f, scales[i], context.scales[row]);
-                    }
-                first += size;
-                continue;
-            }
-#endif
             const auto& kernel = context.kernel(size);
             auto& buffers = workspaces[size];
             if (buffers.context_id != context.id) buffers.initialize(context, kernel);
-            // Two query digits, as in the direct kernel: the same matmul runs on the coarse digits, then
+            // Two query digits, as in the Highway kernel: the same matmul runs on the coarse digits, then
             // on the fine digits, reusing the workspace buffers.
             auto* quantized = static_cast<uint8_t*>(buffers.input.get_data_handle());
             thread_local std::vector<uint8_t> fine;
