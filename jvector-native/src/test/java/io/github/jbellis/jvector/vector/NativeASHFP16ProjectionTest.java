@@ -157,15 +157,42 @@ class NativeASHFP16ProjectionTest {
         assertThrows(IllegalArgumentException.class, () -> projection.projectBatch(inputs, inputs, 2));
         assertThrows(IllegalArgumentException.class, () -> projection.projectBatch(inputs, new float[][]{outputs[0], outputs[0]}, 2));
         assertThrows(IllegalArgumentException.class, () -> projection.projectBatch(inputs, new float[][]{outputs[0], new float[1]}, 2));
-        inputs[1][1] = Float.NaN;
+        inputs[1][1] = 70000f;
+        // A finite value beyond FP16's range fails an explicit FP16 batch before any output is written.
         assertThrows(IllegalArgumentException.class, () -> projection.projectBatch(inputs, outputs, 2));
         for (float[] out : outputs) assertArrayEquals(new float[]{42,42}, out);
-        inputs[1][1] = 70000f;
         // Automatic FP16 (auto's choice where INT8 is unavailable) falls back to FP32 out of range.
         var automatic = new NativeASHProjection(matrix).fp16WithFallback();
         automatic.projectBatch(inputs, outputs, 2);
         checkOracle(matrix, inputs[0], outputs[0], true);
         checkOracle(matrix, inputs[1], outputs[1], false);
+    }
+
+    @Test
+    void nonFiniteQueryGetsNaNWithoutAffectingItsBatch() {
+        Random random = new Random(11);
+        float[][] matrix = new float[16][24];
+        for (float[] row : matrix) for (int i = 0; i < row.length; i++) row[i] = (float) random.nextGaussian() * .1f;
+        var projection = required(new NativeASHProjection(matrix));
+        assumeTrue(projection.supportsBatchProjection(), "FP16 batch projection is unavailable");
+        float[][] inputs = new float[9][24];
+        for (float[] row : inputs) for (int i = 0; i < row.length; i++) row[i] = (float) random.nextGaussian();
+        // The same batch shape without the non-finite values: tiles of 8 and 1 may round differently
+        // from single queries, so valid queries are compared with the clean batch, bit for bit.
+        float[][] expected = new float[9][16];
+        projection.projectBatch(inputs, expected, inputs.length);
+        inputs[3][5] = Float.NaN;
+        inputs[6][0] = Float.POSITIVE_INFINITY;
+        inputs[8][23] = Float.NEGATIVE_INFINITY; // Alone in the second tile.
+        float[][] outputs = new float[9][16];
+        projection.projectBatch(inputs, outputs, inputs.length);
+        for (int q = 0; q < inputs.length; q++) {
+            if (q == 3 || q == 6 || q == 8) {
+                for (float value : outputs[q]) assertTrue(Float.isNaN(value), "query " + q);
+            } else {
+                assertArrayEquals(expected[q], outputs[q], "query " + q);
+            }
+        }
     }
 
     @Test
@@ -282,7 +309,7 @@ class NativeASHFP16ProjectionTest {
                 float[] out = new float[1];
                 for (int call = 0; call < 16; call++) {
                     var error = assertThrows(IllegalArgumentException.class,
-                            () -> projection.project(new float[]{Float.NaN, 1}, out));
+                            () -> projection.project(new float[]{70000f, 1}, out));
                     assertTrue(error.getMessage().contains("finite FP16 range"));
                     float[] query = {.234567f, -.456789f};
                     projection.project(query, out);
@@ -305,11 +332,14 @@ class NativeASHFP16ProjectionTest {
         assertThrows(IllegalArgumentException.class, () -> fp16.project(query, query));
         assertThrows(IllegalArgumentException.class, () -> fp16.project(new float[1], out));
         assertThrows(IllegalArgumentException.class, () -> fp16.project(query, new float[1]));
-        for (float invalid : new float[]{Float.NaN, Float.POSITIVE_INFINITY, 65505f}) {
+        for (float nonFinite : new float[]{Float.NaN, Float.POSITIVE_INFINITY, Float.NEGATIVE_INFINITY}) {
             Arrays.fill(out, 42f);
-            assertThrows(IllegalArgumentException.class, () -> fp16.project(new float[]{invalid, 1}, out));
-            assertArrayEquals(new float[]{42, 42}, out);
+            fp16.project(new float[]{nonFinite, 1}, out); // As in FP32: NaN outputs, no failure.
+            for (float value : out) assertTrue(Float.isNaN(value));
         }
+        Arrays.fill(out, 42f);
+        assertThrows(IllegalArgumentException.class, () -> fp16.project(new float[]{65505f, 1}, out));
+        assertArrayEquals(new float[]{42, 42}, out);
         fp16.project(query, out);
         checkOracle(matrix, query, out, true);
     }

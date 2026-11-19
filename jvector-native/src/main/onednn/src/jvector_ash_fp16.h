@@ -54,11 +54,14 @@ JV_ASH_FP16_EXPORT void jvector_ash_fp16_destroy(void* context);
  * Per-calling-thread workspace and opaque oneDNN/JIT bookkeeping are excluded. */
 JV_ASH_FP16_EXPORT uint64_t jvector_ash_fp16_bytes(const void* context);
 /* input has columns floats, output has rows floats; neither may alias the other.
- * Finite operands must be within the FP16 finite range. Output is FP32. */
+ * Finite operands must be within the FP16 finite range (else RANGE). A query with a NaN or
+ * infinite value gets NaN outputs, as in FP32. Output is FP32. */
 JV_ASH_FP16_EXPORT int jvector_ash_fp16_project(void* context, const float* input,
                                               float* output, jvector_ash_fp16_result* result);
 /* Row-major input [count][columns], output [count][rows]. Caches packed FP16
- * weights by layout; count is positive and has no tile-size cap.
+ * weights by layout; count is positive and has no tile-size cap. A query with a NaN or
+ * infinite value gets NaN outputs without affecting the others; a finite value beyond the
+ * FP16 range fails the whole call with RANGE before any output is written.
  * Conversion and accumulation match singleton projection. No exception crosses
  * the ABI. Java validates shape and nonaliasing before entering native code. */
 JV_ASH_FP16_EXPORT int jvector_ash_fp16_project_batch(void* context, const float* input,
@@ -82,7 +85,8 @@ JV_ASH_FP16_EXPORT void* jvector_ash_int8_create(const float* matrix, int rows,
 JV_ASH_FP16_EXPORT void jvector_ash_int8_destroy(void* context);
 JV_ASH_FP16_EXPORT uint64_t jvector_ash_int8_bytes(const void* context);
 /* Contiguous FP32 input [count][columns], output [count][rows]. Positive count
- * has no tile-size cap. Java validates shapes/nonaliasing and publishes output
+ * has no tile-size cap. A query with a NaN or infinite value gets NaN outputs without
+ * affecting the others. Java validates shapes/nonaliasing and publishes output
  * only after success. On failure the caller must discard native output. */
 JV_ASH_FP16_EXPORT int jvector_ash_int8_project_batch(void* context,
         const float* input, int count, float* output, jvector_ash_fp16_result* result);

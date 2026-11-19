@@ -97,13 +97,15 @@ bool integer_dot_available() {
 #endif
 
 // Share the prototype's FP32 quantization between matrix/query preparation.
-// Reject a nonzero operand whose scale rounds to zero, before division and
-// integer conversion. Do not change the ordinary arithmetic or rounding.
+// Returns the scale, or NaN without writing any code when an operand is not finite, so a
+// non-finite query yields NaN outputs for that query only. Reject a nonzero operand whose
+// scale rounds to zero, before division and integer conversion. Do not change the
+// ordinary arithmetic or rounding.
 template <typename Code>
 JV_ASH_INT8_TARGET float quantize(const float* input, int count, Code* output, int offset, int32_t* sum = nullptr) {
     float maxabs = 0;
     for (int i = 0; i < count; ++i) {
-        if (!std::isfinite(input[i])) throw std::invalid_argument("Nonfinite INT8 operand");
+        if (!std::isfinite(input[i])) return std::numeric_limits<float>::quiet_NaN();
         maxabs = std::max(maxabs, std::fabs(input[i]));
     }
     float scale = maxabs == 0 ? 1.0f : maxabs / 127.0f;
@@ -180,8 +182,11 @@ bool direct_uses_zmm() {
 // The query as two INT8 digits with one scale: input / scale ~ coarse + fine / 254. The second digit
 // holds the coarse digit's rounding remainder, which accounts for nearly all INT8 projection error
 // (rounding the matrix rows costs far less). Both digits are stored with the +128 offset.
+// A non-finite query returns a NaN scale and writes no digits: its stale digits give finite
+// integer dot products that the NaN scale turns into NaN outputs.
 JV_ASH_INT8_TARGET float quantize_two_digits(const float* input, int count, uint8_t* coarse, uint8_t* fine) {
     float scale = quantize(input, count, coarse, 128);
+    if (std::isnan(scale)) return scale;
     for (int i = 0; i < count; ++i) {
         float remainder = input[i] / scale - float(int(coarse[i]) - 128);
         fine[i] = uint8_t(std::clamp(int(std::nearbyint(remainder * 254.0f)), -127, 127) + 128);
@@ -317,9 +322,11 @@ struct Context {
         auto descriptor = memory::desc({columns, rows}, memory::data_type::s8, memory::dims{1, columns});
         plain = memory(descriptor, cpu);
         auto* target = static_cast<int8_t*>(plain.get_data_handle());
-        for (int row = 0; row < rows; ++row)
+        for (int row = 0; row < rows; ++row) {
             scales[row] = quantize(matrix + size_t(row) * columns, columns,
                     target + size_t(row) * columns, 0, &sums[row]);
+            if (std::isnan(scales[row])) throw std::invalid_argument("Nonfinite INT8 matrix operand");
+        }
         retained_bytes.store(descriptor.get_size() + sizeof(Context)
                 + size_t(rows) * (sizeof(float) + sizeof(int32_t)), std::memory_order_relaxed);
         if (direct) {

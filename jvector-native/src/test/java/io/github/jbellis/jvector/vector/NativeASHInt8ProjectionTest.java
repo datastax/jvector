@@ -253,11 +253,6 @@ class NativeASHInt8ProjectionTest {
         assertThrows(IllegalArgumentException.class, () -> projection.projectBatch(inputs, inputs, 2));
         assertThrows(IllegalArgumentException.class, () -> projection.projectBatch(inputs,
                 new float[][]{outputs[0], outputs[0]}, 2));
-        for (float invalid : new float[]{Float.NaN, Float.POSITIVE_INFINITY, Float.NEGATIVE_INFINITY}) {
-            inputs[8][0] = invalid;
-            assertThrows(IllegalArgumentException.class, () -> projection.projectBatch(inputs, outputs, 9));
-            for (float[] row : outputs) for (float value : row) assertEquals(42f, value);
-        }
         assertThrows(NullPointerException.class, () -> projection.project(null, new float[32]));
         assertThrows(NullPointerException.class, () -> projection.project(new float[64], null));
         assertThrows(IllegalArgumentException.class, () -> projection.project(new float[1], new float[32]));
@@ -265,6 +260,33 @@ class NativeASHInt8ProjectionTest {
         float[][] invalidMatrix = matrix(32, 64, 3);
         invalidMatrix[0][0] = Float.NaN;
         assertThrows(IllegalArgumentException.class, () -> prepare(invalidMatrix));
+    }
+
+    @Test
+    void nonFiniteQueryGetsNaNWithoutAffectingItsBatch() {
+        var projection = prepare(matrix(32, 64, 1));
+        float[][] inputs = matrix(9, 64, 2);
+        // The same batch without the non-finite values; valid queries must match it bit for bit.
+        float[][] expected = new float[9][32];
+        projection.projectBatch(inputs, expected, inputs.length);
+        for (float invalid : new float[]{Float.NaN, Float.POSITIVE_INFINITY, Float.NEGATIVE_INFINITY}) {
+            float[][] queries = new float[9][];
+            for (int q = 0; q < queries.length; q++) queries[q] = inputs[q].clone();
+            queries[2][7] = invalid;
+            queries[8][0] = invalid; // Alone in the second tile.
+            float[][] outputs = new float[9][32];
+            projection.projectBatch(queries, outputs, queries.length);
+            for (int q = 0; q < queries.length; q++) {
+                if (q == 2 || q == 8) {
+                    for (float value : outputs[q]) assertTrue(Float.isNaN(value), invalid + " query " + q);
+                } else {
+                    assertArrayEquals(expected[q], outputs[q], invalid + " query " + q);
+                }
+            }
+            float[] single = new float[32];
+            projection.project(queries[2], single);
+            for (float value : single) assertTrue(Float.isNaN(value));
+        }
     }
 
     @Test

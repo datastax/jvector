@@ -903,8 +903,10 @@ This section describes native build, arithmetic, ownership and diagnostics.
 FP16 uses FP16 operands with strict FP32 accumulation/output. The existing
 `auto` policy prefers optimized FP16 and retains its FP32 fallback. An individual
 query outside the finite FP16 range uses FP32 in automatic mode. Required `fp16`
-accepts only finite matrix/query values with magnitude at most 65504; underflow
-and rounding follow IEEE binary16 arithmetic. Input shape/aliasing errors,
+accepts only matrix values and finite query values with magnitude at most 65504;
+underflow and rounding follow IEEE binary16 arithmetic. A query with a NaN or
+infinite value gets NaN outputs, as in FP32, without affecting other queries in
+its batch. Input shape/aliasing errors,
 allocation failures and execution errors are reported rather than hidden.
 
 ### INT8 behavior
@@ -913,8 +915,10 @@ Required `int8` prepares symmetric signed weights per output row and quantizes
 each query independently. oneDNN computes unsigned-input/signed-weight products
 with signed 32-bit accumulation. Correcting the input offset and dequantizing
 produces FP32 output. Scales, quantization and rescaling use FP32 arithmetic. A nonzero operand whose
-scale rounds to zero is rejected before integer conversion. Nonfinite operands
-are rejected; output rescaling retains ordinary FP32 overflow behavior.
+scale rounds to zero is rejected before integer conversion. A nonfinite matrix
+value is rejected; a query with a NaN or infinite value gets NaN outputs, as in
+FP32, without affecting other queries in its batch. Output rescaling retains
+ordinary FP32 overflow behavior.
 
 On x86, only the INT8 quantization and batch-projection functions use an AVX2
 compiler target. The generic model-creation guard runs first and requires a

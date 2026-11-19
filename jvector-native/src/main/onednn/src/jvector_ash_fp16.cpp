@@ -27,6 +27,7 @@
 #include <mutex>
 #include <new>
 #include <stdexcept>
+#include <vector>
 
 // Calling workers own parallelism. This library must never start a nested pool.
 static_assert(DNNL_CPU_RUNTIME == DNNL_RUNTIME_SEQ,
@@ -49,6 +50,22 @@ bool representable(const float* values, size_t count) noexcept {
         if (!std::isfinite(values[i]) || std::fabs(values[i]) > 65504.0f) return false;
     }
     return true;
+}
+
+// A query's values: all within the finite FP16 range, some not finite (the query's outputs are
+// NaN, as in FP32, without affecting other queries), or some finite but beyond FP16's range.
+enum class QueryValues { Representable, NonFinite, OutOfRange };
+QueryValues classify(const float* values, size_t count) noexcept {
+    bool nonfinite = false;
+    for (size_t i = 0; i < count; ++i) {
+        if (!std::isfinite(values[i])) nonfinite = true;
+        else if (std::fabs(values[i]) > 65504.0f) return QueryValues::OutOfRange;
+    }
+    return nonfinite ? QueryValues::NonFinite : QueryValues::Representable;
+}
+
+void fill_nan(float* output, int count) noexcept {
+    std::fill(output, output + count, std::numeric_limits<float>::quiet_NaN());
 }
 
 struct Unsupported : std::runtime_error { using std::runtime_error::runtime_error; };
@@ -254,8 +271,12 @@ int jvector_ash_fp16_project(void* pointer, const float* input, float* output,
     if (!pointer || !input || !output || input == output)
         return set_error(result, JV_ASH_FP16_INVALID_ARGUMENT, "Invalid or aliased projection buffers");
     auto& context = *static_cast<Context*>(pointer);
-    if (!representable(input, context.columns))
-        return set_error(result, JV_ASH_FP16_RANGE, "Query is outside the finite FP16 range");
+    switch (classify(input, context.columns)) {
+        case QueryValues::OutOfRange:
+            return set_error(result, JV_ASH_FP16_RANGE, "Query is outside the finite FP16 range");
+        case QueryValues::NonFinite: fill_nan(output, context.rows); return JV_ASH_FP16_OK;
+        case QueryValues::Representable: break;
+    }
     try {
         auto& buffers = workspace;
         if (buffers.context_id != context.id) buffers.initialize(context, input, output);
@@ -294,9 +315,18 @@ int jvector_ash_fp16_project_batch(void* pointer, const float* input, int count,
     if (uint64_t(count) > std::numeric_limits<size_t>::max() / sizeof(float)
                              / uint64_t(std::max(context.rows, context.columns)))
         return set_error(result, JV_ASH_FP16_INVALID_ARGUMENT, "FP16 batch size overflow");
-    // Validate the entire input before writing any result, including later tiles.
-    if (!representable(input, size_t(count) * size_t(context.columns)))
-        return set_error(result, JV_ASH_FP16_RANGE, "Query is outside the finite FP16 range");
+    // Validate the entire input before writing any result, including later tiles. Non-finite
+    // queries are projected with the rest, then their outputs are set to NaN.
+    thread_local std::vector<int> nonfinite;
+    nonfinite.clear();
+    for (int i = 0; i < count; ++i) {
+        switch (classify(input + size_t(i) * context.columns, context.columns)) {
+            case QueryValues::OutOfRange:
+                return set_error(result, JV_ASH_FP16_RANGE, "Query is outside the finite FP16 range");
+            case QueryValues::NonFinite: nonfinite.push_back(i); break;
+            case QueryValues::Representable: break;
+        }
+    }
     try {
         for (int first = 0; first < count;) {
             const int size = std::min(kBatchTile, count - first);
@@ -329,6 +359,7 @@ int jvector_ash_fp16_project_batch(void* pointer, const float* input, int count,
             }
             first += size;
         }
+        for (int i : nonfinite) fill_nan(output + size_t(i) * context.rows, context.rows);
         return JV_ASH_FP16_OK;
     } catch (const Unsupported& e) { return set_error(result, JV_ASH_FP16_UNSUPPORTED, e.what()); }
     catch (const dnnl::error& e) { return set_error(result, e.status == dnnl_unimplemented
