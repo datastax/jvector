@@ -843,14 +843,41 @@ public class GraphIndexBuilder implements Closeable, Accountable {
             }
 
             var reconnected = new AtomicInteger();
-            simdExecutor.submit(() -> IntStream.range(0, orphans.size()).parallel().forEach(i -> {
-                if (reconnectOrphan(orphans.getInt(i), connected, connectionTargets)) {
-                    reconnected.incrementAndGet();
+            // One node at a time: once an orphan is linked in, everything it reaches is reachable too and needs no
+            // edge of its own. Linking every orphan separately would spend one reconnection edge per node, and with
+            // a large unreachable partition and few reachable targets five passes could not get through them all.
+            simdExecutor.submit(() -> {
+                for (int i = 0; i < orphans.size(); i++) {
+                    int orphan = orphans.getInt(i);
+                    if (connected.get(orphan)) {
+                        continue; // reached through an orphan that was linked in earlier in this pass
+                    }
+                    if (reconnectOrphan(orphan, connected, connectionTargets)) {
+                        reconnected.incrementAndGet();
+                        markReachable(connected, orphan);
+                    }
                 }
-            })).join();
+            }).join();
             logger.debug("Reconnect pass {}: {} unreachable nodes, {} reconnected", pass, orphans.size(), reconnected.get());
             if (reconnected.get() == 0) {
                 return;
+            }
+        }
+    }
+
+    /** Marks {@code start} and everything reachable from it through layer-0 edges as connected. */
+    private void markReachable(FixedBitSet connected, int start) {
+        var stack = new IntArrayList();
+        if (!connected.getAndSet(start)) {
+            stack.addInt(start);
+        }
+        while (!stack.isEmpty()) {
+            int node = stack.removeAt(stack.size() - 1);
+            for (var it = graph.getNeighborsIterator(0, node); it.hasNext(); ) {
+                int neighbor = it.nextInt();
+                if (!connected.getAndSet(neighbor)) {
+                    stack.addInt(neighbor);
+                }
             }
         }
     }
@@ -907,8 +934,13 @@ public class GraphIndexBuilder implements Closeable, Accountable {
         try (var gs = searchers.get()) {
             gs.setView(graph.getView()); // the thread-local searcher may hold a snapshot from before late insertions
             var ssp = scoreProvider.searchProviderFor(node);
-            var excluding = new ExcludingBits(node);
-            var result = gs.search(ssp, beamWidth, beamWidth, 0.0f, 0.0f, excluding);
+            // Only reachable nodes are acceptable. With a hierarchy the search enters layer 0 from the upper layers,
+            // so it can return other unreachable nodes, and linking from one of those reconnects nothing.
+            Bits reachableOthers = other -> other != node && connected.get(other);
+            // The threshold must be NEGATIVE_INFINITY, not 0.0f: DOT_PRODUCT scores are (1 + dot) / 2, which is
+            // negative for non-normalized vectors, and a 0.0f floor would discard the only reachable candidates
+            // of a node that is dissimilar to everything else.
+            var result = gs.search(ssp, beamWidth, beamWidth, Float.NEGATIVE_INFINITY, 0.0f, reachableOthers);
             for (int resumes = 0; ; resumes++) {
                 for (var candidate : result.getNodes()) {
                     if (!connectionTargets.getAndSet(candidate.node)) {
@@ -919,7 +951,7 @@ public class GraphIndexBuilder implements Closeable, Accountable {
                 if (result.getNodes().length == 0 || resumes >= 2 * graph.maxDegree()) {
                     return false;
                 }
-                result = gs.resume(beamWidth, beamWidth);
+                result = gs.resume(beamWidth, beamWidth, Float.NEGATIVE_INFINITY, 0.0f);
             }
         } catch (IOException e) {
             throw new UncheckedIOException(e);
