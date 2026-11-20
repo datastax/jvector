@@ -15,8 +15,12 @@
 project('jvector_simd_kernels', 'cpp',
   version: '0.1.0',
   meson_version: '>= 0.55.0',
-  default_options: ['cpp_std=c++17']
+  # b_vscrt=mt: on Windows, link the C/C++ runtime statically so the DLL has no
+  # dependency on the (possibly absent) VC++ redistributable. Ignored elsewhere.
+  default_options: ['cpp_std=c++17', 'b_vscrt=mt']
 )
+
+host_os = host_machine.system()   # 'linux' or 'windows'
 
 # Highway headers are used as an include directory only.
 # HWY_COMPILE_ONLY_STATIC / HWY_COMPILE_ONLY_SCALAR bypass the
@@ -185,7 +189,9 @@ vectorutil_dep = declare_dependency(
 #)
 
 # ---- Tests -----------------------------------------------------------------
-gtest_dep = dependency('gtest_main', required: false)
+# Prefer a system gtest; otherwise fall back to the gtest subproject if a wrap file is
+# present (e.g. after `meson wrap install gtest`, which is how Windows CI gets it).
+gtest_dep = dependency('gtest_main', required: false, fallback: ['gtest', 'gtest_main_dep'])
 
 if gtest_dep.found()
   # Select the architecture-specific CPU features test.
@@ -209,10 +215,13 @@ if gtest_dep.found()
 else
   warning('gtest_main not found — test_simd_kernels target will not be built. ' +
           'Install libgtest-dev (apt) or googletest (brew) and re-run meson setup.')
-  run_target('test_simd_kernels',
-    command: ['echo',
-      'ERROR: test_simd_kernels is not available because gtest_main was not found. ' +
-      'Install libgtest-dev (apt) or googletest (brew) and re-run: meson setup --wipe build'])
+  # `echo` is not a standalone program on Windows, so only define the hint target elsewhere.
+  if host_os != 'windows'
+    run_target('test_simd_kernels',
+      command: ['echo',
+        'ERROR: test_simd_kernels is not available because gtest_main was not found. ' +
+        'Install libgtest-dev (apt) or googletest (brew) and re-run: meson setup --wipe build'])
+  endif
 endif
 
 # ---- Benchmarks ------------------------------------------------------------
@@ -228,8 +237,10 @@ if gbench_dep.found()
 else
   warning('Google Benchmark not found — bench_simd_kernels target will not be built. ' +
           'Install libbenchmark-dev (apt) or google-benchmark (brew) and re-run meson setup.')
-  run_target('bench_simd_kernels',
-    command: ['echo',
-      'ERROR: bench_simd_kernels is not available because the benchmark library was not found. ' +
-      'Install libbenchmark-dev (apt) or google-benchmark (brew) and re-run: meson setup --wipe build'])
+  if host_os != 'windows'
+    run_target('bench_simd_kernels',
+      command: ['echo',
+        'ERROR: bench_simd_kernels is not available because the benchmark library was not found. ' +
+        'Install libbenchmark-dev (apt) or google-benchmark (brew) and re-run: meson setup --wipe build'])
+  endif
 endif

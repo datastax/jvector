@@ -16,13 +16,21 @@ limitations under the License.
 
 # JVector Native SIMD Library
 
-This directory contains the C++ source for `libjvector-x86_64.so` and
-`libjvector-aarch64.so`, the native SIMD backends that accelerate vector
-operations in JVector via the Java Foreign Function & Memory (FFM) API.
+This directory contains the C++ source for the native SIMD backends that
+accelerate vector operations in JVector via the Java Foreign Function &
+Memory (FFM) API, one library per platform:
 
-> **Platform support:** Currently enabled on **Linux x86-64** (SSE4.2, AVX2,
-> AVX-512) and **Linux AArch64** (NEON, SVE, SVE2). Windows and macOS are not
-> yet supported.
+| Platform | ISA tiers | Bundled as | Toolchain |
+|----------|-----------|------------|-----------|
+| Linux x86-64 | SSE4.2, AVX2, AVX-512 | `libjvector-x86_64.so` | GCC 12+ or clang |
+| Linux AArch64 | NEON, SVE, SVE2 | `libjvector-aarch64.so` | GCC 11+ or clang |
+| Windows x86-64 | SSE4.2, AVX2, AVX-512 | `jvector-windows-x86_64.dll` | clang (MSVC ABI) + Visual Studio build tools |
+
+> Other platforms (e.g. macOS, Windows on ARM) are not supported yet; there
+> jvector uses the Java Vector API provider.
+
+At runtime `LibraryLoader` picks the resource from `os.name` and `os.arch`
+(or uses a `libjvector` found on `java.library.path`).
 
 ---
 
@@ -60,6 +68,27 @@ third_party/highway/          - Google Highway header-only library (git submodul
 | [Ninja](https://ninja-build.org/) | any | `sudo apt install ninja-build` |
 | Git submodules | — | `git submodule update --init` (needed once) |
 
+**Windows (x86-64):** install LLVM/clang (`choco install llvm`), Visual Studio
+Build Tools (for the CRT/SDK and linker), Git for Windows (the build runs
+`build_native_lib.sh` with its bash), and `pip install meson ninja`. Run Maven
+from an **x64 Native Tools Command Prompt** (or after `vcvars64.bat`) so clang can
+find the MSVC libraries; the script warns if `LIB` is unset. clang is used rather than
+`cl.exe` because the ISA variants rely on GCC-style `-march` flags and Highway's AVX-512
+targets. The C runtime is linked statically, so the DLL has no redistributable dependency.
+The C++ tests need gtest: run `meson wrap install gtest` in this directory first.
+
+The Maven build runs automatically on all of these platforms (profiles
+`unix-amd64-profile` for Linux and `windows-x86_64-profile`);
+pass `-Dnative.skip=true` to build the jar without a bundled library.
+
+**Using it on Windows:** `mvn package` builds `jvector.dll`, bundles it into that
+machine's `jvector-native` jar as `jvector-windows-x86_64.dll`, and `LibraryLoader` extracts and
+loads it at runtime. With JDK 22+ and `jvector-native` on the classpath it is selected automatically
+(run with `--enable-native-access=ALL-UNNAMED`); look for `Using NativeVectorizationProvider` in the
+log, or pass `-Djvector.vectorization_provider=native` to make a load failure an error instead of a
+silent fallback to the Java Vector API. Use `JVECTOR_MAX_ISA=avx2` (or `sse42`, `avx3`, ...) to cap the
+instruction set.
+
 > **AArch64 compiler note:** On Clang < 22, the SVE and SVE2 tiers are
 > automatically skipped at configure time (`meson setup` prints a warning).
 > The resulting library contains only the NEON tier and falls back to it at
@@ -82,12 +111,14 @@ Parameters (all optional):
 | `crossarch` | `false` | Set to `true` to also cross-compile for the other arch |
 
 The script:
-1. Detects the host arch via `uname -m` (x86_64 or aarch64).
-2. Verifies prerequisites (g++, meson, ninja, Highway submodule).
+1. Detects the host OS (`uname -s`: Linux, or Windows under Git Bash/MSYS) and
+   arch (`uname -m`: x86_64 or aarch64).
+2. Verifies prerequisites (a C++ compiler, meson, ninja, Highway submodule).
 3. Always builds the **native arch** library into `target/meson-build-<arch>/`.
 4. If `crossarch=true`, also cross-compiles the **other arch** library into
    `target/meson-build-<other-arch>/` using the bundled cross-compile file.
-5. Copies each built `.so` to `jvector-native/target/meson-build/libjvector-<arch>.so`
+5. Copies each built library (`.so` or `.dll`) to
+   `jvector-native/target/meson-build/` under its bundled name from the table above
    (relative to the repository root), which Maven includes as a resource.
    The script does not strip or split debug symbols.
 
@@ -183,6 +214,7 @@ mvn clean install -Dnative.crossarch -Dnative.debug
 The `-Dnative.crossarch` flag activates the `native.crossarch` Maven profile,
 which passes `crossarch=true` as the second argument to `build_native_lib.sh`.
 Without it, only the library for the host architecture is built.
+Cross-compilation is Linux-only.
 
 ### Manual meson build
 

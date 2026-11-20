@@ -22,8 +22,18 @@
 #define VECTOR_SIMD_DOT_H
 
 // Mark a symbol as part of the public ABI even when the library is built
-// with -fvisibility=hidden.
-#define JVECTOR_SIMD_API __attribute__((visibility("default")))
+// with -fvisibility=hidden.  On Windows, symbols are exported from the DLL
+// with dllexport (when building the library, i.e. -DJVECTOR_BUILD) and
+// imported with dllimport by consumers such as the C++ tests.
+#if defined(_WIN32)
+#  if defined(JVECTOR_BUILD)
+#    define JVECTOR_SIMD_API __declspec(dllexport)
+#  else
+#    define JVECTOR_SIMD_API __declspec(dllimport)
+#  endif
+#else
+#  define JVECTOR_SIMD_API __attribute__((visibility("default")))
+#endif
 
 // APIs exposed to Java via FFI
 // Auto-generated from jvector_simd_kernel_list.h
