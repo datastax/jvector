@@ -87,9 +87,12 @@ bool integer_dot_available() {
 #endif
 }
 
-// Every qualified x86 VNNI/AMX backend includes AVX2. Keep the entry-point
-// hardware check generic; specialize only these INT8 computation functions.
-// This preserves direct FP32 rounding instructions in the portable library.
+// Only these INT8 computation functions are compiled for AVX2, so their quantize
+// loops round with direct instructions (the default x86-64 baseline, which the
+// rest of the add-on keeps, calls libm instead) and vectorize wider.
+// They never run on a CPU without AVX2: they are reachable only through a Context,
+// which jvector_ash_int8_create builds only after integer_dot_available() confirms
+// a VNNI/AMX backend, and every one of those includes AVX2.
 #if defined(__x86_64__) || defined(_M_X64)
 #define JV_ASH_INT8_TARGET __attribute__((target("avx2")))
 #else
