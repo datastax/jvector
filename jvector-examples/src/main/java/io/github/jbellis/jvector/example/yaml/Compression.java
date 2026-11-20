@@ -44,7 +44,7 @@ public class Compression {
                     if (strCenterData == null) {
                         centerData = ds.getSimilarityFunction() == VectorSimilarityFunction.EUCLIDEAN;
                     } else {
-                        centerData = strCenterData.equals("Yes");;
+                        centerData = strCenterData.equals("Yes");
                     }
 
                     if (parameters.containsKey("m")) {

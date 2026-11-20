@@ -19,6 +19,7 @@ package io.github.jbellis.jvector.graph.disk.feature;
 import io.github.jbellis.jvector.disk.IndexWriter;
 import io.github.jbellis.jvector.disk.RandomAccessReader;
 import io.github.jbellis.jvector.graph.disk.CommonHeader;
+import io.github.jbellis.jvector.graph.disk.OnDiskGraphIndex;
 import io.github.jbellis.jvector.vector.VectorizationProvider;
 import io.github.jbellis.jvector.vector.types.VectorFloat;
 import io.github.jbellis.jvector.vector.types.VectorTypeSupport;
@@ -58,8 +59,14 @@ public class InlineVectors extends AbstractFeature {
         return new InlineVectors(header.dimension);
     }
 
+    @Deprecated
     @Override
     public void writeHeader(IndexWriter out) {
+        writeHeader(out, OnDiskGraphIndex.CURRENT_VERSION);
+    }
+
+    @Override
+    public void writeHeader(IndexWriter out, int version) {
         // common header contains dimension, which is sufficient
     }
 

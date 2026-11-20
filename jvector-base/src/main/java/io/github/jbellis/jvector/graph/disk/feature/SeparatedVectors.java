@@ -19,6 +19,7 @@ package io.github.jbellis.jvector.graph.disk.feature;
 import io.github.jbellis.jvector.disk.IndexWriter;
 import io.github.jbellis.jvector.disk.RandomAccessReader;
 import io.github.jbellis.jvector.graph.disk.CommonHeader;
+import io.github.jbellis.jvector.graph.disk.OnDiskGraphIndex;
 import io.github.jbellis.jvector.vector.VectorizationProvider;
 import io.github.jbellis.jvector.vector.types.VectorTypeSupport;
 
@@ -60,8 +61,14 @@ public class SeparatedVectors extends AbstractSeparatedFeature {
         return dimension * Float.BYTES;
     }
 
+    @Deprecated
     @Override
     public void writeHeader(IndexWriter out) throws IOException {
+        writeHeader(out, OnDiskGraphIndex.CURRENT_VERSION);
+    }
+
+    @Override
+    public void writeHeader(IndexWriter out, int version) throws IOException {
         out.writeLong(offset);
     }
 

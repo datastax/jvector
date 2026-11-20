@@ -17,6 +17,7 @@
 package io.github.jbellis.jvector.example;
 
 import io.github.jbellis.jvector.graph.ImmutableGraphIndex;
+import io.github.jbellis.jvector.graph.RandomAccessByteVectorValues;
 import io.github.jbellis.jvector.graph.RandomAccessVectorValues;
 import io.github.jbellis.jvector.graph.disk.feature.FeatureId;
 import io.github.jbellis.jvector.quantization.PQVectors;
@@ -34,6 +35,7 @@ final class FeatureProviders {
 
     static {
         register(new InlineVectorsProvider());
+        register(new InlineByteVectorsProvider());
         register(new NVQProvider());
         register(new FusedPQProvider());
     }
@@ -91,6 +93,19 @@ final class FeatureProviders {
                                                ConstructionMetrics metrics) throws FileNotFoundException {
         var writer = GraphBuilderFactory.writerBuilder(graph, outPath, vectors.size());
         var ctx = new FeatureWriteContext(writer, graph, vectors, buildPQ, metrics);
+        for (var id : features) {
+            require(id).configure(ctx);
+        }
+        return ctx;
+    }
+
+    /** As {@link #configureWriter}, for an int8 dataset. */
+    static FeatureWriteContext configureWriter(Set<FeatureId> features,
+                                               ImmutableGraphIndex graph,
+                                               Path outPath,
+                                               RandomAccessByteVectorValues byteVectors) throws FileNotFoundException {
+        var writer = GraphBuilderFactory.writerBuilder(graph, outPath, byteVectors.size());
+        var ctx = new FeatureWriteContext(writer, graph, byteVectors);
         for (var id : features) {
             require(id).configure(ctx);
         }

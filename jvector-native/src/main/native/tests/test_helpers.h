@@ -51,7 +51,11 @@ std::unordered_set<std::string> parse_cpuinfo_line(const std::string& key);
 // so that no element is exactly zero (important for cosine tests).
 // ---------------------------------------------------------------------------
 
-std::vector<float> make_vec(size_t n, float seed);
+std::vector<float>   make_vec(size_t n, float seed);
+
+// make_vec_i8(n, seed) produces n int8_t values with a mix of signs
+// suitable for testing the i8 similarity kernels.
+std::vector<int8_t>  make_vec_i8(size_t n, int8_t seed);
 
 // ---------------------------------------------------------------------------
 // Shared test parameter — vector length + human-readable path description.

@@ -1,3 +1,16 @@
+# Upgrading from 4.0.x to 4.1.x
+
+## On-disk format version 7
+- Version 7 of the on-disk graph format adds one feature, inline int8 vectors (`FeatureId.INLINE_BYTE_VECTORS`):
+  each node's byte vector stored inline, one byte per dimension. Apart from that feature, a version 7 file has
+  the version 6 layout.
+- JVector 4.0.x reads formats up to 6 and rejects version 7 files. `OnDiskGraphIndex.CURRENT_VERSION`,
+  the default for `OnDiskGraphIndexWriter.Builder` and for `CompressedVectors.write(out)`, is now 7.
+- To keep a rollback to 4.0.x possible, pass the version explicitly until every reader runs 4.1:
+  `withVersion(6)` on graph writer builders and `write(out, 6)` for compressors and compressed vectors.
+  A version 6 writer rejects `INLINE_BYTE_VECTORS`.
+- `OnDiskGraphIndexCompactor` always writes `CURRENT_VERSION`; it has no option to write an older version.
+
 # Upgrading from 3.0.x to 4.0.x
 
 ## New features

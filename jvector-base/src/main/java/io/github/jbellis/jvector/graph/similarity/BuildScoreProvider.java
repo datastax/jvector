@@ -16,15 +16,20 @@
 
 package io.github.jbellis.jvector.graph.similarity;
 
+import io.github.jbellis.jvector.graph.RandomAccessByteVectorValues;
 import io.github.jbellis.jvector.graph.RandomAccessVectorValues;
 import io.github.jbellis.jvector.graph.RemappedRandomAccessVectorValues;
+import io.github.jbellis.jvector.graph.VectorValues;
+import io.github.jbellis.jvector.vector.ByteVectorSimilarityFunction;
 import io.github.jbellis.jvector.quantization.BQVectors;
 import io.github.jbellis.jvector.quantization.PQVectors;
 import io.github.jbellis.jvector.vector.VectorSimilarityFunction;
 import io.github.jbellis.jvector.vector.VectorUtil;
 import io.github.jbellis.jvector.vector.VectorizationProvider;
+import io.github.jbellis.jvector.vector.types.ByteSequence;
 import io.github.jbellis.jvector.vector.types.VectorFloat;
 import io.github.jbellis.jvector.vector.types.VectorTypeSupport;
+import java.util.function.Supplier;
 
 /**
  * Encapsulates comparing node distances for GraphIndexBuilder.
@@ -58,6 +63,20 @@ public interface BuildScoreProvider {
      * @param vector the query vector to provide similarity scores against
      */
     SearchScoreProvider searchProviderFor(VectorFloat<?> vector);
+
+    /**
+     * Create a search score provider to use *internally* during construction, for a byte (int8) query vector.
+     * <p>
+     * The default implementation throws {@link UnsupportedOperationException}; only
+     * {@link #byteVectorScoreProvider} overrides it.
+     *
+     * @param vector the int8 query vector to provide similarity scores against
+     */
+    default SearchScoreProvider searchProviderFor(ByteSequence<?> vector) {
+        throw new UnsupportedOperationException(
+                "This BuildScoreProvider does not support byte-vector queries; " +
+                "use byteVectorScoreProvider() to construct a byte-vector builder");
+    }
 
     /**
      * Create a search score provider to use *internally* during construction.
@@ -106,8 +125,8 @@ public interface BuildScoreProvider {
     static BuildScoreProvider randomAccessScoreProvider(RandomAccessVectorValues ravv, VectorSimilarityFunction similarityFunction) {
         // We need two sources of vectors in order to perform diversity check comparisons without
         // colliding.  ThreadLocalSupplier makes this a no-op if the RAVV is actually un-shared.
-        var vectors = ravv.threadLocalSupplier();
-        var vectorsCopy = ravv.threadLocalSupplier();
+        Supplier<RandomAccessVectorValues> vectors = ravv.threadLocalSupplier();
+        Supplier<RandomAccessVectorValues> vectorsCopy = ravv.threadLocalSupplier();
 
         return new BuildScoreProvider() {
             /// Exact scores against `node1`.
@@ -123,7 +142,10 @@ public interface BuildScoreProvider {
                         @Override
                         public float similarityTo(int node2) {
                             var a = anchor;
-                            if (a == null) anchor = a = vectors.get().getVector(node1).copy();
+                            if (a == null) {
+                                anchor = a = vts.createFloatVector(ravv.dimension());
+                                vectors.get().getVectorInto(node1, a, 0);
+                            }
                             return similarityFunction.compare(a, vectorsCopy.get().getVector(node2));
                         }
                     };
@@ -221,6 +243,93 @@ public interface BuildScoreProvider {
             @Override
             public VectorFloat<?> approximateCentroid() {
                 return pqv.getCompressor().getOrComputeCentroid();
+            }
+        };
+    }
+
+
+    /**
+     * Returns a BSP that performs exact score comparisons using the given
+     * {@link RandomAccessByteVectorValues} and {@link ByteVectorSimilarityFunction}.
+     * All scoring is byte×byte with no float32 round-trip.
+     */
+    static BuildScoreProvider byteVectorScoreProvider(RandomAccessByteVectorValues ravv, ByteVectorSimilarityFunction bvsf) {
+        var vectors     = ravv.threadLocalSupplier();
+        var vectorsCopy = ravv.threadLocalSupplier();
+
+        return new BuildScoreProvider() {
+            /// Exact scores against `node1`.
+            ///
+            /// For a value-shared source the anchor is read on the first comparison and kept as
+            /// a private copy, so creating a score function reads nothing, later reads through the
+            /// same views can't overwrite the anchor, and each comparison reads only `node2`.
+            private ScoreFunction.ExactScoreFunction scoreFunctionFor(int node1) {
+                if (ravv.isValueShared()) {
+                    return new ScoreFunction.ExactScoreFunction() {
+                        private ByteSequence<?> anchor;
+
+                        @Override
+                        public float similarityTo(int node2) {
+                            var a = anchor;
+                            if (a == null) {
+                                anchor = a = vts.createByteSequence(ravv.dimension());
+                                vectors.get().getVectorInto(node1, a, 0);
+                            }
+                            return bvsf.compare(a, vectorsCopy.get().getVector(node2));
+                        }
+                    };
+                }
+                var vector = vectors.get().getVector(node1);
+                var vc = vectorsCopy.get();
+                return node2 -> bvsf.compare(vector, vc.getVector(node2));
+            }
+
+            @Override
+            public boolean isExact() {
+                return true;
+            }
+
+            @Override
+            public VectorFloat<?> approximateCentroid() {
+                var vv = vectors.get();
+                var centroid = vts.createFloatVector(vv.dimension());
+                for (int i = 0; i < vv.size(); i++) {
+                    var v = vv.getVector(i);
+                    if (v == null) continue;
+                    for (int d = 0; d < vv.dimension(); d++) {
+                        centroid.set(d, centroid.get(d) + v.get(d));
+                    }
+                }
+                VectorUtil.scale(centroid, 1.0f / vv.size());
+                return centroid;
+            }
+
+            @Override
+            public SearchScoreProvider searchProviderFor(VectorFloat<?> vector) {
+                throw new UnsupportedOperationException(
+                        "byteVectorScoreProvider does not support float query vectors; use searchProviderFor(int node)");
+            }
+
+            @Override
+            public SearchScoreProvider searchProviderFor(ByteSequence<?> vector) {
+                var vc = vectorsCopy.get();
+                var sf = (ScoreFunction.ExactScoreFunction) node2 -> bvsf.compare(vector, vc.getVector(node2));
+                return new DefaultSearchScoreProvider(sf);
+            }
+
+            @Override
+            public SearchScoreProvider searchProviderFor(int node1) {
+                return new DefaultSearchScoreProvider(scoreFunctionFor(node1));
+            }
+
+            @Override
+            public SearchScoreProvider diversityProviderFor(int node1) {
+                return searchProviderFor(node1);
+            }
+
+            @Override
+            public ScoreFunction diversityScoreFunctionFor(int node1) {
+                return scoreFunctionFor(node1);
             }
         };
     }

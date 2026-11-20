@@ -49,18 +49,18 @@ public class TestDatasetPrefetching {
     @Test public void yamlDefaultsToResidentAndOptInIsParsed() throws Exception {
         var file = Files.createTempFile("prefetch-flag", ".yml");
         try {
-            Files.writeString(file, "yamlSchemaVersion: 1\nonDiskIndexVersion: 6\n");
+            Files.writeString(file, "yamlSchemaVersion: 1\nonDiskIndexVersion: " + OnDiskGraphIndex.CURRENT_VERSION + "\n");
             assertFalse(MultiConfig.getConfig(file.toString()).useDatasetPrefetching);
-            Files.writeString(file, "yamlSchemaVersion: 1\nonDiskIndexVersion: 6\nuseDatasetPrefetching: false\n");
+            Files.writeString(file, "yamlSchemaVersion: 1\nonDiskIndexVersion: " + OnDiskGraphIndex.CURRENT_VERSION + "\nuseDatasetPrefetching: false\n");
             assertFalse(MultiConfig.getConfig(file.toString()).useDatasetPrefetching);
-            Files.writeString(file, "yamlSchemaVersion: 1\nonDiskIndexVersion: 6\nuseDatasetPrefetching: true\n");
+            Files.writeString(file, "yamlSchemaVersion: 1\nonDiskIndexVersion: " + OnDiskGraphIndex.CURRENT_VERSION + "\nuseDatasetPrefetching: true\n");
             assertTrue(MultiConfig.getConfig(file.toString()).useDatasetPrefetching);
         } finally { Files.delete(file); }
     }
     @Test public void datasetPrefetchingAndCompactionOptionsAreIndependent() throws Exception {
         var file = Files.createTempFile("prefetch-compaction-flags", ".yml");
         try {
-            String common = "yamlSchemaVersion: 1\nonDiskIndexVersion: 6\nuseDatasetPrefetching: true\n";
+            String common = "yamlSchemaVersion: 1\nonDiskIndexVersion: " + OnDiskGraphIndex.CURRENT_VERSION + "\nuseDatasetPrefetching: true\n";
             Files.writeString(file, common);
             var config = MultiConfig.getConfig(file.toString());
             assertTrue(config.useDatasetPrefetching);
@@ -78,7 +78,7 @@ public class TestDatasetPrefetching {
     @Test public void versionedYamlRejectsUnknownSettings() throws Exception {
         var file = Files.createTempFile("prefetch-unknown-setting", ".yml");
         try {
-            Files.writeString(file, "yamlSchemaVersion: 1\nonDiskIndexVersion: 6\nuseDatasetPrefetching: false\nunknownSetting: true\n");
+            Files.writeString(file, "yamlSchemaVersion: 1\nonDiskIndexVersion: " + OnDiskGraphIndex.CURRENT_VERSION + "\nuseDatasetPrefetching: false\nunknownSetting: true\n");
             assertThrows(org.yaml.snakeyaml.error.YAMLException.class,
                     () -> MultiConfig.getConfig(file.toString()));
         } finally { Files.delete(file); }

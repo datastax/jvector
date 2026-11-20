@@ -381,7 +381,7 @@ abstract class AbstractGraphIndexFormat implements GraphIndexFormat {
     public void writeHeaderFeatures(IndexWriter out, Map<FeatureId,? extends Feature> features) throws IOException {
         // we restrict pre-version-3 writers to INLINE_VECTORS features, so we don't need additional version-handling here
         for (Feature writer : features.values()) {
-            writer.writeHeader(out);
+            writer.writeHeader(out, getVersion());
         }
     }
 

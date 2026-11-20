@@ -109,3 +109,17 @@ openai-3072-1m:
 openai-1536-1m:
   similarity_function: DOT_PRODUCT
   load_behavior: NO_SCRUB
+# is_int8: true means the vectors are SIGNED int8 (-128..127). Unsigned uint8 .bvecs data
+# (e.g. conventional SIFT1B/BIGANN files, 0..255) is not supported and would be silently misread.
+sift1m-128-euclidean-int8:
+  similarity_function: EUCLIDEAN
+  load_behavior: NO_SCRUB
+  is_int8: true
+wikipedia-2023-11-en-mxbai-int8-1m:
+  similarity_function: DOT_PRODUCT
+  load_behavior: NO_SCRUB
+  is_int8: true
+wiki-multilingual-v3-int8-1m:
+  similarity_function: DOT_PRODUCT
+  load_behavior: NO_SCRUB
+  is_int8: true

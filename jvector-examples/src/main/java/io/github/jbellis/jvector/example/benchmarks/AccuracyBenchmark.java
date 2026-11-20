@@ -88,7 +88,7 @@ public class AccuracyBenchmark extends AbstractQueryBenchmark {
             throw new RuntimeException("At least one metric must be displayed");
         }
 
-        int totalQueries = cs.getDataSet().getQueryVectors().size();
+        int totalQueries = cs.getDataSet().getQueryCount();
 
         // execute all queries in parallel and collect results
         List<SearchResult> results = IntStream.range(0, totalQueries)

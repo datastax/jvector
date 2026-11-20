@@ -35,6 +35,12 @@ public class ConstructionParameters extends CommonParameters {
 
     public List<EnumSet<FeatureId>> getFeatureSets() {
         List<EnumSet<FeatureId>> featureSets = null;
+        if (reranking == null || reranking.isEmpty()) {
+            throw new IllegalArgumentException("construction.reranking is required (e.g. [FP] or [NVQ])");
+        }
+        if (fusedGraph == null || fusedGraph.isEmpty()) {
+            throw new IllegalArgumentException("construction.fusedGraph is required (e.g. [No] or [Yes])");
+        }
         for (var fusedItem : fusedGraph) {
             var newFeatures = reranking.stream().map(item -> {
                 EnumSet<FeatureId> features;
@@ -68,5 +74,13 @@ public class ConstructionParameters extends CommonParameters {
         }
 
         return featureSets;
+    }
+
+    /**
+     * Feature sets for int8 datasets, which are stored natively as bytes and have no reranking or fused-graph
+     * options, so there is nothing to configure.
+     */
+    public List<EnumSet<FeatureId>> getInt8FeatureSets() {
+        return List.of(EnumSet.of(FeatureId.INLINE_BYTE_VECTORS));
     }
 }

@@ -16,6 +16,7 @@
 
 package io.github.jbellis.jvector.example;
 
+import io.github.jbellis.jvector.example.benchmarks.datasets.BaseDataSet;
 import io.github.jbellis.jvector.example.benchmarks.datasets.DataSet;
 import io.github.jbellis.jvector.example.benchmarks.diagnostics.SystemMonitor;
 import io.github.jbellis.jvector.example.util.CompressorParameters;
@@ -30,7 +31,7 @@ import java.util.function.Function;
  * <p>To give listeners more data, add a field here and set it where {@link Grid} creates the context.</p>
  */
 final class SearchContext {
-    final DataSet ds;
+    final BaseDataSet ds;
     final BuildConfig build;
     final SearchConfig search;
     /** The feature set the index was requested with. */
@@ -49,7 +50,7 @@ final class SearchContext {
     /** Memory state captured right after the build, or null if none was captured. */
     final SystemMonitor.SystemSnapshot buildSnapshot;
 
-    SearchContext(DataSet ds,
+    SearchContext(BaseDataSet ds,
                   BuildConfig build,
                   SearchConfig search,
                   Set<FeatureId> requestedFeatures,
