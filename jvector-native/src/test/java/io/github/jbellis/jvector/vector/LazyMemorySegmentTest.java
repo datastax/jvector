@@ -44,13 +44,13 @@ class LazyMemorySegmentTest {
     }
 
     @Test
-    void concurrentFirstUsePublishesOneViewOfTheOriginalArray() throws Exception {
+    void concurrentFirstUsePublishesViewsOfTheOriginalArray() throws Exception {
         float[] data = {-0.0f, 1, 2, 3, 4, 5, 6, 7};
         var v = new MemorySegmentVectorFloat(data);
         assertSame(data, v.array());
-        assertEquals(1, java.util.Arrays.stream(MemorySegmentVectorFloat.class.getDeclaredFields())
+        assertEquals(2, java.util.Arrays.stream(MemorySegmentVectorFloat.class.getDeclaredFields())
                 .filter(f -> !java.lang.reflect.Modifier.isStatic(f.getModifiers())).count());
-        var field = MemorySegmentVectorFloat.class.getDeclaredField("segment");
+        var field = MemorySegmentVectorFloat.class.getDeclaredField("data");
         field.setAccessible(true);
         assertSame(data, field.get(v));
         try (var pool = Executors.newFixedThreadPool(48)) {
@@ -60,14 +60,16 @@ class LazyMemorySegmentTest {
                 barrier.await();
                 var first = v.get();
                 for (int n = 0; n < 10000; n++) {
-                    assertSame(first, v.get());
+                    // The cache is a benign race: threads may see different view objects,
+                    // but every view must address the same backing array.
+                    assertSameView(data, v.get());
                     assertEquals(data.length, v.length());
                     assertEquals(Float.floatToRawIntBits(data[n & 7]), Float.floatToRawIntBits(v.get(n & 7)));
                 }
                 return first;
             }));
             MemorySegment first = tasks.get(0).get();
-            for (var task : tasks) assertSame(first, task.get());
+            for (var task : tasks) assertSameView(data, task.get());
             v.set(3, 19);
             assertEquals(19, first.getAtIndex(ValueLayout.JAVA_FLOAT, 3));
             first.setAtIndex(ValueLayout.JAVA_FLOAT, 4, 23);
@@ -81,7 +83,7 @@ class LazyMemorySegmentTest {
         float[] data = {-0.0f, Float.intBitsToFloat(0x7fc00123), 2, 3, 4, 5, 6, 7};
         var original = new MemorySegmentVectorFloat(data);
         var copy = (MemorySegmentVectorFloat) original.copy();
-        var field = MemorySegmentVectorFloat.class.getDeclaredField("segment");
+        var field = MemorySegmentVectorFloat.class.getDeclaredField("data");
         field.setAccessible(true);
         assertSame(data, field.get(original));
         assertSame(copy.array(), field.get(copy));
@@ -101,10 +103,53 @@ class LazyMemorySegmentTest {
         for (float value : fromBuffer.array()) assertEquals(0, Float.floatToRawIntBits(value));
     }
 
+    private static void assertSameView(float[] data, MemorySegment view) {
+        assertSame(data, view.heapBase().orElseThrow());
+        assertEquals(0, view.address());
+        assertEquals((long) data.length * Float.BYTES, view.byteSize());
+    }
+
+    @Test
+    void panamaPathBelowThresholdDoesNotMaterializeSegment() throws Exception {
+        var support = NativeTestSupport.requireNativeProvider().getVectorUtilSupport();
+        var field = MemorySegmentVectorFloat.class.getDeclaredField("segment");
+        field.setAccessible(true);
+        var a = new MemorySegmentVectorFloat(new float[]{1, 2, 3, 4, 5, 6, 7, 8});
+        var b = new MemorySegmentVectorFloat(new float[]{8, 7, 6, 5, 4, 3, 2, 1});
+        support.dotProduct(a, b);
+        support.cosine(a, b);
+        support.squareDistance(a, b);
+        assertNull(field.get(a));
+        assertNull(field.get(b));
+    }
+
+    @Test
+    void nativeAndPanamaAgreeAcrossThreshold() {
+        var support = NativeTestSupport.requireNativeProvider().getVectorUtilSupport();
+        var rnd = new java.util.Random(42);
+        for (int dim : new int[]{7, 64, 255, 256, 257, 512, 1031}) {
+            float[] x = new float[dim], y = new float[dim];
+            for (int i = 0; i < dim; i++) { x[i] = rnd.nextFloat() - 0.5f; y[i] = rnd.nextFloat() - 0.5f; }
+            double dot = 0, l2 = 0, nx = 0, ny = 0;
+            for (int i = 0; i < dim; i++) {
+                dot += x[i] * y[i]; nx += x[i] * x[i]; ny += y[i] * y[i];
+                double d = x[i] - y[i]; l2 += d * d;
+            }
+            var a = new MemorySegmentVectorFloat(x);
+            var b = new MemorySegmentVectorFloat(y);
+            assertEquals(dot, support.dotProduct(a, b), 1e-3, "dot dim=" + dim);
+            assertEquals(l2, support.squareDistance(a, b), 1e-3, "l2 dim=" + dim);
+            assertEquals(dot / Math.sqrt(nx * ny), support.cosine(a, b), 1e-4, "cosine dim=" + dim);
+        }
+    }
+
     @Test
     void nativeUseKeepsStorageSemantics() {
         var support = NativeTestSupport.requireNativeProvider().getVectorUtilSupport();
-        var vector = new MemorySegmentVectorFloat(new float[]{10, 11});
+        // Above the native threshold so the call actually crosses into native code.
+        float[] data = new float[1024];
+        java.util.Arrays.fill(data, 10);
+        var vector = new MemorySegmentVectorFloat(data);
         assertEquals(0, support.squareDistance(vector, vector));
         vector.zero();
         for (float value : vector.array()) assertEquals(0, Float.floatToRawIntBits(value));
