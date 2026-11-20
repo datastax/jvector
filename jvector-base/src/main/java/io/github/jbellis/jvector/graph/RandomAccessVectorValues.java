@@ -95,6 +95,12 @@ public interface RandomAccessVectorValues {
 
     /**
      * Returns a supplier of thread-local copies of the RAVV.
+     * <p>
+     * For shared RAVVs the returned supplier is {@link AutoCloseable}: closing it invokes
+     * close() on every AutoCloseable copy created so far and drops the per-thread cache.
+     * Callers that hold the supplier across a bounded operation should close it when done;
+     * heap-only copies are additionally collected once the supplier itself becomes
+     * unreachable.
      */
     default Supplier<RandomAccessVectorValues> threadLocalSupplier() {
         if (!isValueShared()) {
@@ -102,10 +108,31 @@ public interface RandomAccessVectorValues {
         }
 
         if (this instanceof AutoCloseable) {
-            LOG.warning("RAVV is shared and implements AutoCloseable; threadLocalSupplier() may lead to leaks");
+            LOG.warning("RAVV is shared and implements AutoCloseable; close the supplier returned by threadLocalSupplier() to release per-thread copies");
         }
         var tl = ExplicitThreadLocal.withInitial(this::copy);
-        return tl::get;
+        return new ThreadLocalCopies(tl);
+    }
+
+    /**
+     * Thread-local RAVV supplier whose close() releases the per-thread copies.
+     */
+    final class ThreadLocalCopies implements Supplier<RandomAccessVectorValues>, AutoCloseable {
+        private final ExplicitThreadLocal<RandomAccessVectorValues> tl;
+
+        ThreadLocalCopies(ExplicitThreadLocal<RandomAccessVectorValues> tl) {
+            this.tl = tl;
+        }
+
+        @Override
+        public RandomAccessVectorValues get() {
+            return tl.get();
+        }
+
+        @Override
+        public void close() throws Exception {
+            tl.close();
+        }
     }
 
     /**
