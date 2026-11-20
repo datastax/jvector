@@ -146,6 +146,38 @@ parallel and not deterministic. A CPU merge and a merge with the GPU walk agree 
 GPU walk adds no difference of its own; exact probes rank the cells better than the beam, and recall is the same or
 slightly higher.
 
+`run.sh walk <dataset> [segments] [workDir] [cpu|gpu|both|cpucpu]` builds the segments with JVector on the CPU the
+first time (kept in `<workDir>/<dataset>`, so later runs reuse them), merges them with the CPU compactor and/or with
+the accelerator, compares the two outputs' base-layer lists and prints recall@10 of the same search on each. `both`
+gives the first and last rows of the table; the rows between came from turning phases off with
+`-Djvector.gpu.wideCode=false`, `-Djvector.gpu.probe=false` and `-Djvector.gpu.probe.mma=false` (the region keys go
+with the probes).
+
+**Out of core.** `jvector-gpu/ooc.sh` runs one merge in its own process under a cgroup memory limit with no swap
+(`systemd-run --user --scope -p MemoryMax=... -p MemorySwapMax=0`, so it needs systemd with cgroup v2 and user
+delegation of the memory controller), and prints the time, the peak memory and any OOM kill. Recall is evaluated
+afterwards in a separate process, without the limit:
+
+```bash
+# ada002-1M, 4 segments: 8 GB host limit, 4 GB heap, 4 GB device budget
+jvector-gpu/run.sh walk ada002-1M 4 target/compaction cpu            # builds the 4 segments (and one CPU merge)
+jvector-gpu/ooc.sh 8G 4g 4GB cpu target/compaction/ada002-1M 4 COSINE target/ooc/ada002-1M-cpu.idx
+jvector-gpu/ooc.sh 8G 4g 4GB gpu target/compaction/ada002-1M 4 COSINE target/ooc/ada002-1M-gpu.idx
+jvector-gpu/run.sh ooc eval ada002-1M target/ooc/ada002-1M-cpu.idx target/ooc/ada002-1M-gpu.idx
+
+# Cohere Wikipedia 10M x 1024, 8 segments: 32 GB host limit, 16 GB heap, 21 GB device budget (about 63 GB of data,
+# and the CPU merge alone takes about an hour)
+jvector-gpu/datasets/wikipedia.sh data/wikipedia-10M 10M
+jvector-gpu/run.sh ooc segments data/wikipedia-10M/base.f32 1024 8 COSINE target/ooc/wikipedia-10M gpu
+jvector-gpu/ooc.sh 32G 16g 21GB cpu target/ooc/wikipedia-10M 8 COSINE target/ooc/wikipedia-10M-cpu.idx
+jvector-gpu/ooc.sh 32G 16g 21GB gpu target/ooc/wikipedia-10M 8 COSINE target/ooc/wikipedia-10M-gpu.idx
+jvector-gpu/run.sh ooc evalraw data/wikipedia-10M 1024 COSINE target/ooc/wikipedia-10M-cpu.idx target/ooc/wikipedia-10M-gpu.idx
+```
+
+`ooc segments ... gpu` builds the segments on the GPU only to save time; the merges read them like any JVector
+segments. The heap is the `-Xmx` of the merge; the device budget is `-Dtornado.device.memory`, of which the walk takes
+60% and the probes 25%.
+
 **Product quantization.** `GpuProductQuantization.compute` trains PQ codebooks the way `ProductQuantization.compute`
 does (unweighted): the same subspaces, training sample, k-means++ seeding and Lloyd iterations. `encodeAll`
 encodes with any unweighted `ProductQuantization`, including one trained on the CPU. Both return JVector's own

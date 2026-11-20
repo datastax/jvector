@@ -16,9 +16,7 @@
 
 package io.github.jbellis.jvector.gpu.bench;
 
-import java.nio.file.Files;
 import java.nio.file.Path;
-import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 
@@ -36,7 +34,7 @@ import io.github.jbellis.jvector.vector.types.VectorFloat;
 
 /**
  * JVector's {@link OnDiskGraphIndexCompactor} with and without a {@code CompactionAccelerator} (the GPU cell walk), on
- * the same segments as {@link CompactionBench} (built there and kept): time, how many base-layer neighbour lists are
+ * the same segments as {@link CompactionBench} (built by either the first time, and kept): time, how many base-layer neighbour lists are
  * identical, and recall@10 of the same search on both outputs.
  * Usage: {@code WalkBench <dataset> [segments=4] [workDir=target/compaction] [cpu|gpu|both|cpucpu=both]}; {@code cpucpu}
  * runs the CPU walk twice, the baseline for how much two merges of the same segments differ.
@@ -51,14 +49,8 @@ public final class WalkBench {
         Path work = Path.of(args.length > 2 ? args[2] : "target/compaction").resolve(ds.getName());
         String which = args.length > 3 ? args[3] : "both";
         VectorSimilarityFunction sim = ds.getSimilarityFunction();
-        List<Path> segments = new ArrayList<>();
-        for (int p = 0; p < parts; p++) {
-            Path path = work.resolve("segment-" + p + "-of-" + parts + ".idx");
-            if (!Files.exists(path)) {
-                throw new IllegalStateException(path + " missing: run CompactionBench first (run.sh compact)");
-            }
-            segments.add(path);
-        }
+        // the same segments as CompactionBench: built by JVector on the CPU the first time, then reused
+        List<Path> segments = CompactionBench.segments(ds, parts, work);
         System.out.printf("%s: %d segments in %s%n%n", ds.getName(), parts, work);
         String[] names = which.equals("both") ? new String[] { "cpu", "gpu" }
                 : which.equals("cpucpu") ? new String[] { "cpu", "cpu2" } : new String[] { which };

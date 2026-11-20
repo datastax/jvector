@@ -27,11 +27,15 @@
 #   jvector-gpu/run.sh groundtruth base.f32 query.f32 dim out.ivecs [k]   exact top-k by inner product on the GPU
 #   jvector-gpu/run.sh nvq     <dataset>                            NVQ encoding, JVector vs GPU (NvqBench)
 #   jvector-gpu/run.sh phases  <dataset> [workDir]                  where an on-disk build's time goes (WritePhases)
+#   jvector-gpu/run.sh walk    <dataset> [segments] [workDir] [cpu|gpu|both|cpucpu]
+#                                                                  OnDiskGraphIndexCompactor with and without the GPU
+#                                                                  accelerator (WalkBench)
+#   jvector-gpu/run.sh ooc     compact|segments|eval|evalraw ...    out-of-core runs (OocBench; see jvector-gpu/ooc.sh)
 #
 # jvector-gpu/preflight.sh [dataset] checks the JDK, TornadoVM, GPU, cuVS, build, memory, disk and dataset first.
 #
 # Needs: `tornado` on the PATH (TornadoVM SDK with the CUDA backend and tornado-cuvs), and the module built with
-#   mvn -Pgpu -pl jvector-gpu -am package -DskipTests
+#   mvn -Pgpu -pl jvector-gpu,jvector-examples -am package -DskipTests
 # cuVS is set up by jvector-gpu/cuvs-env.sh, in JVECTOR_GPU_CUVS (default ~/.jvector-gpu/cuvs). JVM flags can be
 # added with JVECTOR_GPU_JVM, e.g.
 # JVECTOR_GPU_JVM="-Xmx56g -Dtornado.device.memory=22GB".
@@ -53,7 +57,7 @@ case "$MODE" in
     walk) MAIN=io.github.jbellis.jvector.gpu.bench.WalkBench ;;
     ooc) MAIN=io.github.jbellis.jvector.gpu.bench.OocBench ;;
     phases) MAIN=io.github.jbellis.jvector.gpu.bench.WritePhases ;;
-    *) sed -n '19,32p' "$0"; exit 1 ;;
+    *) sed -n '19,36p' "$0"; exit 1 ;;
 esac
 
 command -v tornado >/dev/null || { echo "run.sh: 'tornado' is not on the PATH (install the TornadoVM SDK and add its bin/)" >&2; exit 1; }
