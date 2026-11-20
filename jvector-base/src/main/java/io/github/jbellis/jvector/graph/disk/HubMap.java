@@ -31,7 +31,6 @@ import io.github.jbellis.jvector.vector.VectorUtil;
 import io.github.jbellis.jvector.vector.types.VectorFloat;
 import io.github.jbellis.jvector.vector.VectorizationProvider;
 import io.github.jbellis.jvector.vector.types.VectorTypeSupport;
-import org.agrona.collections.Int2IntHashMap;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import sun.misc.Unsafe;
@@ -66,16 +65,16 @@ final class HubMap implements AutoCloseable {
     final int dimension;
     final int topLevel;
     int entryNode;
-    // per level (index 0 unused): node ids, adjacency with stride degree[level] (-1 padded), and
-    // the nodes' vectors position-major, all indexed by the node's position in nodes[level]
+    // per level (index 0 unused): node ids in ascending order, adjacency with stride degree[level] as
+    // positions in the same level (-1 padded), and the nodes' vectors position-major, all indexed by
+    // the node's position in nodes[level]. Everything is sized by the level's node count: a node id is
+    // resolved to its position by binary search over nodes[level] (the beams never need it; they walk
+    // positions), so no table grows with the total node count of the merge.
     final int[] degree;
     final int[][] nodes;
     final int[][] adjacency;
     final VectorFloat<?>[] vectors;
     final float[][] norms;          // COSINE only: |v| per position
-    // node id -> position: a flat array for level 1 (the bulk of the upper layers), maps above it
-    int[] level1Position;
-    final Int2IntHashMap[] upperPosition;   // levels >= 2: node id -> position (level 1 uses level1Position)
     // level-1 vectors: read-only file mapping, row = position, in chunks
     private MappedByteBuffer[] level1Chunks;
     private FloatBuffer[] level1Floats;
@@ -92,7 +91,6 @@ final class HubMap implements AutoCloseable {
         this.adjacency = new int[topLevel + 1][];
         this.vectors = new VectorFloat<?>[topLevel + 1];
         this.norms = new float[topLevel + 1][];
-        this.upperPosition = new Int2IntHashMap[topLevel + 1];
     }
 
     /** Per-thread query state. */
@@ -139,11 +137,12 @@ final class HubMap implements AutoCloseable {
         return new Scorer();
     }
 
+    /** Position of node id {@code node} in {@code level}, or -1 if the node is not on that level. */
     int position(int level, int node) {
-        if (level == 1) {
-            return node >= 0 && node < level1Position.length ? level1Position[node] : -1;
-        }
-        return upperPosition[level].get(node);   // missing value is -1
+        int[] ids = nodes[level];
+        if (ids == null) return -1;
+        int at = Arrays.binarySearch(ids, node);
+        return at >= 0 ? at : -1;
     }
 
     /**
@@ -165,23 +164,19 @@ final class HubMap implements AutoCloseable {
             while (improved) {
                 improved = false;
                 for (int j = 0; j < stride; j++) {
-                    int neighbor = adj[position * stride + j];
-                    if (neighbor < 0) {
-                        break;
-                    }
-                    int neighborPosition = position(level, neighbor);
+                    int neighborPosition = adj[position * stride + j];
                     if (neighborPosition < 0) {
-                        continue;
+                        break;
                     }
                     float score = scorer.score(level, neighborPosition);
                     if (score > currentScore) {
                         currentScore = score;
-                        current = neighbor;
                         position = neighborPosition;
                         improved = true;
                     }
                 }
             }
+            current = nodes[level][position];
         }
         return current;
     }
@@ -190,15 +185,13 @@ final class HubMap implements AutoCloseable {
      * Breadth-first walk over the level-1 graph, restarting at the lowest unvisited position
      * when a component is exhausted.
      *
-     * @return walk position per node id (Integer.MAX_VALUE for nodes not on level 1)
+     * @return walk position per level-1 position (one entry per level-1 node)
      */
     int[] walkPositions() {
-        int[] l1 = nodes[1];
-        int n = l1.length;
+        int n = nodes[1].length;
         int stride = degree[1];
         int[] adj = adjacency[1];
-        int[] positionOf = new int[level1Position.length];
-        Arrays.fill(positionOf, Integer.MAX_VALUE);
+        int[] walkOf = new int[n];
         boolean[] seen = new boolean[n];
         int[] queue = new int[n];
         int head = 0, tail = 0, emitted = 0, nextUnseen = 0;
@@ -214,20 +207,19 @@ final class HubMap implements AutoCloseable {
                 queue[tail++] = nextUnseen;
             }
             int x = queue[head++];
-            positionOf[l1[x]] = emitted++;
+            walkOf[x] = emitted++;
             for (int j = 0; j < stride; j++) {
-                int neighbor = adj[x * stride + j];
-                if (neighbor < 0) {
+                int y = adj[x * stride + j];
+                if (y < 0) {
                     break;
                 }
-                int y = position(1, neighbor);
-                if (y >= 0 && !seen[y]) {
+                if (!seen[y]) {
                     seen[y] = true;
                     queue[tail++] = y;
                 }
             }
         }
-        return positionOf;
+        return walkOf;
     }
 
     /** Bytes of one row of the level-1 vector mapping. */

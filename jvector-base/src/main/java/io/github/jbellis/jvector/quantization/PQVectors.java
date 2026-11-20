@@ -426,16 +426,28 @@ public abstract class PQVectors implements CompressedVectors {
         return new io.github.jbellis.jvector.graph.disk.SidecarCompactionStrategy(ctx, this, retrainer);
     }
 
-    /** For compaction use. See {@link CompressedVectors#writeSidecarHeader}. */
+    /** For compaction use. See {@link CompressedVectors#writeSidecarHeader(IndexWriter, VectorCompressor, int)}. */
     @Override
+    @Deprecated
     public void writeSidecarHeader(IndexWriter out, VectorCompressor<?> mergedCompressor, int count) throws IOException {
+        writeSidecarHeader(out, mergedCompressor, count, io.github.jbellis.jvector.graph.disk.OnDiskGraphIndex.CURRENT_VERSION);
+    }
+
+    /**
+     * For compaction use. See {@link CompressedVectors#writeSidecarHeader(IndexWriter, VectorCompressor, int, int)}:
+     * the merged PQ is serialized at {@code version}, the output's format version, so a sidecar reads back with the
+     * layout of the graph it belongs to (versions 3 and above carry the PQ magic and version; 2 writes the older
+     * layout, which cannot hold an anisotropic threshold).
+     */
+    @Override
+    public void writeSidecarHeader(IndexWriter out, VectorCompressor<?> mergedCompressor, int count, int version) throws IOException {
         if (!(mergedCompressor instanceof ProductQuantization)) {
             throw new IllegalArgumentException(
                     "PQVectors sidecar header requires ProductQuantization; got "
                             + mergedCompressor.getClass().getSimpleName());
         }
         ProductQuantization mergedPQ = (ProductQuantization) mergedCompressor;
-        mergedPQ.write(out, io.github.jbellis.jvector.graph.disk.OnDiskGraphIndex.CURRENT_VERSION);
+        mergedPQ.write(out, version);
         out.writeInt(count);
         out.writeInt(mergedPQ.getSubspaceCount());
     }
