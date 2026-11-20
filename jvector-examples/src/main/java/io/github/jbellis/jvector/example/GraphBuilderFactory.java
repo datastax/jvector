@@ -18,7 +18,6 @@ package io.github.jbellis.jvector.example;
 
 import io.github.jbellis.jvector.example.util.FilteredForkJoinPool;
 import io.github.jbellis.jvector.example.benchmarks.datasets.DataSet;
-import io.github.jbellis.jvector.example.diagnostics.ASHBuildScoreExperiment;
 import io.github.jbellis.jvector.graph.GraphIndexBuilder;
 import io.github.jbellis.jvector.graph.VectorAccess;
 import io.github.jbellis.jvector.graph.disk.AbstractGraphIndexWriter;
@@ -102,7 +101,7 @@ final class GraphBuilderFactory {
 
     static BuildScoreProvider compressedScores(CompressedVectors encoded, VectorSimilarityFunction similarity,
                                                RandomAccessVectorValues raw) {
-        return compressedScores(encoded, similarity, raw, ASHBuildScoreExperiment.defaultMode());
+        return compressedScores(encoded, similarity, raw, ASHConstructionScoring.defaultMode());
     }
 
     private static BuildScoreProvider compressedScores(CompressedVectors encoded, VectorSimilarityFunction similarity,
@@ -113,7 +112,7 @@ final class GraphBuilderFactory {
         } else if (encoded instanceof BQVectors) {
             bsp = BuildScoreProvider.bqBuildScoreProvider((BQVectors) encoded);
         } else if (encoded instanceof ASHVectors) {
-            bsp = ASHBuildScoreExperiment.create(similarity, (ASHVectors) encoded, raw, ashMode);
+            bsp = ASHConstructionScoring.create(similarity, (ASHVectors) encoded, raw, ashMode);
         } else {
             throw new IllegalArgumentException("Construction supports PQ, BQ or ASH build compression");
         }
@@ -131,7 +130,7 @@ final class GraphBuilderFactory {
     }
 
     static String ashConstructionMode(BuildConfig build) {
-        return build.ashConstructionMode == null ? ASHBuildScoreExperiment.defaultMode() : build.ashConstructionMode;
+        return build.ashConstructionMode == null ? ASHConstructionScoring.defaultMode() : build.ashConstructionMode;
     }
 
     /** Builds and cleans up the topology before any disk features are written. */

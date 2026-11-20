@@ -17,7 +17,6 @@
 package io.github.jbellis.jvector.example;
 
 import io.github.jbellis.jvector.example.benchmarks.datasets.DataSet;
-import io.github.jbellis.jvector.example.diagnostics.ASHBuildScoreExperiment;
 import io.github.jbellis.jvector.example.util.CompressorParameters;
 import io.github.jbellis.jvector.example.yaml.MultiConfig;
 import io.github.jbellis.jvector.graph.disk.feature.FeatureId;
@@ -69,7 +68,7 @@ public final class GridSpec {
                             .buildCompressor(compressor.getCompressorParameters())
                             .ashConstructionMode("ASH".equals(compressor.type)
                                     ? Objects.requireNonNullElseGet(compressor.ashConstructionMode(),
-                                            ASHBuildScoreExperiment::defaultMode)
+                                            ASHConstructionScoring::defaultMode)
                                     : null)
                             .indexType(construction.type).writerMode(writerMode).pageAlignment(construction.pageAlignment)
                             .rerankingType(construction.rerankingType())

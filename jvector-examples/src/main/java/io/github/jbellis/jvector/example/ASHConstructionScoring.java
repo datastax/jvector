@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-package io.github.jbellis.jvector.example.diagnostics;
+package io.github.jbellis.jvector.example;
 
 import io.github.jbellis.jvector.graph.RandomAccessVectorValues;
 import io.github.jbellis.jvector.graph.similarity.BuildScoreProvider;
@@ -25,8 +25,8 @@ import io.github.jbellis.jvector.vector.VectorSimilarityFunction;
 import io.github.jbellis.jvector.vector.types.VectorFloat;
 
 /** Benchmark-only adapter; asymmetric construction retains access to original vectors. */
-public final class ASHBuildScoreExperiment {
-    private ASHBuildScoreExperiment() {}
+public final class ASHConstructionScoring {
+    private ASHConstructionScoring() {}
     public static BuildScoreProvider create(VectorSimilarityFunction vsf, ASHVectors encoded,
                                             RandomAccessVectorValues raw) {
         return create(vsf, encoded, raw, defaultMode());

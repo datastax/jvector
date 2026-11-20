@@ -314,5 +314,5 @@ These defaults belong to the script, not the library. See
 
 Implementation references: [YAML compression parsing](../jvector-examples/src/main/java/io/github/jbellis/jvector/example/yaml/Compression.java),
 [ASH model](../jvector-base/src/main/java/io/github/jbellis/jvector/quantization/AsymmetricHashing.java),
-[construction modes](../jvector-examples/src/main/java/io/github/jbellis/jvector/example/diagnostics/ASHBuildScoreExperiment.java),
+[construction modes](../jvector-examples/src/main/java/io/github/jbellis/jvector/example/ASHConstructionScoring.java),
 and [run configuration](../jvector-examples/src/main/java/io/github/jbellis/jvector/example/yaml/RunConfig.java).
