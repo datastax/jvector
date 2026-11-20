@@ -43,11 +43,23 @@ if [[ "$jextract_version" != "$want_jextract_version" ]] ;then
     echo 1>&2 "WARNING: Generated bindings may cause compile errors."
 fi
 
+# ASH kernels (ash_*) are bound by their own classes (NativeASH*), which look up each
+# symbol themselves and choose a critical or ordinary downcall per call, so leave them
+# out of NativeSimdOps: list every symbol in the header, then drop the ash_ functions.
+INCLUDES_FILE="$(mktemp)"
+trap 'rm -f "${INCLUDES_FILE}" "${INCLUDES_FILE}.simd"' EXIT
+"$JEXTRACT_BIN" \
+  -I "${SCRIPT_DIR}" \
+  --dump-includes "${INCLUDES_FILE}" \
+  "${SCRIPT_DIR}/jvector_simd.h"
+grep -v -e '--include-function ash_' "${INCLUDES_FILE}" > "${INCLUDES_FILE}.simd"
+
 "$JEXTRACT_BIN" \
   --output "${JAVA_OUT_DIR}" \
   -t io.github.jbellis.jvector.vector.cnative \
   -I "${SCRIPT_DIR}" \
   --header-class-name NativeSimdOps \
+  "@${INCLUDES_FILE}.simd" \
   "${SCRIPT_DIR}/jvector_simd.h"
 
 # Set critical linker option with heap-based segments for all generated methods
