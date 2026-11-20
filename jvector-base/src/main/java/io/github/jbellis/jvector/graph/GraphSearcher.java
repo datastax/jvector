@@ -429,6 +429,16 @@ public class GraphSearcher implements Closeable {
             // legacy threshold early-termination path inside ScoreTrackerFactory.
             var scoreTracker = scoreTrackerFactory.getScoreTracker(false, rerankK, threshold);
 
+            // Created once per call rather than once per expanded node: both capture only state that is fixed for the
+            // whole layer search, and allocating them in the loop made them essentially all of a pooled searcher's
+            // per-query garbage.
+            ImmutableGraphIndex.IntMarker visitedMarker = visited::add;
+            ImmutableGraphIndex.NeighborProcessor neighborProcessor = (node2, score) -> {
+                scoreTracker.track(score);
+                candidates.push(node2, score);
+                visitedCount++;
+            };
+
             // the main search loop
             while (candidates.size() > 0) {
                 if (stopSearch(candidates, scoreTracker, rerankK, threshold)) {
@@ -454,12 +464,7 @@ public class GraphSearcher implements Closeable {
 
                 // score the neighbors of the top candidate and add them to the queue
                 var scoreFunction = scoreProvider.scoreFunction();
-                ImmutableGraphIndex.NeighborProcessor neighborProcessor = (node2, score) -> {
-                    scoreTracker.track(score);
-                    candidates.push(node2, score);
-                    visitedCount++;
-                };
-                view.processNeighbors(level, topCandidateNode, scoreFunction, visited::add, neighborProcessor);
+                view.processNeighbors(level, topCandidateNode, scoreFunction, visitedMarker, neighborProcessor);
             }
         } catch (Throwable t) {
             // clear scratch structures if terminated via throwable, as they may not have been drained
