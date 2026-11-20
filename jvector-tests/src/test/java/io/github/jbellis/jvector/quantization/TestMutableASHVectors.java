@@ -20,6 +20,7 @@ import com.carrotsearch.randomizedtesting.RandomizedTest;
 import com.carrotsearch.randomizedtesting.annotations.ThreadLeakScope;
 import io.github.jbellis.jvector.graph.ListRandomAccessVectorValues;
 import io.github.jbellis.jvector.graph.RandomAccessVectorValues;
+import io.github.jbellis.jvector.graph.disk.OrdinalMapper;
 import io.github.jbellis.jvector.graph.similarity.PreparedQuery;
 import io.github.jbellis.jvector.vector.VectorSimilarityFunction;
 import io.github.jbellis.jvector.vector.VectorizationProvider;
@@ -362,5 +363,36 @@ public class TestMutableASHVectors extends RandomizedTest {
         assertEquals(DOT.compare(query, newModel.landmarks[0]), missing, 1e-4f);
         assertEquals(newModel.encode(data.get(8)), growing.get(8));
         assertEquals(n, growing.count());
+    }
+
+    @Test
+    public void aRemappedSnapshotGivesHolesTheZeroCode() throws Exception {
+        var data = vectors(300, 31);
+        var ash = model(data, AsymmetricHashing.ITQ, 2);
+        var store = new MutableASHVectors(ash, SMALL_PAGE_BYTES);
+        for (int i = 0; i < data.size(); i++) store.encodeAndSet(i, data.get(i));
+        var zeros = new MutableASHVectors(ash, SMALL_PAGE_BYTES);
+        zeros.setZero(0);
+
+        // New ordinals 1 and 3 are holes, as an OrdinalMapper reports them.
+        int hole = OrdinalMapper.OMITTED;
+        var snapshot = store.snapshot(new int[]{5, hole, 299, hole, 0});
+        assertEquals(5, snapshot.count());
+        assertEquals(store.get(5), snapshot.get(0));
+        assertEquals(store.get(299), snapshot.get(2));
+        assertEquals(store.get(0), snapshot.get(4));
+        assertEquals(zeros.get(0), snapshot.get(1));
+        assertEquals(zeros.get(0), snapshot.get(3));
+
+        // A hole scores as a missing vector does.
+        var query = vectors(1, 32).get(0);
+        var expected = zeros.scoreFunctionFor(query, DOT).similarityTo(0);
+        var scores = snapshot.scoreFunctionFor(query, DOT);
+        assertEquals(expected, scores.similarityTo(1), 0f);
+        assertEquals(expected, scores.similarityTo(3), 0f);
+
+        // Any other ordinal outside the store is still rejected.
+        assertThrows(IndexOutOfBoundsException.class, () -> store.snapshot(new int[]{-1}));
+        assertThrows(IndexOutOfBoundsException.class, () -> store.snapshot(new int[]{300}));
     }
 }

@@ -19,6 +19,7 @@ package io.github.jbellis.jvector.quantization;
 import io.github.jbellis.jvector.annotations.Experimental;
 import io.github.jbellis.jvector.disk.IndexWriter;
 import io.github.jbellis.jvector.graph.RandomAccessVectorValues;
+import io.github.jbellis.jvector.graph.disk.OrdinalMapper;
 import io.github.jbellis.jvector.graph.similarity.BuildScoreProvider;
 import io.github.jbellis.jvector.graph.similarity.DefaultSearchScoreProvider;
 import io.github.jbellis.jvector.graph.similarity.PreparedQuery;
@@ -890,8 +891,9 @@ public final class MutableASHVectors implements MutableCompressedVectors<VectorF
 
     /**
      * A fixed copy holding the vector at ordinal {@code newToOld[i]} at position {@code i}, for writing an index
-     * whose ordinals were renumbered. Every vector must be encoded with one model: finish moving pages to a newer
-     * model first.
+     * whose ordinals were renumbered. An entry of {@link OrdinalMapper#OMITTED} marks a hole in the new ordinal
+     * space and gets the all-zero code, as {@link #setZero} stores. Every vector must be encoded with one model:
+     * finish moving pages to a newer model first.
      */
     public ASHVectors snapshot(int[] newToOld) {
         int[] inUse = inUseIds;
@@ -903,6 +905,11 @@ public final class MutableASHVectors implements MutableCompressedVectors<VectorF
         var code = AsymmetricHashing.QuantizedVector.createEmpty(quantizedDim, bits);
         int n = count();
         for (int i = 0; i < newToOld.length; i++) {
+            if (newToOld[i] == OrdinalMapper.OMITTED) {
+                codes.set(i, m.zero);
+                centered[i] = m.zeroCenteredOffset;
+                continue;
+            }
             int old = Objects.checkIndex(newToOld[i], n);
             Page page = page(old);
             int slot = old & pageMask;
