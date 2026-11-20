@@ -355,6 +355,11 @@ public class TestMutableASHVectors extends RandomizedTest {
         assertArrayEquals(new int[]{id}, growing.modelsInUse());
         assertEquals(1, growing.reencodedMissing());
         assertEquals(zero, growing.get(7));
+        // A missing vector scores at the landmark, a finite score, so searches order it like any other node.
+        var query = data.get(9);
+        float missing = growing.scoreFunctionFor(query, DOT).similarityTo(7);
+        assertTrue("missing vector scored " + missing, Float.isFinite(missing));
+        assertEquals(DOT.compare(query, newModel.landmarks[0]), missing, 1e-4f);
         assertEquals(newModel.encode(data.get(8)), growing.get(8));
         assertEquals(n, growing.count());
     }

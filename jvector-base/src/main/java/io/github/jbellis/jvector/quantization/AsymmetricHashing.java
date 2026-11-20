@@ -1143,10 +1143,14 @@ public class AsymmetricHashing implements VectorCompressor<AsymmetricHashing.Qua
             return createEmpty(quantizedDim, DEFAULT_BITS_PER_DIMENSION);
         }
 
+        /**
+         * An all-zero code. It is also the code of a missing vector (such as a deleted one after a model change), so
+         * its scale and offset are 0 and it scores at the landmark rather than as NaN.
+         */
         public static QuantizedVector createEmpty(int quantizedDim, int bitsPerDimension) {
             return new QuantizedVector(
-                    Float.NaN,
-                    Float.NaN,
+                    0f,
+                    0f,
                     (byte) 0,
                     new long[signWordsForDims(quantizedDim, bitsPerDimension)],
                     new byte[bodyBytesForDims(quantizedDim, bitsPerDimension)]
