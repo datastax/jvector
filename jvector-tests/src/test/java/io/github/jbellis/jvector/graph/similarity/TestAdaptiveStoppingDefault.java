@@ -49,7 +49,8 @@ public class TestAdaptiveStoppingDefault {
                 TestUtil.randomVector(random, 8)), 8);
         var query = TestUtil.randomVector(random, 8);
         for (var similarity : VectorSimilarityFunction.values()) {
-            assertEquals(similarity, DefaultSearchScoreProvider.exact(query, similarity, vectors).adaptiveSimilarity());
+            // exact() keeps the standard rule, as a build provider returning it expects; callers opt in explicitly.
+            assertNull(DefaultSearchScoreProvider.exact(query, similarity, vectors).adaptiveSimilarity());
             var sf = DefaultSearchScoreProvider.exact(query, similarity, vectors).scoreFunction();
             assertEquals(similarity, DefaultSearchScoreProvider.forSimilarity(sf, null, similarity).adaptiveSimilarity());
             // A provider that cannot tell what its scores measure keeps the standard rule.

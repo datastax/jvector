@@ -1040,7 +1040,8 @@ public class Grid {
             } else {
                 // if we're not compressing then just use the exact score function
                 if (cv == null) {
-                    return DefaultSearchScoreProvider.exact(queryVector, ds.getSimilarityFunction(), exactVectors.get());
+                    var exact = DefaultSearchScoreProvider.exact(queryVector, ds.getSimilarityFunction(), exactVectors.get());
+                    return DefaultSearchScoreProvider.forSimilarity(exact.scoreFunction(), null, adaptiveSimilarity());
                 }
 
                 asf = codesScore(queryVector, prepared);

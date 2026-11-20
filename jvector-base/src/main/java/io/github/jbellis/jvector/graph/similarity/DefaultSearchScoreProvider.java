@@ -109,13 +109,13 @@ public final class DefaultSearchScoreProvider implements SearchScoreProvider {
     }
 
     /**
-     * A SearchScoreProvider for a single-pass search based on exact similarity, which may stop adaptively where the
-     * searcher enables it (see {@link #forSimilarity}).
+     * A SearchScoreProvider for a single-pass search based on exact similarity. Its searches stop by the standard
+     * rule; wrap its score function with {@link #forSimilarity} to let top-K searches stop adaptively.
      * Generally only suitable when your RandomAccessVectorValues is entirely in-memory,
      * e.g. during construction.
      */
     public static DefaultSearchScoreProvider exact(VectorFloat<?> v, VectorSimilarityFunction vsf, RandomAccessVectorValues ravv) {
-        return forSimilarity(exactScoreFunction(v, vsf, ravv), null, vsf);
+        return new DefaultSearchScoreProvider(exactScoreFunction(v, vsf, ravv));
     }
 
     /** Exact scores of {@code v} against {@code ravv}, safe for concurrent use. */
