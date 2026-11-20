@@ -31,7 +31,7 @@
 # jvector-gpu/preflight.sh [dataset] checks the JDK, TornadoVM, GPU, cuVS, build, memory, disk and dataset first.
 #
 # Needs: `tornado` on the PATH (TornadoVM SDK with the CUDA backend and tornado-cuvs), and the module built with
-#   mvn -Pgpu -pl jvector-gpu -am package -DskipTests
+#   mvn -Pgpu -pl jvector-gpu,jvector-examples -am package -DskipTests
 # cuVS is set up by jvector-gpu/cuvs-env.sh, in JVECTOR_GPU_CUVS (default ~/.jvector-gpu/cuvs). JVM flags can be
 # added with JVECTOR_GPU_JVM, e.g.
 # JVECTOR_GPU_JVM="-Xmx56g -Dtornado.device.memory=22GB".

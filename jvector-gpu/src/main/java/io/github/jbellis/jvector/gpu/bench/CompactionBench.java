@@ -15,6 +15,7 @@
  */
 package io.github.jbellis.jvector.gpu.bench;
 
+import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
@@ -55,22 +56,17 @@ public final class CompactionBench {
 
     private CompactionBench() {}
 
-    public static void main(String[] args) throws Exception {
-        if (args.length < 1) {
-            System.err.println("usage: CompactionBench <dataset> [segments=4] [workDir=target/compaction]");
-            System.exit(1);
-        }
-        DataSet ds = DataSets.loadDataSet(args[0]).orElseThrow(() -> new IllegalArgumentException("unknown dataset " + args[0])).getDataSet();
-        int parts = args.length > 1 ? Integer.parseInt(args[1]) : 4;
-        Path work = Path.of(args.length > 2 ? args[2] : "target/compaction").resolve(ds.getName());
+    /**
+     * The dataset's base vectors as {@code parts} contiguous segments in {@code work}, {@code segment-<p>-of-<parts>.idx},
+     * each built by JVector on the CPU (M=32, efConstruction 100, overflow 1.2, alpha 1.2, hierarchy). A segment that
+     * is already there is kept, so later runs, and the other benches that merge these segments, reuse them.
+     */
+    static List<Path> segments(DataSet ds, int parts, Path work) throws IOException {
         Files.createDirectories(work);
         int dim = ds.getDimension();
         VectorSimilarityFunction sim = ds.getSimilarityFunction();
         List<VectorFloat<?>> base = ds.getBaseVectors();
         int n = base.size();
-        System.out.printf("%s: %,d x %d vectors, %s, %d segments in %s%n%n", ds.getName(), n, dim, sim, parts, work);
-
-        // 1. segments, built by JVector on the CPU (kept for the next run)
         List<Path> segments = new ArrayList<>();
         for (int p = 0; p < parts; p++) {
             int from = (int) ((long) n * p / parts);
@@ -85,6 +81,23 @@ public final class CompactionBench {
                 System.out.printf("segment %d: %,d vectors built on the CPU in %.1f s%n", p, to - from, (System.nanoTime() - t) / 1e9);
             }
         }
+        return segments;
+    }
+
+    public static void main(String[] args) throws Exception {
+        if (args.length < 1) {
+            System.err.println("usage: CompactionBench <dataset> [segments=4] [workDir=target/compaction]");
+            System.exit(1);
+        }
+        DataSet ds = DataSets.loadDataSet(args[0]).orElseThrow(() -> new IllegalArgumentException("unknown dataset " + args[0])).getDataSet();
+        int parts = args.length > 1 ? Integer.parseInt(args[1]) : 4;
+        Path work = Path.of(args.length > 2 ? args[2] : "target/compaction").resolve(ds.getName());
+        VectorSimilarityFunction sim = ds.getSimilarityFunction();
+        int n = ds.getBaseVectors().size();
+        System.out.printf("%s: %,d x %d vectors, %s, %d segments in %s%n%n", ds.getName(), n, ds.getDimension(), sim, parts, work);
+
+        // 1. segments, built by JVector on the CPU (kept for the next run)
+        List<Path> segments = segments(ds, parts, work);
 
         // 2. JVector's compactor
         // Each compactor assigns the new ordinals; its ordinalMappers() map the results back to the dataset's.
