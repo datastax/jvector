@@ -80,6 +80,40 @@ public class TestProductQuantization extends RandomizedTest {
     }
 
     @Test
+    // Training with globallyCenter must neither modify the caller's vectors nor lose the centering: with exactly as many
+    // distinct points as clusters and a large common offset, every vector must still decode to itself.
+    public void testGlobalCenteringLeavesTrainingVectorsUntouched() {
+        var R = getRandom();
+        int dimension = 7; // not a multiple of the subspace count, so subvector sizes differ
+        List<VectorFloat<?>> vectors = IntStream.range(0, DEFAULT_CLUSTERS).mapToObj(i -> {
+            var v = vectorTypeSupport.createFloatVector(dimension);
+            for (int d = 0; d < dimension; d++) {
+                v.set(d, 1000f + R.nextInt(1000));
+            }
+            return v;
+        }).collect(Collectors.toList());
+        List<VectorFloat<?>> before = vectors.stream().<VectorFloat<?>>map(VectorFloat::copy).collect(Collectors.toList());
+        var ravv = new ListRandomAccessVectorValues(vectors, dimension);
+
+        var pq = ProductQuantization.compute(ravv, 3, DEFAULT_CLUSTERS, true);
+        var refined = pq.refine(ravv);
+
+        var decoded = vectorTypeSupport.createFloatVector(dimension);
+        for (var quantization : List.of(pq, refined)) {
+            var cv = (PQVectors) quantization.encodeAll(ravv);
+            for (int i = 0; i < vectors.size(); i++) {
+                quantization.decode(cv.get(i), decoded);
+                for (int d = 0; d < dimension; d++) {
+                    assertEquals("vector " + i + " dimension " + d, vectors.get(i).get(d), decoded.get(d), 0.01f);
+                }
+            }
+        }
+        for (int i = 0; i < vectors.size(); i++) {
+            assertEquals("training modified vector " + i, before.get(i), vectors.get(i));
+        }
+    }
+
+    @Test
     // validate that iterating on our cluster centroids improves the encoding
     public void testIterativeImprovement() {
         for (int i = 0; i < 10; i++) {
