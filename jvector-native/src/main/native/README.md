@@ -472,11 +472,12 @@ the selected ISA without recompiling:
 
 **x86-64:**
 ```bash
-JVECTOR_MAX_ISA=avx3_spr java ...   # use Sapphire-Rapids FP16 tier
-JVECTOR_MAX_ISA=avx3_dl  java ...   # use Ice Lake tier
-JVECTOR_MAX_ISA=avx3     java ...   # use AVX-512 even if a higher tier is available
-JVECTOR_MAX_ISA=avx2     java ...   # use AVX2 even on an AVX-512 machine
-JVECTOR_MAX_ISA=sse42    java ...   # force scalar/SSE4.2 fallback
+JVECTOR_MAX_ISA=avx3_spr  java ...  # use Sapphire-Rapids FP16 tier
+JVECTOR_MAX_ISA=avx3_dl   java ...  # use Ice Lake tier
+JVECTOR_MAX_ISA=avx3_vnni java ...  # use AVX-512 + VNNI tier (Cascade Lake, Cooper Lake)
+JVECTOR_MAX_ISA=avx3      java ...  # use AVX-512 without VNNI even if a higher tier is available
+JVECTOR_MAX_ISA=avx2      java ...  # use AVX2 even on an AVX-512 machine
+JVECTOR_MAX_ISA=sse42     java ...  # force scalar/SSE4.2 fallback
 ```
 
 **AArch64:**
@@ -486,7 +487,7 @@ JVECTOR_MAX_ISA=sve   java ...   # use SVE tier  (Graviton 3 / Neoverse V1)
 JVECTOR_MAX_ISA=neon  java ...   # force NEON baseline
 ```
 
-Accepted values (case-sensitive): `avx3_spr`, `avx3_dl`, `avx3`, `avx2`, `sse42` (x86-64); `sve2`, `sve`, `neon` (AArch64).
+Accepted values (case-sensitive): `avx3_spr`, `avx3_dl`, `avx3_vnni`, `avx3`, `avx2`, `sse42` (x86-64); `sve2`, `sve`, `neon` (AArch64).
 An unrecognised value is silently ignored and full CPU detection is used.
 
 ---
@@ -695,7 +696,7 @@ Add the new tier above `AVX3_SPR` in ascending capability order:
 
 ```cpp
 // jvector_simd.cpp
-enum class MaxIsa { Unset = -1, SSE42 = 0, AVX2 = 1, AVX3 = 2, AVX3_DL = 3, AVX3_SPR = 4, MY_NEW_TIER = 5 };
+enum class MaxIsa { Unset = -1, SSE42 = 0, AVX2 = 1, AVX3 = 2, AVX3_VNNI = 3, AVX3_DL = 4, AVX3_SPR = 5, MY_NEW_TIER = 6 };
 ```
 
 Also update `read_max_isa()` to map the corresponding string:
@@ -920,7 +921,7 @@ On CPUs with AVX-512 VNNI the native library computes the products itself, with 
 Highway kernel in `ash_projection_i8-inl.h`: the Java model owns the packed INT8
 rows, row scales and row sums, and the kernel holds no state. Tiles use 512-bit
 registers on the AVX3_SPR tier (Sapphire Rapids and later) and 256-bit registers on
-the AVX3_DL tier (Ice Lake, AMD Zen 4/5) and on AVX3 CPUs with VNNI (Cascade Lake,
+the AVX3_DL tier (Ice Lake, AMD Zen 4/5) and the AVX3_VNNI tier (Cascade Lake,
 Cooper Lake). Other CPUs use the oneDNN add-on described below, which only CPUs
 with AVX-VNNI but not AVX-512 need; `JVECTOR_ASH_INT8_ONEDNN` selects it everywhere.
 Both compute the same integers, so their outputs are identical. Scales, quantization and rescaling use FP32 arithmetic. A nonzero operand whose

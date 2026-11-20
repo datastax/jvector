@@ -251,8 +251,8 @@ TEST(IsaDispatch, MaxIsaEnvHonoured)
     static const char* kOrder[] = {"neon", "sve", "sve2"};
     constexpr int kOrderLen = 3;
 #else
-    static const char* kOrder[] = {"sse42", "avx2", "avx3", "avx3_dl", "avx3_spr"};
-    constexpr int kOrderLen = 5;
+    static const char* kOrder[] = {"sse42", "avx2", "avx3", "avx3_vnni", "avx3_dl", "avx3_spr"};
+    constexpr int kOrderLen = 6;
 #endif
     auto tier_idx = [](const char* name) -> int {
         for (int i = 0; i < kOrderLen; ++i)

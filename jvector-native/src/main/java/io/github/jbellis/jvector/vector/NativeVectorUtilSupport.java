@@ -45,7 +45,7 @@ class NativeVectorUtilSupport extends PanamaVectorUtilSupport
 
     /**
      * Returns the ISA tier that was selected by the native dispatcher at library
-     * initialisation time.  Possible values: {@code "avx3_spr"}, {@code "avx3_dl"},
+     * initialisation time.  Possible values: {@code "avx3_spr"}, {@code "avx3_dl"}, {@code "avx3_vnni"},
      * {@code "avx3"}, {@code "avx2"}, {@code "sse42"}.
      */
     public String getActiveIsa() {
@@ -68,7 +68,7 @@ class NativeVectorUtilSupport extends PanamaVectorUtilSupport
      * Returns the value of {@code JVECTOR_MAX_ISA} that was in effect when the
      * native library was loaded, or {@code null} if the variable was absent or
      * contained an unrecognised value.
-     * Possible non-null return values: {@code "avx3_spr"}, {@code "avx3_dl"},
+     * Possible non-null return values: {@code "avx3_spr"}, {@code "avx3_dl"}, {@code "avx3_vnni"},
      * {@code "avx3"}, {@code "avx2"}, {@code "sse42"}.
      */
     public String getMaxIsaEnv() {
