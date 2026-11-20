@@ -139,6 +139,28 @@ final class HubMap implements AutoCloseable {
         return new Scorer();
     }
 
+    /** Number of level-1 positions. */
+    int level1Count() {
+        return nodes[1].length;
+    }
+
+    /** Copies the level-1 vectors of positions {@code [from, from + count)} into {@code dst} from {@code offset}. */
+    void copyLevel1Rows(int from, int count, float[] dst, int offset) {
+        for (int r = 0; r < count; r++) {
+            int position = from + r;
+            if (level1Floats != null) {
+                java.nio.FloatBuffer b = level1Floats[position / level1ChunkRows].duplicate();
+                b.position((position % level1ChunkRows) * dimension);
+                b.get(dst, offset + r * dimension, dimension);
+            } else {
+                VectorFloat<?> v = vectors[1];
+                for (int d = 0; d < dimension; d++) {
+                    dst[offset + r * dimension + d] = v.get(position * dimension + d);
+                }
+            }
+        }
+    }
+
     int position(int level, int node) {
         if (level == 1) {
             return node >= 0 && node < level1Position.length ? level1Position[node] : -1;

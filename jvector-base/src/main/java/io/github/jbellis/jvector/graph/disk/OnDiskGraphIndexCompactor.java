@@ -164,6 +164,9 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
     // hub map holds the upper layers' vectors, and level 0 scans, scores and diversifies on vectors.
     private boolean exactMode;
     private volatile ExactJoin exactJoin;   // full-precision merge: scan results of the node range level 0 is processing
+    /** Walks cells elsewhere (e.g. on a GPU) when one is selected with {@link CompactionAccelerators#PROPERTY}; else null. */
+    private final CompactionAccelerator accelerator = CompactionAccelerators.find().orElse(null);
+    private final java.util.concurrent.atomic.LongAdder acceleratedWalks = new java.util.concurrent.atomic.LongAdder();
     private final LongAdder finalizeRowsTouched = new LongAdder(), finalizeRowsRequested = new LongAdder();
     private ThreadLocal<Scratch> scratchLocal;  // the per-thread scratch of the current compaction (set by compactLevels)
     // What level 0 evaluates candidates from: the wide code for coded sources, the vectors
@@ -198,7 +201,9 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
     // a cell holds a few members per source, so the beam is wide.
     static final int CELL_BUDGET = 4096;
     static final int CELL_ASSIGN_EF = 8;      // level-1 beam width when assigning a node's cell
-    static final int CELL_PROBE_EF = 64;      // level-1 beam width when choosing a node's probe cells
+    static final int CELL_PROBE_EF = 64;
+    /** Most cells an accelerator ranks per query ({@code -Djvector.compaction.probes}). */
+    static final int MAX_ACCELERATED_PROBES = Integer.getInteger("jvector.compaction.probes", 1024);      // level-1 beam width when choosing a node's probe cells
     // The merged upper layers in source ids, per level >= 1: node i of a level is
     // (mergedSrc[l][i], mergedNode[l][i]) and its neighbours sit at [i * degree + j], -1 padded.
     // Merged before the ordinals exist (they define the cells), written after level 0.
@@ -631,7 +636,8 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
         if (cellMap != null) {
             log.info("Level-0 candidates are scanned and scored on the vectors themselves ({} B per node in scratch)",
                      4 * dimension);
-            pqWide = new PQRetrainer(sources, liveNodes, dimension).train(wideSubspaces());
+            pqWide = new PQRetrainer(sources, liveNodes, dimension).train(wideSubspaces(),
+                    accelerator != null && accelerator.supports(similarityFunction, dimension) ? accelerator : null);
             if (pqWide != null) {
                 vectorStore.setSecondaryCompressor(pqWide);
                 log.info("Diversity comparisons use a {}-subspace wide code ({} B per node); every candidate score stays exact",
@@ -1571,6 +1577,17 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
         scratch.probeCount = n;
     }
 
+    /** As {@link #selectCellsByBeam}, from an accelerator's ranked level-1 positions for query {@code i}. */
+    private void selectCellsFromProbe(Scratch scratch, CellProbe probe, int i) {
+        int n = 0;
+        int base = i * probe.maxProbes();
+        for (int r = 0; r < probe.counts[i]; r++) {
+            int cell = cellWalkPosition[cellMap.nodes[1][probe.probes[base + r]]];
+            if (cell >= 0 && cell < cellCount) scratch.probeCells[n++] = cell;
+        }
+        scratch.probeCount = n;
+    }
+
     /** The best-scoring level-1 position a beam of width {@code ef} from {@code startPos} scores. */
     private static int bestLevel1ByBeam(HubMap map, HubMap.Scorer scorer, int startPos, int ef, IntHashSet visited, long[] scored) {
         int count = beam(map, scorer, 1, startPos, ef, visited, scored);
@@ -2210,10 +2227,13 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
             int liveCount = numLiveNodesPerSource.get(s);
             long[] keyed = new long[liveCount];
             AtomicInteger fill = new AtomicInteger();
+            // with an accelerator, every node's cell is its nearest level-1 node, ranked by the accelerator
+            boolean assigned = regionMode && accelerator != null && accelerator.supports(similarityFunction, dimension)
+                    && assignCellsAccelerated(source, alive, size, hubMapRef, walkPositionRef, keyed, fill);
             // enough windows to keep every worker busy on small sources, at most 256K nodes each
             int window = Math.max(4096, Math.min(1 << 18, size / (4 * taskWindowSize) + 1));
             List<Callable<Void>> tasks = new ArrayList<>();
-            for (int from = 0; from < size; from += window) {
+            for (int from = 0; !assigned && from < size; from += window) {
                 final int lo = from;
                 final int hi = Math.min(size, from + window);
                 tasks.add(() -> {
@@ -2304,6 +2324,68 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
         log.info("Region ordinals assigned ({}): {} ordinals across {} sources in {} ms", regionMode ? "region order" : "PQ-prefix order",
                 next, numSources, (System.nanoTime() - t0) / 1_000_000);
         return mappers;
+    }
+
+    /** Nodes per block of {@link #assignCellsAccelerated}: their vectors are held on the heap while the block is ranked. */
+    private static final int ASSIGN_BLOCK = 1 << 14;
+
+    /**
+     * The region keys of one source through the accelerator: the source's live vectors are read in blocks (in
+     * parallel, in node order), and each block's nearest level-1 nodes come from {@link CompactionAccelerator#probe}
+     * with one probe a query.
+     *
+     * @return false if the accelerator declined the first block (nothing was written); the caller then assigns as usual
+     */
+    private boolean assignCellsAccelerated(OnDiskGraphIndex source, FixedBitSet alive, int size, HubMap hubMap, int[] walkPosition,
+                                           long[] keyed, AtomicInteger fill) {
+        long t0 = System.nanoTime();
+        final int[] nodes = new int[ASSIGN_BLOCK];
+        final VectorFloat<?>[] vecs = new VectorFloat<?>[ASSIGN_BLOCK];
+        for (int i = 0; i < ASSIGN_BLOCK; i++) {
+            vecs[i] = vectorTypeSupport.createFloatVector(dimension);
+        }
+        int node = 0;
+        boolean first = true;
+        while (node < size) {
+            int count = 0;
+            int from = node;
+            while (node < size && count < ASSIGN_BLOCK) {
+                if (alive.get(node)) nodes[count++] = node;
+                node++;
+            }
+            if (count == 0) break;
+            source.prefetchL0Records(from, node - 1);
+            final int n = count;
+            int chunk = Math.max(256, n / Math.max(1, taskWindowSize) + 1);
+            List<Callable<Void>> reads = new ArrayList<>();
+            for (int lo = 0; lo < n; lo += chunk) {
+                final int a = lo, b = Math.min(n, lo + chunk);
+                reads.add(() -> {
+                    try (var view = (OnDiskGraphIndex.View) source.getView()) {
+                        for (int i = a; i < b; i++) {
+                            view.getVectorInto(nodes[i], vecs[i], 0);
+                        }
+                    }
+                    return null;
+                });
+            }
+            joinAll(reads);
+            CellProbe probe = new CellProbe(vecs, n, hubMap, dimension, similarityFunction, 1);
+            if (!accelerator.probe(probe)) {
+                if (first) {
+                    return false;
+                }
+                throw new IllegalStateException("the compaction accelerator declined a block after accepting an earlier one");
+            }
+            first = false;
+            for (int i = 0; i < n; i++) {
+                int landing = probe.counts[i] > 0 ? hubMap.nodes[1][probe.probes[i]] : -1;
+                int pos = landing >= 0 && landing < walkPosition.length ? walkPosition[landing] : Integer.MAX_VALUE;
+                keyed[fill.getAndIncrement()] = ((pos & 0xFFFFFFFFL) << 32) | (nodes[i] & 0xFFFFFFFFL);
+            }
+        }
+        log.info("Region keys of {} nodes from the accelerator ({}) in {} ms", fill.get(), accelerator.name(), (System.nanoTime() - t0) / 1_000_000);
+        return true;
     }
 
     private void joinAll(List<Callable<Void>> tasks) {
@@ -2413,9 +2495,36 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
         final boolean needNorms = similarityFunction != VectorSimilarityFunction.DOT_PRODUCT;
         final VectorFloat<?>[] queries = new VectorFloat<?>[n];
         final float[] queryNorm2 = new float[n];
-        // phase 1: query vectors and probe cells; (cell << 32 | node index) pairs per target, per task
         final int tasks1 = Math.max(1, Math.min(taskWindowSize * 4, n / 256));
         final int chunk = (n + tasks1 - 1) / tasks1;
+        // with an accelerator, the queries are decoded first and it may rank every query's cells at once
+        CellProbe accelerated = null;
+        if (accelerator != null && exactMode && accelerator.supports(similarityFunction, dimension)) {
+            List<Callable<Void>> decode = new ArrayList<>();
+            for (int c = 0; c < tasks1; c++) {
+                final int from = c * chunk, to = Math.min(n, from + chunk);
+                if (from >= to) continue;
+                decode.add(() -> {
+                    Scratch sc = scratchLocal.get();
+                    if (sc.wide == null) sc.wide = new WideDecoder(candidateStore, exactMode, pqWide, dimension);
+                    for (int i = from; i < to; i++) {
+                        VectorFloat<?> q = vectorTypeSupport.createFloatVector(dimension);
+                        sc.wide.decode(lo + i, q);
+                        queries[i] = q;
+                        queryNorm2[i] = needNorms ? VectorUtil.dotProduct(q, q) : 0f;
+                    }
+                    return null;
+                });
+            }
+            joinAll(decode);
+            int maxProbes = Math.min(MAX_ACCELERATED_PROBES, Math.min(cellCount, beamScoredCapacity(CELL_PROBE_EF, cellMap.degree[1])));
+            CellProbe probe = new CellProbe(queries, n, cellMap, dimension, similarityFunction, maxProbes);
+            if (accelerator.probe(probe)) {
+                accelerated = probe;
+            }
+        }
+        final CellProbe probed = accelerated;
+        // phase 1: query vectors and probe cells; (cell << 32 | node index) pairs per target, per task
         final long[][][] pairsByTask = new long[tasks1][j.targets][];
         final int[][] countByTask = new int[tasks1][j.targets];
         List<Callable<Void>> phase1 = new ArrayList<>();
@@ -2434,15 +2543,22 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
                 for (int t = 0; t < j.targets; t++) pairs[t] = new long[Math.max(64, (to - from) * 6)];
                 for (int i = from; i < to; i++) {
                     int newOrd = lo + i;
-                    VectorFloat<?> q = vectorTypeSupport.createFloatVector(dimension);
-                    sc.wide.decode(newOrd, q);
-                    queries[i] = q;
-                    queryNorm2[i] = needNorms ? VectorUtil.dotProduct(q, q) : 0f;
+                    VectorFloat<?> q = queries[i];
+                    if (q == null) {
+                        q = vectorTypeSupport.createFloatVector(dimension);
+                        sc.wide.decode(newOrd, q);
+                        queries[i] = q;
+                        queryNorm2[i] = needNorms ? VectorUtil.dotProduct(q, q) : 0f;
+                    }
                     int ownCell = cellOf(src, newOrd);
                     if (ownCell < 0) continue;
-                    sc.cellScorer.setQuery(q);
                     sc.probeCount = 0;
-                    selectCellsByBeam(sc, sc.cellScorer, cellToPosition[ownCell]);
+                    if (probed != null) {
+                        selectCellsFromProbe(sc, probed, i);
+                    } else {
+                        sc.cellScorer.setQuery(q);
+                        selectCellsByBeam(sc, sc.cellScorer, cellToPosition[ownCell]);
+                    }
                     sc.probeNode = -1;
                     for (int target = 0; target < sources.size(); target++) {
                         int ti = j.targetIndex[target];
@@ -2486,6 +2602,13 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
             Arrays.parallelSort(pairs);
             pairTotal += total;
             final int[] starts = cellStart[target];
+            if (accelerator != null && exactMode && accelerator.supports(similarityFunction, dimension)) {
+                var walk = new CellWalk(j, ti, queries, pairs, total, starts, candidateStore, dimension, similarityFunction);
+                if (accelerator.walk(walk)) {
+                    acceleratedWalks.increment();
+                    continue;
+                }
+            }
             // split the sorted pairs into contiguous cell ranges for the workers
             int tasks2 = Math.max(1, Math.min(taskWindowSize * 8, total / 4096));
             List<Callable<Void>> phase2 = new ArrayList<>();
@@ -2544,8 +2667,9 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
             }
             joinAll(phase2);
         }
-        log.info("Cell walk: source {} ordinals [{}, {}): probes {} ms, {} (cell, node) pairs over {} targets, walk {} ms",
-                 src, lo, hi, (t1 - t0) / 1_000_000, pairTotal, j.targets, (System.nanoTime() - t1) / 1_000_000);
+        log.info("Cell walk: source {} ordinals [{}, {}): probes {} ms, {} (cell, node) pairs over {} targets, walk {} ms{}",
+                 src, lo, hi, (t1 - t0) / 1_000_000, pairTotal, j.targets, (System.nanoTime() - t1) / 1_000_000,
+                 accelerator == null ? "" : " (" + accelerator.name() + ": " + acceleratedWalks.sumThenReset() + " targets)");
         return j;
     }
 

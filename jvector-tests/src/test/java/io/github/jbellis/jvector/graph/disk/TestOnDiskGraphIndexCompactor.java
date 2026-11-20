@@ -1205,6 +1205,32 @@ public class TestOnDiskGraphIndexCompactor extends RandomizedTest {
         cellJoinMergeRecall(VectorSimilarityFunction.COSINE, true);
     }
 
+    /**
+     * The wide code, the probes and the cell walk through a {@link CompactionAccelerator} (the plain-Java reference,
+     * through the public contracts of {@link CellProbe} and {@link CellWalk}): all three run there, and the merge meets
+     * the same recall bound as the compactor's own.
+     */
+    @Test
+    public void testCellJoinMergeRecallWithAccelerator() throws Exception {
+        String old = System.getProperty(CompactionAccelerators.PROPERTY);
+        System.setProperty(CompactionAccelerators.PROPERTY, ReferenceCompactionAccelerator.NAME);
+        try {
+            int before = ReferenceCompactionAccelerator.WALKS.get();
+            int probesBefore = ReferenceCompactionAccelerator.PROBES.get();
+            int wideBefore = ReferenceCompactionAccelerator.WIDE_CODES.get();
+            cellJoinMergeRecall(VectorSimilarityFunction.COSINE, false);
+            assertTrue("the accelerator walked", ReferenceCompactionAccelerator.WALKS.get() > before);
+            assertTrue("the accelerator ranked the probes", ReferenceCompactionAccelerator.PROBES.get() > probesBefore);
+            assertTrue("the accelerator trained the wide code", ReferenceCompactionAccelerator.WIDE_CODES.get() > wideBefore);
+        } finally {
+            if (old == null) {
+                System.clearProperty(CompactionAccelerators.PROPERTY);
+            } else {
+                System.setProperty(CompactionAccelerators.PROPERTY, old);
+            }
+        }
+    }
+
     private void cellJoinMergeRecall(VectorSimilarityFunction vsf, boolean fusedSources) throws Exception {
         int perSource = 3000;
         int nSrc = 3;

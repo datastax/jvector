@@ -49,7 +49,15 @@ final class InMemoryBuild implements IndexBuildStrategy {
         Map<Set<FeatureId>, ImmutableGraphIndex> indexes = new LinkedHashMap<>();
         var builder = GraphBuilderFactory.forFullPrecision(floatVectors, ds.getSimilarityFunction(), build);
         long start = System.nanoTime();
-        var onHeapGraph = builder.build(floatVectors);
+        ImmutableGraphIndex onHeapGraph;
+        var acceleratedBuild = AcceleratedBuild.start(builder, floatVectors, ds.getSimilarityFunction());
+        if (acceleratedBuild != null) {
+            acceleratedBuild.join();
+            builder.cleanup();
+            onHeapGraph = builder.getGraph();
+        } else {
+            onHeapGraph = builder.build(floatVectors);
+        }
         double buildTimeS = (System.nanoTime() - start) / 1_000_000_000.0;
         System.out.format("Build (%s) M=%d overflow=%.2f ef=%d in %.2fs%n",
                           "full res",

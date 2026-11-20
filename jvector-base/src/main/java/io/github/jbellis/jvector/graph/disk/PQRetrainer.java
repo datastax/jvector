@@ -130,6 +130,11 @@ public class PQRetrainer {
      * codebook has centroids.
      */
     public ProductQuantization train(int subspaceCount) {
+        return train(subspaceCount, null);
+    }
+
+    /** As {@link #train(int)}, trained by {@code accelerator} when it takes the job (it may be null). */
+    ProductQuantization train(int subspaceCount, CompactionAccelerator accelerator) {
         List<SampleRef> samples = sampleBalanced(ProductQuantization.MAX_PQ_TRAINING_SET_SIZE);
         if (samples.size() < CLUSTERS) {
             log.info("Too few vectors ({}) to train a {}-centroid PQ", samples.size(), CLUSTERS);
@@ -139,9 +144,14 @@ public class PQRetrainer {
         long t0 = System.nanoTime();
         List<VectorFloat<?>> trainingVectors = extractVectorsSequential(samples);
         var ravv = new ListRandomAccessVectorValues(trainingVectors, dimension);
-        ProductQuantization result = ProductQuantization.compute(ravv, subspaceCount, CLUSTERS, true);
-        log.info("Trained a {}-subspace PQ on {} sampled vectors in {}ms",
-                 subspaceCount, trainingVectors.size(), (System.nanoTime() - t0) / 1_000_000L);
+        long t1 = System.nanoTime();
+        ProductQuantization result = accelerator == null ? null : accelerator.trainWideCode(ravv, subspaceCount, CLUSTERS, true);
+        String by = result == null ? "" : " (" + accelerator.name() + ")";
+        if (result == null) {
+            result = ProductQuantization.compute(ravv, subspaceCount, CLUSTERS, true);
+        }
+        log.info("Trained a {}-subspace PQ on {} sampled vectors in {}ms (sample read in {}ms){}",
+                 subspaceCount, trainingVectors.size(), (System.nanoTime() - t0) / 1_000_000L, (t1 - t0) / 1_000_000L, by);
         return result;
     }
 

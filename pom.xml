@@ -52,6 +52,15 @@
         <module>jvector-examples</module>
         <module>benchmarks-jmh</module>
     </modules>
+    <profiles>
+        <!-- GPU graph build (TornadoVM + NVIDIA cuVS): mvn -Pgpu ... -->
+        <profile>
+            <id>gpu</id>
+            <modules>
+                <module>jvector-gpu</module>
+            </modules>
+        </profile>
+    </profiles>
     <build>
         <resources>
             <resource>
