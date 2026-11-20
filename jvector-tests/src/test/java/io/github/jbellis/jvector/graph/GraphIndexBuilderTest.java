@@ -332,7 +332,7 @@ public class GraphIndexBuilderTest extends LuceneTestCase {
      */
     @Test
     public void testNodeWithOnlyNegativeSimilaritiesGetsNeighbors() throws IOException {
-        for (int position : new int[] {25, 50, 100}) {
+        for (int position : new int[] {0, 25, 50, 100}) {
             var random = new Random(1);
             var vectors = new ArrayList<VectorFloat<?>>();
             for (int i = 0; i < 200; i++) {
