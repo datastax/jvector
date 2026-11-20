@@ -19,14 +19,15 @@ package io.github.jbellis.jvector.quantization;
 /**
  * How an ASH model's kernel estimate becomes the graph's similarity, chosen once per model by its similarity.
  *
- * <p>Every ASH kernel computes {@code scale * <Aq, code> + queryTerm[landmark] + offset}. For DOT_PRODUCT that
- * estimates the dot product, and the similarity is {@code (1 + e) / 2}. A EUCLIDEAN model stores its headers and query terms so the same kernels estimate
+ * <p>Every ASH kernel computes {@code scale * <Aq, code> + queryTerm[landmark] + offset}. For DOT_PRODUCT and
+ * COSINE that estimates the dot product (of normalized vectors, for COSINE), and the similarity is
+ * {@code (1 + e) / 2}. A EUCLIDEAN model stores its headers and query terms so the same kernels estimate
  * {@code -||q - x||^2 / 2} in model units (paper, Appendix A), and the similarity is {@code 1 / (1 + ||q - x||^2)}.
  * Scorers call {@link #similarity} once per score on their model's instance; a JVM that uses one of the two
  * scales compiles the call to that scale's arithmetic alone.</p>
  */
 abstract class ASHScoreScale {
-    /** DOT_PRODUCT. */
+    /** DOT_PRODUCT and COSINE. */
     static final ASHScoreScale DOT_PRODUCT = new DotProduct();
 
     /** The similarity for kernel estimate {@code estimate}. */

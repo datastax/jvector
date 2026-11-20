@@ -225,9 +225,6 @@ public abstract class CompressorParameters {
 
         @Override
         public void validateFor(DataSet ds, boolean fused, String ashConstructionMode) {
-            if (ds.getSimilarityFunction() == VectorSimilarityFunction.COSINE) {
-                throw new IllegalArgumentException("ASH requires dot-product or Euclidean similarity");
-            }
             int payload = encodedBits - AsymmetricHashing.HEADER_BITS;
             if (encodedBits <= AsymmetricHashing.HEADER_BITS || payload % bitsPerDimension != 0
                     || payload / bitsPerDimension > ds.getDimension()) {

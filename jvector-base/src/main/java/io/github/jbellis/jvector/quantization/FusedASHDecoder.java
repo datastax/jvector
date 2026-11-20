@@ -154,7 +154,7 @@ public final class FusedASHDecoder implements ScoreFunction.AdaptiveApproximateS
      * @param ash compressor that encoded the graph's ASH features
      * @param hierarchyCachedFeatures canonical features available for direct/upper-layer scoring
      * @param inlineSourceAccessor reads a canonical ASH vector from a cached feature
-     * @param query original-dimensional query, normalized by the caller when appropriate
+     * @param query original-dimensional query, as the caller has it; a COSINE model normalizes it
      * @param reusableNeighborhoodBytes decoder-owned scratch, at least the complete feature size
      * @param reusableScores decoder-owned scratch, at least the source's maximum degree
      * @param blockSize serialized block width: 8, 16, or 32

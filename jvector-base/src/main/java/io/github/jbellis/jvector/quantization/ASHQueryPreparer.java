@@ -19,6 +19,7 @@ import io.github.jbellis.jvector.annotations.Experimental;
 import io.github.jbellis.jvector.graph.similarity.PreparedQuery;
 import io.github.jbellis.jvector.graph.similarity.QueryPreparer;
 import io.github.jbellis.jvector.util.RamUsageEstimator;
+import io.github.jbellis.jvector.vector.VectorSimilarityFunction;
 import io.github.jbellis.jvector.vector.VectorizationProvider;
 import io.github.jbellis.jvector.vector.types.FloatArray;
 import io.github.jbellis.jvector.vector.types.VectorFloat;
@@ -133,7 +134,7 @@ public final class ASHQueryPreparer implements QueryPreparer {
     }
 
     private void finish(State state) {
-        scorer.finishQuery(state.query, state.prepared);
+        scorer.finishQuery(state.scoringQuery, state.prepared);
         FusedASHLayout.buildQueryLut(state.prepared.qProj, ash.quantizedDim, ash.bitsPerDimension, state.lut);
         state.ready = true;
     }
@@ -159,6 +160,10 @@ public final class ASHQueryPreparer implements QueryPreparer {
         /** What the projection reads: {@link #input} in the model's units, or {@code input} itself if they agree. */
         final float[] projectionInput;
         final VectorFloat<?> query;
+        /** A vector viewing {@link #projectionInput}. */
+        final VectorFloat<?> projectionView;
+        /** The vector the landmark terms are scored from: a COSINE model's normalized query, otherwise {@link #query}. */
+        VectorFloat<?> scoringQuery;
         final ASHScorer.QueryPrecompute prepared;
         final float[] lut;
         final long bytes;
@@ -170,6 +175,8 @@ public final class ASHQueryPreparer implements QueryPreparer {
             this.input = new float[ash.originalDimension];
             this.projectionInput = ash.transformsQueryInput() ? new float[ash.originalDimension] : input;
             this.query = VectorizationProvider.getInstance().getVectorTypeSupport().createFloatVector(input);
+            this.projectionView = projectionInput == input ? query
+                    : VectorizationProvider.getInstance().getVectorTypeSupport().createFloatVector(projectionInput);
             this.prepared = prepared;
             this.lut = new float[Math.multiplyExact(FusedASHLayout.codeGroups(ash.quantizedDim, ash.bitsPerDimension), 16)];
             // Initialize a provider's lazy view once, outside preparation/search.
@@ -180,6 +187,7 @@ public final class ASHQueryPreparer implements QueryPreparer {
                     + RamUsageEstimator.sizeOf(prepared.dotQMuByLandmark);
             if (backing != input) sum += RamUsageEstimator.shallowSizeOf(backing);
             if (projectionInput != input) sum += RamUsageEstimator.sizeOf(projectionInput);
+            if (projectionInput != input) sum += RamUsageEstimator.shallowSizeOf(projectionView);
             this.bytes = sum;
         }
 
@@ -191,8 +199,8 @@ public final class ASHQueryPreparer implements QueryPreparer {
                 for (int i = 0; i < input.length; i++) input[i] = source.get(i);
             }
             // The query vector views input, so it stays the caller's query; the projection reads a copy in the
-            // model's form (scaled for EUCLIDEAN).
-            if (projectionInput != input) ash.loadQuery(query, projectionInput, null);
+            // model's form (normalized for COSINE, in FP32 before projection, or scaled for EUCLIDEAN).
+            scoringQuery = projectionInput == input ? query : ash.loadQuery(query, projectionInput, projectionView);
         }
         void check(long expectedGeneration) {
             if (!ready || generation != expectedGeneration)

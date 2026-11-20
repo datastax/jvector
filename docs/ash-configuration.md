@@ -11,9 +11,9 @@ existing objects. CPU-count properties do not pin threads.
 
 ## Similarity
 
-An ASH model is trained for one similarity, `DOT_PRODUCT` or `EUCLIDEAN`,
-which `AsymmetricHashing.initialize` requires as its second argument, as
-`GraphIndexBuilder` does; an ASH index cannot be built without one. The model
+An ASH model is trained for one similarity, `DOT_PRODUCT`, `EUCLIDEAN` or
+`COSINE`, which `AsymmetricHashing.initialize` requires as its second argument,
+as `GraphIndexBuilder` does; an ASH index cannot be built without one. The model
 saves it, and its codes and every scorer of them use it; asking a scorer for
 another similarity throws `IllegalArgumentException`, and every ASH score
 function reports it in `similarityFunction()`, which adaptive stopping reads.
@@ -26,7 +26,7 @@ ASH does not require normalized vectors for any similarity. Training and
 encoding center each vector on its landmark and use the unit residual
 `(x - mu) / ||x - mu||`, so vector lengths are kept. Scores use the exact
 scale of `VectorSimilarityFunction`: `(1 + dot) / 2` for `DOT_PRODUCT` and
-`1 / (1 + d^2)` for `EUCLIDEAN`.
+`1 / (1 + d^2)` for `EUCLIDEAN` and `(1 + cos) / 2` for `COSINE`.
 
 `EUCLIDEAN` uses the same codes, kernels and speed as `DOT_PRODUCT` (ASH paper,
 Appendix A). Its header stores `-||x - mu||^2 / 2` where a `DOT_PRODUCT` header
@@ -34,6 +34,15 @@ stores `<x, mu> - ||mu||^2`, and its query term is `-||q - mu||^2 / 2` in place 
 `<q, mu>`, so the kernels estimate `-||q - x||^2 / 2`. A `EUCLIDEAN` model also
 stores a power-of-two unit that scales vectors to about unit length, so the
 half-precision header holds squared distances of vectors of any length.
+
+`COSINE` normalizes vectors as `VectorUtil.l2normalize` does when it trains and
+encodes, and normalizes each query in FP32 before projection and before any
+FP16 or INT8 conversion; it then uses the `DOT_PRODUCT` path, so it has the same
+speed and, for vectors already of unit length, the same codes and scores.
+Reranking with stored full-precision vectors gives exact cosine similarity.
+Cosine is undefined for a zero vector: a `COSINE` model or index throws
+`IllegalArgumentException` for a zero vector when it trains, encodes, inserts
+or searches, as `l2normalize` does, so callers must reject zero vectors first.
 
 Indexing:
 

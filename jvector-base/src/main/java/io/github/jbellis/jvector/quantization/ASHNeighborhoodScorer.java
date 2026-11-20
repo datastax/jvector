@@ -57,7 +57,7 @@ public final class ASHNeighborhoodScorer {
      * Prepares a query for neighborhoods with a fixed serialized shape.
      *
      * @param ash compressor describing the projection, bit width, and landmarks
-     * @param query original-dimensional query; callers apply any desired normalization
+     * @param query original-dimensional query, as the caller has it; a COSINE model normalizes it
      * @param maxDegree positive scored capacity, including padded graph lanes
      * @param blockSize serialized block width: 8, 16, or 32
      * @throws IllegalArgumentException for a dimension mismatch or invalid shape

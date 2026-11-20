@@ -135,6 +135,9 @@ public class AsymmetricHashing implements VectorCompressor<AsymmetricHashing.Qua
     /** How this model's kernel estimates become its similarity. */
     private final ASHScoreScale scores;
 
+    /** Per-thread normalized copy for encoding one vector at a time under COSINE; never created otherwise. */
+    private final ThreadLocal<VectorFloat<?>> unitScratch;
+
     /** Learned or random Stiefel transform. */
     public final StiefelTransform stiefelTransform;
 
@@ -238,6 +241,7 @@ public class AsymmetricHashing implements VectorCompressor<AsymmetricHashing.Qua
         this.unit = unit;
         this.scores = similarityFunction == VectorSimilarityFunction.EUCLIDEAN
                 ? ASHScoreScale.euclidean(unit) : ASHScoreScale.DOT_PRODUCT;
+        this.unitScratch = ThreadLocal.withInitial(() -> vectorTypeSupport.createFloatVector(originalDim));
         this.stiefelTransform = Objects.requireNonNull(stiefelTransform);
 
         this.landmarks = Objects.requireNonNull(landmarks);
@@ -299,8 +303,10 @@ public class AsymmetricHashing implements VectorCompressor<AsymmetricHashing.Qua
                 + estimateArray2DBytes(landmarkProj)
                 + RamUsageEstimator.sizeOf(landmarkProjSum)
                 + stiefelTransform.heapBytes
-                // The similarity is a shared enum constant and its unit a field; a EUCLIDEAN model owns its scale.
-                + (scores == ASHScoreScale.DOT_PRODUCT ? 0 : RamUsageEstimator.shallowSizeOf(scores));
+                // The similarity is a shared enum constant; its unit is a field. The per-thread unitScratch values
+                // are worker scratch, excluded as the encoding workspaces are.
+                + (scores == ASHScoreScale.DOT_PRODUCT ? 0 : RamUsageEstimator.shallowSizeOf(scores))
+                + RamUsageEstimator.shallowSizeOfInstance(ThreadLocal.class);
         for (VectorFloat<?> landmark : landmarks) bytes = Math.addExact(bytes, landmark.ramBytesUsed());
         this.heapBytes = bytes;
     }
@@ -331,11 +337,13 @@ public class AsymmetricHashing implements VectorCompressor<AsymmetricHashing.Qua
 
     /**
      * Copies {@code query} into {@code input}, the FP32 vector the projection reads, in this model's form: for
-     * EUCLIDEAN scaled by the unit. Allocates nothing.
+     * COSINE normalized as {@link VectorUtil#l2normalize} does, before projection and any FP16 or INT8 conversion;
+     * for EUCLIDEAN scaled by the unit. Allocates nothing when {@code inputView} is given or not needed.
      *
-     * @param inputView a vector viewing {@code input}, or null; for similarities whose scoring vector is the
-     *        transformed input
-     * @return the vector the landmark terms are scored from: {@code query}
+     * @param inputView a vector viewing {@code input}, or null to create one when needed
+     * @return the vector the landmark terms are scored from: a view of the normalized {@code input} for COSINE,
+     *         otherwise {@code query}
+     * @throws IllegalArgumentException for a zero query under COSINE
      */
     VectorFloat<?> loadQuery(VectorFloat<?> query, float[] input, VectorFloat<?> inputView) {
         if (query instanceof FloatArray) {
@@ -343,15 +351,31 @@ public class AsymmetricHashing implements VectorCompressor<AsymmetricHashing.Qua
         } else {
             for (int i = 0; i < input.length; i++) input[i] = query.get(i);
         }
+        if (similarityFunction == VectorSimilarityFunction.COSINE) {
+            double squareSum = VectorUtil.dotProduct(query, query);
+            if (squareSum == 0) {
+                throw new IllegalArgumentException("COSINE similarity is undefined for a zero vector; callers must "
+                        + "reject zero vectors before indexing or searching them");
+            }
+            VectorFloat<?> view = inputView != null ? inputView : vectorTypeSupport.createFloatVector(input);
+            VectorUtil.scale(view, (float) (1.0 / Math.sqrt(squareSum)));
+            return view;
+        }
         if (unit != 1f) {
             for (int i = 0; i < input.length; i++) input[i] *= unit;
         }
         return query;
     }
 
-    /** Whether a query's FP32 projection input differs from the caller's query: EUCLIDEAN scaling. */
+    /** Whether a query's FP32 projection input differs from the caller's query: COSINE or EUCLIDEAN scaling. */
     boolean transformsQueryInput() {
-        return unit != 1f;
+        return unit != 1f || similarityFunction == VectorSimilarityFunction.COSINE;
+    }
+
+    /** Scratch for a normalized copy when this model normalizes what it encodes; otherwise null. */
+    private VectorFloat<?> encodingScratch() {
+        return similarityFunction == VectorSimilarityFunction.COSINE
+                ? vectorTypeSupport.createFloatVector(originalDimension) : null;
     }
 
 
@@ -374,11 +398,50 @@ public class AsymmetricHashing implements VectorCompressor<AsymmetricHashing.Qua
     }
 
     private static VectorSimilarityFunction supportedSimilarity(VectorSimilarityFunction similarity) {
-        Objects.requireNonNull(similarity, "similarityFunction");
-        if (similarity == VectorSimilarityFunction.COSINE) {
-            throw new IllegalArgumentException("ASH does not support COSINE similarity");
+        return Objects.requireNonNull(similarity, "similarityFunction");
+    }
+
+    /**
+     * The vector a COSINE model trains on, encodes and scores: {@code v / ||v||}, normalized as
+     * {@link VectorUtil#l2normalize} does, into {@code scratch} (or a new vector when it is null). Every other
+     * similarity uses {@code v} itself. COSINE then uses the DOT_PRODUCT terms, kernels and scale throughout.
+     *
+     * @throws IllegalArgumentException for a zero vector under COSINE
+     */
+    VectorFloat<?> similarityInput(VectorFloat<?> v, VectorFloat<?> scratch) {
+        if (similarityFunction != VectorSimilarityFunction.COSINE) return v;
+        return unitCopy(v, scratch);
+    }
+
+    private static VectorFloat<?> unitCopy(VectorFloat<?> v, VectorFloat<?> scratch) {
+        VectorFloat<?> unit = scratch == null || scratch.length() != v.length()
+                ? vectorTypeSupport.createFloatVector(v.length()) : scratch;
+        unit.copyFrom(v, 0, 0, v.length());
+        try {
+            VectorUtil.l2normalize(unit);
+        } catch (IllegalArgumentException zero) {
+            throw new IllegalArgumentException("COSINE similarity is undefined for a zero vector; callers must "
+                    + "reject zero vectors before indexing or searching them", zero);
         }
-        return similarity;
+        return unit;
+    }
+
+    /** Training input for a COSINE model: the source's vectors, each normalized when read. */
+    private static RandomAccessVectorValues unitVectors(RandomAccessVectorValues source) {
+        return new RandomAccessVectorValues() {
+            private final VectorFloat<?> scratch = vectorTypeSupport.createFloatVector(source.dimension());
+
+            @Override public int size() { return source.size(); }
+            @Override public int dimension() { return source.dimension(); }
+            @Override public boolean isValueShared() { return true; }
+            @Override public RandomAccessVectorValues copy() { return unitVectors(source.copy()); }
+
+            @Override
+            public VectorFloat<?> getVector(int ordinal) {
+                VectorFloat<?> v = source.getVector(ordinal);
+                return v == null ? null : unitCopy(v, scratch);
+            }
+        };
     }
 
     /**
@@ -403,10 +466,11 @@ public class AsymmetricHashing implements VectorCompressor<AsymmetricHashing.Qua
      * independently of the projected dimension and stored bit width.</p>
      *
      * <p>The similarity is required: it is fixed here and saved with the model, and the model's codes, and every
-     * scorer of them, use only it. ASH does not require unit-length vectors for any similarity.</p>
+     * scorer of them, use only it. ASH does not require unit-length vectors for any similarity; COSINE normalizes
+     * them itself.</p>
      *
      * @param ravv the vectors to quantize
-     * @param similarityFunction DOT_PRODUCT or EUCLIDEAN
+     * @param similarityFunction DOT_PRODUCT, EUCLIDEAN or COSINE (which rejects zero vectors)
      * @param optimizer the optimizer to use
      * @param encodedBits the number of bits used to encode vector, including the header
      * @param landmarkCount number of landmarks
@@ -485,6 +549,8 @@ public class AsymmetricHashing implements VectorCompressor<AsymmetricHashing.Qua
         }
         final int quantizedDim = validateEncodedBits(encodedBits, HEADER_BITS, originalDim, bitsPerDimension);
         var ravvCopy = ravv.threadLocalSupplier().get();
+        // COSINE models learn from, and encode, unit vectors; they then use the DOT_PRODUCT path.
+        if (similarityFunction == VectorSimilarityFunction.COSINE) ravvCopy = unitVectors(ravvCopy);
 
         LOG.info("ASH training: {} landmark(s), {} projected dimensions, {} bit(s) per dimension",
                 landmarkCount, quantizedDim, bitsPerDimension);
@@ -1849,9 +1915,11 @@ public class AsymmetricHashing implements VectorCompressor<AsymmetricHashing.Qua
         QuantizedVector[] scratch = new QuantizedVector[capacity];
         for (int k = 0; k < capacity; k++) scratch[k] = QuantizedVector.createEmpty(quantizedDim, bitsPerDimension);
         int pending = 0;
+        VectorFloat<?> unit = encodingScratch();
         for (int v = 0; v < count; v++) {
             VectorFloat<?> vector = Objects.requireNonNull(vectors[v], "vector");
             if (vector.length() != originalDimension) throw new IllegalArgumentException("ASH encoding vector dimension mismatch");
+            vector = similarityInput(vector, unit);
             QuantizedVector dest = scratch[pending];
             float residualNorm = prepareEncoding(vector, dest);
             normalizeResidual(vector, landmarks[dest.landmark & 0xFF], residualNorm, inputs[pending]);
@@ -1879,6 +1947,7 @@ public class AsymmetricHashing implements VectorCompressor<AsymmetricHashing.Qua
         final QuantizedVector missing = QuantizedVector.createEmpty(quantizedDim, bitsPerDimension);
         final float missingOffset = symmetricOffsets == null ? 0f : centeredOffset(missing);
         int count = 0;
+        VectorFloat<?> unit = encodingScratch();
         try (var cursor = VectorAccess.openRange(source, start, end)) {
             int expected = start;
             while (cursor.next()) {
@@ -1890,6 +1959,7 @@ public class AsymmetricHashing implements VectorCompressor<AsymmetricHashing.Qua
                     if (symmetricOffsets != null) symmetricOffsets[i] = missingOffset;
                     continue;
                 }
+                vector = similarityInput(vector, unit);
                 QuantizedVector dest = scratch[count];
                 float residualNorm = prepareEncoding(vector, dest);
                 normalizeResidual(vector, landmarks[dest.landmark & 0xFF], residualNorm, inputs[count]);
@@ -1933,6 +2003,8 @@ public class AsymmetricHashing implements VectorCompressor<AsymmetricHashing.Qua
         private final double[] absNorm;
         private final QuantizedVector[] codes;
         private final float[] centeredOffsets;
+        /** COSINE models' normalized copy of the vector being added; created on first use. */
+        private VectorFloat<?> unit;
         private int count;
 
         EncodingBatch(int originalDimension, int quantizedDim, int bitsPerDimension) {
@@ -1982,6 +2054,10 @@ public class AsymmetricHashing implements VectorCompressor<AsymmetricHashing.Qua
         if (batch.isFull()) throw new IllegalStateException("Encoding batch is full");
         int i = batch.count;
         QuantizedVector dest = batch.codes[i];
+        if (similarityFunction == VectorSimilarityFunction.COSINE) {
+            if (batch.unit == null) batch.unit = vectorTypeSupport.createFloatVector(originalDimension);
+            vector = similarityInput(vector, batch.unit);
+        }
         float residualNorm = prepareEncoding(vector, dest);
         normalizeResidual(vector, landmarks[dest.landmark & 0xFF], residualNorm, batch.inputs[i]);
         batch.residualNorms[i] = residualNorm;
@@ -2041,6 +2117,8 @@ public class AsymmetricHashing implements VectorCompressor<AsymmetricHashing.Qua
 
     /** As {@link #encodeTo}, returning the code's centered offset for symmetric scoring. */
     float encodeToWithCenteredOffset(VectorFloat<?> vector, QuantizedVector dest) {
+        Objects.requireNonNull(vector, "vector");
+        if (similarityFunction == VectorSimilarityFunction.COSINE) vector = similarityInput(vector, unitScratch.get());
         float residualNorm = prepareEncoding(vector, dest);
         float codeNorm = quantizeVector(vector, residualNorm, dest.landmark, dest);
         return finishEncoding(dest, residualNorm, codeNorm);

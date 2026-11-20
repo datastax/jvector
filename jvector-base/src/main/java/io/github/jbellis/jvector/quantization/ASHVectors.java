@@ -35,7 +35,8 @@ import java.util.Objects;
 /**
  * Container for ASH-compressed vectors with scalar, SIMD, and block scoring.
  * All public node and block scorers return similarities in the similarity the model was trained for, on its exact
- * scale: {@code (1 + dot) / 2} (unclamped) for DOT_PRODUCT and {@code 1 / (1 + d^2)} for EUCLIDEAN. Scorers for
+ * scale: {@code (1 + dot) / 2} (unclamped) for DOT_PRODUCT, {@code 1 / (1 + d^2)} for EUCLIDEAN and
+ * {@code (1 + cos) / 2} for COSINE. Scorers for
  * any other similarity are rejected. Every scorer converts its kernel estimates through the model's
  * {@code ASHScoreScale}.
  *

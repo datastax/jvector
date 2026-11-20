@@ -26,7 +26,7 @@ import io.github.jbellis.jvector.vector.types.VectorFloat;
 /**
  * Query-time raw dot-product scorer for ASH vectors, with scalar and SIMD paths.
  * Graph-facing scorers convert its estimates through the model's {@code ASHScoreScale}; {@link #toSimilarity(float)}
- * is the DOT_PRODUCT scale.
+ * is the DOT_PRODUCT and COSINE scale.
  *
  * <p>
  * The 1-bit path preserves the original ASH decomposition:
@@ -325,7 +325,7 @@ public final class ASHScorer {
         finishQuery(scoring, prepared);
     }
 
-    /** Completes the non-projection terms after direct or batched query projection. */
+    /** Completes the non-projection terms after direct or batched query projection; {@code query} is the scoring query. */
     void finishQuery(VectorFloat<?> query, QueryPrecompute prepared) {
         for (int c = 0; c < ash.landmarkCount; c++) {
             prepared.dotQMuByLandmark[c] = ash.queryLandmarkTerm(query, c);

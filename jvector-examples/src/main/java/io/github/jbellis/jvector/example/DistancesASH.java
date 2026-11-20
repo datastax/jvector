@@ -41,7 +41,7 @@ import java.util.concurrent.ForkJoinTask;
  * ASH scoring benchmark. Pass a dataset name from the public dataset catalog (default
  * {@value #DEFAULT_DATASET}; it is downloaded and cached on first use), or base, query and
  * ground-truth files ({@code .fvecs}, {@code .fvecs}, {@code .ivecs}). The model is trained for the dataset's
- * similarity: EUCLIDEAN, or dot product for dot-product and cosine datasets (cosine datasets should be normalized).
+ * similarity; vectors need not be normalized.
  *
  * <p>The compressor is set by {@code jvector.ash.bitsPerDimension} (1 to 9, default 4),
  * {@code jvector.ash.quantizedDimensions} (default half the input dimension),
@@ -61,7 +61,7 @@ import java.util.concurrent.ForkJoinTask;
  * projection for {@code jvector.bench.projectionSeconds} per sample, and then runs full-scan recall.</p>
  */
 public class DistancesASH {
-    /** The similarity the ASH model is trained for and scored by: the dataset's, with cosine scored as dot product. */
+    /** The similarity the ASH model is trained for and scored by: the dataset's unless set by property. */
     private static VectorSimilarityFunction similarity = VectorSimilarityFunction.DOT_PRODUCT;
 
 
@@ -622,13 +622,34 @@ public class DistancesASH {
                 recall ? SiftLoader.readIvecs(filenameGT) : List.of());
     }
 
+    private static List<VectorFloat<?>> unitCopies(List<VectorFloat<?>> vectors) {
+        var out = new java.util.ArrayList<VectorFloat<?>>(vectors.size());
+        for (var v : vectors) {
+            var copy = v.copy();
+            io.github.jbellis.jvector.vector.VectorUtil.l2normalize(copy);
+            out.add(copy);
+        }
+        return out;
+    }
+
     /** Runs the benchmark; {@code groundTruth} lists each query's nearest base ordinals, best first. */
     public static void testASHEncodings(List<VectorFloat<?>> vectors, List<VectorFloat<?>> allQueries,
+                                        List<? extends List<Integer>> groundTruth) throws IOException {
+        // -Djvector.bench.normalize=true scales copies of the base and query vectors to unit length first.
+        if (Boolean.getBoolean("jvector.bench.normalize")) {
+            System.out.println("\tVectors normalized before training");
+            runASHEncodings(unitCopies(vectors), unitCopies(allQueries), groundTruth);
+        } else {
+            runASHEncodings(vectors, allQueries, groundTruth);
+        }
+    }
+
+    private static void runASHEncodings(List<VectorFloat<?>> vectors, List<VectorFloat<?>> allQueries,
                                         List<? extends List<Integer>> groundTruth) throws IOException {
         // ------------------------------------------------------------
         // Benchmark configuration (runtime flags)
         // ------------------------------------------------------------
-        // -Djvector.ash.similarity=DOT_PRODUCT|EUCLIDEAN trains and scores the model for that similarity.
+        // -Djvector.ash.similarity=DOT_PRODUCT|EUCLIDEAN|COSINE trains and scores the model for that similarity.
         String similarityProperty = System.getProperty("jvector.ash.similarity");
         if (similarityProperty != null) {
             similarity = VectorSimilarityFunction.valueOf(similarityProperty.trim().toUpperCase(java.util.Locale.ROOT));
@@ -1232,10 +1253,8 @@ public class DistancesASH {
         try (DataSet dataset = DataSets.loadDataSet(name)
                 .orElseThrow(() -> new IllegalArgumentException("Unknown dataset: " + name)).getDataSet()) {
             var datasetSimilarity = dataset.getSimilarityFunction();
-            similarity = datasetSimilarity == VectorSimilarityFunction.EUCLIDEAN
-                    ? VectorSimilarityFunction.EUCLIDEAN : VectorSimilarityFunction.DOT_PRODUCT;
-            System.out.println("Running " + dataset.getName() + ", similarity " + datasetSimilarity
-                    + ", ASH similarity " + similarity);
+            similarity = datasetSimilarity;
+            System.out.println("Running " + dataset.getName() + ", similarity " + similarity);
             testASHEncodings(dataset.getBaseVectors(), dataset.getQueryVectors(), dataset.getGroundTruth());
         }
     }

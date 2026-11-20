@@ -34,10 +34,11 @@
   builders places records so none crosses a page boundary, so serving a larger-than-memory index reads
   fewer pages per node. See
   [Building and serving larger-than-memory indexes](docs/larger-than-memory-indexes.md).
-- ASH supports `EUCLIDEAN` as well as `DOT_PRODUCT`. A model's similarity is chosen when it is trained,
+- ASH supports `EUCLIDEAN` and `COSINE` as well as `DOT_PRODUCT`. A model's similarity is chosen when it is trained,
   with `AsymmetricHashing.initialize(vectors, similarity, ...)`, and saved with it; its scorers reject any
   other similarity with `IllegalArgumentException`. The similarity is a required argument; there is no
-  default. ASH does not require normalized vectors. `CompressedVectors.similarityFunction()` and
+  default. ASH does not require normalized vectors; `COSINE` normalizes them itself and throws
+  `IllegalArgumentException` for zero vectors and queries, so callers must reject them first. `CompressedVectors.similarityFunction()` and
   `ScoreFunction.similarityFunction()` report a fixed similarity (null when the caller chooses it, as for PQ).
 - JVector sets the native BLAS thread count for ASH training: one thread by default, or the size of the
   executor passed to `AsymmetricHashing.initialize(..., ForkJoinPool executor)`.

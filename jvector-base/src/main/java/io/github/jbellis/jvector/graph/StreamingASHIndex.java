@@ -35,6 +35,7 @@ import io.github.jbellis.jvector.util.PhysicalCoreExecutor;
 import io.github.jbellis.jvector.util.RamUsageEstimator;
 import io.github.jbellis.jvector.util.ThreadSafeGrowableBitSet;
 import io.github.jbellis.jvector.vector.VectorSimilarityFunction;
+import io.github.jbellis.jvector.vector.VectorUtil;
 import io.github.jbellis.jvector.vector.types.VectorFloat;
 
 import java.io.IOException;
@@ -87,8 +88,9 @@ import java.util.function.Supplier;
  * all-zero code if its page is re-encoded. Ordinals should be dense. A search sees every vector whose {@code add}
  * returned before the search began, and may see vectors being added concurrently.</p>
  *
- * <p>Similarity: the index's similarity, DOT_PRODUCT or EUCLIDEAN, is fixed when it is created; every model it
- * trains is trained for it, and every scorer uses it. Vectors need not be unit length.</p>
+ * <p>Similarity: the index's similarity, DOT_PRODUCT, EUCLIDEAN or COSINE, is fixed when it is created; every model
+ * it trains is trained for it, and every scorer uses it. Vectors need not be unit length. A COSINE index rejects zero
+ * vectors and queries with IllegalArgumentException; callers validate them first.</p>
  */
 @Experimental
 public final class StreamingASHIndex implements Accountable {
@@ -246,8 +248,6 @@ public final class StreamingASHIndex implements Accountable {
                               int encodedBits, int bitsPerDimension, Options options) {
         Objects.requireNonNull(vectors, "vectors");
         Objects.requireNonNull(similarity, "similarity");
-        if (similarity == VectorSimilarityFunction.COSINE)
-            throw new IllegalArgumentException("ASH streaming indexes do not support COSINE similarity");
         if (model != null && model.similarityFunction() != similarity)
             throw new IllegalArgumentException("The model was trained for " + model.similarityFunction()
                     + "; the index is " + similarity);
@@ -306,6 +306,15 @@ public final class StreamingASHIndex implements Accountable {
         return new StreamingASHIndex(vectors, similarity, builders, null, encodedBits, bitsPerDimension, options);
     }
 
+    /**
+     * COSINE is undefined for a zero vector, so a COSINE index rejects zero vectors and queries, as
+     * {@link VectorUtil#l2normalize} does; callers validate vectors before adding or searching them.
+     */
+    private void checkVector(VectorFloat<?> v) {
+        if (similarity == VectorSimilarityFunction.COSINE && v != null && !(VectorUtil.dotProduct(v, v) > 0f))
+            throw new IllegalArgumentException("COSINE similarity is undefined for a zero vector");
+    }
+
     private Live startLive(AsymmetricHashing model) {
         var codes = new MutableASHVectors(model);
         var scores = codes.buildScoreProvider(source);
@@ -340,8 +349,9 @@ public final class StreamingASHIndex implements Accountable {
             try {
                 l = live;
                 if (l == null) {
-                    reservoir.offer(ordinal);
                     VectorFloat<?> v = vectors.get().getVector(ordinal);
+                    checkVector(v);
+                    reservoir.offer(ordinal);
                     if (v != null) mean.accept(v);
                     Cold c = cold;
                     c.added.set(ordinal); // last, so a search that finds the ordinal can read its vector
@@ -502,6 +512,7 @@ public final class StreamingASHIndex implements Accountable {
 
     private long insert(Live l, int ordinal) {
         VectorFloat<?> v = vectors.get().getVector(ordinal);
+        checkVector(v);
         if (v != null) mean.accept(v);
         reservoir.offer(ordinal);
         return place(l, ordinal);
@@ -789,6 +800,7 @@ public final class StreamingASHIndex implements Accountable {
      * {@link #hasModel}.
      */
     public SearchResult search(VectorFloat<?> query, int topK, int rerankK, Bits acceptOrds) {
+        checkVector(query);
         Live l = live;
         if (l == null) {
             Cold c = cold;
@@ -830,6 +842,7 @@ public final class StreamingASHIndex implements Accountable {
      * {@link #hasModel}.
      */
     public SearchScoreProvider searchScoreProviderFor(VectorFloat<?> query) {
+        checkVector(query);
         Live l = live;
         if (l == null) {
             if (cold != null) return DefaultSearchScoreProvider.exact(query, similarity, vectors.get());
