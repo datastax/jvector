@@ -109,11 +109,11 @@ final class NativeBlasThreads {
         var voidToInt = FunctionDescriptor.of(ValueLayout.JAVA_INT);
 
         // MKL's C interface is the mixed-case name; its lower- and upper-case exports are the
-        // Fortran interface, which takes a pointer.
+        // Fortran interface, which takes a pointer. OpenBLAS's openblas_set_num_threads_local is
+        // not used: it sets the process-wide count, and its per-thread value applies only inside
+        // OpenMP parallel regions, so OpenBLAS always takes the reference-counted process-wide path.
         Optional<Control> control = lookup.find("MKL_Set_Num_Threads_Local")
                 .map(s -> new Control("MKL thread-local threads", linker.downcallHandle(s, intToInt), null, false))
-                .or(() -> lookup.find("openblas_set_num_threads_local")
-                        .map(s -> new Control("OpenBLAS thread-local threads", linker.downcallHandle(s, intToInt), null, false)))
                 .or(() -> lookup.find("openblas_set_num_threads").flatMap(set -> lookup.find("openblas_get_num_threads")
                         .map(get -> new Control("OpenBLAS process-wide threads",
                                 linker.downcallHandle(set, intToVoid), linker.downcallHandle(get, voidToInt), true))));

@@ -24,10 +24,12 @@ import io.github.jbellis.jvector.vector.VectorizationProvider;
  * <p>Native BLAS libraries such as MKL and OpenBLAS otherwise start one thread per CPU on their
  * first call, regardless of the host's own executors. JVector's BLAS calls therefore run inside a
  * scope: one thread by default, or the size of the executor a caller passes to the operation.
- * The native vectorization provider applies the limit through the library's per-thread setting
- * (MKL {@code MKL_Set_Num_Threads_Local}, OpenBLAS {@code openblas_set_num_threads_local}), or,
- * for OpenBLAS releases without it, the process-wide setting. Other providers leave BLAS threading
- * to the library's own configuration, such as {@code MKL_NUM_THREADS}.</p>
+ * The native vectorization provider applies the limit per thread with MKL
+ * ({@code MKL_Set_Num_Threads_Local}). OpenBLAS has only a process-wide count
+ * ({@code openblas_set_num_threads}), which every thread shares: the first open scope sets it,
+ * concurrent scopes on other threads join that count, and it is restored when the last one closes.
+ * Other providers leave BLAS threading to the library's own configuration, such as
+ * {@code MKL_NUM_THREADS}.</p>
  *
  * <p>Scopes nest: closing one restores the count that was in effect when it opened.</p>
  */

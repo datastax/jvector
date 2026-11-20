@@ -90,6 +90,37 @@ class NativeBlasThreadsTest {
     }
 
     @Test
+    void openBlasScopesOnTwoThreadsShareAndRestoreTheProcessCount() throws Throwable {
+        assumeTrue(NativeBlasThreads.description().startsWith("OpenBLAS"), "OpenBLAS is not the native BLAS");
+        // openblas_set_num_threads_local also sets the process-wide count, so OpenBLAS must use
+        // the reference-counted process-wide path.
+        assertEquals("OpenBLAS process-wide threads", NativeBlasThreads.description());
+        String path = System.getProperty("dev.ludovic.netlib.blas.nativeLibPath");
+        String library = path != null ? path : System.getProperty("dev.ludovic.netlib.blas.nativeLib", "libblas.so.3");
+        var symbol = java.lang.foreign.SymbolLookup.libraryLookup(library, java.lang.foreign.Arena.global())
+                .find("openblas_get_num_threads").orElseThrow();
+        var get = java.lang.foreign.Linker.nativeLinker().downcallHandle(symbol,
+                java.lang.foreign.FunctionDescriptor.of(java.lang.foreign.ValueLayout.JAVA_INT));
+        int original = (int) get.invokeExact();
+        assumeTrue(original > 1, "OpenBLAS already uses one thread");
+
+        int a = NativeBlasThreads.set(1);                          // scope A opens on this thread
+        int[] b = new int[1];
+        runOnAnotherThread(() -> b[0] = NativeBlasThreads.set(4)); // scope B opens on another thread
+        assertEquals(1, (int) get.invokeExact(), "B must join A's count, not replace it");
+        NativeBlasThreads.set(a);                                  // A closes while B is still open
+        assertEquals(1, (int) get.invokeExact(), "B must keep the count while it is open");
+        runOnAnotherThread(() -> NativeBlasThreads.set(b[0]));     // B closes last
+        assertEquals(original, (int) get.invokeExact(), "The process count must be restored");
+    }
+
+    private static void runOnAnotherThread(Runnable task) throws InterruptedException {
+        var thread = new Thread(task);
+        thread.start();
+        thread.join();
+    }
+
+    @Test
     void trainingUsesOneBlasThreadWithoutAnExecutorAndTheExecutorSizeWithOne() throws Exception {
         assumeTrue(supported() && Files.isDirectory(Path.of("/proc/self/task")),
                 "Needs native BLAS thread control and Linux thread accounting");

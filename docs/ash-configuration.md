@@ -255,10 +255,12 @@ ASH training is the only BLAS and LAPACK user. JVector sets the native BLAS
 thread count for its own calls, so a host does not need to configure MKL or
 OpenBLAS: training uses one BLAS thread, or as many as the executor passed to
 `AsymmetricHashing.initialize(..., ForkJoinPool executor)`. Queries never call
-BLAS. With the native provider, the count is applied per calling thread through
-MKL's `MKL_Set_Num_Threads_Local` or OpenBLAS's `openblas_set_num_threads_local`;
-OpenBLAS releases before 0.3.27 only have a process-wide setting, which JVector
-sets for the duration of training. Other providers leave BLAS threading to
+BLAS. With the native provider, MKL applies the count per calling thread
+(`MKL_Set_Num_Threads_Local`). OpenBLAS has only a process-wide count
+(`openblas_set_num_threads`; its `openblas_set_num_threads_local` also sets the
+process-wide count), so JVector sets it for the duration of training, and
+trainings running at the same time on other threads share the first one's
+count until the last finishes. Other providers leave BLAS threading to
 `MKL_NUM_THREADS`, `OMP_NUM_THREADS` and `OPENBLAS_NUM_THREADS`.
 `io.github.jbellis.jvector.util.BlasThreads` applies the same limit to a host's
 own BLAS work.
