@@ -19,7 +19,8 @@
 
 // INT8 ASH query projection with exact u8 x s8 integer dot products (VNNI vpdpbusd).
 // Included only by the VNNI tiers, inside their namespace, with JV_ASH_I8_WIDE set:
-//  - 0 (AVX3_DL, Ice Lake class and AMD Zen 4/5): 256-bit registers. On Ice Lake, dense
+//  - 0 (AVX3_DL, Ice Lake class and AMD Zen 4/5; AVX3_VNNI, Cascade Lake and Cooper Lake):
+//    256-bit registers. On Ice Lake, dense
 //    512-bit integer dot products slowed the graph search that follows them by 9-15%;
 //    the same tiles on 256-bit registers did not, and were the fastest.
 //  - 1 (AVX3_SPR, Sapphire Rapids and later): 512-bit registers, 1-4% faster there.
@@ -35,6 +36,10 @@
 
 #if !defined(JV_ASH_I8_WIDE)
 #error "Define JV_ASH_I8_WIDE before including ash_projection_i8-inl.h"
+#endif
+// The u8 x s8 dot-product step; a tier whose Highway target emulates it may substitute vpdpbusd.
+#if !defined(JV_ASH_I8_DOT)
+#define JV_ASH_I8_DOT(d32, a, b, sum) hn::SumOfMulQuadAccumulate(d32, a, b, sum)
 #endif
 
 namespace {
@@ -113,7 +118,7 @@ HWY_INLINE void i8_tile(const uint8_t* HWY_RESTRICT query, size_t stride, const 
                 std::memcpy(&four, query + i * stride + g * 4, sizeof(four));
                 const auto a = hn::BitCast(du8, hn::Set(d32, four));
                 for (int k = 0; k < kRow; ++k)
-                    acc[i * kRow + k] = hn::SumOfMulQuadAccumulate(d32, a, b[k], acc[i * kRow + k]);
+                    acc[i * kRow + k] = JV_ASH_I8_DOT(d32, a, b[k], acc[i * kRow + k]);
             }
         }
         for (int i = 0; i < M; ++i)

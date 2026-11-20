@@ -47,8 +47,8 @@ matches FP32 projection, while the matrix keeps one INT8 digit per row.
 
 On AVX-512 VNNI CPUs, INT8 uses JVector's exact-integer Highway kernel for single
 queries and batches, in the native library itself: 512-bit tiles on Sapphire Rapids and
-later, and 256-bit tiles on Ice Lake class CPUs, where wide integer dot products slow
-the graph search that follows. The oneDNN add-on serves INT8 on CPUs with AVX-VNNI
+later, and 256-bit tiles on Cascade Lake, Cooper Lake, Ice Lake and AMD Zen 4/5. On Ice
+Lake, 512-bit integer dot products slowed the graph search that follows them. The oneDNN add-on serves INT8 on CPUs with AVX-VNNI
 but not AVX-512, and chooses the CPU implementation within FP16 at runtime. Setting
 the environment variable `JVECTOR_ASH_INT8_ONEDNN` makes INT8 use the add-on
 everywhere, for example to compare its AMX kernels; both compute the same integers,

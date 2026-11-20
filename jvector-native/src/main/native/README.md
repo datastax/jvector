@@ -912,20 +912,29 @@ allocation failures and execution errors are reported rather than hidden.
 ### INT8 behavior
 
 Required `int8` prepares symmetric signed weights per output row and quantizes
-each query independently. oneDNN computes unsigned-input/signed-weight products
-with signed 32-bit accumulation. Correcting the input offset and dequantizing
-produces FP32 output. Scales, quantization and rescaling use FP32 arithmetic. A nonzero operand whose
+each query independently, as two INT8 digits with one scale (a coarse digit and its
+rounding remainder). Unsigned-input/signed-weight products accumulate in signed
+32 bits. Correcting the input offset and dequantizing produces FP32 output.
+
+On CPUs with AVX-512 VNNI the native library computes the products itself, with the
+Highway kernel in `ash_projection_i8-inl.h`: the Java model owns the packed INT8
+rows, row scales and row sums, and the kernel holds no state. Tiles use 512-bit
+registers on the AVX3_SPR tier (Sapphire Rapids and later) and 256-bit registers on
+the AVX3_DL tier (Ice Lake, AMD Zen 4/5) and on AVX3 CPUs with VNNI (Cascade Lake,
+Cooper Lake). Other CPUs use the oneDNN add-on described below, which only CPUs
+with AVX-VNNI but not AVX-512 need; `JVECTOR_ASH_INT8_ONEDNN` selects it everywhere.
+Both compute the same integers, so their outputs are identical. Scales, quantization and rescaling use FP32 arithmetic. A nonzero operand whose
 scale rounds to zero is rejected before integer conversion. A nonfinite matrix
 value is rejected; a query with a NaN or infinite value gets NaN outputs, as in
 FP32, without affecting other queries in its batch. Output rescaling retains
 ordinary FP32 overflow behavior.
 
-On x86, only the INT8 quantization and batch-projection functions use an AVX2
-compiler target. The generic model-creation guard runs first and requires a
+In the oneDNN add-on, only the INT8 quantization and batch-projection functions use
+an AVX2 compiler target. The generic model-creation guard runs first and requires a
 qualified VNNI/AMX backend, whose ISA includes AVX2. This keeps rounding in native
 instructions without changing FP16/FP32 or library-wide compiler settings.
 
-The qualified VNNI/AMX kernels preserve full-range integer dot products. Legacy
+The add-on's qualified oneDNN VNNI/AMX kernels preserve full-range integer dot products. Legacy
 kernels can saturate at a 16-bit intermediate; INT8 rejects them rather than
 silently changing the quantization range. Both the effective oneDNN ISA and the
 selected primitive are checked. CPU vendor names do not control dispatch.

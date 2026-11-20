@@ -129,6 +129,15 @@ static const KernelVTable AVX3_SPR_vtable = []() {
     return t;
 }();
 
+// AVX3 with AVX-512 VNNI (Cascade Lake, Cooper Lake): the AVX3 slots, plus INT8 projection.
+// The implementation exists in jvector_avx3_vnni_kernels.cpp.
+static const KernelVTable AVX3_VNNI_vtable = []() {
+    KernelVTable t = AVX3_vtable;
+    t.ash_project_i8_available = AVX3_VNNI::ash_project_i8_available;
+    t.ash_project_batch_i8 = AVX3_VNNI::ash_project_batch_i8;
+    return t;
+}();
+
 #define KERNEL_ENTRY(ret_type, name, params, names) AVX2::name,
 static const KernelVTable AVX2_vtable = {
     JVECTOR_SIMD_KERNEL_LIST
@@ -210,7 +219,7 @@ static DispatchResult dispatch_kernels() noexcept
     if (max_isa > MaxIsa::AVX3    && has(CpuFeature::AVX3_DL))
         return { AVX3_DL_vtable, MaxIsa::AVX3_DL, env_str };
     if (max_isa > MaxIsa::AVX2    && has(CpuFeature::AVX3))
-        return { AVX3_vtable, MaxIsa::AVX3, env_str };
+        return { has(CpuFeature::AVX512_VNNI) ? AVX3_VNNI_vtable : AVX3_vtable, MaxIsa::AVX3, env_str };
     if (max_isa > MaxIsa::SSE42   && has(CpuFeature::AVX2))
         return { AVX2_vtable, MaxIsa::AVX2, env_str };
     // SSE42 is the x86-64 baseline — assumed always present, no CPUID check.

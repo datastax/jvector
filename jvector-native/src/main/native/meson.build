@@ -138,6 +138,21 @@ if cpu == 'x86_64'
   )
   isa_libs += avx3_dl_lib
 
+  # AVX3 with AVX-512 VNNI (Cascade Lake, Cooper Lake): only INT8 query projection, which
+  # needs VNNI; every other kernel comes from the AVX3 tier.
+  avx3_vnni_lib = static_library(
+    'simdKernels_avx3_vnni',
+    sources            : 'src/jvector_avx3_vnni_kernels.cpp',
+    dependencies       : hwy_dep,
+    cpp_args           : [
+      '-march=cascadelake',
+      '-DHWY_COMPILE_ONLY_STATIC',
+      '-DJV_REQUIRE_HWY_AVX3',
+      '-fvisibility=hidden',
+    ],
+  )
+  isa_libs += avx3_vnni_lib
+
   # AVX3_SPR (Sapphire Rapids) tier: -march=sapphirerapids adds AVX512FP16 and
   # AVX512BF16 on top of the icelake-server feature set.
   # Requires GCC >= 12 or Clang >= 14.
