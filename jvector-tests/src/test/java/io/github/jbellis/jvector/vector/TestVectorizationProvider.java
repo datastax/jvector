@@ -60,6 +60,39 @@ public class TestVectorizationProvider extends RandomizedTest {
         Assert.assertEquals(a.getVectorUtilSupport().squareDistance(v1a, v2a), b.getVectorUtilSupport().squareDistance(v1b, v2b), 0.0001f);
     }
 
+    /**
+     * PQ scoring calls dotProduct on short slices at non-zero offsets, so check every length around the SIMD widths,
+     * including a slice exactly as wide as one preferred vector, at several offsets against the scalar provider.
+     */
+    @Test
+    public void testDotProductOnShortSlicesWithOffsets() {
+        Assume.assumeTrue(hasSimd);
+
+        VectorizationProvider scalar = new DefaultVectorizationProvider();
+        VectorizationProvider simd = VectorizationProvider.getInstance();
+
+        for (int length : new int[] {1, 2, 3, 4, 5, 7, 8, 9, 15, 16, 17, 31, 32, 33}) {
+            for (int offset1 : new int[] {0, 1, 4, 13}) {
+                for (int offset2 : new int[] {0, 3, 8}) {
+                    VectorFloat<?> simdA = TestUtil.randomVector(getRandom(), offset1 + length + 5);
+                    VectorFloat<?> simdB = TestUtil.randomVector(getRandom(), offset2 + length + 5);
+                    var scalarA = scalar.getVectorTypeSupport().createFloatVector(simdA.length());
+                    var scalarB = scalar.getVectorTypeSupport().createFloatVector(simdB.length());
+                    for (int i = 0; i < simdA.length(); i++) {
+                        scalarA.set(i, simdA.get(i));
+                    }
+                    for (int i = 0; i < simdB.length(); i++) {
+                        scalarB.set(i, simdB.get(i));
+                    }
+                    Assert.assertEquals("length=" + length + " offsets=" + offset1 + "," + offset2,
+                                        scalar.getVectorUtilSupport().dotProduct(scalarA, offset1, scalarB, offset2, length),
+                                        simd.getVectorUtilSupport().dotProduct(simdA, offset1, simdB, offset2, length),
+                                        1e-4f);
+                }
+            }
+        }
+    }
+
     @Test
     public void testAssembleAndSum() {
         Assume.assumeTrue(hasSimd);

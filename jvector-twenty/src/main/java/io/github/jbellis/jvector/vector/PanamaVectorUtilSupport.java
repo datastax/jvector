@@ -156,6 +156,11 @@ class PanamaVectorUtilSupport implements VectorUtilSupport {
     @Override
     public float dotProduct(VectorFloat<?> v1, int v1offset, VectorFloat<?> v2, int v2offset, final int length)
     {
+        // Exactly one vector wide (the PQ subvector size on 128-bit hardware): handle it here. dotProductPreferred is
+        // too large for the JIT to inline, so routing this case through it cost every call a real method call.
+        if (length == FloatVector.SPECIES_PREFERRED.length())
+            return dotPreferred(v1, v1offset, v2, v2offset);
+
         //Common case first
         if (length >= FloatVector.SPECIES_PREFERRED.length())
             return dotProductPreferred(v1, v1offset, v2, v2offset, length);
