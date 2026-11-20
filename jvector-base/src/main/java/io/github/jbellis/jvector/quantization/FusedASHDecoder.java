@@ -64,6 +64,10 @@ import java.util.Objects;
  *   rawDotProduct = scale * &lt;Aq, code&gt; + &lt;q, μ&gt; + offset
  *   similarity = (1 + rawDotProduct) / 2   (unclamped, the exact DOT_PRODUCT scale)
  * </pre>
+ *
+ * <p>A EUCLIDEAN model stores {@code -||x - μ||² / 2} in place of {@code <x, μ> - ||μ||²} and uses
+ * {@code -||q - μ||² / 2} in place of {@code <q, μ>}, so the same estimate is {@code -||q - x||² / 2}; its decoder
+ * reports {@code 1 / (1 + ||q - x||²)}, converting through the model's {@code ASHScoreScale}.</p>
  */
 @Experimental
 public final class FusedASHDecoder implements ScoreFunction.AdaptiveApproximateScoreFunction {
@@ -131,6 +135,8 @@ public final class FusedASHDecoder implements ScoreFunction.AdaptiveApproximateS
     private final InlineSourceAccessor inlineSourceAccessor;
     private final ASHScorer.ASHScoreFunction sourceScorer;
     private final float dotProductBound;
+    private final VectorSimilarityFunction similarityFunction;
+    private final ASHScoreScale scale;
 
     private final int maxDegree;
 
@@ -152,25 +158,10 @@ public final class FusedASHDecoder implements ScoreFunction.AdaptiveApproximateS
      * @param reusableNeighborhoodBytes decoder-owned scratch, at least the complete feature size
      * @param reusableScores decoder-owned scratch, at least the source's maximum degree
      * @param blockSize serialized block width: 8, 16, or 32
-     * @param similarityFunction must be DOT_PRODUCT
-     * @throws IllegalArgumentException if dimensions, payload size, or scratch capacity disagree
-     * @throws UnsupportedOperationException for another similarity function
+     * @param similarityFunction the similarity the model was trained for
+     * @throws IllegalArgumentException if dimensions, payload size, or scratch capacity disagree, or for another
+     *         similarity function
      */
-    public FusedASHDecoder(
-            PackedNeighborhoods packedNeighborhoods,
-            AsymmetricHashing ash,
-            Int2ObjectHashMap<FusedFeature.InlineSource> hierarchyCachedFeatures,
-            InlineSourceAccessor inlineSourceAccessor,
-            VectorFloat<?> query,
-            byte[] reusableNeighborhoodBytes,
-            float[] reusableScores,
-            int blockSize,
-            VectorSimilarityFunction similarityFunction) {
-
-        this(packedNeighborhoods, ash, hierarchyCachedFeatures, inlineSourceAccessor, query,
-                reusableNeighborhoodBytes, reusableScores, blockSize, similarityFunction, null, null);
-    }
-
     private FusedASHDecoder(
             PackedNeighborhoods packedNeighborhoods, AsymmetricHashing ash,
             Int2ObjectHashMap<FusedFeature.InlineSource> hierarchyCachedFeatures,
@@ -179,9 +170,9 @@ public final class FusedASHDecoder implements ScoreFunction.AdaptiveApproximateS
             VectorSimilarityFunction similarityFunction, QueryScratch scratch,
             ASHQueryPreparer.State externalPrepared) {
 
-        if (similarityFunction != VectorSimilarityFunction.DOT_PRODUCT) {
-            throw new UnsupportedOperationException("FusedASH supports DOT_PRODUCT only");
-        }
+        Objects.requireNonNull(ash, "ash").checkSimilarity(similarityFunction);
+        this.similarityFunction = similarityFunction;
+        this.scale = ash.scores();
 
         this.packedNeighborhoods = Objects.requireNonNull(packedNeighborhoods, "packedNeighborhoods");
         Objects.requireNonNull(ash, "ash");
@@ -268,6 +259,12 @@ public final class FusedASHDecoder implements ScoreFunction.AdaptiveApproximateS
         return dotProductBound;
     }
 
+    /** The similarity the model was trained for. */
+    @Override
+    public VectorSimilarityFunction similarityFunction() {
+        return similarityFunction;
+    }
+
     public static FusedASHDecoder newDecoder(
             PackedNeighborhoods packedNeighborhoods,
             AsymmetricHashing ash,
@@ -278,16 +275,19 @@ public final class FusedASHDecoder implements ScoreFunction.AdaptiveApproximateS
             float[] reusableScores,
             int blockSize,
             VectorSimilarityFunction similarityFunction) {
-        return new FusedASHDecoder(
-                packedNeighborhoods,
-                ash,
-                hierarchyCachedFeatures,
-                inlineSourceAccessor,
-                query,
-                reusableNeighborhoodBytes,
-                reusableScores,
-                blockSize,
-                similarityFunction);
+        return create(packedNeighborhoods, ash, hierarchyCachedFeatures, inlineSourceAccessor, query,
+                reusableNeighborhoodBytes, reusableScores, blockSize, similarityFunction, null, null);
+    }
+
+    private static FusedASHDecoder create(
+            PackedNeighborhoods packedNeighborhoods, AsymmetricHashing ash,
+            Int2ObjectHashMap<FusedFeature.InlineSource> hierarchyCachedFeatures,
+            InlineSourceAccessor inlineSourceAccessor, VectorFloat<?> query,
+            byte[] reusableNeighborhoodBytes, float[] reusableScores, int blockSize,
+            VectorSimilarityFunction similarityFunction, QueryScratch scratch,
+            ASHQueryPreparer.State externalPrepared) {
+        return new FusedASHDecoder(packedNeighborhoods, ash, hierarchyCachedFeatures, inlineSourceAccessor, query,
+                reusableNeighborhoodBytes, reusableScores, blockSize, similarityFunction, scratch, externalPrepared);
     }
 
     /** Creates a query decoder using scratch owned by its graph view. */
@@ -297,7 +297,7 @@ public final class FusedASHDecoder implements ScoreFunction.AdaptiveApproximateS
             InlineSourceAccessor sourceAccessor, VectorFloat<?> query, QueryScratch scratch,
             int blockSize, VectorSimilarityFunction similarityFunction) {
         Objects.requireNonNull(scratch, "scratch");
-        return new FusedASHDecoder(neighborhoods, ash, hierarchyFeatures, sourceAccessor, query,
+        return create(neighborhoods, ash, hierarchyFeatures, sourceAccessor, query,
                 scratch.neighborhoodBytes, scratch.scores, blockSize, similarityFunction, scratch, null);
     }
 
@@ -310,9 +310,9 @@ public final class FusedASHDecoder implements ScoreFunction.AdaptiveApproximateS
             QueryScratch scratch, int blockSize) {
         Objects.requireNonNull(scratch, "scratch");
         ASHQueryPreparer.State prepared = ASHQueryPreparer.state(ash, preparedQuery, true);
-        return new FusedASHDecoder(neighborhoods, ash, hierarchyFeatures, sourceAccessor,
+        return create(neighborhoods, ash, hierarchyFeatures, sourceAccessor,
                 prepared.queryVector(), scratch.neighborhoodBytes, scratch.scores, blockSize,
-                VectorSimilarityFunction.DOT_PRODUCT, scratch, prepared);
+                ash.similarityFunction(), scratch, prepared);
     }
 
     private void checkQueryLifetime() {
@@ -367,7 +367,7 @@ public final class FusedASHDecoder implements ScoreFunction.AdaptiveApproximateS
             );
         }
 
-        return ASHScorer.toSimilarity(sourceScorer.similarityTo(vector));
+        return scale.similarity(sourceScorer.similarityTo(vector));
     }
 
     @Override

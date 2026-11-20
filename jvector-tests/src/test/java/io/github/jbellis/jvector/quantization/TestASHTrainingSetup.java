@@ -16,6 +16,7 @@
 
 package io.github.jbellis.jvector.quantization;
 
+import io.github.jbellis.jvector.vector.VectorSimilarityFunction;
 import io.github.jbellis.jvector.graph.RandomAccessVectorValues;
 import io.github.jbellis.jvector.vector.VectorUtil;
 import io.github.jbellis.jvector.vector.VectorizationProvider;
@@ -194,7 +195,7 @@ public class TestASHTrainingSetup {
         for (int optimizer : new int[]{AsymmetricHashing.RANDOM, AsymmetricHashing.ITQ}) {
             for (int bits : new int[]{1,2,4,9}) {
                 Values source = new Values(vectors(count, dimensions), dimensions, true);
-                var model = AsymmetricHashing.initialize(source, optimizer,
+                var model = AsymmetricHashing.initialize(source, VectorSimilarityFunction.DOT_PRODUCT, optimizer,
                         AsymmetricHashing.HEADER_BITS + 3 * bits, 1, bits);
                 Reference expected = new Reference(source.input, dimensions, new Random(103),
                         optimizer == AsymmetricHashing.ITQ);
@@ -224,7 +225,7 @@ public class TestASHTrainingSetup {
         nullRow.input[1] = null;
         assertThrows(NullPointerException.class, () -> prepare(nullRow, 7, new Random(103), true));
         Values empty = new Values(new VectorFloat<?>[0], 7, false);
-        assertThrows(IllegalArgumentException.class, () -> AsymmetricHashing.initialize(empty,
+        assertThrows(IllegalArgumentException.class, () -> AsymmetricHashing.initialize(empty, VectorSimilarityFunction.DOT_PRODUCT,
                 AsymmetricHashing.ITQ, AsymmetricHashing.HEADER_BITS + 6, 1, 2));
         assertEquals(0, empty.reads.get());
     }
@@ -246,34 +247,34 @@ public class TestASHTrainingSetup {
     public void invalidMetadataAndConfigurationAreRejectedBeforeReading() {
         int budget = AsymmetricHashing.HEADER_BITS + 6;
         assertThrows(NullPointerException.class,
-                () -> AsymmetricHashing.initialize(null, AsymmetricHashing.ITQ, budget, 1, 2));
+                () -> AsymmetricHashing.initialize(null, VectorSimilarityFunction.DOT_PRODUCT, AsymmetricHashing.ITQ, budget, 1, 2));
         assertThrows(IllegalArgumentException.class,
-                () -> AsymmetricHashing.initialize(metadataOnlySource(0, 7), AsymmetricHashing.ITQ, budget, 1, 2));
+                () -> AsymmetricHashing.initialize(metadataOnlySource(0, 7), VectorSimilarityFunction.DOT_PRODUCT, AsymmetricHashing.ITQ, budget, 1, 2));
         assertThrows(IllegalArgumentException.class,
-                () -> AsymmetricHashing.initialize(metadataOnlySource(-1, 7), AsymmetricHashing.ITQ, budget, 1, 2));
+                () -> AsymmetricHashing.initialize(metadataOnlySource(-1, 7), VectorSimilarityFunction.DOT_PRODUCT, AsymmetricHashing.ITQ, budget, 1, 2));
         for (int dimensions : new int[]{0,-1}) {
             assertThrows(IllegalArgumentException.class,
-                    () -> AsymmetricHashing.initialize(metadataOnlySource(1, dimensions),
+                    () -> AsymmetricHashing.initialize(metadataOnlySource(1, dimensions), VectorSimilarityFunction.DOT_PRODUCT,
                             AsymmetricHashing.ITQ, budget, 1, 2));
         }
         for (int optimizer : new int[]{0,-1,3}) {
             assertThrows(IllegalArgumentException.class,
-                    () -> AsymmetricHashing.initialize(metadataOnlySource(1, 7), optimizer, budget, 1, 2));
+                    () -> AsymmetricHashing.initialize(metadataOnlySource(1, 7), VectorSimilarityFunction.DOT_PRODUCT, optimizer, budget, 1, 2));
         }
         for (int bits : new int[]{0,10}) {
             assertThrows(IllegalArgumentException.class,
-                    () -> AsymmetricHashing.initialize(metadataOnlySource(1, 7),
+                    () -> AsymmetricHashing.initialize(metadataOnlySource(1, 7), VectorSimilarityFunction.DOT_PRODUCT,
                             AsymmetricHashing.ITQ, budget, 1, bits));
         }
         for (int landmarks : new int[]{0,257}) {
             assertThrows(IllegalArgumentException.class,
-                    () -> AsymmetricHashing.initialize(metadataOnlySource(1, 7),
+                    () -> AsymmetricHashing.initialize(metadataOnlySource(1, 7), VectorSimilarityFunction.DOT_PRODUCT,
                             AsymmetricHashing.ITQ, budget, landmarks, 2));
         }
         for (int invalidBudget : new int[]{AsymmetricHashing.HEADER_BITS,
                 AsymmetricHashing.HEADER_BITS + 3, AsymmetricHashing.HEADER_BITS + 16}) {
             assertThrows(IllegalArgumentException.class,
-                    () -> AsymmetricHashing.initialize(metadataOnlySource(1, 7),
+                    () -> AsymmetricHashing.initialize(metadataOnlySource(1, 7), VectorSimilarityFunction.DOT_PRODUCT,
                             AsymmetricHashing.ITQ, invalidBudget, 1, 2));
         }
     }
@@ -287,11 +288,11 @@ public class TestASHTrainingSetup {
         assertEquals(Integer.valueOf(100), method.invoke(null, 100, Integer.MAX_VALUE));
         assertEquals(Integer.valueOf(140), method.invoke(null, Integer.MAX_VALUE, 7));
         IllegalArgumentException failure = assertThrows(IllegalArgumentException.class,
-                () -> AsymmetricHashing.initialize(metadataOnlySource(50_000, 50_000),
+                () -> AsymmetricHashing.initialize(metadataOnlySource(50_000, 50_000), VectorSimilarityFunction.DOT_PRODUCT,
                         AsymmetricHashing.ITQ, AsymmetricHashing.HEADER_BITS + 6, 1, 2));
         assertTrue(failure.getMessage().contains("array size limit"));
         IllegalArgumentException wideFailure = assertThrows(IllegalArgumentException.class,
-                () -> AsymmetricHashing.initialize(metadataOnlySource(1, 50_000),
+                () -> AsymmetricHashing.initialize(metadataOnlySource(1, 50_000), VectorSimilarityFunction.DOT_PRODUCT,
                         AsymmetricHashing.ITQ, AsymmetricHashing.HEADER_BITS + 6, 1, 2));
         assertTrue(wideFailure.getMessage().contains("PCA basis"));
     }
@@ -320,7 +321,7 @@ public class TestASHTrainingSetup {
         Values source = new Values(vectors(65, 7), 7, true);
         source.failAt = 17;
         IllegalStateException failure = assertThrows(IllegalStateException.class,
-                () -> AsymmetricHashing.initialize(source, AsymmetricHashing.ITQ,
+                () -> AsymmetricHashing.initialize(source, VectorSimilarityFunction.DOT_PRODUCT, AsymmetricHashing.ITQ,
                         AsymmetricHashing.HEADER_BITS + 6, 1, 2));
         assertEquals("source failure", failure.getMessage());
         assertEquals(18, source.reads.get());
@@ -337,7 +338,7 @@ public class TestASHTrainingSetup {
             Object training = field(prepared, "trainingData");
             for (double value : (double[]) field(training, "xCol")) assertEquals(0.0, value, 0.0);
             Values source = new Values(input, 3, true);
-            var model = AsymmetricHashing.initialize(source, AsymmetricHashing.ITQ,
+            var model = AsymmetricHashing.initialize(source, VectorSimilarityFunction.DOT_PRODUCT, AsymmetricHashing.ITQ,
                     AsymmetricHashing.HEADER_BITS + 4, 1, 2);
             for (double[] row : model.stiefelTransform.AData) {
                 for (double value : row) assertTrue(Double.isFinite(value));
@@ -350,7 +351,7 @@ public class TestASHTrainingSetup {
     public void multipleLandmarksStillTrainThroughTheExistingPath() throws Exception {
         for (int optimizer : new int[]{AsymmetricHashing.ITQ, AsymmetricHashing.RANDOM}) {
             Values source = new Values(vectors(120, 7), 7, true);
-            var model = AsymmetricHashing.initialize(source, optimizer,
+            var model = AsymmetricHashing.initialize(source, VectorSimilarityFunction.DOT_PRODUCT, optimizer,
                     AsymmetricHashing.HEADER_BITS + 6, 3, 2);
             assertEquals(3, model.landmarks.length);
             assertEquals(3, model.quantizedDim);
@@ -427,8 +428,8 @@ public class TestASHTrainingSetup {
             VectorUtil.scale(scaled[i], 4f);
         }
         int budget = AsymmetricHashing.HEADER_BITS + 16 * 2;
-        var base = AsymmetricHashing.initialize(new Values(values, dimensions, false), AsymmetricHashing.ITQ, budget, 1, 2);
-        var big = AsymmetricHashing.initialize(new Values(scaled, dimensions, false), AsymmetricHashing.ITQ, budget, 1, 2);
+        var base = AsymmetricHashing.initialize(new Values(values, dimensions, false), VectorSimilarityFunction.DOT_PRODUCT, AsymmetricHashing.ITQ, budget, 1, 2);
+        var big = AsymmetricHashing.initialize(new Values(scaled, dimensions, false), VectorSimilarityFunction.DOT_PRODUCT, AsymmetricHashing.ITQ, budget, 1, 2);
         for (int d = 0; d < dimensions; d++)
             assertEquals(Float.floatToRawIntBits(4f * base.landmarks[0].get(d)),
                     Float.floatToRawIntBits(big.landmarks[0].get(d)));
@@ -441,7 +442,7 @@ public class TestASHTrainingSetup {
         int dimensions = 16, count = 2000;
         VectorFloat<?>[] values = embeddingLike(count, dimensions, false, 4243);
         for (VectorFloat<?> value : values) VectorUtil.scale(value, 10f);
-        var model = AsymmetricHashing.initialize(new Values(values, dimensions, false), AsymmetricHashing.ITQ,
+        var model = AsymmetricHashing.initialize(new Values(values, dimensions, false), VectorSimilarityFunction.DOT_PRODUCT, AsymmetricHashing.ITQ,
                 AsymmetricHashing.HEADER_BITS + 8 * 2, 4, 2);
         double meanNorm = 0;
         for (VectorFloat<?> value : values) meanNorm += Math.sqrt(VectorUtil.dotProduct(value, value));

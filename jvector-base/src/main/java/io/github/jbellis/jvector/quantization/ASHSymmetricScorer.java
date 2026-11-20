@@ -19,7 +19,7 @@ package io.github.jbellis.jvector.quantization;
 import io.github.jbellis.jvector.annotations.Experimental;
 import io.github.jbellis.jvector.graph.similarity.ScoreFunction;
 import io.github.jbellis.jvector.util.RamUsageEstimator;
-import io.github.jbellis.jvector.vector.VectorUtil;
+import io.github.jbellis.jvector.vector.VectorSimilarityFunction;
 
 /**
  * Symmetric ASH scoring from already encoded operands. Graph construction remains C=1.
@@ -45,6 +45,8 @@ public final class ASHSymmetricScorer {
     private final float[][] landmarkDots;
     private final float[] centeredOffsets;
     private final boolean simd;
+    /** How the model's kernel estimates become its similarity. */
+    private final ASHScoreScale scale;
     private final long retainedBytes;
     private final io.github.jbellis.jvector.vector.VectorUtilSupport backend =
             io.github.jbellis.jvector.vector.VectorizationProvider.getInstance().getVectorUtilSupport();
@@ -58,6 +60,7 @@ public final class ASHSymmetricScorer {
         this.vectors = vectors;
         codes = vectors.codes;
         ash = vectors.getCompressor();
+        scale = ash.scores();
         dimensions = ash.quantizedDim;
         bits = ash.bitsPerDimension;
         landmarks = ash.landmarkCount;
@@ -66,7 +69,7 @@ public final class ASHSymmetricScorer {
         landmarkDots = new float[landmarks][landmarks];
         for (int a = 0; a < landmarks; a++) {
             for (int b = 0; b <= a; b++) {
-                landmarkDots[a][b] = landmarkDots[b][a] = VectorUtil.dotProduct(ash.landmarks[a], ash.landmarks[b]);
+                landmarkDots[a][b] = landmarkDots[b][a] = ash.symmetricLandmarkTerm(a, b);
             }
         }
         // Stored offsets include -scale * <A mu_c, code>; symmetric scoring adds it back.
@@ -145,20 +148,22 @@ public final class ASHSymmetricScorer {
             }
         }
         float xs = codes.scales[a], ys = codes.scales[b];
+        // Landmark projections are in input units; scales are in model units (the unit is 1 except for EUCLIDEAN).
         return (xs * ys) * pairDot(as, aso, ab, abo, bs, bso, bb, bbo)
-                + ((xs * crossA + ys * crossB) + (offset(a) + offset(b))) + landmarkDots[ca][cb];
+                + ((ash.unit * (xs * crossA + ys * crossB)) + (offset(a) + offset(b))) + landmarkDots[ca][cb];
     }
 
+    /** Scores in the similarity the model was trained for. */
     public ScoreFunction.AdaptiveApproximateScoreFunction scoreFunctionFor(int node) {
         if (landmarks != 1) return scoreFunctionFor(vectors.get(node));
         return c1ScoreFunction(signs(node), codes.signOffset(node), body(node), codes.bodyOffset(node),
                 codes.scales[node], offset(node));
     }
 
-    /** The operand must already be encoded with this instance's compressor. */
+    /** The operand must already be encoded with this instance's compressor. Scores in the model's similarity. */
     public ScoreFunction.AdaptiveApproximateScoreFunction scoreFunctionFor(AsymmetricHashing.QuantizedVector query) {
-        if (landmarks != 1) return vectors.scoreFunctionFor(preparedState(query), simd);
-        return c1ScoreFunction(query.binaryVector, 0, query.extraBits, 0, query.scale, centeredOffset(query));
+        return landmarks != 1 ? vectors.scoreFunctionFor(preparedState(query), simd)
+                : c1ScoreFunction(query.binaryVector, 0, query.extraBits, 0, query.scale, centeredOffset(query));
     }
 
     private ScoreFunction.AdaptiveApproximateScoreFunction c1ScoreFunction(long[] querySigns, int querySignOffset,
@@ -177,11 +182,16 @@ public final class ASHSymmetricScorer {
             final boolean batch = vu.supportsAshSymmetricDotRows();
             return new ScoreFunction.AdaptiveApproximateScoreFunction() {
                 @Override
+                public VectorSimilarityFunction similarityFunction() {
+                    return ash.similarityFunction();
+                }
+
+                @Override
                 public float similarityTo(int node) {
                     float dot = (queryScale * scales[node])
                             * vu.ashSymmetricDotAt(queryBody, queryBodyOffset, pages[node >>> shift], (node & mask) * stride, d, b)
                             + (queryOffset + offsets[node]) + landmarkDot;
-                    return ASHScorer.toSimilarity(dot);
+                    return scale.similarity(dot);
                 }
 
                 @Override
@@ -201,17 +211,25 @@ public final class ASHSymmetricScorer {
                     for (int i = 0; i < count; i++) {
                         int node = nodes[i];
                         float dot = (queryScale * scales[node]) * scores[i] + (queryOffset + offsets[node]) + landmarkDot;
-                        scores[i] = ASHScorer.toSimilarity(dot);
+                        scores[i] = scale.similarity(dot);
                     }
                 }
             };
         }
-        return node -> {
-            float dot = (queryScale * scales[node])
-                    * pairDot(querySigns, querySignOffset, queryBody, queryBodyOffset,
-                              signs(node), c.signOffset(node), body(node), c.bodyOffset(node))
-                    + (queryOffset + offset(node)) + landmarkDot;
-            return ASHScorer.toSimilarity(dot);
+        return new ScoreFunction.AdaptiveApproximateScoreFunction() {
+            @Override
+            public VectorSimilarityFunction similarityFunction() {
+                return ash.similarityFunction();
+            }
+
+            @Override
+            public float similarityTo(int node) {
+                float dot = (queryScale * scales[node])
+                        * pairDot(querySigns, querySignOffset, queryBody, queryBodyOffset,
+                                  signs(node), c.signOffset(node), body(node), c.bodyOffset(node))
+                        + (queryOffset + offset(node)) + landmarkDot;
+                return scale.similarity(dot);
+            }
         };
     }
 
@@ -222,6 +240,7 @@ public final class ASHSymmetricScorer {
         return blockScorerFor(query, blockSize, kernel);
     }
 
+    /** Scores in the similarity the model was trained for. */
     public ASHBlockScorer blockScorerFor(AsymmetricHashing.QuantizedVector query, int blockSize, Kernel kernel) {
         if (blockSize <= 0) throw new IllegalArgumentException("blockSize must be positive");
         if (landmarks == 1 && (bits == 2 || bits == 4)) {
@@ -268,7 +287,7 @@ public final class ASHSymmetricScorer {
                             out[done+i] = sum*.25f;
                         }
                         for (int i = 0; i < lanes; i++) {
-                            out[done+i] = ASHScorer.toSimilarity((query.scale*scales[ordinal+i])*out[done+i]
+                            out[done+i] = scale.similarity((query.scale*scales[ordinal+i])*out[done+i]
                                     +(queryOffset+offset(ordinal+i))+landmarkDots[0][0]);
                         }
                         done += lanes;
@@ -292,7 +311,7 @@ public final class ASHSymmetricScorer {
                         int at = codes.signOffset(node);
                         float dot = vector ? backend.ashSymmetricBinaryDotAt(query.binaryVector, 0, page, at, dimensions)
                                 : codeDot(query.binaryVector, 0, null, 0, page, at, null, 0, dimensions, bits);
-                        out[i] = ASHScorer.toSimilarity((query.scale * codes.scales[node]) * dot
+                        out[i] = scale.similarity((query.scale * codes.scales[node]) * dot
                                 + (queryOffset + offset(node)) + landmarkDots[0][0]);
                     }
                 }
@@ -312,7 +331,7 @@ public final class ASHSymmetricScorer {
         float[] qProj = new float[dimensions];
         for (int j = 0; j < dimensions; j++) {
             code[j] = component(query, j, bits);
-            qProj[j] = ash.landmarkProj[cq][j] + query.scale * code[j];
+            qProj[j] = ash.unit * ash.landmarkProj[cq][j] + query.scale * code[j];
         }
         // The query's stored offset already includes its own landmark term.
         float correction = query.offset;
@@ -320,7 +339,7 @@ public final class ASHSymmetricScorer {
         for (int c = 0; c < landmarks; c++) {
             float dot = 0;
             for (int j = 0; j < dimensions; j++) dot += code[j] * ash.landmarkProj[c][j];
-            dots[c] = landmarkDots[cq][c] + query.scale * dot + correction;
+            dots[c] = landmarkDots[cq][c] + query.scale * (ash.unit * dot) + correction;
         }
         var prepared = new ASHScorer.QueryPrecompute(dimensions, landmarks, qProj, dots);
         prepared.sumQProj = ASHScorer.sum(qProj);

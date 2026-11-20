@@ -57,7 +57,7 @@ public class TestASHPackedBitsRace {
                 for (int j = 0; j < 64; j++) values[i].set(j, random.nextFloat() - .5f);
                 VectorUtil.l2normalize(values[i]);
             }
-            var ash = AsymmetricHashing.initialize(MockVectorValues.fromValues(values), AsymmetricHashing.RANDOM,
+            var ash = AsymmetricHashing.initialize(MockVectorValues.fromValues(values), VectorSimilarityFunction.DOT_PRODUCT, AsymmetricHashing.RANDOM,
                     AsymmetricHashing.HEADER_BITS + 64, 1, 1);
             var encoded = ash.encodeAll(MockVectorValues.fromValues(values), ForkJoinPool.commonPool());
             var codes = new AsymmetricHashing.QuantizedVector[n];

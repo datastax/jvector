@@ -269,7 +269,7 @@ public class TestCompressedVectors extends RandomizedTest {
         var vectors = createRandomVectors(256, 64);
         vectors.forEach(VectorUtil::l2normalize);
         var ravv = new ListRandomAccessVectorValues(vectors, 64);
-        var ash = AsymmetricHashing.initialize(ravv, AsymmetricHashing.RANDOM,
+        var ash = AsymmetricHashing.initialize(ravv, VectorSimilarityFunction.DOT_PRODUCT, AsymmetricHashing.RANDOM,
                 AsymmetricHashing.HEADER_BITS + 64, 1, 2);
         int current = io.github.jbellis.jvector.graph.disk.OnDiskGraphIndex.CURRENT_VERSION;
 

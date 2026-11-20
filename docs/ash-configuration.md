@@ -9,6 +9,61 @@ Set JVM properties before the affected model, provider or executor is initialize
 Query views and pools are cached; changing a property later does not reconfigure
 existing objects. CPU-count properties do not pin threads.
 
+## Similarity
+
+An ASH model is trained for one similarity, `DOT_PRODUCT` or `EUCLIDEAN`,
+which `AsymmetricHashing.initialize` requires as its second argument, as
+`GraphIndexBuilder` does; an ASH index cannot be built without one. The model
+saves it, and its codes and every scorer of them use it; asking a scorer for
+another similarity throws `IllegalArgumentException`, and every ASH score
+function reports it in `similarityFunction()`, which adaptive stopping reads.
+PQ and BQ keep choosing the similarity per call.
+`CompressedVectors.similarityFunction()` returns the fixed similarity, or null
+when each call chooses it. BenchYAML takes the similarity from the dataset's
+metadata (`similarity_function` in `dataset-metadata.yml`).
+
+ASH does not require normalized vectors for any similarity. Training and
+encoding center each vector on its landmark and use the unit residual
+`(x - mu) / ||x - mu||`, so vector lengths are kept. Scores use the exact
+scale of `VectorSimilarityFunction`: `(1 + dot) / 2` for `DOT_PRODUCT` and
+`1 / (1 + d^2)` for `EUCLIDEAN`.
+
+`EUCLIDEAN` uses the same codes, kernels and speed as `DOT_PRODUCT` (ASH paper,
+Appendix A). Its header stores `-||x - mu||^2 / 2` where a `DOT_PRODUCT` header
+stores `<x, mu> - ||mu||^2`, and its query term is `-||q - mu||^2 / 2` in place of
+`<q, mu>`, so the kernels estimate `-||q - x||^2 / 2`. A `EUCLIDEAN` model also
+stores a power-of-two unit that scales vectors to about unit length, so the
+half-precision header holds squared distances of vectors of any length.
+
+Indexing:
+
+```java
+// The similarity is fixed here and saved with the model.
+AsymmetricHashing ash = AsymmetricHashing.initialize(vectors, VectorSimilarityFunction.EUCLIDEAN,
+        AsymmetricHashing.ITQ, encodedBits, 1, bitsPerDimension, executor);
+ASHVectors codes = ash.encodeAll(vectors, executor);
+// Graph construction scores by the model's similarity; another one is rejected.
+var builder = new GraphIndexBuilder(BuildScoreProvider.ashBuildScoreProvider(codes.similarityFunction(), codes),
+        vectors.dimension(), 32, 100, 1.2f, 1.2f, true);
+var graph = builder.build(vectors);
+```
+
+Scoring:
+
+```java
+VectorSimilarityFunction similarity = codes.similarityFunction(); // EUCLIDEAN
+var approximate = codes.scoreFunctionFor(query, similarity);
+var reranker = vectors.rerankerFor(query, similarity);
+try (var searcher = new GraphSearcher(graph)) {
+    var result = searcher.search(new DefaultSearchScoreProvider(approximate, reranker), 10, 50, 0f, 0f, Bits.ALL);
+}
+```
+
+A fused index reads the similarity from its saved model:
+`view.approximateScoreFunctionFor(query, similarity)` must be given the same
+one. `StreamingASHIndex` takes the similarity when it is created and trains
+every model for it.
+
 ## Stored codes and training
 
 BenchYAML puts these under `compression[].parameters` with `type: ASH`.
@@ -21,7 +76,7 @@ the codes stored with a fused ASH graph.
 | `encodedBits` | Exactly one of this and `compressionRatio` | Total stored bits including the 40-bit / five-byte header. The positive payload `encodedBits - 40` must be divisible by `bitsPerDimension`. |
 | `compressionRatio` | Alternative to `encodedBits` | BenchYAML accepts `8`, `16`, `32`, `64`, `128`, `256`. Resolves a payload near the requested FP32-to-code ratio, with a minimum 64-bit payload and whole projected dimensions; inspect the printed resolved size. |
 | `bitsPerDimension` (`b`) | `1` | Integer `1` through `9`, all supported by fused ASH. `1`, `2` and `4` have the most optimized kernels (see below). Stored-code precision is independent of query-projection arithmetic. |
-| `landmarkCount` (`C`) | `1` | Integer `1` through `256` for the quantizer. Symmetric graph-construction scoring currently requires `C=1` and dot-product similarity. |
+| `landmarkCount` (`C`) | `1` | Integer `1` through `256` for the quantizer. Symmetric graph-construction scoring currently requires `C=1`. |
 | Projected dimension (`d`) | Derived, not a separate YAML field | `d = (encodedBits - 40) / b`, with `1 <= d <= D` for input dimension `D`. Increasing `d` or `b` increases code size. |
 
 For an exact payload, use `encodedBits = 40 + d*b`. For example, a 256-D

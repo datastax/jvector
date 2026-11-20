@@ -98,7 +98,7 @@ Integrators should also read:
 
 | Quantizer | Use it for | Notes |
 | --- | --- | --- |
-| **ASH** | Graph traversal at high compression | Most accurate at a given code size; fused or in memory; dot product only |
+| **ASH** | Graph traversal at high compression | Most accurate at a given code size; fused or in memory; dot product or Euclidean |
 | **PQ** | Graph traversal at moderate compression | Fused or in memory; any similarity; optional anisotropic weighting |
 | **BQ** | Very fast, coarse traversal | One bit per dimension |
 | **NVQ** | Reranking | Stored in the graph; high accuracy at about a quarter of FP32's size |
@@ -123,7 +123,9 @@ Start with the HelloASHWorld programs above, then:
 - [Building and serving larger-than-memory indexes](./docs/larger-than-memory-indexes.md): sizing,
   streamed construction, page-aligned records and query settings for indexes served from disk.
 
-ASH scores dot product only, so use `DOT_PRODUCT` with normalized vectors for cosine similarity.
+An ASH model is trained for one similarity, `DOT_PRODUCT` or `EUCLIDEAN`, chosen when it is created and
+saved with it; every scorer of its codes uses it. ASH does not require normalized vectors. See
+[Similarity](./docs/ash-configuration.md#similarity).
 Fused ASH requires on-disk format version 7, which earlier JVector releases cannot read. Training
 uses the system BLAS and LAPACK (MKL or OpenBLAS) when installed, with a slower Java fallback.
 

@@ -40,8 +40,8 @@ import java.util.concurrent.ForkJoinTask;
 /**
  * ASH scoring benchmark. Pass a dataset name from the public dataset catalog (default
  * {@value #DEFAULT_DATASET}; it is downloaded and cached on first use), or base, query and
- * ground-truth files ({@code .fvecs}, {@code .fvecs}, {@code .ivecs}). ASH scores inner products, so the
- * dataset should use dot-product similarity, or cosine similarity with normalized vectors.
+ * ground-truth files ({@code .fvecs}, {@code .fvecs}, {@code .ivecs}). The model is trained for the dataset's
+ * similarity: EUCLIDEAN, or dot product for dot-product and cosine datasets (cosine datasets should be normalized).
  *
  * <p>The compressor is set by {@code jvector.ash.bitsPerDimension} (1 to 9, default 4),
  * {@code jvector.ash.quantizedDimensions} (default half the input dimension),
@@ -51,7 +51,8 @@ import java.util.concurrent.ForkJoinTask;
  * properties: {@code recall} (exhaustive recall against the ground truth; add
  * {@code recall.block-scoring} to rank with block scoring), {@code single-scoring} and
  * {@code block-scoring} (throughput), {@code symmetric-scoring} (code-to-code scoring),
- * {@code maxQueries}, {@code recall.k} and {@code scoringThreads}.</p>
+ * {@code maxQueries}, {@code recall.k} and {@code scoringThreads}. {@code jvector.ash.similarity} chooses the
+ * similarity the model is trained for and scored by.</p>
  *
  * <p>{@code jvector.bench.int8-projection=true} instead compares query projection precisions on one
  * model: FP32 against {@code jvector.bench.projectionCompare} ({@code int8}, the default, or {@code fp16}).
@@ -60,6 +61,9 @@ import java.util.concurrent.ForkJoinTask;
  * projection for {@code jvector.bench.projectionSeconds} per sample, and then runs full-scan recall.</p>
  */
 public class DistancesASH {
+    /** The similarity the ASH model is trained for and scored by: the dataset's, with cosine scored as dot product. */
+    private static VectorSimilarityFunction similarity = VectorSimilarityFunction.DOT_PRODUCT;
+
 
     static final String DEFAULT_DATASET = "e5-small-v2-100k";
 
@@ -106,10 +110,10 @@ public class DistancesASH {
                 float[] scores = blockSize == 0 ? null : new float[blockSize];
                 for (int q = first; q < queryCount; q += workers) {
                     if (blockSize == 0) {
-                        var scorer = vectors.scoreFunctionFor(queries.get(q), VectorSimilarityFunction.DOT_PRODUCT);
+                        var scorer = vectors.scoreFunctionFor(queries.get(q), similarity);
                         for (int i = 0; i < vectors.count(); i++) checksum += scorer.similarityTo(i);
                     } else {
-                        var scorer = vectors.blockScorerFor(queries.get(q), VectorSimilarityFunction.DOT_PRODUCT, blockSize);
+                        var scorer = vectors.blockScorerFor(queries.get(q), similarity, blockSize);
                         for (int start = 0; start < vectors.count(); start += blockSize) {
                             int count = Math.min(blockSize, vectors.count() - start);
                             scorer.scoreRange(start, count, scores);
@@ -149,10 +153,10 @@ public class DistancesASH {
         float maxBlockVsSingle = 0f;
         for (int qi : new int[]{0, queries.size() / 2}) {
             VectorFloat<?> query = queries.get(qi);
-            ASHBlockScorer block = vectors.blockScorerFor(query, VectorSimilarityFunction.DOT_PRODUCT, blockSize);
-            ASHBlockScorer scalar = vectors.blockScorerFor(query, VectorSimilarityFunction.DOT_PRODUCT);
+            ASHBlockScorer block = vectors.blockScorerFor(query, similarity, blockSize);
+            ASHBlockScorer scalar = vectors.blockScorerFor(query, similarity);
             ScoreFunction.ApproximateScoreFunction single =
-                    vectors.scoreFunctionFor(query, VectorSimilarityFunction.DOT_PRODUCT);
+                    vectors.scoreFunctionFor(query, similarity);
             printScorerInfo("recall-block", block);
             float[] blockScores = new float[blockSize];
             float[] scalarScores = new float[blockSize];
@@ -323,9 +327,9 @@ public class DistancesASH {
                     io.github.jbellis.jvector.quantization.ASHSymmetricScorer.Kernel.SIMD)));
         }
         names.add("asymmetric-single-" + singleMode);
-        factories.add(q -> new ScanScorer(vectors.scoreFunctionFor(queries.get(q),VectorSimilarityFunction.DOT_PRODUCT)));
+        factories.add(q -> new ScanScorer(vectors.scoreFunctionFor(queries.get(q),similarity)));
         names.add("asymmetric-block-" + blockMode);
-        factories.add(q -> new ScanScorer(vectors.blockScorerFor(queries.get(q),VectorSimilarityFunction.DOT_PRODUCT,32)));
+        factories.add(q -> new ScanScorer(vectors.blockScorerFor(queries.get(q),similarity,32)));
 
         String requestedModes = System.getProperty("jvector.bench.scoringModes", "").trim();
         if (!requestedModes.isEmpty()) {
@@ -335,9 +339,10 @@ public class DistancesASH {
                 names.remove(i); factories.remove(i);
             }
         }
-        // Validate selected symmetric modes against an independent decoded/header formula.
+        // Validate selected symmetric modes against an independent decoded/header formula (DOT_PRODUCT's; the unit
+        // tests check EUCLIDEAN's).
         for (int mode = 0; mode < names.size(); mode++) {
-            if (!names.get(mode).startsWith("symmetric-")) continue;
+            if (!names.get(mode).startsWith("symmetric-") || similarity != VectorSimilarityFunction.DOT_PRODUCT) continue;
             double maxError = 0;
             for (int q = 0; q < Math.min(4,queries.size()); q++) {
                 var scorer = factories.get(mode).apply(q);
@@ -470,7 +475,7 @@ public class DistancesASH {
         for(int mode=0;mode<2;mode++) {
             System.setProperty("jvector.ash.queryProjection",names[mode]);
             projections[mode].projectQueryDirect(new float[copy.originalDimension],new float[copy.quantizedDim]);
-            arms[mode].blockScorerFor(queries.get(0),VectorSimilarityFunction.DOT_PRODUCT,32);
+            arms[mode].blockScorerFor(queries.get(0),similarity,32);
         }
         // Timing must cover the requested paths: fail rather than time a substituted precision.
         for(int mode=0;mode<2;mode++) {
@@ -589,7 +594,7 @@ public class DistancesASH {
             tasks.add(executor.submit(()->{
                 double[] totals=new double[2];float[] scores=new float[32];
                 for(int q=first;q<count;q+=executor.getParallelism()) {
-                    var scorer=vectors.blockScorerFor(queries.get(q),VectorSimilarityFunction.DOT_PRODUCT,32);
+                    var scorer=vectors.blockScorerFor(queries.get(q),similarity,32);
                     var heap=new java.util.PriorityQueue<long[]>((a,b)->Float.compare(Float.intBitsToFloat((int)a[0]),Float.intBitsToFloat((int)b[0])));
                     for(int start=0;start<vectors.count();start+=32) {
                         int n=Math.min(32,vectors.count()-start);scorer.scoreRange(start,n,scores);
@@ -623,6 +628,12 @@ public class DistancesASH {
         // ------------------------------------------------------------
         // Benchmark configuration (runtime flags)
         // ------------------------------------------------------------
+        // -Djvector.ash.similarity=DOT_PRODUCT|EUCLIDEAN trains and scores the model for that similarity.
+        String similarityProperty = System.getProperty("jvector.ash.similarity");
+        if (similarityProperty != null) {
+            similarity = VectorSimilarityFunction.valueOf(similarityProperty.trim().toUpperCase(java.util.Locale.ROOT));
+        }
+        System.out.println("\tASH similarity: " + similarity);
         final boolean RUN_SANITY_CHECK =
                 Boolean.parseBoolean(System.getProperty("jvector.bench.sanity-check", "false"));
 
@@ -735,7 +746,7 @@ public class DistancesASH {
         logProgress("\t[stage] ASH initialize: starting (centroids + training)");
         long initStart = System.nanoTime();
         var ash = AsymmetricHashing.initialize(
-                ravv, optimizer, encodedBits, landmarkCount, bitsPerDimension);
+                ravv, similarity, optimizer, encodedBits, landmarkCount, bitsPerDimension);
         long initEnd = System.nanoTime();
         logProgress("\t[stage] ASH initialize: done in " + (initEnd - initStart) / 1e9 + " seconds");
 
@@ -813,17 +824,17 @@ public class DistancesASH {
 
         {
             ScoreFunction.ApproximateScoreFunction single =
-                    ashVecsFinal.scoreFunctionFor(q0, VectorSimilarityFunction.DOT_PRODUCT);
+                    ashVecsFinal.scoreFunctionFor(q0, similarity);
             printScorerInfo("single", single);
         }
 
         if(RUN_SANITY_CHECK) {
 
-            ASHBlockScorer ref = ashVectors.blockScorerFor(q0, VectorSimilarityFunction.DOT_PRODUCT);
+            ASHBlockScorer ref = ashVectors.blockScorerFor(q0, similarity);
             printScorerInfo("scalar-ref", ref);
 
             final int sanityBlockSize = BLOCK_SIZES[0];
-            ASHBlockScorer blk = ashVectors.blockScorerFor(q0, VectorSimilarityFunction.DOT_PRODUCT, sanityBlockSize);
+            ASHBlockScorer blk = ashVectors.blockScorerFor(q0, similarity, sanityBlockSize);
             printScorerInfo("block", blk);
 
 
@@ -898,13 +909,13 @@ public class DistancesASH {
                     for (int i = s; i < e; i++) {
                         VectorFloat<?> q = finalQueries.get(i);
                         ScoreFunction.ApproximateScoreFunction f =
-                                ashVecsFinal.scoreFunctionFor(q, VectorSimilarityFunction.DOT_PRODUCT);
+                                ashVecsFinal.scoreFunctionFor(q, similarity);
 
                         for (int j = 0; j < vectors.size(); j++) {
                             final int baseOrd = (newToOldFinal == null) ? j : newToOldFinal[j];
                             VectorFloat<?> v = finalVectors.get(baseOrd);
 
-                            float trueSimilarity = VectorSimilarityFunction.DOT_PRODUCT.compare(q, v);
+                            float trueSimilarity = similarity.compare(q, v);
                             float approxSimilarity = f.similarityTo(j);
 
                             localError += Math.abs(approxSimilarity - trueSimilarity);
@@ -926,7 +937,7 @@ public class DistancesASH {
             }
 
             distanceError /= count;
-            System.out.println("\tAverage absolute DOT_PRODUCT similarity error = " + distanceError);
+            System.out.println("\tAverage absolute " + similarity + " similarity error = " + distanceError);
         }
 
         // ==================================================================
@@ -953,12 +964,12 @@ public class DistancesASH {
                     for (int i = s; i < e; i++) {
                         VectorFloat<?> q = finalQueries.get(i);
                         ScoreFunction.ApproximateScoreFunction f = RUN_BLOCK_RECALL && !COMPARE_ALL_RECALL ? null
-                                : ashVecsFinal.scoreFunctionFor(q, VectorSimilarityFunction.DOT_PRODUCT);
+                                : ashVecsFinal.scoreFunctionFor(q, similarity);
                         ASHBlockScorer block = RUN_BLOCK_RECALL
-                                ? ashVectorsFinal.blockScorerFor(q, VectorSimilarityFunction.DOT_PRODUCT, BLOCK_SIZES[0])
+                                ? ashVectorsFinal.blockScorerFor(q, similarity, BLOCK_SIZES[0])
                                 : null;
                         ASHBlockScorer scalar = COMPARE_ALL_RECALL
-                                ? ashVectorsFinal.blockScorerFor(q, VectorSimilarityFunction.DOT_PRODUCT)
+                                ? ashVectorsFinal.blockScorerFor(q, similarity)
                                 : null;
                         float[] blockScores = RUN_BLOCK_RECALL ? new float[BLOCK_SIZES[0]] : null;
                         float[] scalarScores = COMPARE_ALL_RECALL ? new float[BLOCK_SIZES[0]] : null;
@@ -1036,7 +1047,7 @@ public class DistancesASH {
                     for (int i = s; i < e; i++) {
                         VectorFloat<?> q = finalQueries.get(i);
                         ScoreFunction.ApproximateScoreFunction f =
-                                ashVecsFinal.scoreFunctionFor(q, VectorSimilarityFunction.DOT_PRODUCT);
+                                ashVecsFinal.scoreFunctionFor(q, similarity);
 
                         for (int j = 0; j < vectors.size(); j++) {
                             localSum += f.similarityTo(j);
@@ -1129,7 +1140,7 @@ public class DistancesASH {
                 ASHBlockScorer scorer =
                         ashVectorsFinal.blockScorerFor(
                                 finalQueries.get(0),
-                                VectorSimilarityFunction.DOT_PRODUCT,
+                                similarity,
                                 blockSize
                         );
 
@@ -1152,7 +1163,7 @@ public class DistancesASH {
                         ASHBlockScorer scorer =
                                 ashVectorsFinal.blockScorerFor(
                                         finalQueries.get(qi),
-                                        VectorSimilarityFunction.DOT_PRODUCT,
+                                        similarity,
                                         blockSize
                                 );
 
@@ -1220,11 +1231,11 @@ public class DistancesASH {
         String name = args.length == 0 ? DEFAULT_DATASET : args[0];
         try (DataSet dataset = DataSets.loadDataSet(name)
                 .orElseThrow(() -> new IllegalArgumentException("Unknown dataset: " + name)).getDataSet()) {
-            var similarity = dataset.getSimilarityFunction();
-            if (similarity != VectorSimilarityFunction.DOT_PRODUCT && similarity != VectorSimilarityFunction.COSINE) {
-                throw new IllegalArgumentException("ASH scores inner products; dataset " + name + " uses " + similarity);
-            }
-            System.out.println("Running " + dataset.getName() + ", similarity " + similarity);
+            var datasetSimilarity = dataset.getSimilarityFunction();
+            similarity = datasetSimilarity == VectorSimilarityFunction.EUCLIDEAN
+                    ? VectorSimilarityFunction.EUCLIDEAN : VectorSimilarityFunction.DOT_PRODUCT;
+            System.out.println("Running " + dataset.getName() + ", similarity " + datasetSimilarity
+                    + ", ASH similarity " + similarity);
             testASHEncodings(dataset.getBaseVectors(), dataset.getQueryVectors(), dataset.getGroundTruth());
         }
     }

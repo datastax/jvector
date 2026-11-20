@@ -59,8 +59,10 @@ public class HelloASHWorldFp16 {
 
             // 2. Learn ASH(b=2,d=192): half as many dimensions, 2 stored bits each.
             // The API's bit budget includes a small per-vector header (40 bits).
+            // The model is trained for the dataset's similarity (DOT_PRODUCT or EUCLIDEAN), saved with it,
+            // and used by every scorer; vectors need not be normalized.
             int b = 2, d = base.dimension() / 2;
-            var ash = AsymmetricHashing.initialize(base, AsymmetricHashing.ITQ,
+            var ash = AsymmetricHashing.initialize(base, similarity, AsymmetricHashing.ITQ,
                     AsymmetricHashing.HEADER_BITS + b * d, 1, b);
             // Collect NVQ's mean during encoding instead of scanning the source again.
             var mean = new VectorMean(base.size(), base.dimension());

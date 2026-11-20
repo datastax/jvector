@@ -64,7 +64,7 @@ final class SavedInMemoryBuild implements IndexBuildStrategy {
     @Override
     @SuppressWarnings("deprecation") // OnHeapGraphIndex.save and load are the library's in-memory graph format
     public BuiltIndexes build(List<? extends Set<FeatureId>> featureSets, BuildConfig build, DataSet ds) throws IOException {
-        var key = cache.keyWithCompressorId(ds.getName(), Set.of(), build.M, build.efConstruction,
+        var key = cache.keyWithCompressorId(ds.getName(), ds.getSimilarityFunction(), Set.of(), build.M, build.efConstruction,
                 build.neighborOverflow, build.alpha, build.addHierarchy, build.refineFinalGraph, "inMemory:" + identity,
                 ds.getBaseRavv().size(), ds.getDimension(), 0).withUpperLayerDegree(build.upperLayerDegree);
         var path = cache.resolve(key).finalPath;

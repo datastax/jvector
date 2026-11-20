@@ -59,7 +59,7 @@ public class TestASHMemoryAccounting {
             for (int j = 0; j < 64; j++) values[n].set(j, random.nextFloat() - .5f);
             VectorUtil.l2normalize(values[n]);
         }
-        return AsymmetricHashing.initialize(MockVectorValues.fromValues(values), AsymmetricHashing.RANDOM,
+        return AsymmetricHashing.initialize(MockVectorValues.fromValues(values), VectorSimilarityFunction.DOT_PRODUCT, AsymmetricHashing.RANDOM,
                 AsymmetricHashing.HEADER_BITS + 33 * bits, landmarks, bits);
     }
 

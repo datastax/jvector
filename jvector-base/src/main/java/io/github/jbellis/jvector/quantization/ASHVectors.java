@@ -34,8 +34,10 @@ import java.util.Objects;
 
 /**
  * Container for ASH-compressed vectors with scalar, SIMD, and block scoring.
- * All public node and block scorers return DOT_PRODUCT similarities on the exact scale,
- * {@code (1 + rawDotProduct) / 2} (unclamped), rather than raw ASH dot products.
+ * All public node and block scorers return similarities in the similarity the model was trained for, on its exact
+ * scale: {@code (1 + dot) / 2} (unclamped) for DOT_PRODUCT and {@code 1 / (1 + d^2)} for EUCLIDEAN. Scorers for
+ * any other similarity are rejected. Every scorer converts its kernel estimates through the model's
+ * {@code ASHScoreScale}.
  *
  * <p>
  * This class implements the functionality required for:
@@ -57,6 +59,8 @@ public class ASHVectors implements CompressedVectors {
     /** The only copy of the stored codes and headers; see {@link ASHCodes}. */
     final ASHCodes codes;
     final ASHScorer scorer;
+    /** How the model's kernel estimates become its similarity. */
+    private final ASHScoreScale scale;
     private final long containerBytes;
     // Immutable, optional construction cache produced by the bounded encoding workers.
     // Raw input vectors are never retained. Loaded/individually encoded collections use
@@ -155,6 +159,7 @@ public class ASHVectors implements CompressedVectors {
         this.ash = ash;
         this.codes = codes;
         this.scorer = new ASHScorer(ash);
+        this.scale = ash.scores();
 
         this.d = ash.quantizedDim;
         this.words = AsymmetricHashing.QuantizedVector.wordsForDims(d);
@@ -246,15 +251,22 @@ public class ASHVectors implements CompressedVectors {
         return new ASHVectors(ash, ASHCodes.load(in, size, ash.quantizedDim, ash.bitsPerDimension), null);
     }
 
+    /** The similarity the model was trained for, which every scorer of these vectors uses. */
+    @Override
+    public VectorSimilarityFunction similarityFunction() {
+        return ash.similarityFunction();
+    }
+
+    /**
+     * Scores {@code query} against the stored vectors.
+     *
+     * @throws IllegalArgumentException unless {@code similarityFunction} is the model's
+     */
     @Override
     public ScoreFunction.AdaptiveApproximateScoreFunction scoreFunctionFor(
             VectorFloat<?> query,
             VectorSimilarityFunction similarityFunction) {
-
-        if (similarityFunction != VectorSimilarityFunction.DOT_PRODUCT) {
-            throw new UnsupportedOperationException("ASH scorer supports DOT_PRODUCT only");
-        }
-
+        ash.checkSimilarity(similarityFunction);
         // ASHScorer dispatches canonical 2/4-bit projection scoring to SIMD when available.
         // The packed masked-add path below is specific to one-bit codes.
         if (ash.bitsPerDimension != 1) {
@@ -302,7 +314,7 @@ public class ASHVectors implements CompressedVectors {
             return new BoundedScoreFunction(qp) {
                 @Override
                 public float similarityTo(int node) {
-                    return ASHScorer.toSimilarity(f.dot(null, 0, c.bodyPage(node), c.bodyOffset(node),
+                    return scale.similarity(f.dot(null, 0, c.bodyPage(node), c.bodyOffset(node),
                             scales[node], offsets[node], landmarks[node] & 0xFF));
                 }
             };
@@ -311,7 +323,7 @@ public class ASHVectors implements CompressedVectors {
             return new BoundedScoreFunction(qp) {
                 @Override
                 public float similarityTo(int node) {
-                    return ASHScorer.toSimilarity(f.dot(c.signPage(node), c.signOffset(node), null, 0,
+                    return scale.similarity(f.dot(c.signPage(node), c.signOffset(node), null, 0,
                             scales[node], offsets[node], landmarks[node] & 0xFF));
                 }
             };
@@ -319,7 +331,7 @@ public class ASHVectors implements CompressedVectors {
         return new BoundedScoreFunction(qp) {
             @Override
             public float similarityTo(int node) {
-                return ASHScorer.toSimilarity(f.dot(c.signPage(node), c.signOffset(node),
+                return scale.similarity(f.dot(c.signPage(node), c.signOffset(node),
                         c.bodyPage(node), c.bodyOffset(node), scales[node], offsets[node], landmarks[node] & 0xFF));
             }
         };
@@ -337,6 +349,11 @@ public class ASHVectors implements CompressedVectors {
         @Override
         public float dotProductBound() {
             return qp == null ? Float.NaN : scorer.dotProductBound(qp);
+        }
+
+        @Override
+        public VectorSimilarityFunction similarityFunction() {
+            return ash.similarityFunction();
         }
     }
 
@@ -378,7 +395,7 @@ public class ASHVectors implements CompressedVectors {
 
         @Override
         public float similarityTo(int node) {
-            return ASHScorer.toSimilarity(single.dot(null, 0, codes.bodyPage(node), codes.bodyOffset(node),
+            return scale.similarity(single.dot(null, 0, codes.bodyPage(node), codes.bodyOffset(node),
                     scales[node], offsets[node], landmarks[node] & 0xFF));
         }
 
@@ -442,6 +459,11 @@ public class ASHVectors implements CompressedVectors {
         }
 
         @Override
+        public VectorSimilarityFunction similarityFunction() {
+            return ash.similarityFunction();
+        }
+
+        @Override
         public float similarityTo(int node2) {
 
             final int c = landmarks[node2] & 0xFF;
@@ -456,7 +478,7 @@ public class ASHVectors implements CompressedVectors {
                     words
             );
 
-            return ASHScorer.toSimilarity(scales[node2] * (2f * maskedAdd - qp.sumQProj)
+            return scale.similarity(scales[node2] * (2f * maskedAdd - qp.sumQProj)
                     + qp.dotQMu[c] + offsets[node2]);
         }
 
@@ -521,12 +543,7 @@ public class ASHVectors implements CompressedVectors {
     public ASHBlockScorer blockScorerFor(
             VectorFloat<?> query,
             VectorSimilarityFunction similarityFunction) {
-
-        if (similarityFunction != VectorSimilarityFunction.DOT_PRODUCT) {
-            throw new UnsupportedOperationException(
-                    "ASH block scorer supports DOT_PRODUCT only");
-        }
-
+        ash.checkSimilarity(similarityFunction);
         return new LegacyASHBlockScorer(nodeScoreFunction(scorer.scalarCodeScorerFor(query), null), codes.size);
     }
 
@@ -562,10 +579,7 @@ public class ASHVectors implements CompressedVectors {
             VectorFloat<?> query,
             VectorSimilarityFunction similarityFunction,
             int blockSize) {
-
-        if (similarityFunction != VectorSimilarityFunction.DOT_PRODUCT) {
-            throw new UnsupportedOperationException("DOT_PRODUCT only");
-        }
+        ash.checkSimilarity(similarityFunction);
         if (blockSize <= 0) {
             throw new IllegalArgumentException("blockSize must be > 0");
         }
@@ -594,7 +608,8 @@ public class ASHVectors implements CompressedVectors {
                     scales,
                     offsets,
                     landmarks,
-                    qp
+                    qp,
+                    scale
             );
         }
 
@@ -608,7 +623,8 @@ public class ASHVectors implements CompressedVectors {
                 landmarks,
                 packedBitsFor(blockSize),
                 blockSize,
-                qp
+                qp,
+                scale
         );
     }
 
@@ -629,8 +645,9 @@ public class ASHVectors implements CompressedVectors {
         }
         var qp = new QueryPrecompute(prepared.d, prepared.C, prepared.qProj,
                 prepared.sumQProj, prepared.dotQMuByLandmark);
-        if (!simd) return new ScalarASHBlockScorer(codes, scales, offsets, landmarks, qp);
-        return new SimdASHBlockScorer(codes.size, scales, offsets, landmarks, packedBitsFor(blockSize), blockSize, qp);
+        if (!simd) return new ScalarASHBlockScorer(codes, scales, offsets, landmarks, qp, scale);
+        return new SimdASHBlockScorer(codes.size, scales, offsets, landmarks, packedBitsFor(blockSize), blockSize, qp,
+                scale);
     }
 
     private byte[][] packProjectionBlocks(int blockSize) {
@@ -674,13 +691,13 @@ public class ASHVectors implements CompressedVectors {
             this.blockSize = blockSize;
             this.blocks = projectionBlocks.computeIfAbsent(blockSize, ASHVectors.this::packProjectionBlocks);
             float[] q = new float[ash.originalDimension];
-            for (int i = 0; i < q.length; i++) q[i] = query.get(i);
+            query = ash.loadQuery(query, q, null);
             float[] projected = new float[d];
             ash.stiefelTransform.projectQuery(q, projected);
             lut = new float[Math.multiplyExact(groups, 16)];
             FusedASHLayout.buildQueryLut(projected, d, ash.bitsPerDimension, lut);
             dotQMu = new float[ash.landmarkCount];
-            for (int i = 0; i < dotQMu.length; i++) dotQMu[i] = VectorUtil.dotProduct(query, ash.landmarks[i]);
+            for (int i = 0; i < dotQMu.length; i++) dotQMu[i] = ash.queryLandmarkTerm(query, i);
         }
 
         LutASHBlockScorer(ASHScorer.QueryPrecompute prepared, int blockSize, boolean simd) {
@@ -704,7 +721,7 @@ public class ASHVectors implements CompressedVectors {
                         lane, lanes, lut, out, done);
                 for (int i = 0; i < lanes; i++) {
                     int node = ordinal + i;
-                    out[done + i] = ASHScorer.toSimilarity(scales[node] * out[done + i]
+                    out[done + i] = scale.similarity(scales[node] * out[done + i]
                             + dotQMu[landmarks[node] & 255] + offsets[node]);
                 }
                 done += lanes;
@@ -776,6 +793,7 @@ public class ASHVectors implements CompressedVectors {
         private final float[] scales;
         private final float[] offsets;
         private final byte[] landmarks;
+        private final ASHScoreScale scale;
 
         private final float[] qProj;        // [d]
         private final float sumQProj;
@@ -788,10 +806,12 @@ public class ASHVectors implements CompressedVectors {
                 float[] scales,
                 float[] offsets,
                 byte[] landmarks,
-                QueryPrecompute qp)
+                QueryPrecompute qp,
+                ASHScoreScale scale)
         {
 
             this.codes = codes;
+            this.scale = scale;
             this.scales = scales;
             this.offsets = offsets;
             this.landmarks = landmarks;
@@ -834,7 +854,7 @@ public class ASHVectors implements CompressedVectors {
                     }
                 }
 
-                out[i] = ASHScorer.toSimilarity(
+                out[i] = scale.similarity(
                         scales[idx] * (2f * maskedAdd - sumQProj)
                                 + dotQMu[c]
                                 + offsets[idx]);
@@ -869,6 +889,7 @@ public class ASHVectors implements CompressedVectors {
         private final float[] scales;
         private final float[] offsets;
         private final byte[] landmarks;
+        private final ASHScoreScale scale;
 
         private final long[] packedBits;
         private final int blockSize;
@@ -891,9 +912,11 @@ public class ASHVectors implements CompressedVectors {
                 byte[] landmarks,
                 long[] packedBits,
                 int blockSize,
-                QueryPrecompute qp) {
+                QueryPrecompute qp,
+                ASHScoreScale scale) {
 
             this.vecUtil = VectorizationProvider.getInstance().getVectorUtilSupport();
+            this.scale = scale;
 
             this.size = size;
             this.scales = scales;
@@ -947,7 +970,7 @@ public class ASHVectors implements CompressedVectors {
 
                 for (int lane = 0; lane < runLen; lane++) {
                     int idx = ord + lane;
-                    out[idx - start] = ASHScorer.toSimilarity(
+                    out[idx - start] = scale.similarity(
                             // scale the 0/1 stored bits to +/-1 for processing.
                             scales[idx] * (2f * maskedAdds[lane] - sumQProj)
                                     + dotQMu[landmarks[idx] & 0xFF]
@@ -963,23 +986,20 @@ public class ASHVectors implements CompressedVectors {
         if (ash.bitsPerDimension != 1) {
             throw new IllegalStateException("ASHVectors precomputeQuery supports only 1-bit ASH");
         }
-
         final int d = ash.quantizedDim;
         final int D = ash.originalDimension;
         final int C = ash.landmarkCount;
 
-        // q materialized once
+        // q materialized once, in the model's form
         final float[] qArr = new float[D];
-        for (int i = 0; i < D; i++) {
-            qArr[i] = query.get(i);
-        }
+        query = ash.loadQuery(query, qArr, null);
 
         // Aq
         final float[] qProj = new float[d];
         ash.stiefelTransform.projectQuery(qArr, qProj);
         final float[] dotQMu = new float[C];
         for (int c = 0; c < C; c++) {
-            dotQMu[c] = VectorUtil.dotProduct(query, ash.landmarks[c]);
+            dotQMu[c] = ash.queryLandmarkTerm(query, c);
         }
 
         return new QueryPrecompute(d, C, qProj, ASHScorer.sum(qProj), dotQMu,
@@ -1152,8 +1172,9 @@ public class ASHVectors implements CompressedVectors {
     }
 
     /**
-     * As {@link #scoreFunctionFor(VectorFloat, VectorSimilarityFunction)} for dot products, for a query prepared by
-     * this store's {@link #queryPreparer}; the score function borrows the prepared state until its search ends.
+     * As {@link #scoreFunctionFor(VectorFloat, VectorSimilarityFunction)} in the model's similarity, for a query
+     * prepared by this store's {@link #queryPreparer}; the score function borrows the prepared state until its search
+     * ends.
      */
     public ScoreFunction.AdaptiveApproximateScoreFunction scoreFunctionFor(PreparedQuery query) {
         var qp = ASHQueryPreparer.state(ash, query, true).prepared;
@@ -1181,13 +1202,12 @@ public class ASHVectors implements CompressedVectors {
         return scoreFunctionFor(query, similarityFunction);
     }
 
-    /** Symmetric node-to-node dot-product similarity from the stored encoded vectors. */
+    /** Symmetric node-to-node similarity from the stored encoded vectors, in the model's similarity. */
     @Override
     public ScoreFunction.AdaptiveApproximateScoreFunction diversityFunctionFor(
             int node1,
             VectorSimilarityFunction similarityFunction) {
-        if (similarityFunction != VectorSimilarityFunction.DOT_PRODUCT)
-            throw new UnsupportedOperationException("ASH diversity scoring supports DOT_PRODUCT only");
+        ash.checkSimilarity(similarityFunction);
         ASHSymmetricScorer symmetric = diversityScorer;
         if (symmetric == null) {
             synchronized (this) {

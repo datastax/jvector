@@ -103,7 +103,7 @@ public class TestAdaptiveStoppingDefault {
         }
 
         // ASH records the largest length it encodes and keeps it through a save and load.
-        var ash = AsymmetricHashing.initialize(ravv, AsymmetricHashing.RANDOM, AsymmetricHashing.HEADER_BITS + 32 * 2, 1, 2);
+        var ash = AsymmetricHashing.initialize(ravv, VectorSimilarityFunction.DOT_PRODUCT, AsymmetricHashing.RANDOM, AsymmetricHashing.HEADER_BITS + 32 * 2, 1, 2);
         var ashv = ash.encodeAll(ravv, ForkJoinPool.commonPool());
         assertEquals(maxNorm, ash.maxEncodedNorm(), maxNorm * 1e-4f);
         assertEquals(queryNorm * ash.maxEncodedNorm(), ashv.precomputedScoreFunctionFor(query, dot).dotProductBound(),

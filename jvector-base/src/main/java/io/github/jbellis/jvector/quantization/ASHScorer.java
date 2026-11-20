@@ -25,7 +25,8 @@ import io.github.jbellis.jvector.vector.types.VectorFloat;
 
 /**
  * Query-time raw dot-product scorer for ASH vectors, with scalar and SIMD paths.
- * Graph-facing scorers convert its estimates using {@link #toSimilarity(float)}.
+ * Graph-facing scorers convert its estimates through the model's {@code ASHScoreScale}; {@link #toSimilarity(float)}
+ * is the DOT_PRODUCT scale.
  *
  * <p>
  * The 1-bit path preserves the original ASH decomposition:
@@ -52,7 +53,11 @@ import io.github.jbellis.jvector.vector.types.VectorFloat;
  * for standalone ASH and future ASH reranking experiments.
  * </p>
  *
- * NOTE: Only DOT_PRODUCT is supported for now.
+ * <p>
+ * Every similarity uses this decomposition. A EUCLIDEAN model stores {@code -||x - mu||^2 / 2} in the offset's
+ * place and uses {@code -||q - mu||^2 / 2} for {@code <q, mu>}, so the same kernels estimate
+ * {@code -||q - x||^2 / 2}; see {@code ASHEuclidean}.
+ * </p>
  */
 @Experimental
 public final class ASHScorer {
@@ -91,14 +96,16 @@ public final class ASHScorer {
                 : "Stiefel rows must equal quantizedDim";
     }
 
+    /**
+     * The raw kernel estimate for {@code query}: the dot product for a DOT_PRODUCT model, and
+     * {@code -||q - x||^2 / 2} in model units for a EUCLIDEAN one. {@link ASHVectors} scores similarities.
+     *
+     * @throws IllegalArgumentException unless {@code similarityFunction} is the model's
+     */
     public ASHScoreFunction scoreFunctionFor(
             VectorFloat<?> query,
             VectorSimilarityFunction similarityFunction) {
-        if (similarityFunction != VectorSimilarityFunction.DOT_PRODUCT) {
-            throw new UnsupportedOperationException(
-                    "ASH scorer supports DOT_PRODUCT only (requested " + similarityFunction + ")"
-            );
-        }
+        ash.checkSimilarity(similarityFunction);
         return scoreFunctionFor(precomputeQuery(query));
     }
 
@@ -313,15 +320,15 @@ public final class ASHScorer {
     void prepareQuery(VectorFloat<?> query, float[] input, QueryPrecompute prepared) {
         validateQuery(query);
         // Scratch is constructed with this model and never resized on the hot path.
-        for (int k = 0; k < input.length; k++) input[k] = query.get(k);
+        VectorFloat<?> scoring = ash.loadQuery(query, input, null);
         ash.stiefelTransform.projectQuery(input, prepared.qProj);
-        finishQuery(query, prepared);
+        finishQuery(scoring, prepared);
     }
 
     /** Completes the non-projection terms after direct or batched query projection. */
     void finishQuery(VectorFloat<?> query, QueryPrecompute prepared) {
         for (int c = 0; c < ash.landmarkCount; c++) {
-            prepared.dotQMuByLandmark[c] = VectorUtil.dotProduct(query, ash.landmarks[c]);
+            prepared.dotQMuByLandmark[c] = ash.queryLandmarkTerm(query, c);
         }
         // Stored offsets include the landmark term, so every scorer needs only Aq and, for 1-bit
         // codes, its sum.

@@ -284,12 +284,13 @@ public interface BuildScoreProvider {
      * <p><b>Query (vector-node) scoring:</b> Delegates to ASHVectors' query-time score function
      * (asymmetric float query → ASH vector).
      *
-     * <p><b>Constraint:</b> This provider requires {@code C=1} (single landmark) and
-     * {@link VectorSimilarityFunction#DOT_PRODUCT}.
+     * <p><b>Constraint:</b> This provider requires {@code C=1} (single landmark), and {@code vsf} must be the
+     * similarity the ASH model was trained for.
      */
     static BuildScoreProvider ashBuildScoreProvider(VectorSimilarityFunction vsf, ASHVectors ashv) {
-        if (vsf != VectorSimilarityFunction.DOT_PRODUCT) {
-            throw new UnsupportedOperationException("ASH build scoring supports DOT_PRODUCT only");
+        if (vsf != ashv.similarityFunction()) {
+            throw new IllegalArgumentException("The ASH model was trained for " + ashv.similarityFunction()
+                    + " and scores only by it; requested " + vsf);
         }
 
         final AsymmetricHashing ash = ashv.getCompressor();
@@ -315,15 +316,14 @@ public interface BuildScoreProvider {
             @Override
             public SearchScoreProvider searchProviderFor(VectorFloat<?> vector) {
                 // Query-time asymmetric scoring is already implemented by ASHVectors.
-                return new DefaultSearchScoreProvider(ashv.precomputedScoreFunctionFor(vector, vsf), null, VectorSimilarityFunction.DOT_PRODUCT);
+                return new DefaultSearchScoreProvider(ashv.precomputedScoreFunctionFor(vector, vsf), null, vsf);
             }
 
             @Override
             public SearchScoreProvider searchProviderFor(int node1) {
                 // A stored node's length is not kept; the largest encoded length bounds it.
                 float m = ash.maxEncodedNorm();
-                return new DefaultSearchScoreProvider(symmetric.scoreFunctionFor(node1), null,
-                        VectorSimilarityFunction.DOT_PRODUCT, m * m);
+                return new DefaultSearchScoreProvider(symmetric.scoreFunctionFor(node1), null, vsf, m * m);
             }
 
             @Override

@@ -16,6 +16,7 @@
 
 package io.github.jbellis.jvector.quantization;
 
+import io.github.jbellis.jvector.vector.VectorSimilarityFunction;
 import io.github.jbellis.jvector.graph.MockVectorValues;
 import io.github.jbellis.jvector.vector.VectorizationProvider;
 import io.github.jbellis.jvector.vector.types.VectorFloat;
@@ -37,7 +38,7 @@ public class TestASHNeighborhoodScorer {
                 values[d] = random.nextFloat() - .5f;
             input[i] = types.createFloatVector(values);
         }
-        var ash = AsymmetricHashing.initialize(MockVectorValues.fromValues(input), AsymmetricHashing.RANDOM,
+        var ash = AsymmetricHashing.initialize(MockVectorValues.fromValues(input), VectorSimilarityFunction.DOT_PRODUCT, AsymmetricHashing.RANDOM,
                 AsymmetricHashing.HEADER_BITS + 33 * 4, 1, 4);
         assertThrows(IllegalArgumentException.class,
                 () -> new ASHNeighborhoodScorer(ash, types.createFloatVector(63), 32, 32));

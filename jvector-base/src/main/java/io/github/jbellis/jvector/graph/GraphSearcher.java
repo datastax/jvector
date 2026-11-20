@@ -623,13 +623,14 @@ public class GraphSearcher implements Closeable {
 
     /**
      * Prepares adaptive stopping for this layer search when the provider asks for it, or its score function requires
-     * it (scoring DOT_PRODUCT), and the rule can read the scores as distances; otherwise the standard rule decides.
+     * it (scoring by the function's own similarity), and the rule can read the scores as distances; otherwise the
+     * standard rule decides.
      */
     private boolean startAdaptiveTermination(SearchScoreProvider scoreProvider, int rerankK) {
         var scoreFunction = scoreProvider.scoreFunction();
         var similarity = scoreProvider.adaptiveSimilarity();
         if (similarity == null && scoreFunction.requiresAdaptiveTermination()) {
-            similarity = VectorSimilarityFunction.DOT_PRODUCT;
+            similarity = scoreFunction.similarityFunction();
         }
         if (similarity == null) return false;
         float bound = similarity == VectorSimilarityFunction.DOT_PRODUCT ? scoreProvider.dotProductBound() : Float.NaN;

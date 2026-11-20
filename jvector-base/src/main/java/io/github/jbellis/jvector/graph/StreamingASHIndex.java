@@ -87,7 +87,8 @@ import java.util.function.Supplier;
  * all-zero code if its page is re-encoded. Ordinals should be dense. A search sees every vector whose {@code add}
  * returned before the search began, and may see vectors being added concurrently.</p>
  *
- * <p>Similarity: ASH scoring supports dot product, which is also cosine similarity for unit-length vectors.</p>
+ * <p>Similarity: the index's similarity, DOT_PRODUCT or EUCLIDEAN, is fixed when it is created; every model it
+ * trains is trained for it, and every scorer uses it. Vectors need not be unit length.</p>
  */
 @Experimental
 public final class StreamingASHIndex implements Accountable {
@@ -244,8 +245,12 @@ public final class StreamingASHIndex implements Accountable {
                               Function<BuildScoreProvider, GraphIndexBuilder> builders, AsymmetricHashing model,
                               int encodedBits, int bitsPerDimension, Options options) {
         Objects.requireNonNull(vectors, "vectors");
-        if (similarity != VectorSimilarityFunction.DOT_PRODUCT)
-            throw new IllegalArgumentException("ASH streaming indexes support DOT_PRODUCT similarity");
+        Objects.requireNonNull(similarity, "similarity");
+        if (similarity == VectorSimilarityFunction.COSINE)
+            throw new IllegalArgumentException("ASH streaming indexes do not support COSINE similarity");
+        if (model != null && model.similarityFunction() != similarity)
+            throw new IllegalArgumentException("The model was trained for " + model.similarityFunction()
+                    + "; the index is " + similarity);
         this.options = Objects.requireNonNull(options, "options");
         this.source = vectors;
         this.vectors = vectors.threadLocalSupplier();
@@ -765,7 +770,7 @@ public final class StreamingASHIndex implements Accountable {
         TRAINING.lock();
         try {
             var ravv = new RemappedRandomAccessVectorValues(vectors.get(), sample);
-            return AsymmetricHashing.initialize(ravv, optimizer, encodedBits, 1, bitsPerDimension,
+            return AsymmetricHashing.initialize(ravv, similarity, optimizer, encodedBits, 1, bitsPerDimension,
                     executor == null ? PhysicalCoreExecutor.pool() : executor);
         } catch (IOException e) {
             throw new UncheckedIOException(e);

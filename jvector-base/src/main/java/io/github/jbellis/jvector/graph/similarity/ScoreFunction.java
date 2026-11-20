@@ -16,6 +16,7 @@
 
 package io.github.jbellis.jvector.graph.similarity;
 
+import io.github.jbellis.jvector.vector.VectorSimilarityFunction;
 import io.github.jbellis.jvector.vector.VectorizationProvider;
 import io.github.jbellis.jvector.vector.types.VectorTypeSupport;
 
@@ -100,6 +101,15 @@ public interface ScoreFunction {
         return Float.NaN;
     }
 
+    /**
+     * The similarity function this function's scores are on, when the function fixes it, as an ASH score function
+     * does from the similarity its model was trained for; null when the caller chooses it. A search whose
+     * {@link SearchScoreProvider} names no similarity reads adaptive stopping's distances by this one.
+     */
+    default VectorSimilarityFunction similarityFunction() {
+        return null;
+    }
+
 
     interface ExactScoreFunction extends ScoreFunction {
         default boolean isExact() {
@@ -115,7 +125,8 @@ public interface ScoreFunction {
 
     /**
      * An approximate score function whose top-K searches stop adaptively, when the searcher's experimental adaptive
-     * stopping is enabled, whatever provider wraps it. Every ASH score function is one.
+     * stopping is enabled, whatever provider wraps it. Every ASH score function is one, and reports the similarity
+     * its index was created for in {@link #similarityFunction()}; a search stops adaptively only when it is known.
      */
     interface AdaptiveApproximateScoreFunction extends ApproximateScoreFunction {
         @Override

@@ -56,7 +56,7 @@ public class TestASHVectorsBuilder {
         for (int bits : new int[] {1, 2, 4}) {
             int n = 1000;
             var all = vectors(n, 17);
-            var ash = AsymmetricHashing.initialize(MockVectorValues.fromValues(vectors(256, 5)), AsymmetricHashing.ITQ,
+            var ash = AsymmetricHashing.initialize(MockVectorValues.fromValues(vectors(256, 5)), VectorSimilarityFunction.DOT_PRODUCT, AsymmetricHashing.ITQ,
                     AsymmetricHashing.HEADER_BITS + 16 * bits, 1, bits);
             var expected = ash.encodeAll(MockVectorValues.fromValues(all), ForkJoinPool.commonPool());
 
@@ -103,7 +103,7 @@ public class TestASHVectorsBuilder {
 
     @Test
     public void ordinalsNeverEncodedKeepTheMissingVectorCode() throws Exception {
-        var ash = AsymmetricHashing.initialize(MockVectorValues.fromValues(vectors(256, 5)), AsymmetricHashing.ITQ,
+        var ash = AsymmetricHashing.initialize(MockVectorValues.fromValues(vectors(256, 5)), VectorSimilarityFunction.DOT_PRODUCT, AsymmetricHashing.ITQ,
                 AsymmetricHashing.HEADER_BITS + 16 * 2, 1, 2);
         var some = vectors(10, 9);
         var builder = ash.vectorsBuilder(20);

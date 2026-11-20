@@ -28,8 +28,8 @@ import java.util.Objects;
  *
  * <p>Construction computes the query projection, landmark terms, and nibble LUT once. Each
  * {@link #score} call then performs lookup, binary16 header decoding, landmark correction, and
- * conversion to the graph's DOT_PRODUCT similarity, (1 + dot) / 2, unclamped. The graph decoder and isolated
- * benchmark share this implementation.</p>
+ * conversion to the similarity the model was trained for: (1 + dot) / 2, unclamped, for DOT_PRODUCT, and
+ * 1 / (1 + d^2) for EUCLIDEAN. The graph decoder and isolated benchmark share this implementation.</p>
  *
  * <p>Publicly constructed prepared state is independently owned and immutable. Such instances may be shared across threads with independent output
  * arrays and immutable packed inputs. Scalar/Panama execution supports all model landmarks;
@@ -51,6 +51,7 @@ public final class ASHNeighborhoodScorer {
     private final ASHInt8Query int8Query;
     private final VectorUtilSupport int8Backend;
     private final ASHLutKernel kernel = new ASHLutKernel();
+    private final ASHScoreScale scale;
 
     /**
      * Prepares a query for neighborhoods with a fixed serialized shape.
@@ -101,6 +102,7 @@ public final class ASHNeighborhoodScorer {
         this.blocks = FusedASHLayout.blocksPerNode(maxDegree, blockSize);
         this.featureSize = FusedASHLayout.featureSize(maxDegree, dimensions, bits, blockSize);
         this.dotQMu = query.dotQMuByLandmark;
+        this.scale = ash.scores();
         int lutSize = Math.multiplyExact(groups, 16);
         if (reusableLut != null && reusableLut.length != lutSize) {
             throw new IllegalArgumentException("LUT size does not match the ASH model");
@@ -137,13 +139,16 @@ public final class ASHNeighborhoodScorer {
     public void score(byte[] packed, float[] out) {
         Objects.checkFromIndexSize(0, featureSize, packed.length);
         Objects.checkFromIndexSize(0, maxDegree, out.length);
+        // The native kernels write the DOT_PRODUCT scale; other scales convert the neighborhood once.
         if (neighborhoodBackend != null) {
             neighborhoodBackend.ashScoreNeighborhood(packed, groups, blockSize, maxDegree, lut, dotQMu[0], out);
+            scale.fromDotProductScale(out, 0, maxDegree);
             return;
         }
         if (int8Backend != null) {
             int8Backend.ashScoreNeighborhoodInt8(packed, bits, int8Query.units, blockSize, maxDegree, int8Query.digits,
                     int8Query.invScale, int8Query.center, dotQMu[0], out);
+            scale.fromDotProductScale(out, 0, maxDegree);
             return;
         }
         for (int block = 0; block < blocks; block++) {
@@ -160,7 +165,7 @@ public final class ASHNeighborhoodScorer {
                 if (landmark >= dotQMu.length) {
                     throw new IllegalStateException("Invalid FusedASH landmark: " + landmark);
                 }
-                out[base + lane] = ASHScorer.toSimilarity(
+                out[base + lane] = scale.similarity(
                         FusedASHLayout.readScale(packed, offset, lane, dimensions, bits, blockSize) * out[base + lane]
                         + dotQMu[landmark]
                         + FusedASHLayout.readOffset(packed, offset, lane, dimensions, bits, blockSize));

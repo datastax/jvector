@@ -494,10 +494,11 @@ public class OnDiskGraphIndex implements ImmutableGraphIndex, AutoCloseable, Acc
             VectorSimilarityFunction similarity) {
         var feature = features.get(FeatureId.FUSED_ASH);
         if (feature == null) return java.util.Optional.empty();
-        if (similarity != VectorSimilarityFunction.DOT_PRODUCT)
-            throw new UnsupportedOperationException("FusedASH supports DOT_PRODUCT only");
-        return java.util.Optional.of(new io.github.jbellis.jvector.quantization.ASHQueryPreparer(
-                ((FusedASH) feature).getASH()));
+        var ash = ((FusedASH) feature).getASH();
+        if (similarity != ash.similarityFunction())
+            throw new IllegalArgumentException("The index's ASH model was trained for " + ash.similarityFunction()
+                    + " and scores only by it; requested " + similarity);
+        return java.util.Optional.of(new io.github.jbellis.jvector.quantization.ASHQueryPreparer(ash));
     }
 
     public class View implements FeatureSource, ScoringView, RandomAccessVectorValues {
@@ -785,8 +786,10 @@ public class OnDiskGraphIndex implements ImmutableGraphIndex, AutoCloseable, Acc
             var feature = (FusedASH) features.get(FeatureId.FUSED_ASH);
             if (feature == null) throw new UnsupportedOperationException("Prepared query scoring requires FusedASH");
             var asf = feature.approximateScoreFunctionFor(prepared, this);
-            var rr = rerank ? rerankerFor(prepared.queryVector(), VectorSimilarityFunction.DOT_PRODUCT) : null;
-            return new io.github.jbellis.jvector.graph.similarity.DefaultSearchScoreProvider(asf, rr, io.github.jbellis.jvector.vector.VectorSimilarityFunction.DOT_PRODUCT);
+            // The ASH model fixes the similarity: approximate and exact scores both use it.
+            var similarity = feature.getASH().similarityFunction();
+            var rr = rerank ? rerankerFor(prepared.queryVector(), similarity) : null;
+            return new io.github.jbellis.jvector.graph.similarity.DefaultSearchScoreProvider(asf, rr, similarity);
         }
 
         @Override

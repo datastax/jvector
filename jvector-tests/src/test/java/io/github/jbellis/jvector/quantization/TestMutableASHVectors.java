@@ -57,7 +57,7 @@ public class TestMutableASHVectors extends RandomizedTest {
     }
 
     private static AsymmetricHashing model(List<VectorFloat<?>> data, int optimizer, int bits) throws Exception {
-        return AsymmetricHashing.initialize(new ListRandomAccessVectorValues(data, DIM), optimizer,
+        return AsymmetricHashing.initialize(new ListRandomAccessVectorValues(data, DIM), VectorSimilarityFunction.DOT_PRODUCT, optimizer,
                 AsymmetricHashing.HEADER_BITS + PROJECTED * bits, 1, bits);
     }
 

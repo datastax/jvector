@@ -23,11 +23,13 @@ import io.github.jbellis.jvector.disk.RandomAccessReader;
 import io.github.jbellis.jvector.graph.RandomAccessVectorValues;
 import io.github.jbellis.jvector.graph.VectorAccess;
 import io.github.jbellis.jvector.graph.disk.OnDiskGraphIndex;
+import io.github.jbellis.jvector.graph.similarity.ScoreFunction;
 import io.github.jbellis.jvector.util.Accountable;
 import io.github.jbellis.jvector.util.CallerBatchProcessor;
 import io.github.jbellis.jvector.util.BlasThreads;
 import io.github.jbellis.jvector.util.PhysicalCoreExecutor;
 import io.github.jbellis.jvector.util.RamUsageEstimator;
+import io.github.jbellis.jvector.vector.VectorSimilarityFunction;
 import io.github.jbellis.jvector.vector.VectorUtil;
 import io.github.jbellis.jvector.vector.VectorUtilSupport;
 import io.github.jbellis.jvector.vector.VectorizationProvider;
@@ -116,6 +118,23 @@ public class AsymmetricHashing implements VectorCompressor<AsymmetricHashing.Qua
     /** Optimizer / learning mode. */
     public final int optimizer;
 
+    /**
+     * The similarity this model was trained for. It is fixed when the model is created and saved with it: the
+     * stored headers hold that similarity's terms, so its codes are scored only by it. See
+     * {@link #similarityFunction()}.
+     */
+    private final VectorSimilarityFunction similarityFunction;
+
+    /**
+     * For EUCLIDEAN, a power of two that scales vectors to about unit length before a code's terms are stored, so the
+     * half-precision headers hold squared distances without overflow; 1 otherwise. Scaling by a power of two only
+     * shifts exponents, so it adds no rounding. Squared distances are divided by its square when scored.
+     */
+    final float unit;
+
+    /** How this model's kernel estimates become its similarity. */
+    private final ASHScoreScale scores;
+
     /** Learned or random Stiefel transform. */
     public final StiefelTransform stiefelTransform;
 
@@ -180,6 +199,8 @@ public class AsymmetricHashing implements VectorCompressor<AsymmetricHashing.Qua
                               int quantizedDim,
                               int bitsPerDimension,
                               int optimizer,
+                              VectorSimilarityFunction similarityFunction,
+                              float unit,
                               VectorFloat<?>[] landmarks,
                               StiefelTransform stiefelTransform,
                               float[][] landmarkProj,
@@ -209,6 +230,14 @@ public class AsymmetricHashing implements VectorCompressor<AsymmetricHashing.Qua
             throw new IllegalArgumentException("Unknown optimizer " + optimizer);
         }
         this.optimizer = optimizer;
+        this.similarityFunction = supportedSimilarity(similarityFunction);
+        if (!(unit > 0f) || Math.scalb(1f, Math.getExponent(unit)) != unit
+                || (similarityFunction != VectorSimilarityFunction.EUCLIDEAN && unit != 1f)) {
+            throw new IllegalArgumentException("Invalid ASH unit " + unit + " for " + similarityFunction);
+        }
+        this.unit = unit;
+        this.scores = similarityFunction == VectorSimilarityFunction.EUCLIDEAN
+                ? ASHScoreScale.euclidean(unit) : ASHScoreScale.DOT_PRODUCT;
         this.stiefelTransform = Objects.requireNonNull(stiefelTransform);
 
         this.landmarks = Objects.requireNonNull(landmarks);
@@ -269,23 +298,99 @@ public class AsymmetricHashing implements VectorCompressor<AsymmetricHashing.Qua
                 + RamUsageEstimator.sizeOf(landmarkNormSq)
                 + estimateArray2DBytes(landmarkProj)
                 + RamUsageEstimator.sizeOf(landmarkProjSum)
-                + stiefelTransform.heapBytes;
+                + stiefelTransform.heapBytes
+                // The similarity is a shared enum constant and its unit a field; a EUCLIDEAN model owns its scale.
+                + (scores == ASHScoreScale.DOT_PRODUCT ? 0 : RamUsageEstimator.shallowSizeOf(scores));
         for (VectorFloat<?> landmark : landmarks) bytes = Math.addExact(bytes, landmark.ramBytesUsed());
         this.heapBytes = bytes;
     }
 
     /**
-     * Initialize ASH index-wide parameters with the default 2 bits per projected dimension.
+     * The similarity this model was trained for, fixed when it was created and saved with it. Its codes, and every
+     * scorer of them, use only this similarity; a scorer requested for another one is rejected.
+     */
+    public VectorSimilarityFunction similarityFunction() {
+        return similarityFunction;
+    }
+
+    /**
+     * Throws unless {@code requested} is this model's similarity: the stored headers hold that similarity's terms, so
+     * scores for another one would be wrong.
+     */
+    void checkSimilarity(VectorSimilarityFunction requested) {
+        if (requested != similarityFunction) {
+            throw new IllegalArgumentException("This ASH model was trained for " + similarityFunction
+                    + " and scores only by it; requested " + requested);
+        }
+    }
+
+    /** How this model's kernel estimates become its similarity; every scorer of its codes converts through it. */
+    ASHScoreScale scores() {
+        return scores;
+    }
+
+    /**
+     * Copies {@code query} into {@code input}, the FP32 vector the projection reads, in this model's form: for
+     * EUCLIDEAN scaled by the unit. Allocates nothing.
      *
-     * @param ravv the vectors to quantize
-     * @param optimizer the optimizer to use
-     * @param encodedBits the number of bits used to encode vector, including the header
+     * @param inputView a vector viewing {@code input}, or null; for similarities whose scoring vector is the
+     *        transformed input
+     * @return the vector the landmark terms are scored from: {@code query}
+     */
+    VectorFloat<?> loadQuery(VectorFloat<?> query, float[] input, VectorFloat<?> inputView) {
+        if (query instanceof FloatArray) {
+            System.arraycopy(((FloatArray) query).array(), 0, input, 0, input.length);
+        } else {
+            for (int i = 0; i < input.length; i++) input[i] = query.get(i);
+        }
+        if (unit != 1f) {
+            for (int i = 0; i < input.length; i++) input[i] *= unit;
+        }
+        return query;
+    }
+
+    /** Whether a query's FP32 projection input differs from the caller's query: EUCLIDEAN scaling. */
+    boolean transformsQueryInput() {
+        return unit != 1f;
+    }
+
+
+    /**
+     * The query term every kernel adds for codes of landmark {@code c}: {@code <q, mu_c>}, or for EUCLIDEAN
+     * {@code -||q - mu_c||^2 / 2} in model units.
+     */
+    float queryLandmarkTerm(VectorFloat<?> query, int c) {
+        if (similarityFunction != VectorSimilarityFunction.EUCLIDEAN) return VectorUtil.dotProduct(query, landmarks[c]);
+        return -0.5f * (unit * unit) * VectorUtil.squareL2Distance(query, landmarks[c]);
+    }
+
+    /**
+     * The landmark term of symmetric (code-to-code) scoring for codes of landmarks {@code a} and {@code b}:
+     * {@code <mu_a, mu_b>}, or for EUCLIDEAN {@code -||mu_a - mu_b||^2 / 2} in model units.
+     */
+    float symmetricLandmarkTerm(int a, int b) {
+        if (similarityFunction != VectorSimilarityFunction.EUCLIDEAN) return VectorUtil.dotProduct(landmarks[a], landmarks[b]);
+        return -0.5f * (unit * unit) * VectorUtil.squareL2Distance(landmarks[a], landmarks[b]);
+    }
+
+    private static VectorSimilarityFunction supportedSimilarity(VectorSimilarityFunction similarity) {
+        Objects.requireNonNull(similarity, "similarityFunction");
+        if (similarity == VectorSimilarityFunction.COSINE) {
+            throw new IllegalArgumentException("ASH does not support COSINE similarity");
+        }
+        return similarity;
+    }
+
+    /**
+     * As {@link #initialize(RandomAccessVectorValues, VectorSimilarityFunction, int, int, int, int)} with the default
+     * 2 bits per projected dimension.
      */
     public static AsymmetricHashing initialize(RandomAccessVectorValues ravv,
+                                               VectorSimilarityFunction similarityFunction,
                                                int optimizer,
                                                int encodedBits,
                                                int landmarkCount) throws IOException {
-        return initialize(ravv, optimizer, encodedBits, landmarkCount, DEFAULT_BITS_PER_DIMENSION);
+        return initialize(ravv, similarityFunction, optimizer, encodedBits, landmarkCount, DEFAULT_BITS_PER_DIMENSION);
     }
 
     /**
@@ -297,7 +402,11 @@ public class AsymmetricHashing implements VectorCompressor<AsymmetricHashing.Qua
      * dataset pass to encoding. The sample size uses the original dimension,
      * independently of the projected dimension and stored bit width.</p>
      *
+     * <p>The similarity is required: it is fixed here and saved with the model, and the model's codes, and every
+     * scorer of them, use only it. ASH does not require unit-length vectors for any similarity.</p>
+     *
      * @param ravv the vectors to quantize
+     * @param similarityFunction DOT_PRODUCT or EUCLIDEAN
      * @param optimizer the optimizer to use
      * @param encodedBits the number of bits used to encode vector, including the header
      * @param landmarkCount number of landmarks
@@ -307,12 +416,14 @@ public class AsymmetricHashing implements VectorCompressor<AsymmetricHashing.Qua
      * @throws NullPointerException if the source or a sampled vector is null
      */
     public static AsymmetricHashing initialize(RandomAccessVectorValues ravv,
+                                               VectorSimilarityFunction similarityFunction,
                                                int optimizer,
                                                int encodedBits,
                                                int landmarkCount,
                                                int bitsPerDimension) throws IOException {
+        supportedSimilarity(similarityFunction);
         try (var blas = BlasThreads.singleUnlessLimited()) {
-            return train(ravv, optimizer, encodedBits, landmarkCount, bitsPerDimension);
+            return train(ravv, similarityFunction, optimizer, encodedBits, landmarkCount, bitsPerDimension);
         }
     }
 
@@ -322,21 +433,34 @@ public class AsymmetricHashing implements VectorCompressor<AsymmetricHashing.Qua
      * {@link BlasThreads}); other training work uses the library's physical-core pool either way.
      *
      * @param executor the pool whose parallelism sets the BLAS thread count
-     * @see #initialize(RandomAccessVectorValues, int, int, int, int)
+     * @see #initialize(RandomAccessVectorValues, VectorSimilarityFunction, int, int, int, int)
      */
     public static AsymmetricHashing initialize(RandomAccessVectorValues ravv,
+                                               VectorSimilarityFunction similarityFunction,
                                                int optimizer,
                                                int encodedBits,
                                                int landmarkCount,
                                                int bitsPerDimension,
                                                ForkJoinPool executor) throws IOException {
+        supportedSimilarity(similarityFunction);
         Objects.requireNonNull(executor, "executor");
         try (var blas = BlasThreads.limit(Math.max(1, executor.getParallelism()))) {
-            return train(ravv, optimizer, encodedBits, landmarkCount, bitsPerDimension);
+            return train(ravv, similarityFunction, optimizer, encodedBits, landmarkCount, bitsPerDimension);
         }
     }
 
+    /**
+     * The EUCLIDEAN unit for vectors with mean squared length {@code meanSquaredNorm}: the power of two that scales
+     * their root-mean-square length into [1, 2). 1 when there is no length to scale.
+     */
+    static float euclideanUnit(double meanSquaredNorm) {
+        float rms = (float) Math.sqrt(meanSquaredNorm);
+        if (!(rms >= Float.MIN_NORMAL) || !Float.isFinite(rms)) return 1f;
+        return Math.scalb(1f, -Math.getExponent(rms));
+    }
+
     private static AsymmetricHashing train(RandomAccessVectorValues ravv,
+                                           VectorSimilarityFunction similarityFunction,
                                            int optimizer,
                                            int encodedBits,
                                            int landmarkCount,
@@ -370,11 +494,13 @@ public class AsymmetricHashing implements VectorCompressor<AsymmetricHashing.Qua
         final Random rng = new Random(TRAINING_SEED);
         VectorFloat<?>[] landmarks;
         ASHTraining.TrainingData trainingData = null;
+        double meanSquaredNorm;
         if (landmarkCount == 1) {
             ASHTraining.SingleLandmarkTraining prepared = ASHTraining.prepareSingleLandmarkTraining(
                     ravvCopy, originalDim, rng, optimizer == ITQ);
             landmarks = new VectorFloat<?>[]{prepared.landmark};
             trainingData = prepared.trainingData;
+            meanSquaredNorm = prepared.meanSquaredNorm;
         } else {
             // Multi-landmark clustering still needs its materialized input. Like
             // encoding, k-means and ITQ use the raw vectors, not unit-length copies.
@@ -382,6 +508,9 @@ public class AsymmetricHashing implements VectorCompressor<AsymmetricHashing.Qua
             for (int i = 0; i < points.length; i++) {
                 points[i] = ravvCopy.getVector(i).copy();
             }
+            double squaredNorms = 0;
+            for (VectorFloat<?> point : points) squaredNorms += VectorUtil.dotProduct(point, point);
+            meanSquaredNorm = squaredNorms / points.length;
             long kmStart = System.nanoTime();
             MiniBatchKMeansClusterer km = new MiniBatchKMeansClusterer(points, landmarkCount, 1024);
             VectorFloat<?> packed = km.cluster(/*unweightedIterations*/ 20, /*anisotropicIterations*/ 0);
@@ -412,12 +541,15 @@ public class AsymmetricHashing implements VectorCompressor<AsymmetricHashing.Qua
                         originalDim
                 );
 
+        float unit = similarityFunction == VectorSimilarityFunction.EUCLIDEAN ? euclideanUnit(meanSquaredNorm) : 1f;
         return new AsymmetricHashing(
                 originalDim,
                 encodedBits,
                 quantizedDim,
                 bitsPerDimension,
                 optimizer,
+                similarityFunction,
+                unit,
                 landmarks,
                 stiefelTransform,
                 lp.proj,
@@ -550,6 +682,25 @@ public class AsymmetricHashing implements VectorCompressor<AsymmetricHashing.Qua
         }
     }
 
+    /** Stable on-disk codes for the similarity, independent of the enum's declaration order. */
+    private static int similarityCode(VectorSimilarityFunction similarity) {
+        switch (similarity) {
+            case DOT_PRODUCT: return 1;
+            case EUCLIDEAN: return 2;
+            case COSINE: return 3;
+            default: throw new IllegalArgumentException("No ASH code for " + similarity);
+        }
+    }
+
+    private static VectorSimilarityFunction similarityFromCode(int code) throws IOException {
+        switch (code) {
+            case 1: return VectorSimilarityFunction.DOT_PRODUCT;
+            case 2: return VectorSimilarityFunction.EUCLIDEAN;
+            case 3: return VectorSimilarityFunction.COSINE;
+            default: throw new IOException("Invalid ASH similarity code " + code);
+        }
+    }
+
     public static AsymmetricHashing load(RandomAccessReader in) throws IOException {
 
         int magic = in.readInt();
@@ -582,6 +733,8 @@ public class AsymmetricHashing implements VectorCompressor<AsymmetricHashing.Qua
         }
 
         int optimizer = in.readInt();
+        VectorSimilarityFunction similarityFunction = similarityFromCode(in.readInt());
+        float unit = in.readFloat();
 
         // Multi-landmark support
         int landmarkCount = in.readInt();
@@ -618,6 +771,8 @@ public class AsymmetricHashing implements VectorCompressor<AsymmetricHashing.Qua
                 quantizedDim,
                 bitsPerDimension,
                 optimizer,
+                similarityFunction,
+                unit,
                 landmarks,
                 stiefelTransform,
                 lp.proj,
@@ -629,7 +784,8 @@ public class AsymmetricHashing implements VectorCompressor<AsymmetricHashing.Qua
 
     /**
      * Writes the ASH model: the ASH magic number ({@code 0x75EC4015}), the on-disk graph format
-     * version, the dimensions, bit widths and optimizer, the landmarks, and the Stiefel transform.
+     * version, the dimensions, bit widths and optimizer, the similarity and its unit, the landmarks, and the
+     * Stiefel transform.
      * {@link #load} checks the magic number and version before reading the rest.
      *
      * @param out the IndexWriter into which to write the object
@@ -649,6 +805,8 @@ public class AsymmetricHashing implements VectorCompressor<AsymmetricHashing.Qua
         out.writeInt(quantizedDim);
         out.writeInt(bitsPerDimension);
         out.writeInt(optimizer);
+        out.writeInt(similarityCode(similarityFunction));
+        out.writeFloat(unit);
 
         // Multi-landmark serialization
         out.writeInt(landmarkCount);
@@ -916,6 +1074,8 @@ public class AsymmetricHashing implements VectorCompressor<AsymmetricHashing.Qua
      * margin for the half-precision headers.
      */
     void recordEncodedCodes(QuantizedVector[] vectors) {
+        // EUCLIDEAN headers do not hold <x, mu>, and its scores need no dot-product bound.
+        if (similarityFunction == VectorSimilarityFunction.EUCLIDEAN) return;
         for (var vector : vectors) {
             if (vector != null) recordEncodedSquaredNorm(encodedSquaredNorm(vector) * HEADER_NORM_MARGIN);
         }
@@ -929,7 +1089,7 @@ public class AsymmetricHashing implements VectorCompressor<AsymmetricHashing.Qua
                          byte[] body, int bodyOffset) {
         int c = landmark & 255;
         if (c >= landmarkCount) throw new IllegalArgumentException("Invalid landmark " + c);
-        return offset + scale * landmarkCodeDot(c, signs, signOffset, body, bodyOffset);
+        return offset + scale * (unit * landmarkCodeDot(c, signs, signOffset, body, bodyOffset));
     }
 
     // ---------------------------------------------------------------------
@@ -1917,7 +2077,11 @@ public class AsymmetricHashing implements VectorCompressor<AsymmetricHashing.Qua
 
         assert quantizedDim > 0;
 
-        final float rawOffset = dotXMu - landmarkNormSq[c];
+        // DOT_PRODUCT: <x, mu> - ||mu||^2. EUCLIDEAN: -||x - mu||^2 / 2 in units of the model's unit; with the
+        // query term -||q - mu||^2 / 2, the same kernels then estimate -||q - x||^2 / 2 (paper, Appendix A).
+        final float rawOffset = similarityFunction == VectorSimilarityFunction.EUCLIDEAN
+                ? -0.5f * (unit * unit) * sqDist
+                : dotXMu - landmarkNormSq[c];
         // ||x||^2 = ||x - mu||^2 + 2 <x, mu> - ||mu||^2, from the terms already computed.
         recordEncodedSquaredNorm(sqDist + 2f * dotXMu - landmarkNormSq[c]);
 
@@ -1935,11 +2099,12 @@ public class AsymmetricHashing implements VectorCompressor<AsymmetricHashing.Qua
     private float finishEncoding(QuantizedVector dest, float residualNorm, float codeNorm) {
         final int c = dest.landmark & 0xFF;
         final float rawOffset = dest.offset;
-        final float scale = codeNorm > 0f ? residualNorm / codeNorm : 0f;
+        // Lengths are in units of the model's unit, 1 except for EUCLIDEAN; powers of two scale exactly.
+        final float scale = (codeNorm > 0f ? residualNorm / codeNorm : 0f) * unit;
 
-        // Projection-mode offset: offset = <x, μ> - ||μ||² - scale * <Aμ, code>, so query-time
-        // scoring can use Aq instead of A(q - μ). A 1-bit code is its ±1 signs.
-        final float landmarkDot = landmarkCodeDot(c, dest.binaryVector, 0, dest.extraBits, 0);
+        // Projection-mode offset: offset = <x, μ> - ||μ||² - scale * <Aμ, code> (EUCLIDEAN: -||x - μ||² / 2
+        // - scale * <Aμ, code>), so query-time scoring can use Aq instead of A(q - μ). A 1-bit code is its ±1 signs.
+        final float landmarkDot = unit * landmarkCodeDot(c, dest.binaryVector, 0, dest.extraBits, 0);
         dest.scale = roundToFloat16(scale);
         dest.offset = roundToFloat16(rawOffset - scale * landmarkDot);
         return dest.offset + dest.scale * landmarkDot;
@@ -2176,6 +2341,8 @@ public class AsymmetricHashing implements VectorCompressor<AsymmetricHashing.Qua
         size += Integer.BYTES; // quantizedDim
         size += Integer.BYTES; // bitsPerDimension
         size += Integer.BYTES; // optimizer
+        size += Integer.BYTES; // similarity
+        size += Float.BYTES; // unit
         size += Integer.BYTES; // landmarkCount
         for (int c = 0; c < landmarkCount; c++) {
             size += Integer.BYTES; // landmark dimension
@@ -2458,6 +2625,8 @@ public class AsymmetricHashing implements VectorCompressor<AsymmetricHashing.Qua
                 && quantizedDim == that.quantizedDim
                 && bitsPerDimension == that.bitsPerDimension
                 && optimizer == that.optimizer
+                && similarityFunction == that.similarityFunction
+                && unit == that.unit
                 && landmarksEqual(this.landmarks, that.landmarks)
                 && matrixEquals(
                 this.stiefelTransform == null ? null : this.stiefelTransform.W,
@@ -2486,6 +2655,8 @@ public class AsymmetricHashing implements VectorCompressor<AsymmetricHashing.Qua
         result = 31 * result + Integer.hashCode(quantizedDim);
         result = 31 * result + Integer.hashCode(bitsPerDimension);
         result = 31 * result + Integer.hashCode(optimizer);
+        result = 31 * result + similarityCode(similarityFunction);
+        result = 31 * result + Float.hashCode(unit);
         result = 31 * result + landmarksHash(landmarks);
         result = 31 * result + matrixHash(
                 stiefelTransform == null ? null : stiefelTransform.W
@@ -2517,13 +2688,14 @@ public class AsymmetricHashing implements VectorCompressor<AsymmetricHashing.Qua
         }
 
         return String.format(
-                "AsymmetricHashing[origDim=%d, encodedBits=%d, bodyBits=%d, quantizedDim=%d, bitsPerDimension=%d, optimizer=%s, landmarks=%d]",
+                "AsymmetricHashing[origDim=%d, encodedBits=%d, bodyBits=%d, quantizedDim=%d, bitsPerDimension=%d, optimizer=%s, similarity=%s, landmarks=%d]",
                 originalDimension,
                 encodedBits,
                 bodyBits,
                 quantizedDim,
                 bitsPerDimension,
                 optimizerName,
+                similarityFunction,
                 landmarkCount
         );
     }

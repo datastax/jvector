@@ -142,7 +142,7 @@ public class TestASHCodes {
         for (int bits : new int[]{1, 2, 3, 4}) for (int dim : new int[]{40, 130}) {
             var input = inputs(260, dim, 17L * bits + dim);
             var values = MockVectorValues.fromValues(input);
-            var ash = AsymmetricHashing.initialize(values, AsymmetricHashing.RANDOM,
+            var ash = AsymmetricHashing.initialize(values, VectorSimilarityFunction.DOT_PRODUCT, AsymmetricHashing.RANDOM,
                     AsymmetricHashing.HEADER_BITS + (dim / 2) * bits, 2, bits);
             var vectors = smallPages(ash.encodeAll(values, ForkJoinPool.commonPool()));
             var reference = new ASHScorer(ash);
@@ -172,7 +172,7 @@ public class TestASHCodes {
         for (int bits : new int[]{1, 2, 4}) for (int dim : new int[]{40, 96, 200}) {
             var input = inputs(300, dim, 31L * bits + dim);
             var values = MockVectorValues.fromValues(input);
-            var ash = AsymmetricHashing.initialize(values, AsymmetricHashing.RANDOM,
+            var ash = AsymmetricHashing.initialize(values, VectorSimilarityFunction.DOT_PRODUCT, AsymmetricHashing.RANDOM,
                     AsymmetricHashing.HEADER_BITS + (dim / 2) * bits, 1, bits);
             var vectors = smallPages(ash.encodeAll(values, ForkJoinPool.commonPool()));
             var auto = new ASHSymmetricScorer(vectors, ASHSymmetricScorer.Kernel.AUTO);
@@ -199,7 +199,7 @@ public class TestASHCodes {
     public void reorderingMovesCodesWithTheirOrdinals() throws Exception {
         var input = inputs(200, 64, 9);
         var values = MockVectorValues.fromValues(input);
-        var ash = AsymmetricHashing.initialize(values, AsymmetricHashing.RANDOM,
+        var ash = AsymmetricHashing.initialize(values, VectorSimilarityFunction.DOT_PRODUCT, AsymmetricHashing.RANDOM,
                 AsymmetricHashing.HEADER_BITS + 32 * 4, 3, 4);
         var vectors = smallPages(ash.encodeAll(values, ForkJoinPool.commonPool()));
         var order = vectors.reorderByLandmarkFast();

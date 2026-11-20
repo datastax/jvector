@@ -67,7 +67,7 @@ public final class ASHQueryPreparer implements QueryPreparer {
         validate(query, state);
         state.invalidate();
         state.copy(query);
-        ash.stiefelTransform.projectQueryDirect(state.input, state.prepared.qProj);
+        ash.stiefelTransform.projectQueryDirect(state.projectionInput, state.prepared.qProj);
         finish(state);
     }
 
@@ -93,7 +93,7 @@ public final class ASHQueryPreparer implements QueryPreparer {
             for (int i = 0; i < count; i++) {
                 State state = (State) preparedStates[i];
                 state.copy(queries[i]);
-                buffers.input[i] = state.input;
+                buffers.input[i] = state.projectionInput;
                 buffers.output[i] = state.prepared.qProj;
             }
             ash.stiefelTransform.projectQueryBatch(buffers.input, buffers.output, count);
@@ -156,6 +156,8 @@ public final class ASHQueryPreparer implements QueryPreparer {
     static final class State implements PreparedQuery {
         final AsymmetricHashing ash;
         final float[] input;
+        /** What the projection reads: {@link #input} in the model's units, or {@code input} itself if they agree. */
+        final float[] projectionInput;
         final VectorFloat<?> query;
         final ASHScorer.QueryPrecompute prepared;
         final float[] lut;
@@ -166,6 +168,7 @@ public final class ASHQueryPreparer implements QueryPreparer {
         State(AsymmetricHashing ash, ASHScorer.QueryPrecompute prepared) {
             this.ash = ash;
             this.input = new float[ash.originalDimension];
+            this.projectionInput = ash.transformsQueryInput() ? new float[ash.originalDimension] : input;
             this.query = VectorizationProvider.getInstance().getVectorTypeSupport().createFloatVector(input);
             this.prepared = prepared;
             this.lut = new float[Math.multiplyExact(FusedASHLayout.codeGroups(ash.quantizedDim, ash.bitsPerDimension), 16)];
@@ -176,6 +179,7 @@ public final class ASHQueryPreparer implements QueryPreparer {
                     + RamUsageEstimator.sizeOf(prepared.qProj) + RamUsageEstimator.sizeOf(lut)
                     + RamUsageEstimator.sizeOf(prepared.dotQMuByLandmark);
             if (backing != input) sum += RamUsageEstimator.shallowSizeOf(backing);
+            if (projectionInput != input) sum += RamUsageEstimator.sizeOf(projectionInput);
             this.bytes = sum;
         }
 
@@ -186,6 +190,9 @@ public final class ASHQueryPreparer implements QueryPreparer {
             } else {
                 for (int i = 0; i < input.length; i++) input[i] = source.get(i);
             }
+            // The query vector views input, so it stays the caller's query; the projection reads a copy in the
+            // model's form (scaled for EUCLIDEAN).
+            if (projectionInput != input) ash.loadQuery(query, projectionInput, null);
         }
         void check(long expectedGeneration) {
             if (!ready || generation != expectedGeneration)

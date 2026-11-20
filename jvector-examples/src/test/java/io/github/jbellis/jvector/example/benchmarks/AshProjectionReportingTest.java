@@ -48,7 +48,7 @@ public class AshProjectionReportingTest {
             var second = vectors.createFloatVector(new float[]{0,1,0,0});
             var ds = new SimpleDataSet("precision-metadata", VectorSimilarityFunction.DOT_PRODUCT,
                     List.of(first,second), List.of(first), List.of(List.of(0)));
-            var model = AsymmetricHashing.initialize(ds.getBaseRavv(), AsymmetricHashing.RANDOM, 48, 1, 2);
+            var model = AsymmetricHashing.initialize(ds.getBaseRavv(), VectorSimilarityFunction.DOT_PRODUCT, AsymmetricHashing.RANDOM, 48, 1, 2);
             assertNull(model.stiefelTransform.initializedQueryProjectionPrecision());
             var config = new RunConfig();
             config.benchmarks = Map.of("accuracy",List.of("recall"));

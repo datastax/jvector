@@ -278,7 +278,7 @@ public class TestGridASHIntegration {
         var data = schema3Data();
         var build = BuildConfig.builder().M(8).efConstruction(32).neighborOverflow(1.2f).alpha(1.2f)
                 .addHierarchy(true).refineFinalGraph(false).indexType("inMemory").build();
-        var ash = AsymmetricHashing.initialize(data.getBaseRavv(), AsymmetricHashing.ITQ, 72, 1, 2);
+        var ash = AsymmetricHashing.initialize(data.getBaseRavv(), VectorSimilarityFunction.DOT_PRODUCT, AsymmetricHashing.ITQ, 72, 1, 2);
         var codes = ash.encodeAll(data.getBaseRavv());
         var cache = OnDiskGraphIndexCache.initialize(temporary.newFolder().toPath());
         var builds = new java.util.concurrent.atomic.AtomicInteger();

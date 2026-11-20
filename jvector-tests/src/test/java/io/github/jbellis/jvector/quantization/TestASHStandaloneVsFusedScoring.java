@@ -81,7 +81,7 @@ public class TestASHStandaloneVsFusedScoring {
                         + PROJECTED_DIMENSION * bitsPerDimension;
 
         AsymmetricHashing ash = AsymmetricHashing.initialize(
-                ravv,
+                ravv, VectorSimilarityFunction.DOT_PRODUCT,
                 AsymmetricHashing.ITQ,
                 encodedBits,
                 LANDMARK_COUNT,

@@ -58,7 +58,7 @@ public class TestPreparedASHQuery {
     }
 
     private static AsymmetricHashing model(VectorFloat<?>[] input, int bits) throws Exception {
-        return AsymmetricHashing.initialize(MockVectorValues.fromValues(input), AsymmetricHashing.RANDOM,
+        return AsymmetricHashing.initialize(MockVectorValues.fromValues(input), VectorSimilarityFunction.DOT_PRODUCT, AsymmetricHashing.RANDOM,
                 AsymmetricHashing.HEADER_BITS + 33 * bits, 1, bits);
     }
 
@@ -236,7 +236,7 @@ public class TestPreparedASHQuery {
                         preparer.prepare(values[q + 1], state);
                         assertThrows(IllegalStateException.class, () -> provider.scoreFunction().similarityTo(0));
                     }
-                    assertThrows(UnsupportedOperationException.class, () -> disk.queryPreparer(VectorSimilarityFunction.COSINE));
+                    assertThrows(IllegalArgumentException.class, () -> disk.queryPreparer(VectorSimilarityFunction.COSINE));
                 }
             } finally { Files.deleteIfExists(path); }
         }

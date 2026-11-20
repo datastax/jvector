@@ -134,10 +134,10 @@ class NativeBlasThreadsTest {
             int before = nativeThreads();
             if ("pooled".equals(args[0])) {
                 var pool = new ForkJoinPool(Runtime.getRuntime().availableProcessors());
-                AsymmetricHashing.initialize(values, AsymmetricHashing.ITQ, AsymmetricHashing.HEADER_BITS + 512, 1, 2, pool);
+                AsymmetricHashing.initialize(values, VectorSimilarityFunction.DOT_PRODUCT, AsymmetricHashing.ITQ, AsymmetricHashing.HEADER_BITS + 512, 1, 2, pool);
                 pool.shutdown();
             } else {
-                AsymmetricHashing.initialize(values, AsymmetricHashing.ITQ, AsymmetricHashing.HEADER_BITS + 512, 1, 2);
+                AsymmetricHashing.initialize(values, VectorSimilarityFunction.DOT_PRODUCT, AsymmetricHashing.ITQ, AsymmetricHashing.HEADER_BITS + 512, 1, 2);
             }
             System.out.println("native-threads-started=" + Math.max(0, nativeThreads() - before));
         }

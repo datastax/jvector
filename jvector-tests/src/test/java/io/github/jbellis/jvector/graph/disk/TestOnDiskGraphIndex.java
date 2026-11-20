@@ -449,7 +449,7 @@ public class TestOnDiskGraphIndex extends RandomizedTest {
     private static FusedASH fusedAshFeature(ImmutableGraphIndex graph) throws java.io.IOException {
         var vectors = TestUtil.createRandomVectors(graph.size(0), 64);
         vectors.forEach(io.github.jbellis.jvector.vector.VectorUtil::l2normalize);
-        var ash = AsymmetricHashing.initialize(new ListRandomAccessVectorValues(vectors, 64),
+        var ash = AsymmetricHashing.initialize(new ListRandomAccessVectorValues(vectors, 64), VectorSimilarityFunction.DOT_PRODUCT,
                 AsymmetricHashing.RANDOM, AsymmetricHashing.HEADER_BITS + 64, 1, 2);
         return new FusedASH(graph.getDegree(0), ash);
     }

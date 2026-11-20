@@ -140,9 +140,9 @@ final class CompressedOnDiskBuild implements IndexBuildStrategy {
             for (Set<FeatureId> fs : featureSets) {
                 int nvq = fs.contains(FeatureId.NVQ_VECTORS) ? NVQProvider.subvectors(dimension) : 0;
                 var key = cacheIdentity == null
-                        ? cache.key(ds.getName(), fs, build.M, build.efConstruction, build.neighborOverflow, build.alpha,
+                        ? cache.key(ds.getName(), ds.getSimilarityFunction(), fs, build.M, build.efConstruction, build.neighborOverflow, build.alpha,
                                 build.addHierarchy, build.refineFinalGraph, buildCompressor, baseCount, dimension, nvq)
-                        : cache.keyWithCompressorId(ds.getName(), fs, build.M, build.efConstruction, build.neighborOverflow,
+                        : cache.keyWithCompressorId(ds.getName(), ds.getSimilarityFunction(), fs, build.M, build.efConstruction, build.neighborOverflow,
                                 build.alpha, build.addHierarchy, build.refineFinalGraph, cacheIdentity,
                                 baseCount, dimension, nvq);
                 key = key.withUpperLayerDegree(build.upperLayerDegree);

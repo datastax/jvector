@@ -41,7 +41,7 @@ comparing codes, and writes the index in one parallel pass:
 ```java
 var pool = PhysicalCoreExecutor.pool();
 int b = 2, d = 368;                                   // choose b and d with the record size in mind
-var ash = AsymmetricHashing.initialize(vectors, AsymmetricHashing.ITQ,
+var ash = AsymmetricHashing.initialize(vectors, VectorSimilarityFunction.DOT_PRODUCT, AsymmetricHashing.ITQ,
         AsymmetricHashing.HEADER_BITS + b * d, 1, b, pool);
 var mean = new VectorMean(vectors.size(), vectors.dimension());
 var codes = ash.encodeAll(mean.duringScan(vectors), pool);

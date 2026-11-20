@@ -87,7 +87,7 @@ public class TestASHScoringDispatch {
             }
             var values = MockVectorValues.fromValues(input);
             for (int bits : new int[]{1, 2, 4}) {
-                var ash = AsymmetricHashing.initialize(values, AsymmetricHashing.RANDOM,
+                var ash = AsymmetricHashing.initialize(values, VectorSimilarityFunction.DOT_PRODUCT, AsymmetricHashing.RANDOM,
                         AsymmetricHashing.HEADER_BITS + 33 * bits, 2, bits);
                 var encoded = ash.encodeAll(values, ForkJoinPool.commonPool());
                 // Reload canonical metadata/body bytes before exercising the new factories.
@@ -210,7 +210,7 @@ public class TestASHScoringDispatch {
             VectorUtil.l2normalize(input[n]);
         }
         var values = MockVectorValues.fromValues(input);
-        var ash = AsymmetricHashing.initialize(values, AsymmetricHashing.RANDOM,
+        var ash = AsymmetricHashing.initialize(values, VectorSimilarityFunction.DOT_PRODUCT, AsymmetricHashing.RANDOM,
                 AsymmetricHashing.HEADER_BITS + 90, 64, 2);
         var encoded = ash.encodeAll(values, ForkJoinPool.commonPool());
         var scorer = encoded.scoreFunctionFor(input[3], VectorSimilarityFunction.DOT_PRODUCT);

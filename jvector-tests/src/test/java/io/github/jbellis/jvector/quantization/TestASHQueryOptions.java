@@ -16,6 +16,7 @@
 
 package io.github.jbellis.jvector.quantization;
 
+import io.github.jbellis.jvector.vector.VectorSimilarityFunction;
 import io.github.jbellis.jvector.graph.ListRandomAccessVectorValues;
 import io.github.jbellis.jvector.vector.VectorUtil;
 import io.github.jbellis.jvector.vector.VectorizationProvider;
@@ -42,7 +43,7 @@ public class TestASHQueryOptions {
             vectors.add(v);
         }
         var values = new ListRandomAccessVectorValues(vectors, 32);
-        return AsymmetricHashing.initialize(values, AsymmetricHashing.RANDOM, AsymmetricHashing.HEADER_BITS + 32, 1, 1);
+        return AsymmetricHashing.initialize(values, VectorSimilarityFunction.DOT_PRODUCT, AsymmetricHashing.RANDOM, AsymmetricHashing.HEADER_BITS + 32, 1, 1);
     }
 
     @Test

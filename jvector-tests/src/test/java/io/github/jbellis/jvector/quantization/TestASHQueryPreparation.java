@@ -58,7 +58,7 @@ public class TestASHQueryPreparation {
     }
 
     private static AsymmetricHashing model(VectorFloat<?>[] vectors, int bits) throws Exception {
-        return AsymmetricHashing.initialize(MockVectorValues.fromValues(vectors), AsymmetricHashing.RANDOM,
+        return AsymmetricHashing.initialize(MockVectorValues.fromValues(vectors), VectorSimilarityFunction.DOT_PRODUCT, AsymmetricHashing.RANDOM,
                 AsymmetricHashing.HEADER_BITS + 33 * bits, 2, bits);
     }
 

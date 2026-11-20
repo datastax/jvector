@@ -115,10 +115,13 @@ final class ASHTraining {
     static final class SingleLandmarkTraining {
         final VectorFloat<?> landmark;
         final TrainingData trainingData;
+        /** The sample's mean squared vector length. */
+        final double meanSquaredNorm;
 
-        SingleLandmarkTraining(VectorFloat<?> landmark, TrainingData trainingData) {
+        SingleLandmarkTraining(VectorFloat<?> landmark, TrainingData trainingData, double meanSquaredNorm) {
             this.landmark = landmark;
             this.trainingData = trainingData;
+            this.meanSquaredNorm = meanSquaredNorm;
         }
     }
 
@@ -163,6 +166,7 @@ final class ASHTraining {
         Arrays.sort(ordinals);
         final float[] sample = learn ? new float[(int) sampleElements] : null;
         final double[] accumulator = new double[dimensions];
+        double squaredNorms = 0;
         final VectorFloat<?> rowValues = vectorTypeSupport.createFloatVector(dimensions);
         final float[] values = rowValues instanceof FloatArray ? ((FloatArray) rowValues).array() : null;
         for (int row = 0; row < sampleSize; row++) {
@@ -185,6 +189,7 @@ final class ASHTraining {
                 throw new IllegalArgumentException("ASH training vector at ordinal " + ordinal
                         + " has a non-finite FP32 L2 norm");
             }
+            squaredNorms += (double) norm * norm;
             if (values != null) {
                 for (int d = 0; d < dimensions; d++) accumulator[d] += values[d];
             } else {
@@ -202,8 +207,10 @@ final class ASHTraining {
         VectorFloat<?> mean = vectorTypeSupport.createFloatVector(dimensions);
         double invCount = 1.0 / sampleSize;
         for (int d = 0; d < dimensions; d++) mean.set(d, (float) (accumulator[d] * invCount));
-        if (!learn) return new SingleLandmarkTraining(mean, null);
-        return new SingleLandmarkTraining(mean, centerTrainingSample(sample, sampleSize, dimensions, mean));
+        double meanSquaredNorm = squaredNorms * invCount;
+        if (!learn) return new SingleLandmarkTraining(mean, null, meanSquaredNorm);
+        return new SingleLandmarkTraining(mean, centerTrainingSample(sample, sampleSize, dimensions, mean),
+                meanSquaredNorm);
     }
 
     /**

@@ -143,7 +143,7 @@ public class TestASHSymmetricScorer {
         var input = inputs(25, 40);
         var values = MockVectorValues.fromValues(input);
         for (int bits = 1; bits <= 9; bits++) {
-            var ash = AsymmetricHashing.initialize(values, AsymmetricHashing.RANDOM,
+            var ash = AsymmetricHashing.initialize(values, VectorSimilarityFunction.DOT_PRODUCT, AsymmetricHashing.RANDOM,
                     AsymmetricHashing.HEADER_BITS + 31 * bits, 1, bits);
             var encoded = ash.encodeAll(values, java.util.concurrent.ForkJoinPool.commonPool());
             var scorer = new ASHSymmetricScorer(encoded);
@@ -212,7 +212,7 @@ public class TestASHSymmetricScorer {
         for (int i = 1; i < input.length; i++) input[i] = input[0].copy();
         var values = MockVectorValues.fromValues(input);
         for (int bits : new int[]{1,2,4,9}) {
-            var ash = AsymmetricHashing.initialize(values, AsymmetricHashing.RANDOM,
+            var ash = AsymmetricHashing.initialize(values, VectorSimilarityFunction.DOT_PRODUCT, AsymmetricHashing.RANDOM,
                     AsymmetricHashing.HEADER_BITS + 31*bits,1,bits);
             var encoded = ash.encodeAll(values, java.util.concurrent.ForkJoinPool.commonPool());
             float score = new ASHSymmetricScorer(encoded).dotProduct(0,1);
@@ -222,7 +222,7 @@ public class TestASHSymmetricScorer {
 
     @Test public void graphProviderStillRejectsMultipleLandmarks() throws Exception {
         var values = MockVectorValues.fromValues(inputs(25,40));
-        var ash = AsymmetricHashing.initialize(values,AsymmetricHashing.RANDOM,
+        var ash = AsymmetricHashing.initialize(values, VectorSimilarityFunction.DOT_PRODUCT,AsymmetricHashing.RANDOM,
                 AsymmetricHashing.HEADER_BITS+31*2,2,2);
         var encoded = ash.encodeAll(values, java.util.concurrent.ForkJoinPool.commonPool());
         new ASHSymmetricScorer(encoded);
@@ -236,7 +236,7 @@ public class TestASHSymmetricScorer {
         var values = MockVectorValues.fromValues(input);
         var random = new Random(41);
         for (int bits : new int[]{2, 4}) {
-            var ash = AsymmetricHashing.initialize(values, AsymmetricHashing.RANDOM,
+            var ash = AsymmetricHashing.initialize(values, VectorSimilarityFunction.DOT_PRODUCT, AsymmetricHashing.RANDOM,
                     AsymmetricHashing.HEADER_BITS + 1024 * bits, 1, bits);
             var encoded = ash.encodeAll(values, java.util.concurrent.ForkJoinPool.commonPool());
             var scorer = new ASHSymmetricScorer(encoded);
@@ -260,7 +260,7 @@ public class TestASHSymmetricScorer {
         for (int d = 0; d < 40; d++) input[1].set(d, -input[0].get(d));
         var values = MockVectorValues.fromValues(input);
         for (int bits : new int[]{1,2,3,4,9}) {
-            var ash = AsymmetricHashing.initialize(values,AsymmetricHashing.RANDOM,
+            var ash = AsymmetricHashing.initialize(values, VectorSimilarityFunction.DOT_PRODUCT,AsymmetricHashing.RANDOM,
                     AsymmetricHashing.HEADER_BITS+31*bits,1,bits);
             var encoded = ash.encodeAll(values, java.util.concurrent.ForkJoinPool.commonPool());
             var bsp = BuildScoreProvider.ashBuildScoreProvider(VectorSimilarityFunction.DOT_PRODUCT,encoded);
@@ -284,7 +284,7 @@ public class TestASHSymmetricScorer {
         var backend = VectorizationProvider.getInstance().getVectorUtilSupport();
         for (int centers : new int[]{2,64,256}) {
             for (int bits = 1; bits <= 9; bits++) {
-                var ash = AsymmetricHashing.initialize(values, AsymmetricHashing.RANDOM,
+                var ash = AsymmetricHashing.initialize(values, VectorSimilarityFunction.DOT_PRODUCT, AsymmetricHashing.RANDOM,
                         AsymmetricHashing.HEADER_BITS + 31*bits, centers, bits);
                 var encoded = ash.encodeAll(values, java.util.concurrent.ForkJoinPool.commonPool());
                 var scalar = new ASHSymmetricScorer(encoded, ASHSymmetricScorer.Kernel.SCALAR);

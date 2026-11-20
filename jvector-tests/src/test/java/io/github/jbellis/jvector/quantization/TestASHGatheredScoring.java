@@ -54,7 +54,7 @@ public class TestASHGatheredScoring {
     public void gatheredScoringIsOffByDefault() throws Exception {
         // Gathered scoring is experimental: without the property, nodes are scored one at a time.
         var base = unitVectors(500, 64, 3);
-        var ash = AsymmetricHashing.initialize(MockVectorValues.fromValues(base), AsymmetricHashing.ITQ,
+        var ash = AsymmetricHashing.initialize(MockVectorValues.fromValues(base), VectorSimilarityFunction.DOT_PRODUCT, AsymmetricHashing.ITQ,
                 AsymmetricHashing.HEADER_BITS + 2 * 34, 1, 2);
         var codes = ash.encodeAll(MockVectorValues.fromValues(base), ForkJoinPool.commonPool());
         assertFalse(codes.scoreFunctionFor(unitVectors(1, 64, 4)[0], VectorSimilarityFunction.DOT_PRODUCT).supportsBatchScoring());
@@ -76,7 +76,7 @@ public class TestASHGatheredScoring {
         for (int dimension : new int[] {64, 384, 1536}) {
             int projected = dimension / 2 + 2;
             var base = unitVectors(2000, dimension, dimension);
-            var ash = AsymmetricHashing.initialize(MockVectorValues.fromValues(base), AsymmetricHashing.ITQ,
+            var ash = AsymmetricHashing.initialize(MockVectorValues.fromValues(base), VectorSimilarityFunction.DOT_PRODUCT, AsymmetricHashing.ITQ,
                     AsymmetricHashing.HEADER_BITS + 2 * projected, 1, 2);
             var codes = ash.encodeAll(MockVectorValues.fromValues(base), ForkJoinPool.commonPool());
             var query = unitVectors(1, dimension, 99)[0];

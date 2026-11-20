@@ -121,7 +121,7 @@ public final class MutableASHVectors implements MutableCompressedVectors<VectorF
             this.id = id;
             this.ash = ash;
             this.scorer = new ASHScorer(ash);
-            this.landmarkDot = VectorUtil.dotProduct(ash.landmarks[0], ash.landmarks[0]);
+            this.landmarkDot = ash.symmetricLandmarkTerm(0, 0);
             this.zero = AsymmetricHashing.QuantizedVector.createEmpty(ash.quantizedDim, ash.bitsPerDimension);
             this.zeroCenteredOffset = ash.centeredOffset(zero);
         }
@@ -195,6 +195,9 @@ public final class MutableASHVectors implements MutableCompressedVectors<VectorF
         if (ash.originalDimension != originalDimension || ash.quantizedDim != quantizedDim
                 || ash.bitsPerDimension != bits || ash.landmarkCount != 1)
             throw new IllegalArgumentException("A new model must have the collection's code shape and one landmark");
+        if (ash.similarityFunction() != similarityFunction())
+            throw new IllegalArgumentException("A new model must have the collection's similarity, "
+                    + similarityFunction() + "; got " + ash.similarityFunction());
         Model[] m = models;
         if (m.length == 256) throw new IllegalStateException("At most 256 models per collection");
         Model[] next = Arrays.copyOf(m, m.length + 1);
@@ -223,6 +226,12 @@ public final class MutableASHVectors implements MutableCompressedVectors<VectorF
     @Override
     public AsymmetricHashing getCompressor() {
         return models[current].ash;
+    }
+
+    /** The similarity every model of this collection was trained for, which every scorer of it uses. */
+    @Override
+    public VectorSimilarityFunction similarityFunction() {
+        return models[0].ash.similarityFunction();
     }
 
     // ---------------------------------------------------------------------------------------------
@@ -496,8 +505,7 @@ public final class MutableASHVectors implements MutableCompressedVectors<VectorF
     @Override
     public ScoreFunction.AdaptiveApproximateScoreFunction scoreFunctionFor(VectorFloat<?> query,
                                                                           VectorSimilarityFunction similarityFunction) {
-        if (similarityFunction != VectorSimilarityFunction.DOT_PRODUCT)
-            throw new UnsupportedOperationException("ASH scoring supports DOT_PRODUCT only");
+        getCompressor().checkSimilarity(similarityFunction);
         return new QueryScoreFunction(query);
     }
 
@@ -518,7 +526,8 @@ public final class MutableASHVectors implements MutableCompressedVectors<VectorF
     }
 
     /**
-     * As {@link #scoreFunctionFor(VectorFloat, VectorSimilarityFunction)} for dot products, for a query prepared by
+     * As {@link #scoreFunctionFor(VectorFloat, VectorSimilarityFunction)} in the collection's similarity, for a query
+     * prepared by
      * a {@link #queryPreparer} of this collection; the score function borrows the prepared state until its search
      * ends.
      */
@@ -544,6 +553,7 @@ public final class MutableASHVectors implements MutableCompressedVectors<VectorF
     /** Through the model's code scorer, as {@link ASHVectors} scores multibit codes and forced-scalar 1-bit codes. */
     private final class CodeScorerQuery extends ModelQuery {
         private final ASHScorer.CodeScorer f;
+        private final ASHScoreScale scale;
         private final float bound;
 
         CodeScorerQuery(Model m, VectorFloat<?> query) {
@@ -551,13 +561,14 @@ public final class MutableASHVectors implements MutableCompressedVectors<VectorF
         }
 
         CodeScorerQuery(Model m, ASHScorer.QueryPrecompute qp) {
+            scale = m.ash.scores();
             f = m.scorer.codeScorerFor(qp);
             bound = m.scorer.dotProductBound(qp);
         }
 
         @Override
         float similarityTo(Page page, int slot) {
-            return ASHScorer.toSimilarity(f.dot(page.signs, slot * signWords, page.body, slot * bodyBytes,
+            return scale.similarity(f.dot(page.signs, slot * signWords, page.body, slot * bodyBytes,
                     page.scales[slot], page.offsets[slot], page.landmarks[slot] & 0xFF));
         }
 
@@ -573,19 +584,22 @@ public final class MutableASHVectors implements MutableCompressedVectors<VectorF
         private final float sumQProj;
         private final float dotQMu;
         private final float bound;
+        private final ASHScoreScale scale;
         private final int words = AsymmetricHashing.QuantizedVector.wordsForDims(quantizedDim);
 
         MaskedAddQuery(Model m, VectorFloat<?> query) {
+            scale = m.ash.scores();
             float[] q = new float[originalDimension];
-            for (int i = 0; i < q.length; i++) q[i] = query.get(i);
+            query = m.ash.loadQuery(query, q, null);
             qProj = new float[quantizedDim];
             m.ash.stiefelTransform.projectQuery(q, qProj);
             sumQProj = ASHScorer.sum(qProj);
-            dotQMu = VectorUtil.dotProduct(query, m.ash.landmarks[0]);
+            dotQMu = m.ash.queryLandmarkTerm(query, 0);
             bound = bound(m, (float) Math.sqrt(VectorUtil.dotProduct(query, query)));
         }
 
         MaskedAddQuery(Model m, ASHScorer.QueryPrecompute qp) {
+            scale = m.ash.scores();
             qProj = qp.qProj;
             sumQProj = qp.sumQProj;
             dotQMu = qp.dotQMuByLandmark[0];
@@ -600,7 +614,7 @@ public final class MutableASHVectors implements MutableCompressedVectors<VectorF
         @Override
         float similarityTo(Page page, int slot) {
             float maskedAdd = VU.ashMaskedAdd_512(qProj, 0, page.signs, slot * signWords, quantizedDim, words);
-            return ASHScorer.toSimilarity(page.scales[slot] * (2f * maskedAdd - sumQProj) + dotQMu + page.offsets[slot]);
+            return scale.similarity(page.scales[slot] * (2f * maskedAdd - sumQProj) + dotQMu + page.offsets[slot]);
         }
 
         @Override
@@ -609,7 +623,7 @@ public final class MutableASHVectors implements MutableCompressedVectors<VectorF
         }
     }
 
-    /** The query path {@link ASHVectors} would use for {@code m}'s codes. */
+    /** The query path {@link ASHVectors} would use for {@code m}'s codes, in {@code m}'s similarity. */
     private ModelQuery prepare(Model m, VectorFloat<?> query) {
         return maskedAdd() ? new MaskedAddQuery(m, query) : new CodeScorerQuery(m, query);
     }
@@ -682,6 +696,11 @@ public final class MutableASHVectors implements MutableCompressedVectors<VectorF
         }
 
         @Override
+        public VectorSimilarityFunction similarityFunction() {
+            return MutableASHVectors.this.similarityFunction();
+        }
+
+        @Override
         public boolean isExact() {
             return false;
         }
@@ -712,6 +731,7 @@ public final class MutableASHVectors implements MutableCompressedVectors<VectorF
         private final Page source;
         private final int sourceSlot;
         private final Model model;
+        private final ASHScoreScale scoreScale;
         private final float scale;
         private final float centered;
         private final Supplier<RandomAccessVectorValues> vectors;
@@ -723,6 +743,7 @@ public final class MutableASHVectors implements MutableCompressedVectors<VectorF
             this.source = source;
             this.sourceSlot = node & pageMask;
             this.model = models[source.model];
+            this.scoreScale = model.ash.scores();
             this.scale = source.scales[sourceSlot];
             this.centered = source.centered[sourceSlot];
             this.vectors = vectors;
@@ -752,7 +773,17 @@ public final class MutableASHVectors implements MutableCompressedVectors<VectorF
             int slot = target & pageMask;
             float dot = (scale * page.scales[slot]) * codeDot(page, slot)
                     + (centered + page.centered[slot]) + model.landmarkDot;
-            return ASHScorer.toSimilarity(dot);
+            return similarity(dot);
+        }
+
+        /** The similarity of a same-model estimate, in the source model's units. */
+        private float similarity(float dot) {
+            return scoreScale.similarity(dot);
+        }
+
+        @Override
+        public VectorSimilarityFunction similarityFunction() {
+            return model.ash.similarityFunction();
         }
 
         @Override
@@ -785,15 +816,14 @@ public final class MutableASHVectors implements MutableCompressedVectors<VectorF
                 }
                 int slot = nodes[i] & pageMask;
                 float dot = (scale * page.scales[slot]) * dots[k++] + (centered + page.centered[slot]) + model.landmarkDot;
-                scores[i] = ASHScorer.toSimilarity(dot);
+                scores[i] = similarity(dot);
             }
         }
     }
 
     @Override
     public ScoreFunction.AdaptiveApproximateScoreFunction diversityFunctionFor(int node, VectorSimilarityFunction similarityFunction) {
-        if (similarityFunction != VectorSimilarityFunction.DOT_PRODUCT)
-            throw new UnsupportedOperationException("ASH scoring supports DOT_PRODUCT only");
+        getCompressor().checkSimilarity(similarityFunction);
         return symmetricFunctionFor(node, () -> {
             throw new IllegalStateException("Scoring across models needs the source vectors; use buildScoreProvider");
         });
@@ -830,14 +860,14 @@ public final class MutableASHVectors implements MutableCompressedVectors<VectorF
 
             @Override
             public SearchScoreProvider searchProviderFor(VectorFloat<?> vector) {
-                return new DefaultSearchScoreProvider(scoreFunctionFor(vector, VectorSimilarityFunction.DOT_PRODUCT));
+                return new DefaultSearchScoreProvider(scoreFunctionFor(vector, similarityFunction()));
             }
 
             @Override
             public SearchScoreProvider searchProviderFor(int node) {
                 float m = maxEncodedNorm();
                 return new DefaultSearchScoreProvider(symmetricFunctionFor(node, views), null,
-                        VectorSimilarityFunction.DOT_PRODUCT, m * m);
+                        similarityFunction(), m * m);
             }
 
             @Override

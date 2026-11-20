@@ -145,7 +145,7 @@ public class TestUnnormalizedVectors {
         for (int[] config : ash) {
             int bits = config[0], dims = config[1];
             int totalBits = AsymmetricHashing.HEADER_BITS + dims * bits;
-            var ashv = AsymmetricHashing.initialize(ravv, AsymmetricHashing.RANDOM, totalBits, 1, bits)
+            var ashv = AsymmetricHashing.initialize(ravv, VectorSimilarityFunction.DOT_PRODUCT, AsymmetricHashing.RANDOM, totalBits, 1, bits)
                     .encodeAll(ravv, ForkJoinPool.commonPool());
             String name = "ASH " + dims + "x" + bits + " (" + (totalBits / 8) + " B)";
             results.put(name, check(label, name, BuildScoreProvider.ashBuildScoreProvider(vsf, ashv), ravv, queries,

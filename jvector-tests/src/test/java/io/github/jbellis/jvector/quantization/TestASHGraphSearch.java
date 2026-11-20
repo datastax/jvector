@@ -66,7 +66,7 @@ public class TestASHGraphSearch {
                 // also need canonical LUT scoring, which only some backends provide.
                 boolean simd = backend.supportsAshLutScoring()
                         && (!AsymmetricHashing.usesOffsetBinaryCode(bits) || backend.supportsAshCanonicalLutScoring());
-                var ash = AsymmetricHashing.initialize(values, AsymmetricHashing.RANDOM,
+                var ash = AsymmetricHashing.initialize(values, VectorSimilarityFunction.DOT_PRODUCT, AsymmetricHashing.RANDOM,
                         AsymmetricHashing.HEADER_BITS + 33 * bits, 1, bits);
                 var encoded = ash.encodeAll(values, ForkJoinPool.commonPool());
                 var path = Files.createTempFile("ash-negative-entry-", ".index");

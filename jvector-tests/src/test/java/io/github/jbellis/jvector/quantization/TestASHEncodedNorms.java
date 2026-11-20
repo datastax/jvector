@@ -15,6 +15,7 @@
  */
 package io.github.jbellis.jvector.quantization;
 
+import io.github.jbellis.jvector.vector.VectorSimilarityFunction;
 import io.github.jbellis.jvector.TestUtil;
 import io.github.jbellis.jvector.disk.SimpleMappedReader;
 import io.github.jbellis.jvector.disk.SimpleWriter;
@@ -53,7 +54,7 @@ public class TestASHEncodedNorms {
         for (int bits : new int[] {1, 2, 3, 4, 9}) {
             for (int landmarks : new int[] {1, 4}) {
                 String where = bits + " bits, " + landmarks + " landmarks";
-                var ash = AsymmetricHashing.initialize(ravv, AsymmetricHashing.RANDOM,
+                var ash = AsymmetricHashing.initialize(ravv, VectorSimilarityFunction.DOT_PRODUCT, AsymmetricHashing.RANDOM,
                         AsymmetricHashing.HEADER_BITS + 40 * bits, landmarks, bits);
                 // A second instance of the same model, saved before it encoded anything.
                 File file = File.createTempFile("ash-model", ".bin");

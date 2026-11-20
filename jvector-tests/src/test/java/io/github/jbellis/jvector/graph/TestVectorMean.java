@@ -16,6 +16,7 @@
 
 package io.github.jbellis.jvector.graph;
 
+import io.github.jbellis.jvector.vector.VectorSimilarityFunction;
 import io.github.jbellis.jvector.quantization.*;
 import io.github.jbellis.jvector.vector.VectorizationProvider;
 import io.github.jbellis.jvector.vector.types.VectorFloat;
@@ -193,7 +194,7 @@ public class TestVectorMean {
         }
         var resident = new ListRandomAccessVectorValues(input, 16);
         var pq = ProductQuantization.compute(resident, 2, 4, true);
-        var ash = AsymmetricHashing.initialize(resident, AsymmetricHashing.RANDOM,
+        var ash = AsymmetricHashing.initialize(resident, VectorSimilarityFunction.DOT_PRODUCT, AsymmetricHashing.RANDOM,
                 AsymmetricHashing.HEADER_BITS + 8 * 2, 1, 2);
         var pool = new ForkJoinPool(4);
         try {

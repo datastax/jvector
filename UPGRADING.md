@@ -7,7 +7,8 @@
   adaptive dot-product stopping needs: one float at the end of each serialized PQ model, and of the
   inline-vector and separated-vector feature headers. Otherwise a version 7 file has the version 6 layout.
   ASH models (`AsymmetricHashing`, `ASHVectors`) also require version 7 or later when they are written or
-  loaded.
+  loaded. A model stores its similarity and, for `EUCLIDEAN`, a scale unit (8 bytes in all); ASH models
+  written before these fields existed cannot be loaded.
 - Dot-product searches over indexes and PQ models written before version 7 stop by the standard rule,
   since their largest vector length is unknown; rewriting them at version 7 does not change that for codes
   encoded before, so a PQ model loaded from an older format keeps it unknown.
@@ -33,6 +34,11 @@
   builders places records so none crosses a page boundary, so serving a larger-than-memory index reads
   fewer pages per node. See
   [Building and serving larger-than-memory indexes](docs/larger-than-memory-indexes.md).
+- ASH supports `EUCLIDEAN` as well as `DOT_PRODUCT`. A model's similarity is chosen when it is trained,
+  with `AsymmetricHashing.initialize(vectors, similarity, ...)`, and saved with it; its scorers reject any
+  other similarity with `IllegalArgumentException`. The similarity is a required argument; there is no
+  default. ASH does not require normalized vectors. `CompressedVectors.similarityFunction()` and
+  `ScoreFunction.similarityFunction()` report a fixed similarity (null when the caller chooses it, as for PQ).
 - JVector sets the native BLAS thread count for ASH training: one thread by default, or the size of the
   executor passed to `AsymmetricHashing.initialize(..., ForkJoinPool executor)`.
 

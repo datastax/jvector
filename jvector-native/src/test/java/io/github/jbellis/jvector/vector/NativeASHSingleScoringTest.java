@@ -76,7 +76,7 @@ class NativeASHSingleScoringTest {
         assertEquals("native", System.getProperty("jvector.vectorization_provider"));
         for (int bits : new int[] {2, 4}) {
             var values = new Values(40, 64);
-            var ash = AsymmetricHashing.initialize(values, AsymmetricHashing.RANDOM,
+            var ash = AsymmetricHashing.initialize(values, VectorSimilarityFunction.DOT_PRODUCT, AsymmetricHashing.RANDOM,
                     AsymmetricHashing.HEADER_BITS + 33 * bits, 1, bits);
             var encoded = ash.encodeAll(values, ForkJoinPool.commonPool());
             var expected = new float[40];

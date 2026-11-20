@@ -16,6 +16,7 @@
 
 package io.github.jbellis.jvector.example.util;
 
+import io.github.jbellis.jvector.vector.VectorSimilarityFunction;
 import io.github.jbellis.jvector.graph.disk.OnDiskGraphIndex;
 import io.github.jbellis.jvector.graph.disk.feature.FeatureId;
 import org.junit.Rule;
@@ -35,7 +36,12 @@ public class OnDiskGraphIndexCacheKeyTest {
     public TemporaryFolder dir = new TemporaryFolder();
 
     private static String name(OnDiskGraphIndexCache cache, String dataset, int count, int dim, int nvq) {
-        var key = cache.keyWithCompressorId(dataset, FUSED_NVQ, 32, 100, 1.2f, 1.2f, true, true,
+        return name(cache, dataset, VectorSimilarityFunction.DOT_PRODUCT, count, dim, nvq);
+    }
+
+    private static String name(OnDiskGraphIndexCache cache, String dataset, VectorSimilarityFunction similarity,
+                               int count, int dim, int nvq) {
+        var key = cache.keyWithCompressorId(dataset, similarity, FUSED_NVQ, 32, 100, 1.2f, 1.2f, true, true,
                 "schema3:ASH_x:symmetric-all", count, dim, nvq);
         return cache.resolve(key).finalPath.getFileName().toString();
     }
@@ -44,12 +50,14 @@ public class OnDiskGraphIndexCacheKeyTest {
     public void signatureCarriesShapeFormatAndNvqLayout() throws Exception {
         var cache = OnDiskGraphIndexCache.initialize(dir.getRoot().toPath());
         String base = name(cache, "ds", 1_000_000, 768, 2);
-        assertTrue(base, base.contains("_n1000000_d768_fmt" + OnDiskGraphIndex.CURRENT_VERSION + "_"));
+        assertTrue(base, base.contains("_dot_n1000000_d768_fmt" + OnDiskGraphIndex.CURRENT_VERSION + "_"));
         assertTrue(base, base.contains("_NVQ_VECTORS_nvq2_"));
         assertEquals("identical inputs share one graph", base, name(cache, "ds", 1_000_000, 768, 2));
         assertNotEquals("a larger profile is a different graph", base, name(cache, "ds", 100_000_000, 768, 2));
         assertNotEquals("a different dimension is a different graph", base, name(cache, "ds", 1_000_000, 384, 2));
         assertNotEquals("a different NVQ layout is a different file", base, name(cache, "ds", 1_000_000, 768, 1));
+        assertNotEquals("a different similarity is a different graph", base,
+                name(cache, "ds", VectorSimilarityFunction.EUCLIDEAN, 1_000_000, 768, 2));
     }
 
     @Test
@@ -57,7 +65,7 @@ public class OnDiskGraphIndexCacheKeyTest {
         var cache = OnDiskGraphIndexCache.initialize(dir.getRoot().toPath());
         assertThrows(IllegalArgumentException.class, () -> name(cache, "ds", 10, 4, 0));
         assertThrows(IllegalArgumentException.class, () -> cache.keyWithCompressorId("ds",
-                EnumSet.of(FeatureId.FUSED_ASH, FeatureId.INLINE_VECTORS), 32, 100, 1.2f, 1.2f, true, true,
+                VectorSimilarityFunction.DOT_PRODUCT, EnumSet.of(FeatureId.FUSED_ASH, FeatureId.INLINE_VECTORS), 32, 100, 1.2f, 1.2f, true, true,
                 "id", 10, 4, 2));
         assertThrows(IllegalArgumentException.class, () -> name(cache, "ds", 0, 4, 2));
     }

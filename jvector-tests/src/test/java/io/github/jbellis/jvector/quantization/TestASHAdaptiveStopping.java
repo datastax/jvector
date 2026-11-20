@@ -55,7 +55,7 @@ public class TestASHAdaptiveStopping {
             VectorUtil.l2normalize(input[i]);
         }
         var values = MockVectorValues.fromValues(input);
-        var ash = AsymmetricHashing.initialize(values, AsymmetricHashing.RANDOM,
+        var ash = AsymmetricHashing.initialize(values, VectorSimilarityFunction.DOT_PRODUCT, AsymmetricHashing.RANDOM,
                 AsymmetricHashing.HEADER_BITS + 32 * 2, 1, 2);
         var encoded = ash.encodeAll(values, ForkJoinPool.commonPool());
         var bsp = BuildScoreProvider.ashBuildScoreProvider(VectorSimilarityFunction.DOT_PRODUCT, encoded);

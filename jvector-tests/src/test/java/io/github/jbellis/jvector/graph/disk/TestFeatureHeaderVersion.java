@@ -16,6 +16,7 @@
 
 package io.github.jbellis.jvector.graph.disk;
 
+import io.github.jbellis.jvector.vector.VectorSimilarityFunction;
 import com.carrotsearch.randomizedtesting.RandomizedTest;
 import com.carrotsearch.randomizedtesting.annotations.ThreadLeakScope;
 import io.github.jbellis.jvector.TestUtil;
@@ -62,7 +63,7 @@ public class TestFeatureHeaderVersion extends RandomizedTest {
         var ravv = new ListRandomAccessVectorValues(TestUtil.createRandomVectors(512, DIMENSION), DIMENSION);
         var pq = ProductQuantization.compute(ravv, 8, 256, false);
         var nvq = NVQuantization.compute(ravv, 2);
-        var ash = AsymmetricHashing.initialize(ravv, AsymmetricHashing.RANDOM,
+        var ash = AsymmetricHashing.initialize(ravv, VectorSimilarityFunction.DOT_PRODUCT, AsymmetricHashing.RANDOM,
                 AsymmetricHashing.HEADER_BITS + DIMENSION, 1);
         var fusedAsh = new FusedASH(MAX_DEGREE, ash);
         int blockSize = fusedAsh.blockSize();

@@ -225,8 +225,8 @@ public abstract class CompressorParameters {
 
         @Override
         public void validateFor(DataSet ds, boolean fused, String ashConstructionMode) {
-            if (ds.getSimilarityFunction() != VectorSimilarityFunction.DOT_PRODUCT) {
-                throw new IllegalArgumentException("ASH requires dot-product similarity");
+            if (ds.getSimilarityFunction() == VectorSimilarityFunction.COSINE) {
+                throw new IllegalArgumentException("ASH requires dot-product or Euclidean similarity");
             }
             int payload = encodedBits - AsymmetricHashing.HEADER_BITS;
             if (encodedBits <= AsymmetricHashing.HEADER_BITS || payload % bitsPerDimension != 0
@@ -274,6 +274,7 @@ public abstract class CompressorParameters {
                 var executor = ForkJoinTask.inForkJoinPool() ? ForkJoinTask.getPool() : PhysicalCoreExecutor.pool();
                 return AsymmetricHashing.initialize(
                         trainingVectors(ds),
+                        ds.getSimilarityFunction(),
                         optimizer,
                         encodedBits,
                         landmarkCount,
@@ -287,8 +288,9 @@ public abstract class CompressorParameters {
         @Override
         public String idStringFor(DataSet ds) {
             return String.format(
-                    "ASH_%s_v%d_opt%d_bits%d_bpd%d_C%d",
+                    "ASH_%s_%s_v%d_opt%d_bits%d_bpd%d_C%d",
                     ds.getName(),
+                    OnDiskGraphIndexCache.similarityTag(ds.getSimilarityFunction()),
                     io.github.jbellis.jvector.graph.disk.OnDiskGraphIndex.CURRENT_VERSION,
                     optimizer,
                     encodedBits,

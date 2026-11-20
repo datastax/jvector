@@ -15,6 +15,7 @@
  */
 package io.github.jbellis.jvector.quantization;
 
+import io.github.jbellis.jvector.vector.VectorSimilarityFunction;
 import io.github.jbellis.jvector.graph.MockVectorValues;
 import io.github.jbellis.jvector.graph.RandomAccessVectorValues;
 import io.github.jbellis.jvector.vector.VectorizationProvider;
@@ -44,7 +45,7 @@ public class TestASHBatchEncoding {
     }
 
     private static AsymmetricHashing model(int bits, int landmarks) throws Exception {
-        return AsymmetricHashing.initialize(MockVectorValues.fromValues(vectors(128)),
+        return AsymmetricHashing.initialize(MockVectorValues.fromValues(vectors(128)), VectorSimilarityFunction.DOT_PRODUCT,
                 AsymmetricHashing.RANDOM, AsymmetricHashing.HEADER_BITS + 9 * bits, landmarks, bits);
     }
 
