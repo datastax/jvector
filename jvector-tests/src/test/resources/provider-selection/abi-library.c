@@ -38,6 +38,9 @@ float dot_product_f32(const float *a, size_t ao, const float *b, size_t bo, size
 }
 void cosine_f32(void) {}
 void euclidean_f32(void) {}
+void cosine_f32_batch(void) {}
+void dot_product_f32_batch(void) {}
+void euclidean_f32_batch(void) {}
 void add_in_place_f32(void) {}
 void add_scalar_in_place_f32(void) {}
 void sub_in_place_f32(void) {}

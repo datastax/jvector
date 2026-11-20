@@ -70,13 +70,7 @@ public final class DefaultSearchScoreProvider implements SearchScoreProvider {
      */
     public static DefaultSearchScoreProvider exact(VectorFloat<?> v, VectorSimilarityFunction vsf, RandomAccessVectorValues ravv) {
         // don't use ESF.reranker, we need thread safety here
-        var sf = new ScoreFunction.ExactScoreFunction() {
-            @Override
-            public float similarityTo(int node2) {
-                return vsf.compare(v, ravv.getVector(node2));
-            }
-        };
-        return new DefaultSearchScoreProvider(sf);
+        return new DefaultSearchScoreProvider(new BatchedExactScoreFunction(v, vsf, ravv, null));
     }
 
     /**
@@ -86,12 +80,70 @@ public final class DefaultSearchScoreProvider implements SearchScoreProvider {
      */
     public static DefaultSearchScoreProvider exact(VectorFloat<?> v, int[] graphToRavvOrdMap ,VectorSimilarityFunction vsf, RandomAccessVectorValues ravv) {
         // don't use ESF.reranker, we need thread safety here
-        var sf = new ScoreFunction.ExactScoreFunction() {
-            @Override
-            public float similarityTo(int node2) {
-                return vsf.compare(v, ravv.getVector(graphToRavvOrdMap[node2]));
+        return new DefaultSearchScoreProvider(new BatchedExactScoreFunction(v, vsf, ravv, graphToRavvOrdMap));
+    }
+
+    /**
+     * Exact scoring against a RandomAccessVectorValues. {@link #similarityTo} scores one node at a time, with
+     * no shared state. {@link #similarityToBatch} gathers the vectors of several nodes into one contiguous
+     * scratch vector and scores them with a single batched kernel call, which amortizes the per-call
+     * overhead of the vector kernels (e.g. the native downcall) and lets the loads of independent vectors
+     * overlap. Scores are identical either way.
+     * <p>
+     * The gather buffer is per thread and reused across queries, not allocated per instance: a score function is
+     * created for every query, and a per-query buffer of count * dimension floats (about 100 KB at 384 dimensions)
+     * costs more in allocation and GC than the batching saves at high QPS. The buffer is only used within a single
+     * {@code similarityToBatch} call, so it is safe to share between score functions on the same thread, and
+     * between threads since each has its own.
+     */
+    private static final class BatchedExactScoreFunction implements ScoreFunction.ExactScoreFunction {
+        // One buffer per thread, grown on demand and never shrunk. Any dimension can use it, since callers only
+        // address the first count * dimension floats.
+        private static final ThreadLocal<VectorFloat<?>> GATHER_SCRATCH = new ThreadLocal<>();
+
+        private final VectorFloat<?> query;
+        private final VectorSimilarityFunction vsf;
+        private final RandomAccessVectorValues ravv;
+        private final int[] graphToRavvOrdMap; // null means identity
+
+        BatchedExactScoreFunction(VectorFloat<?> query, VectorSimilarityFunction vsf,
+                                  RandomAccessVectorValues ravv, int[] graphToRavvOrdMap) {
+            this.query = query;
+            this.vsf = vsf;
+            this.ravv = ravv;
+            this.graphToRavvOrdMap = graphToRavvOrdMap;
+        }
+
+        private int ordinal(int node) {
+            return graphToRavvOrdMap == null ? node : graphToRavvOrdMap[node];
+        }
+
+        @Override
+        public float similarityTo(int node2) {
+            return vsf.compare(query, ravv.getVector(ordinal(node2)));
+        }
+
+        @Override
+        public boolean supportsSimilarityToBatch() {
+            return true;
+        }
+
+        @Override
+        public void similarityToBatch(int[] nodes, int count, float[] out) {
+            final int dim = query.length();
+            if (ravv.dimension() != dim) {
+                throw new IllegalArgumentException("vector dimensions differ: " + dim + "!=" + ravv.dimension());
             }
-        };
-        return new DefaultSearchScoreProvider(sf);
+            VectorFloat<?> gathered = GATHER_SCRATCH.get();
+            if (gathered == null || gathered.length() < count * dim) {
+                // size for a typical node degree so that growth is rare; this happens once per thread
+                gathered = vts.createFloatVector(Math.max(count, 64) * dim);
+                GATHER_SCRATCH.set(gathered);
+            }
+            for (int i = 0; i < count; i++) {
+                ravv.getVectorInto(ordinal(nodes[i]), gathered, i * dim);
+            }
+            vsf.compareBatch(query, gathered, count, out);
+        }
     }
 }

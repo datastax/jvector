@@ -48,7 +48,8 @@ class LazyMemorySegmentTest {
         float[] data = {-0.0f, 1, 2, 3, 4, 5, 6, 7};
         var v = new MemorySegmentVectorFloat(data);
         assertSame(data, v.array());
-        assertEquals(1, java.util.Arrays.stream(MemorySegmentVectorFloat.class.getDeclaredFields())
+        // the storage slot plus the cached element count (length() must not chase the segment per call)
+        assertEquals(2, java.util.Arrays.stream(MemorySegmentVectorFloat.class.getDeclaredFields())
                 .filter(f -> !java.lang.reflect.Modifier.isStatic(f.getModifiers())).count());
         var field = MemorySegmentVectorFloat.class.getDeclaredField("segment");
         field.setAccessible(true);

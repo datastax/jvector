@@ -295,3 +295,34 @@ TEST(ClosestCentroid, KeepsFirstEqualDistance) {
     float centroids[] = {2, -2, 3};
     EXPECT_EQ(closest_centroid_f32(point, 0, centroids, 3, 1), 0);
 }
+
+// ---------------------------------------------------------------------------
+// *_f32_batch — one query against `count` contiguous vectors must equal, bit for
+// bit, the single-pair kernel applied to each vector.
+// ---------------------------------------------------------------------------
+
+TEST_P(SimilarityTest, BatchMatchesSinglePair)
+{
+    const size_t n = GetParam().length;
+    for (size_t count : {size_t(0), size_t(1), size_t(2), size_t(5), size_t(33)}) {
+        auto query   = make_vec(n, 0.7f);
+        auto vectors = make_vec(n * count, 1.3f);
+        std::vector<float> out(count + 1, -1.0f);
+
+        euclidean_f32_batch(query.data(), vectors.data(), count, n, out.data());
+        for (size_t i = 0; i < count; ++i) {
+            EXPECT_EQ(out[i], euclidean_f32(query.data(), 0, vectors.data(), i * n, n)) << "euclidean i=" << i;
+        }
+        EXPECT_EQ(out[count], -1.0f) << "euclidean wrote past count";
+
+        dot_product_f32_batch(query.data(), vectors.data(), count, n, out.data());
+        for (size_t i = 0; i < count; ++i) {
+            EXPECT_EQ(out[i], dot_product_f32(query.data(), 0, vectors.data(), i * n, n)) << "dot i=" << i;
+        }
+
+        cosine_f32_batch(query.data(), vectors.data(), count, n, out.data());
+        for (size_t i = 0; i < count; ++i) {
+            EXPECT_EQ(out[i], cosine_f32(query.data(), 0, vectors.data(), i * n, n)) << "cosine i=" << i;
+        }
+    }
+}

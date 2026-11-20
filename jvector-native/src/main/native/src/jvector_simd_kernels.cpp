@@ -399,6 +399,35 @@ HWY_FLATTEN float euclidean_f32(
     return L2SquareDistance(a, aoffset, b, boffset, length);
 }
 
+// Batched similarity: score one query against `count` vectors stored back to back
+// (`vectors + i * length`). One downcall covers a whole neighbor list instead of one call per
+// neighbor. Each result calls exactly the single-pair kernel above, so it is bit-for-bit equal
+// to the one-at-a-time result; the vectors were just gathered into a contiguous scratch buffer,
+// so there is nothing left to prefetch.
+HWY_FLATTEN void cosine_f32_batch(
+        const float *query, const float *vectors, size_t count, size_t length, float *results)
+{
+    for (size_t i = 0; i < count; ++i) {
+        results[i] = CosineDistance(query, 0, vectors, i * length, length);
+    }
+}
+
+HWY_FLATTEN void dot_product_f32_batch(
+        const float *query, const float *vectors, size_t count, size_t length, float *results)
+{
+    for (size_t i = 0; i < count; ++i) {
+        results[i] = DotProduct(query, 0, vectors, i * length, length);
+    }
+}
+
+HWY_FLATTEN void euclidean_f32_batch(
+        const float *query, const float *vectors, size_t count, size_t length, float *results)
+{
+    for (size_t i = 0; i < count; ++i) {
+        results[i] = L2SquareDistance(query, 0, vectors, i * length, length);
+    }
+}
+
 // Keep the centroid scan native so even tiny PQ subvectors need only one downcall.
 // Reuse exactly the single-distance kernel and strict comparison: neither the
 // reduction order nor first-centroid tie handling changes.

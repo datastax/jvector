@@ -77,4 +77,34 @@ public enum VectorSimilarityFunction {
    * @return the value of the similarity function applied to the two vectors
    */
   public abstract float compare(VectorFloat<?> v1, VectorFloat<?> v2);
+
+  /**
+   * Scores {@code query} against {@code count} vectors stored back to back in {@code vectors}:
+   * {@code out[i] = compare(query, i-th vector)}, using one batched kernel call.
+   * {@code vectors} must hold at least {@code count * query.length()} elements.
+   */
+  public void compareBatch(VectorFloat<?> query, VectorFloat<?> vectors, int count, float[] out) {
+    switch (this) {
+      case EUCLIDEAN:
+        VectorUtil.squareL2DistanceBatch(query, vectors, count, out);
+        for (int i = 0; i < count; i++) {
+          out[i] = 1 / (1 + out[i]);
+        }
+        break;
+      case DOT_PRODUCT:
+        VectorUtil.dotProductBatch(query, vectors, count, out);
+        for (int i = 0; i < count; i++) {
+          out[i] = (1 + out[i]) / 2;
+        }
+        break;
+      case COSINE:
+        VectorUtil.cosineBatch(query, vectors, count, out);
+        for (int i = 0; i < count; i++) {
+          out[i] = (1 + out[i]) / 2;
+        }
+        break;
+      default:
+        throw new AssertionError(this);
+    }
+  }
 }

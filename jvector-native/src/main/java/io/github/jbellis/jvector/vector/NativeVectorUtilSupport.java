@@ -273,6 +273,35 @@ class NativeVectorUtilSupport extends PanamaVectorUtilSupport
                                           length);
     }
 
+    // Batched similarity: `vectors` holds `count` vectors back to back, so one downcall scores them all.
+    // VectorUtil has already checked that vectors and out are large enough for count entries.
+    @Override
+    public void squareDistanceBatch(VectorFloat<?> query, VectorFloat<?> vectors, int count, float[] out) {
+        if (query instanceof MemorySegmentVectorFloat q && vectors instanceof MemorySegmentVectorFloat v) {
+            NativeSimdOps.euclidean_f32_batch(q.get(), v.get(), count, query.length(), MemorySegment.ofArray(out));
+        } else {
+            super.squareDistanceBatch(query, vectors, count, out);
+        }
+    }
+
+    @Override
+    public void dotProductBatch(VectorFloat<?> query, VectorFloat<?> vectors, int count, float[] out) {
+        if (query instanceof MemorySegmentVectorFloat q && vectors instanceof MemorySegmentVectorFloat v) {
+            NativeSimdOps.dot_product_f32_batch(q.get(), v.get(), count, query.length(), MemorySegment.ofArray(out));
+        } else {
+            super.dotProductBatch(query, vectors, count, out);
+        }
+    }
+
+    @Override
+    public void cosineBatch(VectorFloat<?> query, VectorFloat<?> vectors, int count, float[] out) {
+        if (query instanceof MemorySegmentVectorFloat q && vectors instanceof MemorySegmentVectorFloat v) {
+            NativeSimdOps.cosine_f32_batch(q.get(), v.get(), count, query.length(), MemorySegment.ofArray(out));
+        } else {
+            super.cosineBatch(query, vectors, count, out);
+        }
+    }
+
     @Override
     public float cosine(VectorFloat<?> v1, VectorFloat<?> v2) {
         return NativeSimdOps.cosine_f32(((MemorySegmentVectorFloat) v1).get(), 0,
