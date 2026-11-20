@@ -29,7 +29,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.junit.Assert.*;
 
-/** Sampled C=1 setup, numeric order, RNG state and borrowed-source lifetime. */
+/** Sampled C=1 setup, raw-vector training, numeric order, RNG state and borrowed-source lifetime. */
 public class TestASHTrainingSetup {
     private static final class Values implements RandomAccessVectorValues {
         final VectorFloat<?>[] input;
@@ -107,6 +107,14 @@ public class TestASHTrainingSetup {
         final int rows;
 
         Reference(VectorFloat<?>[] source, int dimensions, Random rng, boolean learn) {
+            this(source, dimensions, rng, learn, false);
+        }
+
+        /**
+         * {@code unitLengthFirst} reproduces the earlier training path, which scaled each
+         * sampled vector to unit length before taking the mean and the ITQ residuals.
+         */
+        Reference(VectorFloat<?>[] source, int dimensions, Random rng, boolean learn, boolean unitLengthFirst) {
             int sampleSize = Math.min(source.length, dimensions * 20);
             Random selection = learn ? rng : new Random(103);
             int[] ordinals = new int[sampleSize];
@@ -119,6 +127,7 @@ public class TestASHTrainingSetup {
             VectorFloat<?>[] points = new VectorFloat<?>[sampleSize];
             for (int i = 0; i < sampleSize; i++) {
                 points[i] = source[ordinals[i]].copy();
+                if (!unitLengthFirst) continue;
                 float norm = (float) Math.sqrt(VectorUtil.dotProduct(points[i], points[i]));
                 if (norm > 1e-10f) VectorUtil.scale(points[i], 1f / norm);
             }
@@ -346,6 +355,101 @@ public class TestASHTrainingSetup {
             assertEquals(3, model.landmarks.length);
             assertEquals(3, model.quantizedDim);
             assertEquals(120, source.reads.get());
+        }
+    }
+
+    /**
+     * Gaussian vectors with a shared offset and uneven per-dimension spread, like
+     * embedding data; {@code unit} scales each one so its FP32 norm is exactly 1.
+     */
+    private static VectorFloat<?>[] embeddingLike(int count, int dimensions, boolean unit, long seed) {
+        var types = VectorizationProvider.getInstance().getVectorTypeSupport();
+        var support = VectorizationProvider.getInstance().getVectorUtilSupport();
+        Random random = new Random(seed);
+        float[] offset = new float[dimensions], spread = new float[dimensions];
+        for (int d = 0; d < dimensions; d++) {
+            offset[d] = (float) random.nextGaussian() * .3f;
+            spread[d] = .2f + 2f * random.nextFloat();
+        }
+        VectorFloat<?>[] values = new VectorFloat<?>[count];
+        for (int i = 0; i < count; i++) {
+            while (true) {
+                values[i] = types.createFloatVector(dimensions);
+                for (int d = 0; d < dimensions; d++)
+                    values[i].set(d, offset[d] + spread[d] * (float) random.nextGaussian());
+                if (!unit) break;
+                VectorUtil.l2normalize(values[i]);
+                // Keep only vectors that the earlier unit-length step left unchanged.
+                if ((float) Math.sqrt(support.dotProduct(values[i], values[i])) == 1.0f) break;
+            }
+        }
+        return values;
+    }
+
+    @Test
+    public void unitLengthInputGivesTheSameModelAsTheEarlierUnitLengthTraining() throws Exception {
+        int dimensions = 48, count = 1500;
+        VectorFloat<?>[] values = embeddingLike(count, dimensions, true, 7177);
+        for (boolean learn : new boolean[]{false, true}) {
+            Reference earlier = new Reference(values, dimensions, new Random(103), learn, true);
+            Object actual = prepare(new Values(values, dimensions, true), dimensions, new Random(103), learn);
+            VectorFloat<?> mean = (VectorFloat<?>) field(actual, "landmark");
+            for (int d = 0; d < dimensions; d++)
+                assertEquals(Float.floatToRawIntBits(earlier.mean.get(d)), Float.floatToRawIntBits(mean.get(d)));
+            if (!learn) continue;
+            double[] observed = (double[]) field(field(actual, "trainingData"), "xCol");
+            for (int i = 0; i < observed.length; i++)
+                assertEquals(Double.doubleToRawLongBits(earlier.xCol[i]), Double.doubleToRawLongBits(observed[i]));
+        }
+    }
+
+    @Test
+    public void trainingUsesRawVectorsLikeEncoding() throws Exception {
+        int dimensions = 32, count = 900;
+        VectorFloat<?>[] values = embeddingLike(count, dimensions, false, 9091);
+        Reference raw = new Reference(values, dimensions, new Random(103), true);
+        Reference unitFirst = new Reference(values, dimensions, new Random(103), true, true);
+        Object actual = prepare(new Values(values, dimensions, false), dimensions, new Random(103), true);
+        VectorFloat<?> mean = (VectorFloat<?>) field(actual, "landmark");
+        float largestUnitFirstGap = 0f;
+        for (int d = 0; d < dimensions; d++) {
+            assertEquals(Float.floatToRawIntBits(raw.mean.get(d)), Float.floatToRawIntBits(mean.get(d)));
+            largestUnitFirstGap = Math.max(largestUnitFirstGap, Math.abs(unitFirst.mean.get(d) - mean.get(d)));
+        }
+        // Non-unit data: the landmark is the raw mean, not the mean of unit vectors.
+        assertTrue(largestUnitFirstGap > .05f);
+
+        // Scaling the data by a power of two scales the landmark exactly and leaves the
+        // normalized residuals, and so the learned projection, bit-for-bit unchanged.
+        VectorFloat<?>[] scaled = new VectorFloat<?>[count];
+        for (int i = 0; i < count; i++) {
+            scaled[i] = values[i].copy();
+            VectorUtil.scale(scaled[i], 4f);
+        }
+        int budget = AsymmetricHashing.HEADER_BITS + 16 * 2;
+        var base = AsymmetricHashing.initialize(new Values(values, dimensions, false), AsymmetricHashing.ITQ, budget, 1, 2);
+        var big = AsymmetricHashing.initialize(new Values(scaled, dimensions, false), AsymmetricHashing.ITQ, budget, 1, 2);
+        for (int d = 0; d < dimensions; d++)
+            assertEquals(Float.floatToRawIntBits(4f * base.landmarks[0].get(d)),
+                    Float.floatToRawIntBits(big.landmarks[0].get(d)));
+        for (int r = 0; r < base.stiefelTransform.AData.length; r++)
+            assertArrayEquals(base.stiefelTransform.AData[r], big.stiefelTransform.AData[r], 0.0);
+    }
+
+    @Test
+    public void multipleLandmarksAreLearnedFromRawVectors() throws Exception {
+        int dimensions = 16, count = 2000;
+        VectorFloat<?>[] values = embeddingLike(count, dimensions, false, 4243);
+        for (VectorFloat<?> value : values) VectorUtil.scale(value, 10f);
+        var model = AsymmetricHashing.initialize(new Values(values, dimensions, false), AsymmetricHashing.ITQ,
+                AsymmetricHashing.HEADER_BITS + 8 * 2, 4, 2);
+        double meanNorm = 0;
+        for (VectorFloat<?> value : values) meanNorm += Math.sqrt(VectorUtil.dotProduct(value, value));
+        meanNorm /= count;
+        for (VectorFloat<?> landmark : model.landmarks) {
+            double norm = Math.sqrt(VectorUtil.dotProduct(landmark, landmark));
+            // Unit-length k-means input would give centroids of norm at most 1.
+            assertTrue("landmark norm " + norm, norm > 2.0 && norm < 2 * meanNorm);
         }
     }
 }

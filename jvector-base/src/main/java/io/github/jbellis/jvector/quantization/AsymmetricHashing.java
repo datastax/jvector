@@ -376,13 +376,11 @@ public class AsymmetricHashing implements VectorCompressor<AsymmetricHashing.Qua
             landmarks = new VectorFloat<?>[]{prepared.landmark};
             trainingData = prepared.trainingData;
         } else {
-            // Multi-landmark clustering still needs its materialized input.
+            // Multi-landmark clustering still needs its materialized input. Like
+            // encoding, k-means and ITQ use the raw vectors, not unit-length copies.
             VectorFloat<?>[] points = new VectorFloat<?>[ravvCopy.size()];
             for (int i = 0; i < points.length; i++) {
-                VectorFloat<?> v = ravvCopy.getVector(i).copy();
-                float norm = (float) Math.sqrt(VectorUtil.dotProduct(v, v));
-                if (norm > 1e-10f) VectorUtil.scale(v, 1.0f / norm);
-                points[i] = v;
+                points[i] = ravvCopy.getVector(i).copy();
             }
             long kmStart = System.nanoTime();
             MiniBatchKMeansClusterer km = new MiniBatchKMeansClusterer(points, landmarkCount, 1024);

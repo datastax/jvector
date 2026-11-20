@@ -128,10 +128,13 @@ final class ASHTraining {
 
     /**
      * Computes the C=1 landmark and ITQ inputs from the same deterministic
-     * sample. Only sampled source vectors are read; normalized sample values
-     * are retained until the mean is known. One reusable vector protects
-     * borrowed source storage. Double sums follow sorted ordinal order, and
-     * normalization retains the provider's FP32 dot/scale operations.
+     * sample. Only sampled source vectors are read; raw sample values are
+     * retained until the mean is known. One reusable vector protects borrowed
+     * source storage, and double sums follow sorted ordinal order.
+     *
+     * <p>Like encoding, training works on the raw vectors: the landmark is the
+     * mean of the sampled vectors, and ITQ learns from (x - mu) / ||x - mu||.
+     * Vectors are not scaled to unit length first.
      */
     static SingleLandmarkTraining prepareSingleLandmarkTraining(
             RandomAccessVectorValues source, int dimensions, Random rng, boolean learn) {
@@ -160,8 +163,8 @@ final class ASHTraining {
         Arrays.sort(ordinals);
         final float[] sample = learn ? new float[(int) sampleElements] : null;
         final double[] accumulator = new double[dimensions];
-        final VectorFloat<?> normalized = vectorTypeSupport.createFloatVector(dimensions);
-        final float[] values = normalized instanceof FloatArray ? ((FloatArray) normalized).array() : null;
+        final VectorFloat<?> rowValues = vectorTypeSupport.createFloatVector(dimensions);
+        final float[] values = rowValues instanceof FloatArray ? ((FloatArray) rowValues).array() : null;
         for (int row = 0; row < sampleSize; row++) {
             int ordinal = ordinals[row];
             VectorFloat<?> input = source.getVector(ordinal);
@@ -172,28 +175,27 @@ final class ASHTraining {
                 throw new IllegalArgumentException("ASH training vector at ordinal " + ordinal
                         + " has dimension " + input.length() + "; expected " + dimensions);
             }
-            normalized.copyFrom(input, 0, 0, dimensions);
+            rowValues.copyFrom(input, 0, 0, dimensions);
             // Dimensions are already checked. Call the provider directly so invalid
             // norms reach argument validation even when VectorUtil assertions are enabled.
-            float norm = (float) Math.sqrt(vectorUtilSupport.dotProduct(normalized, normalized));
+            // Encoding computes FP32 norms too, so a vector whose norm is not finite
+            // cannot be encoded and is rejected here.
+            float norm = (float) Math.sqrt(vectorUtilSupport.dotProduct(rowValues, rowValues));
             if (!Float.isFinite(norm)) {
                 throw new IllegalArgumentException("ASH training vector at ordinal " + ordinal
                         + " has a non-finite FP32 L2 norm");
             }
-            if (norm > 1e-10f) {
-                VectorUtil.scale(normalized, 1.0f / norm);
-            }
             if (values != null) {
                 for (int d = 0; d < dimensions; d++) accumulator[d] += values[d];
             } else {
-                for (int d = 0; d < dimensions; d++) accumulator[d] += normalized.get(d);
+                for (int d = 0; d < dimensions; d++) accumulator[d] += rowValues.get(d);
             }
             if (learn) {
                 int offset = row * dimensions;
                 if (values != null) {
                     System.arraycopy(values, 0, sample, offset, dimensions);
                 } else {
-                    for (int d = 0; d < dimensions; d++) sample[offset + d] = normalized.get(d);
+                    for (int d = 0; d < dimensions; d++) sample[offset + d] = rowValues.get(d);
                 }
             }
         }
