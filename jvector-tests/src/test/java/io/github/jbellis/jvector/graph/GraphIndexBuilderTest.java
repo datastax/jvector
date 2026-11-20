@@ -324,4 +324,31 @@ public class GraphIndexBuilderTest extends LuceneTestCase {
             }
         }
     }
+
+    /**
+     * DOT_PRODUCT scores are (1 + dot) / 2, which is negative for non-normalized vectors. A vector that is dissimilar
+     * to all the others must still get neighbors when it is inserted; searching with a threshold of 0 discards every
+     * candidate it finds and leaves it with none.
+     */
+    @Test
+    public void testNodeWithOnlyNegativeSimilaritiesGetsNeighbors() throws IOException {
+        for (int position : new int[] {0, 25, 50, 100}) {
+            var random = new Random(1);
+            var vectors = new ArrayList<VectorFloat<?>>();
+            for (int i = 0; i < 200; i++) {
+                vectors.add(vts.createFloatVector(new float[] {10f + (float) random.nextGaussian(), (float) random.nextGaussian()}));
+            }
+            vectors.add(position, vts.createFloatVector(new float[] {-10f, 0f}));
+            var ravv = new ListRandomAccessVectorValues(vectors, 2);
+            var bsp = BuildScoreProvider.randomAccessScoreProvider(ravv, VectorSimilarityFunction.DOT_PRODUCT);
+            try (var builder = new GraphIndexBuilder(bsp, 2, 8, 40, 1.2f, 1.2f, false)) {
+                for (int node = 0; node < ravv.size(); node++) {
+                    builder.addGraphNode(node, ravv.getVector(node));
+                }
+                try (var view = builder.getGraph().getView()) {
+                    assertTrue("node " + position + " has no neighbors", view.getNeighborsIterator(0, position).size() > 0);
+                }
+            }
+        }
+    }
 }
