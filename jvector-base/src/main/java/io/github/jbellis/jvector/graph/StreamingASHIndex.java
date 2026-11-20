@@ -319,9 +319,9 @@ public final class StreamingASHIndex implements Accountable {
      */
     public long add(int ordinal) {
         Live l = live;
-        if (l == null && recorded.get() >= recordLimit && cold.catchUp == null) {
+        if (l == null && recorded.get() >= recordLimit && awaitingCatchUp()) {
             // A cold index that has recorded its limit waits for its first model, retrying it if a fix failed.
-            while ((l = live) == null && cold.catchUp == null) {
+            while ((l = live) == null && awaitingCatchUp()) {
                 afterColdInsert();
                 LockSupport.parkNanos(100_000);
             }
@@ -410,6 +410,15 @@ public final class StreamingASHIndex implements Accountable {
             training.set(false);
             throw e;
         }
+    }
+
+    /**
+     * True while the index is cold and its first model has not started catching up. The first model is published by
+     * setting {@code live} and then clearing {@code cold}, so a null {@code cold} means {@code live} is set.
+     */
+    private boolean awaitingCatchUp() {
+        Cold c = cold;
+        return c != null && c.catchUp == null;
     }
 
     /**
