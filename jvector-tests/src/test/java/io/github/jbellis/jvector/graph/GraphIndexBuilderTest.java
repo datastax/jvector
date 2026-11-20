@@ -324,4 +324,47 @@ public class GraphIndexBuilderTest extends LuceneTestCase {
             }
         }
     }
+
+    /**
+     * Neighbor pruning during insertion and cleanup() can drop the last in-edge of a node. That node is then
+     * unreachable from the entry node, so no search can ever return it. cleanup() must repair such nodes.
+     */
+    @Test
+    public void testCleanupLeavesEveryNodeReachable() throws IOException {
+        for (boolean addHierarchy : new boolean[] {false, true}) {
+            for (int seed = 0; seed < 6; seed++) {
+                var ravv = MockVectorValues.fromValues(createRandomFloatVectors(600, 32, new Random(seed)));
+                var bsp = BuildScoreProvider.randomAccessScoreProvider(ravv, VectorSimilarityFunction.EUCLIDEAN);
+                try (var builder = new GraphIndexBuilder(bsp, ravv.dimension(), 8, 16, 1.2f, 1.2f, addHierarchy)) {
+                    for (int node = 0; node < ravv.size(); node++) {
+                        builder.addGraphNode(node, ravv.getVector(node));
+                    }
+                    builder.cleanup();
+                    assertEquals("unreachable nodes (hierarchy=" + addHierarchy + ", seed=" + seed + ")",
+                                 ravv.size(), countReachableFromEntry(builder.getGraph()));
+                }
+            }
+        }
+    }
+
+    private static int countReachableFromEntry(ImmutableGraphIndex graph) throws IOException {
+        try (var view = graph.getView()) {
+            var seen = new java.util.BitSet(view.getIdUpperBound());
+            var stack = new java.util.ArrayDeque<Integer>();
+            int entry = view.entryNode().node;
+            seen.set(entry);
+            stack.push(entry);
+            while (!stack.isEmpty()) {
+                var neighbors = view.getNeighborsIterator(0, stack.pop());
+                while (neighbors.hasNext()) {
+                    int neighbor = neighbors.nextInt();
+                    if (!seen.get(neighbor)) {
+                        seen.set(neighbor);
+                        stack.push(neighbor);
+                    }
+                }
+            }
+            return seen.cardinality();
+        }
+    }
 }
