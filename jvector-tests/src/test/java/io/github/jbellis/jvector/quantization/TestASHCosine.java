@@ -20,6 +20,7 @@ import io.github.jbellis.jvector.disk.ByteBufferReader;
 import io.github.jbellis.jvector.disk.SimpleMappedReader;
 import io.github.jbellis.jvector.graph.GraphIndexBuilder;
 import io.github.jbellis.jvector.graph.GraphSearcher;
+import io.github.jbellis.jvector.graph.ImmutableGraphIndex;
 import io.github.jbellis.jvector.graph.ListRandomAccessVectorValues;
 import io.github.jbellis.jvector.graph.MockVectorValues;
 import io.github.jbellis.jvector.graph.StreamingASHIndex;
@@ -244,8 +245,7 @@ public class TestASHCosine {
         var values = MockVectorValues.fromValues(unit);
         var model = AsymmetricHashing.initialize(values, DOT, AsymmetricHashing.ITQ, encodedBits(32, 4), 1, 4);
         var codes = model.encodeAll(values, ForkJoinPool.commonPool());
-        var graph = new GraphIndexBuilder(BuildScoreProvider.ashBuildScoreProvider(codes), DIM, 16, 64,
-                1.2f, 1.2f, false, true).build(values);
+        var graph = buildOnOneThread(codes, values);
         int hits = 0;
         for (var q : normalized(queries)) {
             var expected = exactTop(unit, q, 10);
@@ -266,8 +266,7 @@ public class TestASHCosine {
         var values = MockVectorValues.fromValues(raw);
         var model = AsymmetricHashing.initialize(values, COS, AsymmetricHashing.ITQ, encodedBits(32, 4), 1, 4);
         var codes = model.encodeAll(values, ForkJoinPool.commonPool());
-        var graph = new GraphIndexBuilder(BuildScoreProvider.ashBuildScoreProvider(codes), DIM, 16, 64,
-                1.2f, 1.2f, false, true).build(values);
+        var graph = buildOnOneThread(codes, values);
         var path = Files.createTempFile("ash-cosine-", ".index");
         try {
             var suppliers = new EnumMap<FeatureId, IntFunction<Feature.State>>(FeatureId.class);
@@ -306,12 +305,24 @@ public class TestASHCosine {
                 }
                 double memoryRecall = memoryHits / (10.0 * queries.length);
                 double diskRecall = diskHits / (10.0 * queries.length);
-                // Graph construction runs in parallel, so the two graphs can differ slightly.
+                // Both graphs are built on one thread from identical codes, so they match; only the exact
+                // rerank scores (cosine of raw vectors vs dot product of normalized ones) can differ in a last bit.
                 assertEquals("in-memory recall vs DOT_PRODUCT on normalized vectors", reference, memoryRecall, 0.03);
                 assertEquals("on-disk recall vs DOT_PRODUCT on normalized vectors", reference, diskRecall, 0.03);
             }
         } finally {
             Files.deleteIfExists(path);
+        }
+    }
+
+    /** Builds on one thread so that graphs built from identical codes are identical. */
+    private static ImmutableGraphIndex buildOnOneThread(ASHVectors codes, MockVectorValues values) throws Exception {
+        var pool = new ForkJoinPool(1);
+        try {
+            return new GraphIndexBuilder(BuildScoreProvider.ashBuildScoreProvider(codes), DIM, 16, 64,
+                    1.2f, 1.2f, false, true, pool, pool).build(values);
+        } finally {
+            pool.shutdown();
         }
     }
 
