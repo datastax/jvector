@@ -302,6 +302,11 @@ public class OnHeapGraphIndex implements MutableGraphIndex {
     }
 
     @Override
+    public void insertEdgeNotDiverse(int level, int fromNode, int toNode, float score) {
+        layers.get(level).insertEdgeNotDiverse(fromNode, toNode, score);
+    }
+
+    @Override
     public void addEdges(int level, int node, NodeArray candidates, float overflowRatio) {
         var newNeighbors = layers[level].insertDiverse(node, candidates);
         layers[level].backlink(newNeighbors, node, overflowRatio);

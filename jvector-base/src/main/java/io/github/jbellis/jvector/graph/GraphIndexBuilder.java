@@ -34,6 +34,7 @@ import io.github.jbellis.jvector.quantization.ProductQuantization;
 import io.github.jbellis.jvector.util.*;
 import io.github.jbellis.jvector.vector.VectorSimilarityFunction;
 import io.github.jbellis.jvector.vector.types.VectorFloat;
+import org.agrona.collections.IntArrayList;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -772,6 +773,9 @@ public class GraphIndexBuilder implements Closeable, Accountable {
             });
         }).join();
 
+        // a node whose last in-edge was pruned is unreachable from the entry node, so searches could never find it
+        reconnectOrphanedNodes();
+
         graph.setAllMutationsCompleted();
     }
 
@@ -802,6 +806,120 @@ public class GraphIndexBuilder implements Closeable, Accountable {
                     gs.searchOneLayer(ssp, 1, Float.NEGATIVE_INFINITY, lvl, acceptedBits);
                 }
                 gs.setEntryPointsFromPreviousLayer();
+            }
+        } catch (IOException e) {
+            throw new UncheckedIOException(e);
+        }
+    }
+
+    /** Reconnection is best-effort: linking one orphan evicts another node's worst edge, which can orphan that node. */
+    private static final int MAX_RECONNECT_PASSES = 5;
+
+    /**
+     * Repairs nodes that are unreachable from the entry node in layer 0 once degrees have been enforced.
+     * <p>
+     * Neighbor pruning during insertion and {@link #cleanup()} can drop the last in-edge of a node. Such a node has
+     * outgoing edges but no path from the entry node, so no search can ever return it. For each such node we add an
+     * in-edge from the closest reachable neighbor (or, failing that, from the closest node found by searching),
+     * evicting that neighbor's worst edge so the degree cap still holds.
+     */
+    private void reconnectOrphanedNodes() {
+        int upper = graph.getIdUpperBound();
+        // Nodes already used as connection targets. A reconnection edge is usually the worst one in its target's
+        // neighborhood, so reusing a target would just overwrite the previous reconnection.
+        var connectionTargets = new AtomicFixedBitSet(upper);
+        connectionTargets.set(graph.entryNode().node);
+
+        for (int pass = 0; pass < MAX_RECONNECT_PASSES; pass++) {
+            var connected = findConnectedNodes(upper);
+            var orphans = new IntArrayList();
+            for (int node = 0; node < upper; node++) {
+                if (graph.contains(0, node) && !connected.get(node)) {
+                    orphans.addInt(node);
+                }
+            }
+            if (orphans.isEmpty()) {
+                return;
+            }
+
+            var reconnected = new AtomicInteger();
+            simdExecutor.submit(() -> IntStream.range(0, orphans.size()).parallel().forEach(i -> {
+                if (reconnectOrphan(orphans.getInt(i), connected, connectionTargets)) {
+                    reconnected.incrementAndGet();
+                }
+            })).join();
+            logger.debug("Reconnect pass {}: {} unreachable nodes, {} reconnected", pass, orphans.size(), reconnected.get());
+            if (reconnected.get() == 0) {
+                return;
+            }
+        }
+    }
+
+    /** @return the nodes reachable from the entry node by following layer-0 edges */
+    private FixedBitSet findConnectedNodes(int idUpperBound) {
+        var connected = new FixedBitSet(idUpperBound);
+        var stack = new IntArrayList();
+        int entry = graph.entryNode().node;
+        connected.set(entry);
+        stack.addInt(entry);
+        while (!stack.isEmpty()) {
+            int node = stack.removeAt(stack.size() - 1);
+            for (var it = graph.getNeighborsIterator(0, node); it.hasNext(); ) {
+                int neighbor = it.nextInt();
+                if (!connected.getAndSet(neighbor)) {
+                    stack.addInt(neighbor);
+                }
+            }
+        }
+        return connected;
+    }
+
+    /**
+     * Adds an in-edge to the unreachable {@code node} from a reachable node that has not been used as a
+     * connection target yet.
+     *
+     * @return true if an edge was added
+     */
+    private boolean reconnectOrphan(int node, Bits connected, AtomicFixedBitSet connectionTargets) {
+        var sf = scoreProvider.searchProviderFor(node).scoreFunction();
+
+        // First choice: the closest of our own neighbors that is reachable. It already considered us close enough
+        // to link to, and restricting to reachable neighbors matters when the orphans form a large partition.
+        int bestNeighbor = -1;
+        float bestScore = Float.NEGATIVE_INFINITY;
+        for (var it = graph.getNeighborsIterator(0, node); it.hasNext(); ) {
+            int neighbor = it.nextInt();
+            if (!connected.get(neighbor) || connectionTargets.get(neighbor)) {
+                continue;
+            }
+            float score = sf.similarityTo(neighbor);
+            if (score > bestScore) {
+                bestScore = score;
+                bestNeighbor = neighbor;
+            }
+        }
+        if (bestNeighbor >= 0 && !connectionTargets.getAndSet(bestNeighbor)) {
+            graph.insertEdgeNotDiverse(0, bestNeighbor, node, bestScore);
+            return true;
+        }
+
+        // Otherwise search for nearby reachable nodes, resuming a bounded number of times to find an unused target.
+        try (var gs = searchers.get()) {
+            gs.setView(graph.getView()); // the thread-local searcher may hold a snapshot from before late insertions
+            var ssp = scoreProvider.searchProviderFor(node);
+            var excluding = new ExcludingBits(node);
+            var result = gs.search(ssp, beamWidth, beamWidth, 0.0f, 0.0f, excluding);
+            for (int resumes = 0; ; resumes++) {
+                for (var candidate : result.getNodes()) {
+                    if (!connectionTargets.getAndSet(candidate.node)) {
+                        graph.insertEdgeNotDiverse(0, candidate.node, node, candidate.score);
+                        return true;
+                    }
+                }
+                if (result.getNodes().length == 0 || resumes >= 2 * graph.maxDegree()) {
+                    return false;
+                }
+                result = gs.resume(beamWidth, beamWidth);
             }
         } catch (IOException e) {
             throw new UncheckedIOException(e);
