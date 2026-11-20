@@ -79,6 +79,15 @@ public class TestASHCosine {
         return out;
     }
 
+    private static VectorFloat<?>[] scaled(VectorFloat<?>[] vectors, float k) {
+        VectorFloat<?>[] out = new VectorFloat<?>[vectors.length];
+        for (int i = 0; i < out.length; i++) {
+            out[i] = vectors[i].copy();
+            VectorUtil.scale(out[i], k);
+        }
+        return out;
+    }
+
     private static VectorFloat<?>[] normalized(VectorFloat<?>[] vectors) {
         VectorFloat<?>[] out = new VectorFloat<?>[vectors.length];
         for (int i = 0; i < out.length; i++) {
@@ -108,14 +117,19 @@ public class TestASHCosine {
                 String where = "bits=" + bits + " C=" + landmarks;
                 if (landmarks > 1) {
                     // k-means seeds itself randomly, so two models with several landmarks differ; check instead that
-                    // one COSINE model scores raw and normalized vectors alike. Normalizing an already normalized
-                    // vector again can change its last bit, so these agree to rounding rather than exactly.
+                    // one COSINE model ignores vector length. Power-of-two multiples normalize to exactly the same
+                    // unit vector, so their codes and scores must match exactly. (Pre-normalized copies would not:
+                    // normalizing again can change a last bit, which at a quantization boundary flips a code.)
                     var rawCodes = cosine.encodeAll(MockVectorValues.fromValues(raw), ForkJoinPool.commonPool());
-                    var unitCodes = cosine.encodeAll(MockVectorValues.fromValues(unit), ForkJoinPool.commonPool());
-                    for (int q = 0; q < queries.length; q++) {
-                        var a = rawCodes.scoreFunctionFor(queries[q], COS);
-                        var b = unitCodes.scoreFunctionFor(unitQueries[q], COS);
-                        for (int i = 0; i < raw.length; i++) assertEquals(where, b.similarityTo(i), a.similarityTo(i), 1e-4f);
+                    for (float k : new float[]{2f, 0.5f}) {
+                        var scaledCodes = cosine.encodeAll(MockVectorValues.fromValues(scaled(raw, k)),
+                                ForkJoinPool.commonPool());
+                        for (int q = 0; q < queries.length; q++) {
+                            var a = rawCodes.scoreFunctionFor(queries[q], COS);
+                            var b = scaledCodes.scoreFunctionFor(queries[q], COS);
+                            for (int i = 0; i < raw.length; i++)
+                                assertEquals(where + " x" + k, a.similarityTo(i), b.similarityTo(i), 0f);
+                        }
                     }
                     continue;
                 }
