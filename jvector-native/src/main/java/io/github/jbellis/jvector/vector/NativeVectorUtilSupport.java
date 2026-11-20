@@ -211,7 +211,7 @@ class NativeVectorUtilSupport extends PanamaVectorUtilSupport
     @Override
     public void ashScoreNeighborhood(byte[] codes, int groups, int blockSize, int capacity,
                                      float[] lut, float landmarkDot, float[] out) {
-        NativeASHKernels.scoreNeighborhood(codes, groups, blockSize, capacity, lut, landmarkDot, out);
+        NativeASHKernels.scoreNeighborhood(codes, groups, blockSize, capacity, lut, landmarkDot, 0f, out);
     }
 
     @Override
@@ -223,7 +223,35 @@ class NativeVectorUtilSupport extends PanamaVectorUtilSupport
     public void ashScoreNeighborhoodInt8(byte[] codes, int bits, int units, int blockSize, int capacity,
                                          byte[] q, float invScale, float center, float landmarkDot, float[] out) {
         NativeASHKernels.scoreNeighborhoodInt8(codes, bits, units, blockSize, capacity, q, invScale, center,
-                landmarkDot, out);
+                landmarkDot, 0f, out);
+    }
+
+    @Override
+    public boolean supportsAshEuclideanNeighborhoodScoring() {
+        return NativeASHKernels.isEuclideanAvailable();
+    }
+
+    @Override
+    public void ashScoreNeighborhoodEuclidean(byte[] codes, int groups, int blockSize, int capacity, float[] lut,
+                                              float landmarkDot, float squaredDistancePerEstimate, float[] out) {
+        NativeASHKernels.scoreNeighborhood(codes, groups, blockSize, capacity, lut, landmarkDot,
+                euclideanFactor(squaredDistancePerEstimate), out);
+    }
+
+    @Override
+    public void ashScoreNeighborhoodInt8Euclidean(byte[] codes, int bits, int units, int blockSize, int capacity,
+                                                  byte[] q, float invScale, float center, float landmarkDot,
+                                                  float squaredDistancePerEstimate, float[] out) {
+        NativeASHKernels.scoreNeighborhoodInt8(codes, bits, units, blockSize, capacity, q, invScale, center,
+                landmarkDot, euclideanFactor(squaredDistancePerEstimate), out);
+    }
+
+    /** Zero selects the DOT_PRODUCT kernels, so a EUCLIDEAN factor must be negative. */
+    private static float euclideanFactor(float squaredDistancePerEstimate) {
+        if (!(squaredDistancePerEstimate < 0f) || Float.isInfinite(squaredDistancePerEstimate)) {
+            throw new IllegalArgumentException("A EUCLIDEAN factor must be negative and finite");
+        }
+        return squaredDistancePerEstimate;
     }
 
     @Override

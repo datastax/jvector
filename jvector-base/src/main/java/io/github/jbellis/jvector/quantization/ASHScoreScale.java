@@ -39,6 +39,12 @@ abstract class ASHScoreScale {
      */
     abstract void fromDotProductScale(float[] scores, int from, int count);
 
+    /**
+     * For a EUCLIDEAN scale, the factor {@code k} with {@code ||q - x||^2 = k * e}, which native neighborhood kernels
+     * take to write this scale directly; zero for the DOT_PRODUCT scale.
+     */
+    abstract float squaredDistancePerEstimate();
+
     static ASHScoreScale euclidean(float unit) {
         return new Euclidean(unit);
     }
@@ -52,6 +58,11 @@ abstract class ASHScoreScale {
         @Override
         void fromDotProductScale(float[] scores, int from, int count) {
             // Already on this scale.
+        }
+
+        @Override
+        float squaredDistancePerEstimate() {
+            return 0f;
         }
     }
 
@@ -79,6 +90,11 @@ abstract class ASHScoreScale {
             for (int i = from, end = from + count; i < end; i++) {
                 scores[i] = 1f / (1f + Math.max(0f, base - slope * scores[i]));
             }
+        }
+
+        @Override
+        float squaredDistancePerEstimate() {
+            return perEstimate;
         }
     }
 }

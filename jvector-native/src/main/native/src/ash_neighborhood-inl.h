@@ -62,9 +62,13 @@ HWY_INLINE hn::VFromD<D> AshPromoteHalf(D d, hn::VFromD<hn::Rebind<uint16_t, D>>
     return value;
 }
 
-template <class D>
+// Output scales. kAshDot writes (1 + e) / 2, unclamped, as ASHScorer.toSimilarity. kAshEuclidean writes
+// 1 / (1 + max(0, perEstimate * e)) for a model whose estimate e is -||q - x||^2 / 2 in model units.
+enum AshScale { kAshDot, kAshEuclidean };
+
+template <AshScale kScale, class D>
 HWY_INLINE int AshFinish(D d, const unsigned char *header, int blockSize, int lane, int count, float landmarkDot,
-                         hn::VFromD<D> dot, float *out) {
+                         float perEstimate, hn::VFromD<D> dot, float *out) {
     const hn::Rebind<uint8_t, D> db;
     const hn::Rebind<uint16_t, D> dh;
     const auto landmarks = hn::LoadN(db, header + 4 * blockSize + lane, count);
@@ -80,16 +84,21 @@ HWY_INLINE int AshFinish(D d, const unsigned char *header, int blockSize, int la
     const auto scale = AshPromoteHalf(d, scaleBits);
     const auto offset = AshPromoteHalf(d, offsetBits);
     const auto raw = hn::Add(hn::MulAdd(scale, dot, hn::Set(d, landmarkDot)), offset);
-    const auto half = hn::Set(d, 0.5f);
-    // (1 + dot) / 2, unclamped, as ASHScorer.toSimilarity.
-    const auto similarity = hn::MulAdd(raw, half, half);
-    hn::StoreN(similarity, d, out, count);
+    if constexpr (kScale == kAshDot) {
+        (void) perEstimate;
+        const auto half = hn::Set(d, 0.5f);
+        hn::StoreN(hn::MulAdd(raw, half, half), d, out, count);
+    } else {
+        const auto one = hn::Set(d, 1.0f);
+        const auto squared = hn::Max(hn::Mul(hn::Set(d, perEstimate), raw), hn::Zero(d));
+        hn::StoreN(hn::Div(one, hn::Add(one, squared)), d, out, count);
+    }
     return kAshSuccess;
 }
 
-template <class D>
+template <AshScale kScale, class D>
 HWY_INLINE int AshBlock32(D d, const unsigned char *codes, const float *lut, int groups, float landmarkDot,
-                          float *out) {
+                          float perEstimate, float *out) {
     const hn::Rebind<uint8_t, D> db;
     const hn::Rebind<uint32_t, D> du;
     const auto mask = hn::Set(du, 15);
@@ -120,8 +129,9 @@ HWY_INLINE int AshBlock32(D d, const unsigned char *codes, const float *lut, int
         lo1 = hn::Add(lo1, AshLookup(d, table, hn::And(c1, mask)));
     }
     const auto *header = codes + ((static_cast<size_t>(groups) + 1) / 2) * 32;
-    int status = AshFinish(d, header, 32, 0, 16, landmarkDot, hn::Add(lo0, hi0), out);
-    return status ? status : AshFinish(d, header, 32, 16, 16, landmarkDot, hn::Add(lo1, hi1), out + 16);
+    int status = AshFinish<kScale>(d, header, 32, 0, 16, landmarkDot, perEstimate, hn::Add(lo0, hi0), out);
+    return status ? status
+                  : AshFinish<kScale>(d, header, 32, 16, 16, landmarkDot, perEstimate, hn::Add(lo1, hi1), out + 16);
 }
 
 } // namespace
@@ -158,11 +168,14 @@ float ash_canonical_lut_dot_f32(const unsigned char *HWY_RESTRICT code,
     return sum;
 }
 
+namespace {
 // Synchronous, allocation-free leaf. Buffer sizes and non-aliasing are checked by
 // NativeASHKernels before FFM. The ordinary FFM path uses the same entry for larger
 // legal inputs. FP32 reductions may differ in order from the Java scalar oracle.
-int ash_score_neighborhood_c1_f32(const unsigned char *HWY_RESTRICT codes, const float *HWY_RESTRICT lut,
-                                  float landmarkDot, int groups, int blockSize, int capacity, float *HWY_RESTRICT out) {
+template <AshScale kScale>
+int AshScoreNeighborhoodF32(const unsigned char *HWY_RESTRICT codes, const float *HWY_RESTRICT lut,
+                            float landmarkDot, float perEstimate, int groups, int blockSize, int capacity,
+                            float *HWY_RESTRICT out) {
     if (codes == nullptr || lut == nullptr || out == nullptr || groups <= 0 || capacity <= 0 ||
         (blockSize != 8 && blockSize != 16 && blockSize != 32)) {
         return kAshInvalidShape;
@@ -180,7 +193,7 @@ int ash_score_neighborhood_c1_f32(const unsigned char *HWY_RESTRICT codes, const
 #if HWY_TARGET <= HWY_AVX3
         if constexpr (hn::MaxLanes(d) == 16) {
             if (blockSize == 32 && count == 32) {
-                int status = AshBlock32(d, codes, lut, groups, landmarkDot, out + base);
+                int status = AshBlock32<kScale>(d, codes, lut, groups, landmarkDot, perEstimate, out + base);
                 if (status)
                     return status;
                 continue;
@@ -202,13 +215,26 @@ int ash_score_neighborhood_c1_f32(const unsigned char *HWY_RESTRICT codes, const
                     hn::PromoteTo(du, hn::LoadN(db, codes + static_cast<size_t>(g / 2) * blockSize + lane, active));
                 lo = hn::Add(lo, AshLookup(d, lut + static_cast<size_t>(g) * 16, hn::And(c, mask)));
             }
-            int status = AshFinish(d, codes + bodyBytes, blockSize, lane, active, landmarkDot, hn::Add(lo, hi),
-                                   out + base + lane);
+            int status = AshFinish<kScale>(d, codes + bodyBytes, blockSize, lane, active, landmarkDot, perEstimate,
+                                           hn::Add(lo, hi), out + base + lane);
             if (status)
                 return status;
         }
     }
     return kAshSuccess;
+}
+} // namespace
+
+int ash_score_neighborhood_c1_f32(const unsigned char *HWY_RESTRICT codes, const float *HWY_RESTRICT lut,
+                                  float landmarkDot, int groups, int blockSize, int capacity, float *HWY_RESTRICT out) {
+    return AshScoreNeighborhoodF32<kAshDot>(codes, lut, landmarkDot, 0.0f, groups, blockSize, capacity, out);
+}
+
+int ash_score_neighborhood_c1_f32_euclidean(const unsigned char *HWY_RESTRICT codes, const float *HWY_RESTRICT lut,
+                                            float landmarkDot, float perEstimate, int groups, int blockSize,
+                                            int capacity, float *HWY_RESTRICT out) {
+    return AshScoreNeighborhoodF32<kAshEuclidean>(codes, lut, landmarkDot, perEstimate, groups, blockSize, capacity,
+                                                  out);
 }
 
 #endif // JVECTOR_ASH_INT8_NEIGHBORHOOD_ONLY
@@ -271,12 +297,14 @@ HWY_INLINE void AshAccumulateFields(D64 d64, D8 d8, D32 d32, int bits, size_t la
 }
 } // namespace
 
+namespace {
 // Whole-neighborhood C=1 ASH for offset-binary codes with an INT8 query: per lane,
 // dot = (<q, u> - center) * invScale, then the header terms and similarity. q holds units * 8 entries
 // (zero past the projected dimension). Returns kAshSuccess, kAshInvalidLandmark or kAshInvalidShape.
-int ash_score_neighborhood_i8_c1(const unsigned char *HWY_RESTRICT codes, const int8_t *HWY_RESTRICT q,
-                                 float invScale, float center, float landmarkDot, int bits, int units,
-                                 int blockSize, int capacity, float *HWY_RESTRICT out) {
+template <AshScale kScale>
+int AshScoreNeighborhoodI8(const unsigned char *HWY_RESTRICT codes, const int8_t *HWY_RESTRICT q,
+                           float invScale, float center, float landmarkDot, float perEstimate, int bits, int units,
+                           int blockSize, int capacity, float *HWY_RESTRICT out) {
     if (codes == nullptr || q == nullptr || out == nullptr || units <= 0 || capacity <= 0 || bits < 3 ||
         bits > kAshInt8MaxBits || bits == 4 || (blockSize != 8 && blockSize != 16 && blockSize != 32)) {
         return kAshInvalidShape;
@@ -351,7 +379,8 @@ int ash_score_neighborhood_i8_c1(const unsigned char *HWY_RESTRICT codes, const 
                 const auto dot = hn::Mul(hn::Sub(AshLaneSums(d64, d32, acc), hn::Set(df, center)), hn::Set(df, invScale));
                 const int lane = static_cast<int>((first + i) * lanes);
                 const int active = std::min(static_cast<int>(lanes), count - lane);
-                return AshFinish(df, codes + bodyBytes, blockSize, lane, active, landmarkDot, dot, out + base + lane);
+                return AshFinish<kScale>(df, codes + bodyBytes, blockSize, lane, active, landmarkDot, perEstimate, dot,
+                                         out + base + lane);
             };
             int status = finish(0, a0, t0);
             if (!status && n > 1) status = finish(1, a1, t1);
@@ -361,6 +390,22 @@ int ash_score_neighborhood_i8_c1(const unsigned char *HWY_RESTRICT codes, const 
         }
     }
     return kAshSuccess;
+}
+} // namespace
+
+int ash_score_neighborhood_i8_c1(const unsigned char *HWY_RESTRICT codes, const int8_t *HWY_RESTRICT q,
+                                 float invScale, float center, float landmarkDot, int bits, int units,
+                                 int blockSize, int capacity, float *HWY_RESTRICT out) {
+    return AshScoreNeighborhoodI8<kAshDot>(codes, q, invScale, center, landmarkDot, 0.0f, bits, units, blockSize,
+                                           capacity, out);
+}
+
+int ash_score_neighborhood_i8_c1_euclidean(const unsigned char *HWY_RESTRICT codes, const int8_t *HWY_RESTRICT q,
+                                           float invScale, float center, float landmarkDot, float perEstimate,
+                                           int bits, int units, int blockSize, int capacity,
+                                           float *HWY_RESTRICT out) {
+    return AshScoreNeighborhoodI8<kAshEuclidean>(codes, q, invScale, center, landmarkDot, perEstimate, bits, units,
+                                                 blockSize, capacity, out);
 }
 
 #ifndef JVECTOR_ASH_INT8_NEIGHBORHOOD_ONLY

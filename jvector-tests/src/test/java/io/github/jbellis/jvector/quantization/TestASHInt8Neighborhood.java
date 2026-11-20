@@ -102,6 +102,21 @@ public class TestASHInt8Neighborhood {
                                 java[i], nativeOut[i], 1e-5f * Math.max(1f, Math.abs(java[i])));
                     }
                     assertEquals("Lanes past the capacity stay untouched", -7f, nativeOut[capacity], 0f);
+                    if (!backend.supportsAshEuclideanNeighborhoodScoring()) continue;
+                    // The EUCLIDEAN form maps the same estimate e to 1 / (1 + max(0, k * e)).
+                    float k = -2f;
+                    float[] euclidean = new float[capacity + 2];
+                    Arrays.fill(euclidean, -7f);
+                    backend.ashScoreNeighborhoodInt8Euclidean(packed, bits, query.units, blockSize, capacity,
+                            query.digits, query.invScale, query.center, landmarkDot, k, euclidean);
+                    for (int i = 0; i < capacity; i++) {
+                        float estimate = 2f * nativeOut[i] - 1f;
+                        float expected = 1f / (1f + Math.max(0f, k * estimate));
+                        assertEquals("euclidean bits=" + bits + " d=" + dimension + " bs=" + blockSize + " lane=" + i,
+                                expected, euclidean[i],
+                                1e-6f + 1e-5f * expected * expected * Math.abs(k) * (1f + Math.abs(estimate)));
+                    }
+                    assertEquals("Lanes past the capacity stay untouched", -7f, euclidean[capacity], 0f);
                 }
             }
         }

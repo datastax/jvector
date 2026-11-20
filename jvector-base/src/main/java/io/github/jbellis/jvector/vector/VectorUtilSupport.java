@@ -230,6 +230,38 @@ public interface VectorUtilSupport {
     throw new UnsupportedOperationException("Native INT8 ASH neighborhood scoring is unavailable");
   }
 
+  /**
+   * Whether each neighborhood kernel this provider supports also has a EUCLIDEAN form:
+   * {@link #ashScoreNeighborhoodEuclidean} and, where INT8 neighborhoods are supported,
+   * {@link #ashScoreNeighborhoodInt8Euclidean}.
+   */
+  default boolean supportsAshEuclideanNeighborhoodScoring() { return false; }
+
+  /**
+   * {@link #ashScoreNeighborhood} for a EUCLIDEAN model: with {@code e} the per-lane estimate
+   * {@code scale * <lut, code> + landmarkDot + offset}, each output is
+   * {@code 1 / (1 + max(0, squaredDistancePerEstimate * e))}.
+   *
+   * @param squaredDistancePerEstimate the model's factor from estimate to squared distance; negative
+   * @throws UnsupportedOperationException if this provider has no implementation
+   */
+  default void ashScoreNeighborhoodEuclidean(byte[] codes, int groups, int blockSize, int capacity, float[] lut,
+                                             float landmarkDot, float squaredDistancePerEstimate, float[] out) {
+    throw new UnsupportedOperationException("Native EUCLIDEAN ASH neighborhood scoring is unavailable");
+  }
+
+  /**
+   * {@link #ashScoreNeighborhoodInt8} for a EUCLIDEAN model, with the output of
+   * {@link #ashScoreNeighborhoodEuclidean}.
+   *
+   * @throws UnsupportedOperationException if this provider has no implementation
+   */
+  default void ashScoreNeighborhoodInt8Euclidean(byte[] codes, int bits, int units, int blockSize, int capacity,
+                                                 byte[] q, float invScale, float center, float landmarkDot,
+                                                 float squaredDistancePerEstimate, float[] out) {
+    throw new UnsupportedOperationException("Native EUCLIDEAN INT8 ASH neighborhood scoring is unavailable");
+  }
+
   /** Calculates the dot product of the given float arrays. */
   float dotProduct(VectorFloat<?> a, VectorFloat<?> b);
 

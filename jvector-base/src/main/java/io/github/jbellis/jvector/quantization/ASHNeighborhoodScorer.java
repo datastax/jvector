@@ -52,6 +52,8 @@ public final class ASHNeighborhoodScorer {
     private final VectorUtilSupport int8Backend;
     private final ASHLutKernel kernel = new ASHLutKernel();
     private final ASHScoreScale scale;
+    /** A EUCLIDEAN model's factor for native kernels that write its scale directly; zero to convert in Java. */
+    private final float fusedSquaredDistancePerEstimate;
 
     /**
      * Prepares a query for neighborhoods with a fixed serialized shape.
@@ -123,6 +125,8 @@ public final class ASHNeighborhoodScorer {
             this.neighborhoodBackend =
                     kernel.isSimd() && dotQMu.length == 1 && backend.supportsAshNeighborhoodScoring() ? backend : null;
         }
+        this.fusedSquaredDistancePerEstimate = backend.supportsAshEuclideanNeighborhoodScoring()
+                ? scale.squaredDistancePerEstimate() : 0f;
     }
 
     /**
@@ -139,16 +143,28 @@ public final class ASHNeighborhoodScorer {
     public void score(byte[] packed, float[] out) {
         Objects.checkFromIndexSize(0, featureSize, packed.length);
         Objects.checkFromIndexSize(0, maxDegree, out.length);
-        // The native kernels write the DOT_PRODUCT scale; other scales convert the neighborhood once.
+        // Native kernels write the DOT_PRODUCT scale or, where the library has them, the EUCLIDEAN scale directly;
+        // otherwise a EUCLIDEAN model converts the neighborhood once.
         if (neighborhoodBackend != null) {
-            neighborhoodBackend.ashScoreNeighborhood(packed, groups, blockSize, maxDegree, lut, dotQMu[0], out);
-            scale.fromDotProductScale(out, 0, maxDegree);
+            if (fusedSquaredDistancePerEstimate != 0f) {
+                neighborhoodBackend.ashScoreNeighborhoodEuclidean(packed, groups, blockSize, maxDegree, lut, dotQMu[0],
+                        fusedSquaredDistancePerEstimate, out);
+            } else {
+                neighborhoodBackend.ashScoreNeighborhood(packed, groups, blockSize, maxDegree, lut, dotQMu[0], out);
+                scale.fromDotProductScale(out, 0, maxDegree);
+            }
             return;
         }
         if (int8Backend != null) {
-            int8Backend.ashScoreNeighborhoodInt8(packed, bits, int8Query.units, blockSize, maxDegree, int8Query.digits,
-                    int8Query.invScale, int8Query.center, dotQMu[0], out);
-            scale.fromDotProductScale(out, 0, maxDegree);
+            if (fusedSquaredDistancePerEstimate != 0f) {
+                int8Backend.ashScoreNeighborhoodInt8Euclidean(packed, bits, int8Query.units, blockSize, maxDegree,
+                        int8Query.digits, int8Query.invScale, int8Query.center, dotQMu[0],
+                        fusedSquaredDistancePerEstimate, out);
+            } else {
+                int8Backend.ashScoreNeighborhoodInt8(packed, bits, int8Query.units, blockSize, maxDegree,
+                        int8Query.digits, int8Query.invScale, int8Query.center, dotQMu[0], out);
+                scale.fromDotProductScale(out, 0, maxDegree);
+            }
             return;
         }
         for (int block = 0; block < blocks; block++) {

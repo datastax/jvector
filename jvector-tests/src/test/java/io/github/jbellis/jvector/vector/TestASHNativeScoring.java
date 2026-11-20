@@ -83,6 +83,53 @@ public class TestASHNativeScoring {
         }
     }
 
+    /** The EUCLIDEAN kernel equals the DOT_PRODUCT kernel's estimate mapped to 1 / (1 + max(0, k * e)). */
+    @Test
+    public void euclideanNeighborhoodMatchesDotProductKernelOnTheEuclideanScale() {
+        var backend = VectorizationProvider.getInstance().getVectorUtilSupport();
+        org.junit.Assume.assumeTrue(backend.supportsAshEuclideanNeighborhoodScoring());
+        var random = new Random(20261120);
+        for (int groups : new int[] {1, 7, 16, 17, 65, 384}) {
+            float[] lut = new float[groups * 16];
+            for (int i = 0; i < lut.length; i++) lut[i] = (random.nextFloat() - .5f) / (float) Math.sqrt(groups);
+            for (int blockSize : new int[] {8, 16, 32}) {
+                for (int capacity : new int[] {1, 23, 32, 37, 64}) {
+                    byte[] codes = new byte[FusedASHLayout.featureSize(capacity, groups, 4, blockSize)];
+                    random.nextBytes(codes);
+                    for (int lane = 0; lane < capacity; lane++) {
+                        int offset = FusedASHLayout.blockOffset(lane / blockSize, groups, 4, blockSize);
+                        FusedASHLayout.writeLaneHeader(codes, offset, lane % blockSize, groups, 4, blockSize,
+                                random.nextFloat(), random.nextFloat() - .5f, (byte) 0);
+                    }
+                    float landmarkDot = random.nextFloat() - .5f;
+                    float[] dot = new float[capacity];
+                    backend.ashScoreNeighborhood(codes, groups, blockSize, capacity, lut, landmarkDot, dot);
+                    // k = -2 / unit^2 for power-of-two units 1/2, 1, 2 and 32.
+                    for (float k : new float[] {-8f, -2f, -.5f, -0x1.0p-9f}) {
+                        float[] actual = new float[capacity + 1];
+                        actual[capacity] = Float.NaN;
+                        backend.ashScoreNeighborhoodEuclidean(codes, groups, blockSize, capacity, lut, landmarkDot, k,
+                                actual);
+                        for (int lane = 0; lane < capacity; lane++) {
+                            float estimate = 2f * dot[lane] - 1f;
+                            float expected = 1f / (1f + Math.max(0f, k * estimate));
+                            assertEquals("groups=" + groups + " B=" + blockSize + " k=" + k + " lane=" + lane,
+                                    expected, actual[lane], 1e-6f + 1e-5f * expected * expected
+                                                                    * Math.abs(k) * (1f + Math.abs(estimate)));
+                        }
+                        assertTrue(Float.isNaN(actual[capacity]));
+                    }
+                }
+            }
+        }
+        float[] lut = new float[16];
+        byte[] codes = new byte[FusedASHLayout.featureSize(8, 1, 4, 8)];
+        for (float k : new float[] {0f, 1f, Float.NEGATIVE_INFINITY, Float.NaN}) {
+            assertThrows(IllegalArgumentException.class,
+                    () -> backend.ashScoreNeighborhoodEuclidean(codes, 1, 8, 8, lut, 0f, k, new float[8]));
+        }
+    }
+
     @Test
     public void nativeEntryRejectsInvalidShapesBeforeFFM() {
         var backend = VectorizationProvider.getInstance().getVectorUtilSupport();

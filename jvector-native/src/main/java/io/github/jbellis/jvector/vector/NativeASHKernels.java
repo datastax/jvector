@@ -59,6 +59,19 @@ final class NativeASHKernels {
     private static final MethodHandle ORDINARY_SCORE =
             ADDRESS_OF_KERNEL == null ? null : Linker.nativeLinker().downcallHandle(ADDRESS_OF_KERNEL, DESCRIPTOR);
 
+    // EUCLIDEAN forms of both neighborhood kernels: the same arguments plus the factor from estimate to squared
+    // distance after landmarkDot, writing 1 / (1 + d^2). Optional: older libraries convert in Java instead.
+    private static final String EUCLIDEAN_SYMBOL = "ash_score_neighborhood_c1_f32_euclidean";
+    private static final MemorySegment ADDRESS_OF_EUCLIDEAN =
+            SymbolLookup.loaderLookup().find(EUCLIDEAN_SYMBOL).orElse(null);
+    private static final FunctionDescriptor EUCLIDEAN_DESCRIPTOR = FunctionDescriptor.of(JAVA_INT, ADDRESS, ADDRESS,
+            JAVA_FLOAT, JAVA_FLOAT, JAVA_INT, JAVA_INT, JAVA_INT, ADDRESS);
+    private static final MethodHandle CRITICAL_EUCLIDEAN = ADDRESS_OF_EUCLIDEAN == null ? null
+            : Linker.nativeLinker().downcallHandle(ADDRESS_OF_EUCLIDEAN, EUCLIDEAN_DESCRIPTOR,
+                    Linker.Option.critical(true));
+    private static final MethodHandle ORDINARY_EUCLIDEAN = ADDRESS_OF_EUCLIDEAN == null ? null
+            : Linker.nativeLinker().downcallHandle(ADDRESS_OF_EUCLIDEAN, EUCLIDEAN_DESCRIPTOR);
+
     private static final MemorySegment ADDRESS_OF_CANONICAL =
             SymbolLookup.loaderLookup().find("ash_canonical_lut_dot_f32").orElse(null);
     private static final FunctionDescriptor CANONICAL_DESCRIPTOR =
@@ -120,6 +133,11 @@ final class NativeASHKernels {
 
     static boolean isCanonicalLutAvailable() { return ADDRESS_OF_CANONICAL != null; }
 
+    /** Whether the library has the EUCLIDEAN forms of both neighborhood kernels. */
+    static boolean isEuclideanAvailable() {
+        return ADDRESS_OF_EUCLIDEAN != null && ADDRESS_OF_INT8_EUCLIDEAN != null;
+    }
+
     static float dotCanonical(byte[] code, int groups, float[] lut) {
         return dotCanonical(code, 0, groups, lut);
     }
@@ -172,11 +190,17 @@ final class NativeASHKernels {
         }
     }
 
-    /** Validate all Java-side size and aliasing contracts before passing pointers to C++. */
-    static void scoreNeighborhood(
-            byte[] codes, int groups, int blockSize, int capacity, float[] lut, float landmarkDot, float[] out) {
-        if (!isAvailable()) {
-            throw new UnsupportedOperationException("Native library does not provide " + SYMBOL);
+    /**
+     * Validate all Java-side size and aliasing contracts before passing pointers to C++.
+     *
+     * @param squaredDistancePerEstimate zero for DOT_PRODUCT output; negative for EUCLIDEAN output
+     */
+    static void scoreNeighborhood(byte[] codes, int groups, int blockSize, int capacity, float[] lut,
+                                  float landmarkDot, float squaredDistancePerEstimate, float[] out) {
+        boolean euclidean = squaredDistancePerEstimate != 0f;
+        if (euclidean ? ADDRESS_OF_EUCLIDEAN == null : !isAvailable()) {
+            throw new UnsupportedOperationException("Native library does not provide "
+                    + (euclidean ? EUCLIDEAN_SYMBOL : SYMBOL));
         }
         Objects.requireNonNull(codes, "codes");
         Objects.requireNonNull(lut, "lut");
@@ -198,25 +222,31 @@ final class NativeASHKernels {
         long vectorSlots = blockCount * Math.max(blockSize, 16); // Native kernels cap FP32 width at 16.
         if ((long) groups * vectorSlots <= MAX_CRITICAL_LANE_GROUPS) {
             // These heap segments are valid only for this synchronous, short leaf call.
-            status = invoke(CRITICAL_SCORE, MemorySegment.ofArray(codes), MemorySegment.ofArray(lut), landmarkDot,
-                    groups, blockSize, capacity, MemorySegment.ofArray(out));
+            status = euclidean
+                    ? invokeEuclidean(CRITICAL_EUCLIDEAN, MemorySegment.ofArray(codes), MemorySegment.ofArray(lut),
+                            landmarkDot, squaredDistancePerEstimate, groups, blockSize, capacity,
+                            MemorySegment.ofArray(out))
+                    : invoke(CRITICAL_SCORE, MemorySegment.ofArray(codes), MemorySegment.ofArray(lut), landmarkDot,
+                            groups, blockSize, capacity, MemorySegment.ofArray(out));
         } else {
-            status = scoreLargeNeighborhood(
-                    codes, packedBytes, lut, lutFloats, landmarkDot, groups, blockSize, capacity, out);
+            status = scoreLargeNeighborhood(codes, packedBytes, lut, lutFloats, landmarkDot,
+                    squaredDistancePerEstimate, groups, blockSize, capacity, out);
         }
         checkStatus(status);
     }
 
     private static int scoreLargeNeighborhood(byte[] codes, long packedBytes, float[] lut, long lutFloats,
-            float landmarkDot, int groups, int blockSize, int capacity, float[] out) {
+            float landmarkDot, float squaredDistancePerEstimate, int groups, int blockSize, int capacity, float[] out) {
         try (Arena arena = Arena.ofConfined()) {
             MemorySegment nativeCodes = arena.allocate(packedBytes);
             MemorySegment nativeLut = arena.allocate(lutFloats * Float.BYTES, Float.BYTES);
             MemorySegment nativeOut = arena.allocate((long) capacity * Float.BYTES, Float.BYTES);
             MemorySegment.copy(MemorySegment.ofArray(codes), 0, nativeCodes, 0, packedBytes);
             MemorySegment.copy(MemorySegment.ofArray(lut), 0, nativeLut, 0, lutFloats * Float.BYTES);
-            int status =
-                    invoke(ORDINARY_SCORE, nativeCodes, nativeLut, landmarkDot, groups, blockSize, capacity, nativeOut);
+            int status = squaredDistancePerEstimate != 0f
+                    ? invokeEuclidean(ORDINARY_EUCLIDEAN, nativeCodes, nativeLut, landmarkDot,
+                            squaredDistancePerEstimate, groups, blockSize, capacity, nativeOut)
+                    : invoke(ORDINARY_SCORE, nativeCodes, nativeLut, landmarkDot, groups, blockSize, capacity, nativeOut);
             if (status == 0) {
                 MemorySegment.copy(nativeOut, 0, MemorySegment.ofArray(out), 0, (long) capacity * Float.BYTES);
             }
@@ -238,6 +268,21 @@ final class NativeASHKernels {
         }
     }
 
+    private static int invokeEuclidean(MethodHandle handle, MemorySegment codes, MemorySegment lut, float landmarkDot,
+            float squaredDistancePerEstimate, int groups, int blockSize, int capacity, MemorySegment out) {
+        if (TRACE_DOWNCALLS) {
+            System.out.printf("%s(%d, %d, %d)%n", EUCLIDEAN_SYMBOL, groups, blockSize, capacity);
+        }
+        try {
+            return (int) handle.invokeExact(codes, lut, landmarkDot, squaredDistancePerEstimate, groups, blockSize,
+                    capacity, out);
+        } catch (RuntimeException | Error error) {
+            throw error;
+        } catch (Throwable error) {
+            throw new AssertionError("Unexpected checked exception from " + EUCLIDEAN_SYMBOL, error);
+        }
+    }
+
     private static final String INT8_SYMBOL = "ash_score_neighborhood_i8_c1";
     private static final MemorySegment ADDRESS_OF_INT8 = SymbolLookup.loaderLookup().find(INT8_SYMBOL).orElse(null);
     private static final FunctionDescriptor INT8_DESCRIPTOR = FunctionDescriptor.of(JAVA_INT, ADDRESS, ADDRESS,
@@ -247,17 +292,33 @@ final class NativeASHKernels {
     private static final MethodHandle ORDINARY_INT8 = ADDRESS_OF_INT8 == null ? null
             : Linker.nativeLinker().downcallHandle(ADDRESS_OF_INT8, INT8_DESCRIPTOR);
 
+    private static final String INT8_EUCLIDEAN_SYMBOL = "ash_score_neighborhood_i8_c1_euclidean";
+    private static final MemorySegment ADDRESS_OF_INT8_EUCLIDEAN =
+            SymbolLookup.loaderLookup().find(INT8_EUCLIDEAN_SYMBOL).orElse(null);
+    private static final FunctionDescriptor INT8_EUCLIDEAN_DESCRIPTOR = FunctionDescriptor.of(JAVA_INT, ADDRESS,
+            ADDRESS, JAVA_FLOAT, JAVA_FLOAT, JAVA_FLOAT, JAVA_FLOAT, JAVA_INT, JAVA_INT, JAVA_INT, JAVA_INT, ADDRESS);
+    private static final MethodHandle CRITICAL_INT8_EUCLIDEAN = ADDRESS_OF_INT8_EUCLIDEAN == null ? null
+            : Linker.nativeLinker().downcallHandle(ADDRESS_OF_INT8_EUCLIDEAN, INT8_EUCLIDEAN_DESCRIPTOR,
+                    Linker.Option.critical(true));
+    private static final MethodHandle ORDINARY_INT8_EUCLIDEAN = ADDRESS_OF_INT8_EUCLIDEAN == null ? null
+            : Linker.nativeLinker().downcallHandle(ADDRESS_OF_INT8_EUCLIDEAN, INT8_EUCLIDEAN_DESCRIPTOR);
+
     /** Whether the library scores offset-binary neighborhoods with an INT8 query. */
     static boolean isInt8NeighborhoodAvailable() { return ADDRESS_OF_INT8 != null; }
 
     /**
      * Scores an offset-binary neighborhood ({@code [unit][lane][bits bytes]} body per block, then the
      * headers) with an INT8 query of {@code units * 8} entries.
+     *
+     * @param squaredDistancePerEstimate zero for DOT_PRODUCT output; negative for EUCLIDEAN output
      */
-    static void scoreNeighborhoodInt8(byte[] codes, int bits, int units, int blockSize, int capacity,
-                                      byte[] q, float invScale, float center, float landmarkDot, float[] out) {
-        if (!isInt8NeighborhoodAvailable()) {
-            throw new UnsupportedOperationException("Native library does not provide " + INT8_SYMBOL);
+    static void scoreNeighborhoodInt8(byte[] codes, int bits, int units, int blockSize, int capacity, byte[] q,
+                                      float invScale, float center, float landmarkDot,
+                                      float squaredDistancePerEstimate, float[] out) {
+        boolean euclidean = squaredDistancePerEstimate != 0f;
+        if (euclidean ? ADDRESS_OF_INT8_EUCLIDEAN == null : !isInt8NeighborhoodAvailable()) {
+            throw new UnsupportedOperationException("Native library does not provide "
+                    + (euclidean ? INT8_EUCLIDEAN_SYMBOL : INT8_SYMBOL));
         }
         Objects.requireNonNull(codes, "codes");
         Objects.requireNonNull(q, "q");
@@ -275,8 +336,9 @@ final class NativeASHKernels {
         int status;
         if ((long) units * blockCount * blockSize <= MAX_CRITICAL_LANE_GROUPS) {
             // These heap segments are valid only for this synchronous, short leaf call.
-            status = invokeInt8(CRITICAL_INT8, MemorySegment.ofArray(codes), MemorySegment.ofArray(q),
-                    invScale, center, landmarkDot, bits, units, blockSize, capacity, MemorySegment.ofArray(out));
+            status = invokeInt8(euclidean ? CRITICAL_INT8_EUCLIDEAN : CRITICAL_INT8, MemorySegment.ofArray(codes),
+                    MemorySegment.ofArray(q), invScale, center, landmarkDot, squaredDistancePerEstimate, bits, units,
+                    blockSize, capacity, MemorySegment.ofArray(out));
         } else {
             try (Arena arena = Arena.ofConfined()) {
                 MemorySegment nativeCodes = arena.allocate(packedBytes);
@@ -284,8 +346,9 @@ final class NativeASHKernels {
                 MemorySegment nativeOut = arena.allocate((long) capacity * Float.BYTES, Float.BYTES);
                 MemorySegment.copy(MemorySegment.ofArray(codes), 0, nativeCodes, 0, packedBytes);
                 MemorySegment.copy(MemorySegment.ofArray(q), 0, nativeQuery, 0, queryBytes);
-                status = invokeInt8(ORDINARY_INT8, nativeCodes, nativeQuery, invScale, center, landmarkDot,
-                        bits, units, blockSize, capacity, nativeOut);
+                status = invokeInt8(euclidean ? ORDINARY_INT8_EUCLIDEAN : ORDINARY_INT8, nativeCodes, nativeQuery,
+                        invScale, center, landmarkDot, squaredDistancePerEstimate, bits, units, blockSize, capacity,
+                        nativeOut);
                 if (status == 0) {
                     MemorySegment.copy(nativeOut, 0, MemorySegment.ofArray(out), 0, (long) capacity * Float.BYTES);
                 }
@@ -294,15 +357,20 @@ final class NativeASHKernels {
         checkStatus(status);
     }
 
-    private static int invokeInt8(MethodHandle handle, MemorySegment codes, MemorySegment q,
-            float invScale, float center, float landmarkDot, int bits, int units, int blockSize, int capacity,
-            MemorySegment out) {
+    private static int invokeInt8(MethodHandle handle, MemorySegment codes, MemorySegment q, float invScale,
+            float center, float landmarkDot, float squaredDistancePerEstimate, int bits, int units, int blockSize,
+            int capacity, MemorySegment out) {
+        boolean euclidean = squaredDistancePerEstimate != 0f;
         if (TRACE_DOWNCALLS) {
-            System.out.printf("%s(%d, %d, %d, %d)%n", INT8_SYMBOL, bits, units, blockSize, capacity);
+            System.out.printf("%s(%d, %d, %d, %d)%n", euclidean ? INT8_EUCLIDEAN_SYMBOL : INT8_SYMBOL,
+                    bits, units, blockSize, capacity);
         }
         try {
-            return (int) handle.invokeExact(codes, q, invScale, center, landmarkDot, bits, units, blockSize,
-                    capacity, out);
+            return euclidean
+                    ? (int) handle.invokeExact(codes, q, invScale, center, landmarkDot, squaredDistancePerEstimate,
+                            bits, units, blockSize, capacity, out)
+                    : (int) handle.invokeExact(codes, q, invScale, center, landmarkDot, bits, units, blockSize,
+                            capacity, out);
         } catch (RuntimeException | Error error) {
             throw error;
         } catch (Throwable error) {
