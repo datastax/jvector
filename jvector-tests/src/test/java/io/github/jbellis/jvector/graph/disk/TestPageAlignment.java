@@ -152,6 +152,30 @@ public class TestPageAlignment extends LuceneTestCase {
     }
 
     @Test
+    public void aBuilderCanBeBuiltAgain() throws IOException {
+        // A retry after a failed write builds the same builder again, with the same page alignment.
+        var vectors = vectors(16);
+        var graph = graph(vectors, false);
+        var suppliers = Feature.singleStateFactory(FeatureId.INLINE_VECTORS,
+                node -> new InlineVectors.State(vectors.getVector(node)));
+        Path path = directory.resolve("rebuilt");
+        var builder = new OnDiskGraphIndexWriter.Builder(graph, path).with(new InlineVectors(vectors.dimension()))
+                .withPageAlignment(PAGE);
+        // Writers from one builder share its output, so only the one that writes is closed.
+        String first = builder.build().describeRecordLayout();
+        try (var writer = builder.build()) {
+            assertEquals(first, writer.describeRecordLayout());
+            writer.write(suppliers);
+        }
+        try (var reader = new SimpleMappedReader.Supplier(path)) {
+            var index = OnDiskGraphIndex.load(reader);
+            assertTrue(index.getFeatureSet().contains(FeatureId.PAGE_ALIGNMENT));
+            assertRecordsAligned(index, Files.size(path));
+            TestUtil.assertGraphEquals(graph, index);
+        }
+    }
+
+    @Test
     public void rejectsOldFormatsAndInvalidPages() throws IOException {
         var vectors = vectors(16);
         var graph = graph(vectors, false);

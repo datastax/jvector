@@ -274,11 +274,14 @@ public abstract class AbstractGraphIndexWriter<T extends IndexWriter> implements
         }
 
         /**
-         * Adds a feature.
+         * Adds a feature. Page alignment is set with {@link #withPageAlignment} instead.
          * @param feature the feature
          * @return this builder
          */
         public Builder<K, T> with(Feature feature) {
+            if (feature.id() == FeatureId.PAGE_ALIGNMENT) {
+                throw new IllegalArgumentException("Use withPageAlignment instead of adding PAGE_ALIGNMENT directly");
+            }
             features.put(feature.id(), feature);
             return this;
         }
@@ -324,9 +327,8 @@ public abstract class AbstractGraphIndexWriter<T extends IndexWriter> implements
             if (ordinalMapper == null) {
                 ordinalMapper = new OrdinalMapper.MapMapper(sequentialRenumbering(graphIndex));
             }
-            if (features.containsKey(FeatureId.PAGE_ALIGNMENT)) {
-                throw new IllegalArgumentException("Use withPageAlignment instead of adding PAGE_ALIGNMENT directly");
-            }
+            // Recomputed on every build, so a builder can be built again.
+            features.remove(FeatureId.PAGE_ALIGNMENT);
             String note = null;
             if (pageAlignment > 0) {
                 if (!format.supportsFeature(FeatureId.PAGE_ALIGNMENT)) {
