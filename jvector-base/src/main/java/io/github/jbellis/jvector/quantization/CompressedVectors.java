@@ -104,10 +104,24 @@ public interface CompressedVectors extends Accountable {
      * the start of a streaming sidecar write by {@code SidecarCompactionStrategy.writeSidecar},
      * after which the strategy emits chunks of {@code sidecarVectorsPerChunk()} codes each.
      * Default throws — implementations supporting sidecar compaction must override.
+     *
+     * @deprecated writes the compressor at {@code OnDiskGraphIndex.CURRENT_VERSION} whatever the output's
+     *             version; override {@link #writeSidecarHeader(IndexWriter, VectorCompressor, int, int)} instead.
      */
+    @Deprecated
     default void writeSidecarHeader(IndexWriter out, VectorCompressor<?> mergedCompressor, int count) throws IOException {
         throw new UnsupportedOperationException(
                 getClass().getSimpleName() + " does not support sidecar compaction");
+    }
+
+    /**
+     * For compaction use: as {@link #writeSidecarHeader(IndexWriter, VectorCompressor, int)}, with the
+     * on-disk format version of the output the sidecar belongs to ({@code OnDiskGraphIndexCompactor#withVersion}),
+     * at which the merged compressor is serialized. The default delegates to the three-argument method, so an
+     * implementation that only overrides that one keeps working, writing at {@code CURRENT_VERSION}.
+     */
+    default void writeSidecarHeader(IndexWriter out, VectorCompressor<?> mergedCompressor, int count, int version) throws IOException {
+        writeSidecarHeader(out, mergedCompressor, count);
     }
 
     /**

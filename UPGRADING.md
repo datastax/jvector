@@ -19,8 +19,9 @@
   Versions 6 and below still write inline vectors, NVQ, separated vectors and fused PQ exactly as before,
   and 4.0.x reads them. A version 6 writer rejects fused ASH and page alignment, and ASH models reject
   version 6.
-- `OnDiskGraphIndexCompactor` always writes `CURRENT_VERSION`; it has no option to write an older version.
-  It does not compact page-aligned indexes.
+- `OnDiskGraphIndexCompactor` writes `CURRENT_VERSION` by default; pass `withVersion(6)` to keep a rollback
+  to 4.0.x possible (its compressed sidecar is written at the same version). It does not compact page-aligned
+  indexes.
 
 ## New features
 - Asymmetric Hashing (ASH) quantization, stored separately or fused into the graph (format version 7), with

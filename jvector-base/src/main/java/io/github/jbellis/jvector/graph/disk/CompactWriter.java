@@ -21,6 +21,7 @@ import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 import java.nio.file.Path;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -61,6 +62,7 @@ final class CompactWriter implements AutoCloseable {
     private final ThreadLocal<ByteBuffer> bufferPerThread;
     private final ThreadLocal<ByteSequence<?>> zeroPQ;
     private final boolean fusedPQEnabled;
+    private final boolean usesFooter;
     private final Path outputPath;
     private final List<CommonHeader.LayerInfo> configuredLayerInfo;
     private final List<Integer> configuredLayerDegrees;
@@ -76,7 +78,13 @@ final class CompactWriter implements AutoCloseable {
     private int pqCodeSize;
     private ThreadLocal<byte[]> pqCodeBufPerThread;
 
+    /**
+     * @param version the on-disk format version to write, one {@link GraphIndexFormatFactory} knows.
+     *                Fused PQ needs a version that supports it (6), an output with upper layers one
+     *                that supports multi-layer graphs (4 and above).
+     */
     CompactWriter(Path outputPath,
+                  int version,
                   int maxOrdinal,
                   int numBaseLayerNodes,
                   long startOffset,
@@ -88,18 +96,19 @@ final class CompactWriter implements AutoCloseable {
             throws IOException {
         this.fusedFeature = fusedFeature;
         this.fusedPQEnabled = fusedFeature != null;
-        // This writer only ever targets the current on-disk format -- unlike AbstractGraphIndexWriter,
-        // there is no builder/version parameter that lets a caller pick an older version. Because of
-        // that, `fusedPQEnabled` alone is a safe stand-in for "the format supports fused PQ" everywhere
-        // below: there's no other version this class could be writing. We still check the format here,
-        // once, instead of just assuming it, so that if this class is ever changed to support writing
-        // older versions, or a future version drops fused PQ support, this fails loudly at construction
-        // instead of silently omitting the fused-PQ footer/packed-neighbor data later on.
-        int version = OnDiskGraphIndex.CURRENT_VERSION;
-        if (fusedPQEnabled && !GraphIndexFormatFactory.forVersion(version).supportsFeature(FeatureId.FUSED_PQ)) {
-            throw new IllegalStateException(
+        // The format is checked once, here, against what this output needs. Everywhere below,
+        // `fusedPQEnabled` alone then stands for "the format supports fused PQ", and `usesFooter`
+        // for "the format is footer-based" (5 and above; the header is written at the start either way).
+        GraphIndexFormat format = GraphIndexFormatFactory.forVersion(version);
+        if (fusedPQEnabled && !format.supportsFeature(FeatureId.FUSED_PQ)) {
+            throw new IllegalArgumentException(
                     "Fused PQ requires a format version that supports it; version " + version + " does not");
         }
+        if (layerInfo.size() > 1 && !format.supportsMultiLayer()) {
+            throw new IllegalArgumentException(
+                    "A graph with upper layers requires a format version that supports them; version " + version + " does not");
+        }
+        this.usesFooter = format.usesFooter();
         this.outputPath = outputPath;
         this.writer = new BufferedRandomAccessWriter(outputPath);
         this.startOffset = startOffset;
@@ -172,11 +181,29 @@ final class CompactWriter implements AutoCloseable {
         return fusedPQEnabled && pqCodeCache == null;
     }
 
+    // The header as writeHeader() serialized it, kept only with assertions enabled, for the check in
+    // writeFooter(): every header field (version, dimension, entry node, layer sizes, features) is fixed
+    // in the constructor and nothing fills one in while the records are written. A footer-based format
+    // (version 5 and above) writes the header again at the end, so a late change would at least reach
+    // the file there; a header-based format (4 and below) has only the copy written at the start, so
+    // for it a late change would be lost.
+    private static final boolean ASSERTIONS_ENABLED = CompactWriter.class.desiredAssertionStatus();
+    private byte[] headerAtStart;
+
     public void writeHeader() throws IOException {
         writer.seek(startOffset);
         header.write(writer);
         assert writer.position() == startOffset + headerSize : String.format("%d != %d", writer.position(), startOffset + headerSize);
         writer.flush();
+        if (ASSERTIONS_ENABLED) {
+            headerAtStart = serializedHeader();
+        }
+    }
+
+    private byte[] serializedHeader() throws IOException {
+        var out = ByteBufferIndexWriter.create(headerSize, false);
+        header.write(out);
+        return Arrays.copyOf(out.getBuffer().array(), out.getBuffer().position());
     }
 
     void writeFooter() throws IOException {
@@ -199,6 +226,14 @@ final class CompactWriter implements AutoCloseable {
                 writer.writeInt(entryNode);
                 vectorTypeSupport.writeByteSequence(writer, entryNodePqCode);
             }
+        }
+        if (!usesFooter) {
+            // A header-based format: the header written at the start is the metadata, and it is not
+            // written again, so it must not have changed since (see headerAtStart; null when writeHeader
+            // was not called, which the assertion then does not judge).
+            assert headerAtStart == null || Arrays.equals(headerAtStart, serializedHeader())
+                    : "the header changed after writeHeader(); a header-based format cannot record that";
+            return;
         }
         long headerOffset = writer.position();
         header.write(writer);
@@ -271,7 +306,9 @@ final class CompactWriter implements AutoCloseable {
             }
         }
         // Footer trailer: header copy + headerOffset (long) + magic (int).
-        total += headerSize + FOOTER_SIZE;
+        if (usesFooter) {
+            total += headerSize + FOOTER_SIZE;
+        }
         return total;
     }
 

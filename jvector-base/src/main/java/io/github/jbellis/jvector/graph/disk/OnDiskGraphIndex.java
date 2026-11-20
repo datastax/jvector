@@ -467,6 +467,16 @@ public class OnDiskGraphIndex implements ImmutableGraphIndex, AutoCloseable, Acc
         readerSupplier.prefetch(start, end - start);
     }
 
+    /**
+     * Announces the L0 record of {@code node} to the page cache ahead of its read; see
+     * {@link ReaderSupplier#announce(long, long)}. Asynchronous where the reader supports it, so a
+     * caller that knows which record it will read a few steps from now keeps the device busy instead
+     * of faulting the records in one at a time. Best-effort no-op when unsupported.
+     */
+    public void announceL0Record(int node) {
+        readerSupplier.announce(neighborsOffset + l0Layout.offset(node), l0Layout.recordBytes);
+    }
+
     // re-declared to specify type
     @Override
     public View getView() {
