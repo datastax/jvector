@@ -152,6 +152,41 @@ public class TestPageAlignment extends LuceneTestCase {
     }
 
     @Test
+    public void sequentialRecordsAlignWithTheFileAtAStartOffset() throws IOException {
+        // The sequential writer starts where its output is, so its padding is computed for that position.
+        var vectors = vectors(16);
+        var graph = graph(vectors, true);
+        var suppliers = Feature.singleStateFactory(FeatureId.INLINE_VECTORS,
+                node -> new InlineVectors.State(vectors.getVector(node)));
+        for (long start : new long[] {7, PAGE - 1, PAGE + 13, 3L * PAGE}) {
+            Path path = directory.resolve("sequential-at-" + start);
+            try (var out = new SimpleWriter(path)) {
+                out.write(new byte[(int) start]);
+                var builder = new OnDiskSequentialGraphIndexWriter.Builder(graph, out)
+                        .with(new InlineVectors(vectors.dimension())).withPageAlignment(PAGE);
+                try (var writer = builder.build()) {
+                    writer.write(suppliers);
+                }
+            }
+            try (var reader = new SimpleMappedReader.Supplier(path)) {
+                var index = OnDiskGraphIndex.load(reader, start);
+                assertTrue(index.getFeatureSet().contains(FeatureId.PAGE_ALIGNMENT));
+                assertRecordsAligned(index, Files.size(path));
+                TestUtil.assertGraphEquals(graph, index);
+                TestOnDiskGraphIndex.validateVectors(index.getView(), vectors);
+            }
+        }
+        // Padding computed for one position is not written at another.
+        Path moved = directory.resolve("sequential-moved");
+        try (var out = new SimpleWriter(moved)) {
+            var writer = new OnDiskSequentialGraphIndexWriter.Builder(graph, out)
+                    .with(new InlineVectors(vectors.dimension())).withPageAlignment(PAGE).build();
+            out.write(new byte[13]);
+            assertThrows(IllegalStateException.class, () -> writer.write(suppliers));
+        }
+    }
+
+    @Test
     public void aBuilderCanBeBuiltAgain() throws IOException {
         // A retry after a failed write builds the same builder again, with the same page alignment.
         var vectors = vectors(16);
