@@ -9,16 +9,18 @@ codes. Training and base-vector encoding retain their existing FP32 behavior.
 These recommendations concern CPU query throughput and latency. Validate recall
 on your data before deploying FP16 or INT8.
 
-| Processor family | Setting | Why |
-|---|---|---|
-| Intel Xeon Cascade Lake, Cooper Lake, Ice Lake | `auto` (INT8) | Fast integer projection with 256-bit tiles; the required FP16 path is unavailable. |
-| Intel Xeon Sapphire Rapids, Emerald Rapids, Granite Rapids | `auto` (INT8) | INT8 with 512-bit tiles is faster than AMX FP16; use `fp16` where recall at low overquery matters more. |
-| Intel Xeon Sierra Forest | `auto` (INT8) | Integer acceleration (AVX-VNNI through oneDNN) is the useful low-precision path. |
-| AMD Zen 4 and Zen 5: EPYC, Ryzen, Threadripper | `auto` (INT8) | AVX-512 VNNI integer acceleration; these CPUs lack the FP16 instructions required by this backend. |
-| Older Intel Xeon and AMD Zen 1–3 | `auto` (FP32) | Without VNNI or FP16 support, `auto` keeps the established FP32 path. |
-| Arm Neoverse / AWS Graviton and Apple Silicon | `auto` (FP32) | The established supported path for this release. |
+Use the default, `auto`, on every processor. What it selects depends on the
+instructions the processor supports:
 
-For query throughput and latency on Intel Ice Lake:
+| Processor support | `auto` selects | Notes |
+|---|---|---|
+| x86-64 with AVX-512 VNNI and AVX-512 FP16 | INT8, native kernel, 512-bit tiles | Faster than FP16 projection. Use `fp16` where recall at low overquery matters more than throughput. |
+| x86-64 with AVX-512 VNNI, without AVX-512 FP16 | INT8, native kernel, 256-bit tiles | FP16 projection is unavailable. |
+| x86-64 with AVX-VNNI, without AVX-512 | INT8 through the oneDNN add-on | Without the add-on, `auto` uses FP32. |
+| x86-64 without VNNI | FP32 | |
+| AArch64 | FP32 | |
+
+To require INT8 and fail if it is unavailable, rather than fall back:
 
 ```text
 -Djvector.ash.queryProjection=int8
@@ -33,23 +35,24 @@ effect before the model's first query:
 
 | Setting | Behavior |
 |---|---|
-| `auto` (default) | Use INT8 where an integer dot-product backend is available (x86 VNNI or AMX); otherwise try optimized FP16, with the existing FP32 fallback if FP16 is unavailable or outside its supported range. |
+| `auto` (default) | Use INT8 where an integer dot-product backend is available (x86-64 VNNI); otherwise try optimized FP16, with the existing FP32 fallback if FP16 is unavailable or outside its supported range. |
 | `fp32` | Use the existing FP32 projection. |
 | `fp16` | Require optimized FP16 projection with FP32 accumulation and output. Report an error if unavailable or outside the supported range. |
 | `int8` | Require optimized INT8 projection with signed 32-bit integer accumulation and FP32 output. Report an error if unavailable; never silently substitute FP16 or FP32. |
 
 `auto` selects INT8 first because it was the fastest projection on every CPU
-measured: 1.03-1.10x FP16 on an AMX CPU and 1.2-1.5x FP32 on Ice Lake class CPUs,
-across nine 1M datasets. The query is quantized to two INT8 digits with one scale:
+measured: 1.03-1.10x FP16 on a CPU with AVX-512 FP16 and AMX, and 1.2-1.5x FP32 on
+AVX-512 VNNI CPUs without FP16, across nine 1M datasets. The query is quantized to two INT8 digits with one scale:
 a coarse digit and its rounding remainder, times 254. Nearly all INT8 projection
 error came from rounding the query; with the second digit, exhaustive recall
 matches FP32 projection, while the matrix keeps one INT8 digit per row.
 
 On AVX-512 VNNI CPUs, INT8 uses JVector's exact-integer Highway kernel for single
-queries and batches, in the native library itself: 512-bit tiles on Sapphire Rapids and
-later, and 256-bit tiles on Cascade Lake, Cooper Lake, Ice Lake and AMD Zen 4/5. On Ice
-Lake, 512-bit integer dot products slowed the graph search that follows them. The oneDNN add-on serves INT8 on CPUs with AVX-VNNI
-but not AVX-512, and chooses the CPU implementation within FP16 at runtime. Setting
+queries and batches, in the native library itself: 512-bit tiles on CPUs that also
+have AVX-512 FP16, and 256-bit tiles on other AVX-512 VNNI CPUs, where 512-bit integer
+dot products slowed the graph search that follows them. The oneDNN add-on serves INT8
+on CPUs with AVX-VNNI but not AVX-512, and chooses the CPU implementation within FP16
+at runtime. Setting
 the environment variable `JVECTOR_ASH_INT8_ONEDNN` makes INT8 use the add-on
 everywhere, for example to compare its AMX kernels; both compute the same integers,
 so the results are identical.
@@ -96,9 +99,10 @@ under each precision in separate JVM runs.
 
 ## Deployment
 
-FP16 requires the native vector provider and the oneDNN add-on included by the
-standard native build. INT8 requires the native vector provider, and the add-on
-only on CPUs without AVX-512 VNNI. See the [native development guide](../jvector-native/src/main/native/README.md#recommended-onednn-build-and-package)
+FP16 requires the native vector provider, a CPU with AVX-512 FP16, and the oneDNN
+add-on. INT8 requires the native vector provider, and the add-on only on CPUs
+without AVX-512 VNNI. Published release JARs include the add-on; source builds
+add it with `-Dnative.onednn=true`, which also needs CMake. See the [native development guide](../jvector-native/src/main/native/README.md#recommended-onednn-build-and-package)
 for build commands, supported runtime behavior, diagnostics and tests.
 
 ## Validate a selection

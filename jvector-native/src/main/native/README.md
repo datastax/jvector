@@ -56,7 +56,7 @@ libjvector never depends on it.
 
 | Tool | Minimum version | Notes |
 |------|----------------|-------|
-| g++ (x86-64) | GCC 11+ | Must support `-march=skylake-avx512` |
+| g++ (x86-64) | GCC 12+ | Needed for the AVX3_SPR tier; `build_native_lib.sh` checks it |
 | g++ (AArch64) | GCC 11+ | All three tiers (NEON, SVE, SVE2) built |
 | clang++ (x86-64) | Clang any recent | Must support `-march=skylake-avx512` (Clang 7+) |
 | clang++ (AArch64) | Clang any recent | NEON tier always built; SVE/SVE2 require **Clang ≥ 22** — older Clang produces a NEON-only build with a warning |

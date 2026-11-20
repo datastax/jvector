@@ -8,9 +8,9 @@ Two self-contained introductions build and query a fused ASH disk index over the
 public `e5-small-v2-100k` dataset (downloaded and cached automatically):
 
 - [HelloASHWorldInt8](src/main/java/io/github/jbellis/jvector/example/HelloASHWorldInt8.java):
-  INT8 query projection for Intel Ice Lake and other supported INT8 processors.
+  INT8 query projection, for x86-64 processors with AVX-512 VNNI or AVX-VNNI.
 - [HelloASHWorldFp16](src/main/java/io/github/jbellis/jvector/example/HelloASHWorldFp16.java):
-  native FP16 query projection for Intel Sapphire Rapids and newer FP16 processors.
+  native FP16 query projection, for x86-64 processors with AVX-512 FP16.
 
 Both teach the same six steps: load vectors, train/encode ASH, construct the graph,
 write fused ASH neighborhoods with NVQ reranking vectors, reopen and search

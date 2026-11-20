@@ -93,7 +93,7 @@ centroids. Reranking uses NVQ vectors stored in the graph.
 **Query parameters.** Top 10 returned. Overquery 1.0 and 2.0 (rerank 1x and 2x)
 rescore 10 and 20 candidates with NVQ. Search pruning off. ASH uses queued
 execution with a maximum batch of 8 and automatic query projection, which
-resolves to FP16 on this CPU: one ASH worker per core (1 or 8), queue capacity 8
+resolves to INT8 on this CPU (AVX-512 VNNI): one ASH worker per core (1 or 8), queue capacity 8
 per core, fed by 4 × cores caller threads (4 or 32); the mean batch size is 8.0.
 PQ uses direct execution with 4 × cores caller threads. Concurrent results are
 verified against single-threaded results.
