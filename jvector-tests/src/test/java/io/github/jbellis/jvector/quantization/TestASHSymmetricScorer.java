@@ -147,7 +147,7 @@ public class TestASHSymmetricScorer {
                     AsymmetricHashing.HEADER_BITS + 31 * bits, 1, bits);
             var encoded = ash.encodeAll(values, java.util.concurrent.ForkJoinPool.commonPool());
             var scorer = new ASHSymmetricScorer(encoded);
-            var bsp = BuildScoreProvider.ashBuildScoreProvider(VectorSimilarityFunction.DOT_PRODUCT, encoded);
+            var bsp = BuildScoreProvider.ashBuildScoreProvider(encoded);
             for (int i = 0; i < input.length; i++) {
                 for (int j = 0; j < input.length; j++) {
                     var a = encoded.get(i); var b = encoded.get(j);
@@ -226,7 +226,7 @@ public class TestASHSymmetricScorer {
                 AsymmetricHashing.HEADER_BITS+31*2,2,2);
         var encoded = ash.encodeAll(values, java.util.concurrent.ForkJoinPool.commonPool());
         new ASHSymmetricScorer(encoded);
-        assertThrows(IllegalArgumentException.class, () -> BuildScoreProvider.ashBuildScoreProvider(VectorSimilarityFunction.DOT_PRODUCT, encoded));
+        assertThrows(IllegalArgumentException.class, () -> BuildScoreProvider.ashBuildScoreProvider(encoded));
     }
 
     @Test public void batchScoresMatchSingleScoresBitForBit() throws Exception {
@@ -263,7 +263,7 @@ public class TestASHSymmetricScorer {
             var ash = AsymmetricHashing.initialize(values, VectorSimilarityFunction.DOT_PRODUCT,AsymmetricHashing.RANDOM,
                     AsymmetricHashing.HEADER_BITS+31*bits,1,bits);
             var encoded = ash.encodeAll(values, java.util.concurrent.ForkJoinPool.commonPool());
-            var bsp = BuildScoreProvider.ashBuildScoreProvider(VectorSimilarityFunction.DOT_PRODUCT,encoded);
+            var bsp = BuildScoreProvider.ashBuildScoreProvider(encoded);
             assertTrue(new ASHSymmetricScorer(encoded).dotProduct(0,1) < 0f);
             assertEquals(VectorSimilarityFunction.DOT_PRODUCT, bsp.searchProviderFor(0).adaptiveSimilarity());
             assertTrue(Float.isFinite(bsp.searchProviderFor(0).dotProductBound()));

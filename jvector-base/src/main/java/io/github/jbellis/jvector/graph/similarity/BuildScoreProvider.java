@@ -278,20 +278,18 @@ public interface BuildScoreProvider {
     /**
      * Returns a BSP that performs approximate score comparisons using the given ASHVectors.
      *
+     * <p>Scores use the similarity the ASH model was trained for.
+     *
      * <p><b>Construction (node-node) scoring:</b> Uses symmetric ASH–ASH dot-product approximation
      * computed from the complete encoded payload + per-vector header fields (scale, offset).
      *
      * <p><b>Query (vector-node) scoring:</b> Delegates to ASHVectors' query-time score function
      * (asymmetric float query → ASH vector).
      *
-     * <p><b>Constraint:</b> This provider requires {@code C=1} (single landmark), and {@code vsf} must be the
-     * similarity the ASH model was trained for.
+     * <p><b>Constraint:</b> This provider requires {@code C=1} (single landmark).
      */
-    static BuildScoreProvider ashBuildScoreProvider(VectorSimilarityFunction vsf, ASHVectors ashv) {
-        if (vsf != ashv.similarityFunction()) {
-            throw new IllegalArgumentException("The ASH model was trained for " + ashv.similarityFunction()
-                    + " and scores only by it; requested " + vsf);
-        }
+    static BuildScoreProvider ashBuildScoreProvider(ASHVectors ashv) {
+        final VectorSimilarityFunction vsf = ashv.similarityFunction();
 
         final AsymmetricHashing ash = ashv.getCompressor();
         if (ash.landmarkCount != 1) {

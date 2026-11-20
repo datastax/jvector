@@ -140,8 +140,8 @@ public class TestASHCosine {
                     var b = dotCodes.scoreFunctionFor(unitQueries[q], DOT);
                     var blockA = new float[raw.length];
                     var blockB = new float[raw.length];
-                    cosineCodes.blockScorerFor(queries[q], COS, 32).scoreRange(0, raw.length, blockA);
-                    dotCodes.blockScorerFor(unitQueries[q], DOT, 32).scoreRange(0, raw.length, blockB);
+                    cosineCodes.blockScorerFor(queries[q], 32).scoreRange(0, raw.length, blockA);
+                    dotCodes.blockScorerFor(unitQueries[q], 32).scoreRange(0, raw.length, blockB);
                     var preparedA = cosinePreparer.newState();
                     cosinePreparer.prepare(queries[q], preparedA);
                     var preparedB = dotPreparer.newState();
@@ -169,7 +169,7 @@ public class TestASHCosine {
         var codes = (ASHVectors) model.encodeAll(MockVectorValues.fromValues(raw));
         assertThrows(IllegalArgumentException.class, () -> model.encode(zero));
         assertThrows(IllegalArgumentException.class, () -> codes.scoreFunctionFor(zero, COS));
-        assertThrows(IllegalArgumentException.class, () -> codes.blockScorerFor(zero, COS, 32));
+        assertThrows(IllegalArgumentException.class, () -> codes.blockScorerFor(zero, 32));
         var preparer = codes.queryPreparer();
         assertThrows(IllegalArgumentException.class, () -> preparer.prepare(zero, preparer.newState()));
         var mutable = new MutableASHVectors(model);
@@ -230,7 +230,7 @@ public class TestASHCosine {
         var values = MockVectorValues.fromValues(unit);
         var model = AsymmetricHashing.initialize(values, DOT, AsymmetricHashing.ITQ, encodedBits(32, 4), 1, 4);
         var codes = model.encodeAll(values, ForkJoinPool.commonPool());
-        var graph = new GraphIndexBuilder(BuildScoreProvider.ashBuildScoreProvider(DOT, codes), DIM, 16, 64,
+        var graph = new GraphIndexBuilder(BuildScoreProvider.ashBuildScoreProvider(codes), DIM, 16, 64,
                 1.2f, 1.2f, false, true).build(values);
         int hits = 0;
         for (var q : normalized(queries)) {
@@ -252,7 +252,7 @@ public class TestASHCosine {
         var values = MockVectorValues.fromValues(raw);
         var model = AsymmetricHashing.initialize(values, COS, AsymmetricHashing.ITQ, encodedBits(32, 4), 1, 4);
         var codes = model.encodeAll(values, ForkJoinPool.commonPool());
-        var graph = new GraphIndexBuilder(BuildScoreProvider.ashBuildScoreProvider(COS, codes), DIM, 16, 64,
+        var graph = new GraphIndexBuilder(BuildScoreProvider.ashBuildScoreProvider(codes), DIM, 16, 64,
                 1.2f, 1.2f, false, true).build(values);
         var path = Files.createTempFile("ash-cosine-", ".index");
         try {

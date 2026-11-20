@@ -278,19 +278,18 @@ public final class StreamingASHIndex implements Accountable {
     }
 
     /**
-     * An index that encodes vectors with {@code model} until it trains a newer one.
+     * An index that encodes vectors with {@code model} until it trains a newer one. Its similarity is the model's.
      *
      * @param vectors  the caller's vectors, read by ordinal; see the class comment
      * @param builders creates the graph builder from the index's score provider, with the caller's graph settings
      *                 (degree, beam width, hierarchy, executors)
      */
-    public static StreamingASHIndex withModel(RandomAccessVectorValues vectors, VectorSimilarityFunction similarity,
-                                              AsymmetricHashing model,
+    public static StreamingASHIndex withModel(RandomAccessVectorValues vectors, AsymmetricHashing model,
                                               Function<BuildScoreProvider, GraphIndexBuilder> builders,
                                               Options options) {
         Objects.requireNonNull(model, "model");
-        return new StreamingASHIndex(vectors, similarity, builders, model, model.encodedBits, model.bitsPerDimension,
-                options);
+        return new StreamingASHIndex(vectors, model.similarityFunction(), builders, model, model.encodedBits,
+                model.bitsPerDimension, options);
     }
 
     /**

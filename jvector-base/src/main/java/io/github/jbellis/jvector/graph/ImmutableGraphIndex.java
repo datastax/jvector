@@ -55,9 +55,9 @@ public interface ImmutableGraphIndex extends AutoCloseable, Accountable {
      * Optional numerical query preparation, independent of a mutable graph view.
      * Obtain and reuse one preparer per loaded model. Returned preparers and query
      * states belong to the caller; their byte counts exclude shared model weights.
+     * The preparer scores by the similarity the index's model was trained for.
      */
-    default java.util.Optional<io.github.jbellis.jvector.graph.similarity.QueryPreparer> queryPreparer(
-            VectorSimilarityFunction similarity) {
+    default java.util.Optional<io.github.jbellis.jvector.graph.similarity.QueryPreparer> queryPreparer() {
         return java.util.Optional.empty();
     }
 

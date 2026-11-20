@@ -96,7 +96,7 @@ public class TestASHPackedBitsRace {
     }
 
     private static float[] score(ASHVectors vectors, VectorFloat<?> query, int blockSize) {
-        var scorer = vectors.blockScorerFor(query, VectorSimilarityFunction.DOT_PRODUCT, blockSize);
+        var scorer = vectors.blockScorerFor(query, blockSize);
         int n = vectors.count();
         float[] out = new float[n];
         float[] block = new float[blockSize];

@@ -166,8 +166,8 @@ public class TestASHEuclidean {
                                 for (int i = 0; i < data.length; i++) expectedSingly[i] = onePerVector.similarityTo(i);
                                 check(where + " mutable", expectedSingly, mutable.scoreFunctionFor(q, L2));
                             }
-                            check(where + " block", expected, encoded.blockScorerFor(q, L2));
-                            check(where + " block32", expected, encoded.blockScorerFor(q, L2, 32));
+                            check(where + " block", expected, encoded.blockScorerFor(q));
+                            check(where + " block32", expected, encoded.blockScorerFor(q, 32));
                         }
                     }
                 }
@@ -258,9 +258,7 @@ public class TestASHEuclidean {
         var encoded = ash.encodeAll(MockVectorValues.fromValues(data), ForkJoinPool.commonPool());
         assertEquals(L2, encoded.similarityFunction());
         assertThrows(IllegalArgumentException.class, () -> encoded.scoreFunctionFor(data[0], DOT));
-        assertThrows(IllegalArgumentException.class, () -> encoded.blockScorerFor(data[0], DOT, 32));
         assertThrows(IllegalArgumentException.class, () -> encoded.diversityFunctionFor(0, DOT));
-        assertThrows(IllegalArgumentException.class, () -> BuildScoreProvider.ashBuildScoreProvider(DOT, encoded));
 
         var legacy = AsymmetricHashing.initialize(MockVectorValues.fromValues(data), VectorSimilarityFunction.DOT_PRODUCT, AsymmetricHashing.ITQ,
                 encodedBits(32, 2), 1, 2);
@@ -330,7 +328,7 @@ public class TestASHEuclidean {
         var values = MockVectorValues.fromValues(data);
         var ash = train(data, 32, 4, 1);
         var encoded = ash.encodeAll(values, ForkJoinPool.commonPool());
-        var builder = new GraphIndexBuilder(BuildScoreProvider.ashBuildScoreProvider(L2, encoded), DIM, 16, 64,
+        var builder = new GraphIndexBuilder(BuildScoreProvider.ashBuildScoreProvider(encoded), DIM, 16, 64,
                 1.2f, 1.2f, false, true);
         var graph = builder.build(values);
         var path = Files.createTempFile("ash-euclidean-", ".index");
@@ -343,8 +341,12 @@ public class TestASHEuclidean {
                 writer.write(suppliers);
             }
             try (var reader = new SimpleMappedReader.Supplier(path); var disk = OnDiskGraphIndex.load(reader, 0)) {
-                assertThrows(IllegalArgumentException.class, () -> disk.queryPreparer(DOT));
-                var preparer = disk.queryPreparer(L2).orElseThrow();
+                var preparer = disk.queryPreparer().orElseThrow();
+                try (var view = disk.getView()) {
+                    // The reranker must score by the index's ASH similarity.
+                    assertThrows(IllegalArgumentException.class, () -> view.rerankerFor(queries[0], DOT));
+                    view.rerankerFor(queries[0], L2);
+                }
                 for (boolean adaptive : new boolean[]{false, true}) {
                     int memoryHits = 0, diskHits = 0, preparedHits = 0;
                     for (var q : queries) {
@@ -420,7 +422,7 @@ public class TestASHEuclidean {
         assertEquals(L2, model.similarityFunction());
         var values = MockVectorValues.fromValues(data);
         var encoded = model.encodeAll(values, ForkJoinPool.commonPool());
-        var graph = new GraphIndexBuilder(BuildScoreProvider.ashBuildScoreProvider(L2, encoded), DIM, 16, 64,
+        var graph = new GraphIndexBuilder(BuildScoreProvider.ashBuildScoreProvider(encoded), DIM, 16, 64,
                 1.2f, 1.2f, false, false).build(values);
         int batchHits = 0;
         for (var q : queries) {
@@ -433,9 +435,6 @@ public class TestASHEuclidean {
         }
         double batch = batchHits / (10.0 * queries.length);
         assertTrue("streaming recall " + recall + " vs batch " + batch, recall > batch - 0.05);
-        assertThrows(IllegalArgumentException.class, () -> StreamingASHIndex.withModel(
-                new ListRandomAccessVectorValues(Arrays.asList(data), DIM), DOT, train(data, 32, 4, 1),
-                scores -> new GraphIndexBuilder(scores, DIM, 16, 64, 1.2f, 1.2f, false, false), options));
     }
 
     private static HashSet<Integer> exactTop(VectorFloat<?>[] data, VectorFloat<?> q, int k) {

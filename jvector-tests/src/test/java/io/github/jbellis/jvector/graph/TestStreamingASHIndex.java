@@ -102,7 +102,7 @@ public class TestStreamingASHIndex extends RandomizedTest {
                                       int k, int rerankK, Bits accept) {
         var ravv = new ListRandomAccessVectorValues(data, DIM);
         var codes = (ASHVectors) model.encodeAll(ravv);
-        var scores = BuildScoreProvider.ashBuildScoreProvider(DOT, codes);
+        var scores = BuildScoreProvider.ashBuildScoreProvider(codes);
         var builder = builders().apply(scores);
         for (int i = 0; i < data.size(); i++) builder.addGraphNode(i, scores.searchProviderFor(i));
         int hits = 0;
@@ -457,7 +457,7 @@ public class TestStreamingASHIndex extends RandomizedTest {
         for (int i = 0; i < data.size(); i++) first.add(i);
         var model = first.trainNextModel(AsymmetricHashing.ITQ, ForkJoinPool.commonPool());
         assertEquals(AsymmetricHashing.ITQ, model.optimizer);
-        var warm = StreamingASHIndex.withModel(new ListRandomAccessVectorValues(data, DIM), DOT, model, builders(),
+        var warm = StreamingASHIndex.withModel(new ListRandomAccessVectorValues(data, DIM), model, builders(),
                 new StreamingASHIndex.Options());
         assertTrue(warm.hasModel());
         for (int i = 0; i < data.size(); i++) warm.add(i);

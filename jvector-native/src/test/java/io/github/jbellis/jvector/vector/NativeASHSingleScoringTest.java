@@ -80,7 +80,7 @@ class NativeASHSingleScoringTest {
                     AsymmetricHashing.HEADER_BITS + 33 * bits, 1, bits);
             var encoded = ash.encodeAll(values, ForkJoinPool.commonPool());
             var expected = new float[40];
-            encoded.blockScorerFor(values.getVector(0), VectorSimilarityFunction.DOT_PRODUCT)
+            encoded.blockScorerFor(values.getVector(0))
                     .scoreRange(0, 40, expected);
             var single = encoded.scoreFunctionFor(values.getVector(0), VectorSimilarityFunction.DOT_PRODUCT);
             var prepared = encoded.precomputedScoreFunctionFor(values.getVector(0), VectorSimilarityFunction.DOT_PRODUCT);

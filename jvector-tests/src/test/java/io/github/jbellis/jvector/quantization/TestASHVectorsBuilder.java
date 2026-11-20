@@ -84,9 +84,9 @@ public class TestASHVectorsBuilder {
             assertArrayEquals(expected.symmetricOffsets, built.symmetricOffsets, 0f);
 
             // the live view scores the same while it is filled, and so does the built store
-            var liveScores = BuildScoreProvider.ashBuildScoreProvider(VectorSimilarityFunction.DOT_PRODUCT, builder.live());
-            var builtScores = BuildScoreProvider.ashBuildScoreProvider(VectorSimilarityFunction.DOT_PRODUCT, built);
-            var expectedScores = BuildScoreProvider.ashBuildScoreProvider(VectorSimilarityFunction.DOT_PRODUCT, expected);
+            var liveScores = BuildScoreProvider.ashBuildScoreProvider(builder.live());
+            var builtScores = BuildScoreProvider.ashBuildScoreProvider(built);
+            var expectedScores = BuildScoreProvider.ashBuildScoreProvider(expected);
             if (bits != 1) {
                 for (int a = 0; a < n; a += 97) {
                     var e = expectedScores.searchProviderFor(a).scoreFunction();

@@ -88,7 +88,7 @@ final class StreamingBuild implements IndexBuildStrategy {
         StreamingASHIndex index = coldStartSize > 0
                 ? StreamingASHIndex.coldStart(vectors, ds.getSimilarityFunction(), params.encodedBits(),
                         params.bitsPerDimension(), builders, options)
-                : StreamingASHIndex.withModel(vectors, ds.getSimilarityFunction(), (AsymmetricHashing) model.get(),
+                : StreamingASHIndex.withModel(vectors, (AsymmetricHashing) model.get(),
                         builders, options);
 
         // Inserts come from their own threads, one per construction worker, as a database's writes do, so the

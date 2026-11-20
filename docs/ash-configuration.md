@@ -17,6 +17,10 @@ as `GraphIndexBuilder` does; an ASH index cannot be built without one. The model
 saves it, and its codes and every scorer of them use it; asking a scorer for
 another similarity throws `IllegalArgumentException`, and every ASH score
 function reports it in `similarityFunction()`, which adaptive stopping reads.
+You name the similarity only where a model or index is created
+(`AsymmetricHashing.initialize`, `StreamingASHIndex.coldStart`); the ASH build
+score provider, block scorers, query preparers and `StreamingASHIndex.withModel`
+take it from the model, and an ASH index's reranker rejects any other similarity.
 PQ and BQ keep choosing the similarity per call.
 `CompressedVectors.similarityFunction()` returns the fixed similarity, or null
 when each call chooses it. BenchYAML takes the similarity from the dataset's
@@ -52,7 +56,7 @@ AsymmetricHashing ash = AsymmetricHashing.initialize(vectors, VectorSimilarityFu
         AsymmetricHashing.ITQ, encodedBits, 1, bitsPerDimension, executor);
 ASHVectors codes = ash.encodeAll(vectors, executor);
 // Graph construction scores by the model's similarity; another one is rejected.
-var builder = new GraphIndexBuilder(BuildScoreProvider.ashBuildScoreProvider(codes.similarityFunction(), codes),
+var builder = new GraphIndexBuilder(BuildScoreProvider.ashBuildScoreProvider(codes),
         vectors.dimension(), 32, 100, 1.2f, 1.2f, true);
 var graph = builder.build(vectors);
 ```
@@ -157,7 +161,7 @@ an ASH construction entry. Omission uses the JVM policy, which defaults to
 
 `jvector.bench.ashConstruction` controls **BenchYAML/Grid**, not every library
 builder. For library integration, obtain a provider using
-`BuildScoreProvider.ashBuildScoreProvider(similarity, encoded)`. Use
+`BuildScoreProvider.ashBuildScoreProvider(encoded)`. Use
 `builder.addGraphNode(node, provider.searchProviderFor(node))` for fully symmetric
 insertion. The overload taking an original vector retains asymmetric query
 preparation. Both policies use the same stored ASH vectors; application queries

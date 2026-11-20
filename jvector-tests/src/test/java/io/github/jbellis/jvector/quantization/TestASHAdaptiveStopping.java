@@ -58,7 +58,7 @@ public class TestASHAdaptiveStopping {
         var ash = AsymmetricHashing.initialize(values, VectorSimilarityFunction.DOT_PRODUCT, AsymmetricHashing.RANDOM,
                 AsymmetricHashing.HEADER_BITS + 32 * 2, 1, 2);
         var encoded = ash.encodeAll(values, ForkJoinPool.commonPool());
-        var bsp = BuildScoreProvider.ashBuildScoreProvider(VectorSimilarityFunction.DOT_PRODUCT, encoded);
+        var bsp = BuildScoreProvider.ashBuildScoreProvider(encoded);
         try (var builder = new GraphIndexBuilder(bsp, dimension, 16, 50, 1.2f, 1.2f, true, true)) {
             for (int i = 0; i < count; i++) builder.addGraphNode(i, input[i]);
             builder.cleanup();

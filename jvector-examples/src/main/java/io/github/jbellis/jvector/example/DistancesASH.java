@@ -113,7 +113,7 @@ public class DistancesASH {
                         var scorer = vectors.scoreFunctionFor(queries.get(q), similarity);
                         for (int i = 0; i < vectors.count(); i++) checksum += scorer.similarityTo(i);
                     } else {
-                        var scorer = vectors.blockScorerFor(queries.get(q), similarity, blockSize);
+                        var scorer = vectors.blockScorerFor(queries.get(q), blockSize);
                         for (int start = 0; start < vectors.count(); start += blockSize) {
                             int count = Math.min(blockSize, vectors.count() - start);
                             scorer.scoreRange(start, count, scores);
@@ -153,8 +153,8 @@ public class DistancesASH {
         float maxBlockVsSingle = 0f;
         for (int qi : new int[]{0, queries.size() / 2}) {
             VectorFloat<?> query = queries.get(qi);
-            ASHBlockScorer block = vectors.blockScorerFor(query, similarity, blockSize);
-            ASHBlockScorer scalar = vectors.blockScorerFor(query, similarity);
+            ASHBlockScorer block = vectors.blockScorerFor(query, blockSize);
+            ASHBlockScorer scalar = vectors.blockScorerFor(query);
             ScoreFunction.ApproximateScoreFunction single =
                     vectors.scoreFunctionFor(query, similarity);
             printScorerInfo("recall-block", block);
@@ -329,7 +329,7 @@ public class DistancesASH {
         names.add("asymmetric-single-" + singleMode);
         factories.add(q -> new ScanScorer(vectors.scoreFunctionFor(queries.get(q),similarity)));
         names.add("asymmetric-block-" + blockMode);
-        factories.add(q -> new ScanScorer(vectors.blockScorerFor(queries.get(q),similarity,32)));
+        factories.add(q -> new ScanScorer(vectors.blockScorerFor(queries.get(q),32)));
 
         String requestedModes = System.getProperty("jvector.bench.scoringModes", "").trim();
         if (!requestedModes.isEmpty()) {
@@ -475,7 +475,7 @@ public class DistancesASH {
         for(int mode=0;mode<2;mode++) {
             System.setProperty("jvector.ash.queryProjection",names[mode]);
             projections[mode].projectQueryDirect(new float[copy.originalDimension],new float[copy.quantizedDim]);
-            arms[mode].blockScorerFor(queries.get(0),similarity,32);
+            arms[mode].blockScorerFor(queries.get(0),32);
         }
         // Timing must cover the requested paths: fail rather than time a substituted precision.
         for(int mode=0;mode<2;mode++) {
@@ -594,7 +594,7 @@ public class DistancesASH {
             tasks.add(executor.submit(()->{
                 double[] totals=new double[2];float[] scores=new float[32];
                 for(int q=first;q<count;q+=executor.getParallelism()) {
-                    var scorer=vectors.blockScorerFor(queries.get(q),similarity,32);
+                    var scorer=vectors.blockScorerFor(queries.get(q),32);
                     var heap=new java.util.PriorityQueue<long[]>((a,b)->Float.compare(Float.intBitsToFloat((int)a[0]),Float.intBitsToFloat((int)b[0])));
                     for(int start=0;start<vectors.count();start+=32) {
                         int n=Math.min(32,vectors.count()-start);scorer.scoreRange(start,n,scores);
@@ -851,11 +851,11 @@ public class DistancesASH {
 
         if(RUN_SANITY_CHECK) {
 
-            ASHBlockScorer ref = ashVectors.blockScorerFor(q0, similarity);
+            ASHBlockScorer ref = ashVectors.blockScorerFor(q0);
             printScorerInfo("scalar-ref", ref);
 
             final int sanityBlockSize = BLOCK_SIZES[0];
-            ASHBlockScorer blk = ashVectors.blockScorerFor(q0, similarity, sanityBlockSize);
+            ASHBlockScorer blk = ashVectors.blockScorerFor(q0, sanityBlockSize);
             printScorerInfo("block", blk);
 
 
@@ -987,10 +987,10 @@ public class DistancesASH {
                         ScoreFunction.ApproximateScoreFunction f = RUN_BLOCK_RECALL && !COMPARE_ALL_RECALL ? null
                                 : ashVecsFinal.scoreFunctionFor(q, similarity);
                         ASHBlockScorer block = RUN_BLOCK_RECALL
-                                ? ashVectorsFinal.blockScorerFor(q, similarity, BLOCK_SIZES[0])
+                                ? ashVectorsFinal.blockScorerFor(q, BLOCK_SIZES[0])
                                 : null;
                         ASHBlockScorer scalar = COMPARE_ALL_RECALL
-                                ? ashVectorsFinal.blockScorerFor(q, similarity)
+                                ? ashVectorsFinal.blockScorerFor(q)
                                 : null;
                         float[] blockScores = RUN_BLOCK_RECALL ? new float[BLOCK_SIZES[0]] : null;
                         float[] scalarScores = COMPARE_ALL_RECALL ? new float[BLOCK_SIZES[0]] : null;
@@ -1161,7 +1161,6 @@ public class DistancesASH {
                 ASHBlockScorer scorer =
                         ashVectorsFinal.blockScorerFor(
                                 finalQueries.get(0),
-                                similarity,
                                 blockSize
                         );
 
@@ -1184,7 +1183,6 @@ public class DistancesASH {
                         ASHBlockScorer scorer =
                                 ashVectorsFinal.blockScorerFor(
                                         finalQueries.get(qi),
-                                        similarity,
                                         blockSize
                                 );
 

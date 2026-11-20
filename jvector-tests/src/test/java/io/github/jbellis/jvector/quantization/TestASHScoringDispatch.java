@@ -109,7 +109,7 @@ public class TestASHScoringDispatch {
                         var single = encoded.scoreFunctionFor(input[q], VectorSimilarityFunction.DOT_PRODUCT);
                         for (int i = 0; i < expected.length; i++) assertEquals(expected[i], single.similarityTo(i), 0.00005f);
                         for (int size : new int[]{8, 16, 32}) {
-                            var block = encoded.blockScorerFor(input[q], VectorSimilarityFunction.DOT_PRODUCT, size);
+                            var block = encoded.blockScorerFor(input[q], size);
                             if (bits != 1) assertTrue(block.toString(), block.toString().contains(
                                     mode.equals("scalar") || !simd ? "scalar ASH LUT" : "SIMD ASH LUT"));
                             for (int start : new int[]{0, 1, 7, 15, 31, 65, 96, 97}) {
@@ -122,7 +122,7 @@ public class TestASHScoringDispatch {
                         }
                         // The two-argument overload deliberately remains an independent scalar oracle.
                         float[] referenceBlock = new float[32];
-                        encoded.blockScorerFor(input[q], VectorSimilarityFunction.DOT_PRODUCT).scoreRange(0, 32, referenceBlock);
+                        encoded.blockScorerFor(input[q]).scoreRange(0, 32, referenceBlock);
                         for (int i = 0; i < 32; i++) assertEquals(expected[i], referenceBlock[i], 0.00005f);
                     }
                 }

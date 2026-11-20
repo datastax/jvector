@@ -52,7 +52,7 @@ final class HelloASHQueuedSearch {
 
     static List<SearchResult> search(OnDiskGraphIndex graph, VectorSimilarityFunction similarity,
                                      List<VectorFloat<?>> queries, int searchCores) throws Exception {
-        var preparer = graph.queryPreparer(similarity).orElseThrow();
+        var preparer = graph.queryPreparer().orElseThrow();
         int maximumBatch = 8, admission = 8 * searchCores;
 
         // The application supplies execution threads. Each worker owns its searcher.

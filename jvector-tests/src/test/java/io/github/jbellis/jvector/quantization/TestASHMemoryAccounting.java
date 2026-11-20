@@ -289,14 +289,14 @@ public class TestASHMemoryAccounting {
         assertEquals(ownBefore, vectors.ramBytesUsed() - ash.ramBytesUsed());
         var query = ash.landmarks[0];
         for (int block : new int[]{8,16,8}) {
-            vectors.blockScorerFor(query, VectorSimilarityFunction.DOT_PRODUCT, block);
+            vectors.blockScorerFor(query, block);
             long[] packed = (long[])field(field(vectors, "packedBits"), "words");
             // Query preparation may initialize provider weights; subtract model growth.
             long own = vectors.ramBytesUsed()-ash.ramBytesUsed();
             assertTrue(packed != null);
             assertTrue(own >= RamUsageEstimator.sizeOf(packed));
             long stable = vectors.ramBytesUsed();
-            vectors.blockScorerFor(query, VectorSimilarityFunction.DOT_PRODUCT, block);
+            vectors.blockScorerFor(query, block);
             assertEquals(stable, vectors.ramBytesUsed());
         }
     }

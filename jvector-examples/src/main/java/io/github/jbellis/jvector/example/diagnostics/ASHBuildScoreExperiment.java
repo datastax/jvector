@@ -40,7 +40,7 @@ public final class ASHBuildScoreExperiment {
                                             RandomAccessVectorValues raw, String mode) {
         System.out.println("ASH construction scoring mode: " + mode);
         if (mode.equals("symmetric") || mode.equals("symmetric-all")) {
-            return BuildScoreProvider.ashBuildScoreProvider(vsf,encoded);
+            return BuildScoreProvider.ashBuildScoreProvider(encoded);
         }
         if (mode.equals("symmetric-scalar")) {
             if (vsf != encoded.similarityFunction() || encoded.getCompressor().landmarkCount != 1)

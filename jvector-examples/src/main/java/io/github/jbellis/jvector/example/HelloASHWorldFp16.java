@@ -70,7 +70,7 @@ public class HelloASHWorldFp16 {
             var nvq = NVQuantization.create(mean.mean(), 1);
 
             // 3. Construct a hierarchical graph using symmetric ASH code comparisons.
-            var scores = BuildScoreProvider.ashBuildScoreProvider(similarity, codes);
+            var scores = BuildScoreProvider.ashBuildScoreProvider(codes);
             try (var builder = new GraphIndexBuilder(scores, base.dimension(),
                     32, 100, 1.2f, 1.2f, true, true)) {
                 PhysicalCoreExecutor.pool().submit(() ->
@@ -97,7 +97,7 @@ public class HelloASHWorldFp16 {
             try (var readers = ReaderSupplierFactory.open(path);
                  var graph = OnDiskGraphIndex.load(readers);
                  var searcher = new GraphSearcher(graph)) {
-                var preparer = graph.queryPreparer(similarity).orElseThrow();
+                var preparer = graph.queryPreparer().orElseThrow();
                 var prepared = preparer.newState();
                 preparer.prepare(dataset.getQueryVectors().get(0), prepared);
                 var view = (ImmutableGraphIndex.ScoringView) searcher.getView();

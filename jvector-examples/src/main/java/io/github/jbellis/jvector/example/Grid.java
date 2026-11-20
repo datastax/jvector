@@ -937,7 +937,7 @@ public class Grid {
             queryBatchSize = batchSize;
             queryRequestsPerWorker = requestsPerWorker;
             if (queuedExecution && queryPreparer == null) {
-                queryPreparer = index.queryPreparer(ds.getSimilarityFunction()).orElse(null);
+                queryPreparer = index.queryPreparer().orElse(null);
                 // Indexes that score with stored or in-memory ASH codes prepare queries with those codes' model.
                 if (queryPreparer == null && !scoresFromIndex) {
                     if (cv instanceof ASHVectors) queryPreparer = ((ASHVectors) cv).queryPreparer();

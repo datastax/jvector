@@ -490,15 +490,10 @@ public class OnDiskGraphIndex implements ImmutableGraphIndex, AutoCloseable, Acc
     }
 
     @Override
-    public java.util.Optional<io.github.jbellis.jvector.graph.similarity.QueryPreparer> queryPreparer(
-            VectorSimilarityFunction similarity) {
+    public java.util.Optional<io.github.jbellis.jvector.graph.similarity.QueryPreparer> queryPreparer() {
         var feature = features.get(FeatureId.FUSED_ASH);
         if (feature == null) return java.util.Optional.empty();
-        var ash = ((FusedASH) feature).getASH();
-        if (similarity != ash.similarityFunction())
-            throw new IllegalArgumentException("The index's ASH model was trained for " + ash.similarityFunction()
-                    + " and scores only by it; requested " + similarity);
-        return java.util.Optional.of(new io.github.jbellis.jvector.quantization.ASHQueryPreparer(ash));
+        return java.util.Optional.of(new io.github.jbellis.jvector.quantization.ASHQueryPreparer(((FusedASH) feature).getASH()));
     }
 
     public class View implements FeatureSource, ScoringView, RandomAccessVectorValues {
@@ -754,6 +749,12 @@ public class OnDiskGraphIndex implements ImmutableGraphIndex, AutoCloseable, Acc
 
         @Override
         public ScoreFunction.ExactScoreFunction rerankerFor(VectorFloat<?> queryVector, VectorSimilarityFunction vsf) {
+            // An ASH index scores only by its model's similarity, so its reranker must use the same one.
+            var ashFeature = (FusedASH) features.get(FeatureId.FUSED_ASH);
+            if (ashFeature != null && vsf != ashFeature.getASH().similarityFunction()) {
+                throw new IllegalArgumentException("The index's ASH model was trained for "
+                        + ashFeature.getASH().similarityFunction() + "; requested reranking by " + vsf);
+            }
             if (features.containsKey(FeatureId.INLINE_VECTORS)) {
                 // Exact scores of the inline vectors, reporting the dot-product bound adaptive stopping needs: the
                 // query's length times the largest stored length (NaN when the header did not store it).

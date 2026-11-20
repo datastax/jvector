@@ -541,10 +541,7 @@ public class ASHVectors implements CompressedVectors {
      * Returns the independent scalar reference scorer, regardless of kernel properties.
      * Use the overload accepting a block size for automatic or forced SIMD dispatch.
      */
-    public ASHBlockScorer blockScorerFor(
-            VectorFloat<?> query,
-            VectorSimilarityFunction similarityFunction) {
-        ash.checkSimilarity(similarityFunction);
+    public ASHBlockScorer blockScorerFor(VectorFloat<?> query) {
         return new LegacyASHBlockScorer(nodeScoreFunction(scorer.scalarCodeScorerFor(query), null), codes.size);
     }
 
@@ -572,15 +569,11 @@ public class ASHVectors implements CompressedVectors {
      * </ul>
      *
      * <p>
-     * Scorers are numerically equivalent within floating-point accumulation error.
-     * Packed multi-bit bodies are cached per block size and shared across queries.
+     * Scorers are numerically equivalent within floating-point accumulation error, and score by the similarity
+     * the model was trained for. Packed multi-bit bodies are cached per block size and shared across queries.
      * </p>
      */
-    public ASHBlockScorer blockScorerFor(
-            VectorFloat<?> query,
-            VectorSimilarityFunction similarityFunction,
-            int blockSize) {
-        ash.checkSimilarity(similarityFunction);
+    public ASHBlockScorer blockScorerFor(VectorFloat<?> query, int blockSize) {
         if (blockSize <= 0) {
             throw new IllegalArgumentException("blockSize must be > 0");
         }

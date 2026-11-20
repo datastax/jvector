@@ -220,7 +220,7 @@ public class TestPreparedASHQuery {
                 }
                 try (var reader = new SimpleMappedReader.Supplier(path); var disk = OnDiskGraphIndex.load(reader, 0);
                      var direct = new GraphSearcher(disk); var queued = new GraphSearcher(disk)) {
-                    var preparer = disk.queryPreparer(DOT).orElseThrow();
+                    var preparer = disk.queryPreparer().orElseThrow();
                     var state = preparer.newState();
                     var directView = (OnDiskGraphIndex.View) direct.getView();
                     var queuedView = (OnDiskGraphIndex.View) queued.getView();
@@ -236,7 +236,8 @@ public class TestPreparedASHQuery {
                         preparer.prepare(values[q + 1], state);
                         assertThrows(IllegalStateException.class, () -> provider.scoreFunction().similarityTo(0));
                     }
-                    assertThrows(IllegalArgumentException.class, () -> disk.queryPreparer(VectorSimilarityFunction.COSINE));
+                    assertThrows(IllegalArgumentException.class,
+                            () -> directView.rerankerFor(values[0], VectorSimilarityFunction.COSINE));
                 }
             } finally { Files.deleteIfExists(path); }
         }

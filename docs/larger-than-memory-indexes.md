@@ -47,7 +47,7 @@ var mean = new VectorMean(vectors.size(), vectors.dimension());
 var codes = ash.encodeAll(mean.duringScan(vectors), pool);
 var nvq = NVQuantization.create(mean.mean(), 2);
 
-var scores = BuildScoreProvider.ashBuildScoreProvider(VectorSimilarityFunction.DOT_PRODUCT, codes);
+var scores = BuildScoreProvider.ashBuildScoreProvider(codes);
 try (var builder = new GraphIndexBuilder(scores, vectors.dimension(), 32, 100, 1.2f, 1.2f, true, true)) {
     pool.submit(() -> IntStream.range(0, vectors.size()).parallel()
             .forEach(node -> builder.addGraphNode(node, scores.searchProviderFor(node)))).join();
