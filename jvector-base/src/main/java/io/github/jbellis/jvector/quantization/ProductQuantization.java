@@ -42,7 +42,6 @@ import java.util.concurrent.Callable;
 import java.util.concurrent.ForkJoinPool;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.logging.Logger;
-import java.util.stream.Collectors;
 import java.util.stream.IntStream;
 
 import static io.github.jbellis.jvector.quantization.KMeansPlusPlusClusterer.UNWEIGHTED;
@@ -129,19 +128,11 @@ public class ProductQuantization implements VectorCompressor<ByteSequence<?>>, A
         var subvectorSizesAndOffsets = getSubvectorSizesAndOffsets(ravv.dimension(), M);
         var vectors = extractTrainingVectors(ravv, parallelExecutor);
 
-        // subtract the centroid from each training vector
-        VectorFloat<?> globalCentroid;
-        if (globallyCenter) {
-            globalCentroid = KMeansPlusPlusClusterer.centroidOf(vectors);
-            // subtract the centroid from each vector
-            List<VectorFloat<?>> finalVectors = vectors;
-            vectors = simdExecutor.submit(() -> finalVectors.stream().parallel().map(v -> VectorUtil.sub(v, globalCentroid)).collect(Collectors.<VectorFloat<?>>toList())).join();
-        } else {
-            globalCentroid = null;
-        }
+        // The training vectors are centered one subvector at a time inside createCodebooks, never as a full copy.
+        VectorFloat<?> globalCentroid = globallyCenter ? KMeansPlusPlusClusterer.centroidOf(vectors) : null;
 
         // derive the codebooks
-        var codebooks = createCodebooks(vectors, subvectorSizesAndOffsets, clusterCount, anisotropicThreshold, simdExecutor);
+        var codebooks = createCodebooks(vectors, subvectorSizesAndOffsets, clusterCount, anisotropicThreshold, simdExecutor, globalCentroid);
         return new ProductQuantization(codebooks, clusterCount, subvectorSizesAndOffsets, globalCentroid, anisotropicThreshold);
     }
 
@@ -201,15 +192,10 @@ public class ProductQuantization implements VectorCompressor<ByteSequence<?>>, A
         }
 
         var subvectorSizesAndOffsets = getSubvectorSizesAndOffsets(ravv.dimension(), M);
-        var vectorsMutable = extractTrainingVectors(ravv, parallelExecutor);
-        if (globalCentroid != null) {
-            var vectors = vectorsMutable;
-            vectorsMutable = simdExecutor.submit(() -> vectors.stream().parallel().map(v -> VectorUtil.sub(v, globalCentroid)).collect(Collectors.<VectorFloat<?>>toList())).join();
-        }
-        var vectors = vectorsMutable; // "effectively final" to make the closure happy
+        var vectors = extractTrainingVectors(ravv, parallelExecutor);
 
         Callable<VectorFloat<?>[]> callable = () -> IntStream.range(0, M).parallel().mapToObj(m -> {
-            VectorFloat<?>[] subvectors = extractSubvectors(vectors, m, subvectorSizesAndOffsets);
+            VectorFloat<?>[] subvectors = extractSubvectors(vectors, m, subvectorSizesAndOffsets, globalCentroid);
             var clusterer = new KMeansPlusPlusClusterer(subvectors, codebooks[m], anisotropicThreshold);
             return clusterer.cluster(anisotropicThreshold == UNWEIGHTED ? lloydsRounds : 0,
                                      anisotropicThreshold == UNWEIGHTED ? 0 : lloydsRounds);
@@ -523,10 +509,10 @@ public class ProductQuantization implements VectorCompressor<ByteSequence<?>>, A
         return globalCentroid;
     }
 
-    static VectorFloat<?>[] createCodebooks(List<VectorFloat<?>> vectors, int[][] subvectorSizeAndOffset, int clusters, float anisotropicThreshold, ForkJoinPool simdExecutor) {
+    static VectorFloat<?>[] createCodebooks(List<VectorFloat<?>> vectors, int[][] subvectorSizeAndOffset, int clusters, float anisotropicThreshold, ForkJoinPool simdExecutor, VectorFloat<?> globalCentroid) {
         int M = subvectorSizeAndOffset.length;
         Callable<VectorFloat<?>[]> callable = () -> IntStream.range(0, M).parallel().mapToObj(m -> {
-            VectorFloat<?>[] subvectors = extractSubvectors(vectors, m, subvectorSizeAndOffset);
+            VectorFloat<?>[] subvectors = extractSubvectors(vectors, m, subvectorSizeAndOffset, globalCentroid);
             var clusterer = new KMeansPlusPlusClusterer(subvectors, clusters, anisotropicThreshold);
             return clusterer.cluster(K_MEANS_ITERATIONS, anisotropicThreshold == UNWEIGHTED ? 0 : K_MEANS_ITERATIONS);
         }).toArray(VectorFloat<?>[]::new);
@@ -537,9 +523,18 @@ public class ProductQuantization implements VectorCompressor<ByteSequence<?>>, A
      * Extract VectorFloat subvectors corresponding to the m'th subspace.
      * This is NOT done in parallel (since the callers are themselves running in parallel).
      */
-    private static VectorFloat<?>[] extractSubvectors(List<VectorFloat<?>> vectors, int m, int[][] subvectorSizeAndOffset) {
+    private static VectorFloat<?>[] extractSubvectors(List<VectorFloat<?>> vectors, int m, int[][] subvectorSizeAndOffset, VectorFloat<?> globalCentroid) {
+        // Center the subvector rather than the whole vector, so that a centered copy of the training set is never
+        // materialized. The input vectors may be the caller's own objects, so they must not be modified either.
+        VectorFloat<?> centroidSubvector = globalCentroid == null ? null : getSubVector(globalCentroid, m, subvectorSizeAndOffset);
         return vectors.stream()
-                .map(vector -> getSubVector(vector, m, subvectorSizeAndOffset))
+                .map(vector -> {
+                    var subvector = getSubVector(vector, m, subvectorSizeAndOffset);
+                    if (centroidSubvector != null) {
+                        VectorUtil.subInPlace(subvector, centroidSubvector);
+                    }
+                    return subvector;
+                })
                 .toArray(VectorFloat<?>[]::new);
     }
 
