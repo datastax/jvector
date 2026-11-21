@@ -26,6 +26,7 @@ import jdk.incubator.vector.IntVector;
 import jdk.incubator.vector.LongVector;
 import jdk.incubator.vector.VectorMask;
 import jdk.incubator.vector.VectorOperators;
+import jdk.incubator.vector.VectorShuffle;
 import jdk.incubator.vector.VectorSpecies;
 import java.util.Objects;
 import jdk.incubator.vector.VectorShape;
@@ -2342,6 +2343,30 @@ class PanamaVectorUtilSupport implements VectorUtilSupport {
         return total;
     }
 
+    // Shuffles that rotate SPECIES_PREFERRED by half, a quarter, ... of its lanes, for addLanesPairwise.
+    private static final VectorShuffle<Float>[] PAIRWISE_ROTATIONS = pairwiseRotations();
+
+    @SuppressWarnings("unchecked")
+    private static VectorShuffle<Float>[] pairwiseRotations() {
+        int lanes = FloatVector.SPECIES_PREFERRED.length();
+        int steps = Integer.numberOfTrailingZeros(lanes);
+        VectorShuffle<Float>[] rotations = (VectorShuffle<Float>[]) new VectorShuffle<?>[steps];
+        for (int s = 0, half = lanes / 2; s < steps; s++, half /= 2)
+            rotations[s] = VectorShuffle.iota(FloatVector.SPECIES_PREFERRED, half, 1, true);
+        return rotations;
+    }
+
+    /**
+     * The sum of {@code v}'s lanes (a SPECIES_PREFERRED vector) by a fixed tree of lane-wise adds: each lane plus
+     * the lane half the width away, then a quarter, and so on. Unlike reduceLanes, whose order can change when the
+     * JIT compiles its caller, every step here is exact lane-wise arithmetic, so the result
+     * is the same compiled or not; and unlike a lane-by-lane loop it stays in vector registers.
+     */
+    private static float addLanesPairwise(FloatVector v) {
+        for (VectorShuffle<Float> rotation : PAIRWISE_ROTATIONS) v = v.add(v.rearrange(rotation));
+        return v.lane(0);
+    }
+
     @Override
     public void ashMaskedAddBlockAllWords(float[] tildeQ,
                                           int d,
@@ -2417,7 +2442,7 @@ class PanamaVectorUtilSupport implements VectorUtilSupport {
             }
 
             // One horizontal sum per lane (instead of per chunk)
-            float maskedAdd = accVec.reduceLanes(VectorOperators.ADD) + scalarAcc;
+            float maskedAdd = addLanesPairwise(accVec) + scalarAcc;
 
             outMaskedAdd[lane] = maskedAdd;
         }
