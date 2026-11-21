@@ -908,8 +908,10 @@ public class GraphIndexBuilder implements Closeable, Accountable {
                 }
 
                 // Now do the main search at layer 0
-                // The threshold is NEGATIVE_INFINITY, not 0.0f, as in the layer searches above and in improveConnections.
-                result = gs.resume(beamWidth, beamWidth, Float.NEGATIVE_INFINITY, 0.0f);
+                // The threshold and the rerank floor are NEGATIVE_INFINITY, not 0.0f, as in the layer searches above and
+                // in improveConnections. A score provider with a reranker only reranks candidates at or above the floor,
+                // so a floor of 0 would drop the candidates with a negative score (DOT_PRODUCT, non-normalized vectors).
+                result = gs.resume(beamWidth, beamWidth, Float.NEGATIVE_INFINITY, Float.NEGATIVE_INFINITY);
             }
 
             updateNeighborsOneLayer(0, nodeLevel.node, result.getNodes(), naturalScratchPooled, inProgressBefore, concurrentScratchPooled, searchScoreProvider);
