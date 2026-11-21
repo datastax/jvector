@@ -28,9 +28,9 @@ ready-to-run file per layout.
 
 | Quantizer | Choose it when | Notes |
 | --- | --- | --- |
-| **PQ** | You want the stable, widely deployed default | Any similarity; optional anisotropic weighting; fused PQ requires 256 clusters per subspace |
-| **ASH** (experimental) | You want the best accuracy for a given code size, or faster builds | Any similarity (chosen when the model is trained); fused or in memory; API may change between releases |
-| **BQ** | Dimension is very high and a coarse first pass is enough | One bit per dimension, scored by Hamming distance as an approximation of cosine similarity; not fused |
+| **[PQ](pq.md)** | You want the stable, widely deployed default | Any similarity; optional anisotropic weighting; fused PQ requires 256 clusters per subspace |
+| **[ASH](ash-configuration.md)** (experimental) | You want the best accuracy for a given code size, or faster builds | Any similarity (chosen when the model is trained); fused or in memory; API may change between releases |
+| **[BQ](bq.md)** | Dimension is very high, vectors are normalized, and a coarse first pass is enough | One bit per dimension, scored by Hamming distance as an approximation of cosine similarity; not fused |
 | **None** | The collection is small or low-dimensional | Scores full vectors; no training |
 
 On large datasets at the same code size, fused ASH builds faster than fused PQ and reaches higher
@@ -58,7 +58,7 @@ format version 7, which JVector 4.0.x cannot read; see [UPGRADING.md](../UPGRADI
 
 | Reranker | Size per vector | Use it when |
 | --- | --- | --- |
-| **NVQ** | About a quarter of FP32 (dimension + 60 bytes with two subvectors) | On-disk indexes: high accuracy at a fraction of the read size |
+| **[NVQ](nvq.md)** | About a quarter of FP32 (dimension + 60 bytes with two subvectors) | On-disk indexes: high accuracy at a fraction of the read size |
 | **FP32** | 4 × dimension bytes | Exact final scores, or in-memory indexes that already hold the vectors |
 | **None** | 0 | Full-vector traversal, or when approximate scores are good enough |
 

@@ -20,6 +20,8 @@ built concurrently and incrementally, and can be searched from disk with compres
 | Add JVector to a project and run a first search | [Quick start](getting-started.md) |
 | Learn the API step by step | [Tutorial 1: Introduction](tutorials/1-intro-tutorial.md) |
 | Pick a quantizer and index layout | [Choosing an index](choosing-an-index.md) |
+| Understand how graphs are built, hierarchical or flat | [Graph construction](graph-construction.md) |
+| Learn one quantizer in depth | [PQ](pq.md), [ASH](ash-configuration.md), [NVQ](nvq.md), [BQ](bq.md) |
 | Decide between fused and separated codes and vectors | [Fused and separated layouts](fused-and-separated.md) |
 | Trade recall against speed | [Tuning construction and search](tuning.md) |
 | Plan memory and disk | [Memory and disk sizing](sizing.md) |

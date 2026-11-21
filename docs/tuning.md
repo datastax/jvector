@@ -12,8 +12,8 @@ setting at a time.
 | Beam width | `withBeamWidth` | `efConstruction` | 100 | How widely each insertion searches for neighbors. Higher builds a better graph more slowly. |
 | Neighbor overflow | `withNeighborOverflow` | `neighborOverflow` | 1.2 | Extra neighbors a node may hold temporarily during construction. Larger values build more efficiently but use more memory. Must be at least 1.0. |
 | Alpha | `withAlpha` | — | 1.2 | How aggressively neighbors are pruned for diversity. Above 1.0 keeps some longer edges, which helps search cross the graph; 1.0 is usually too strict. |
-| Hierarchy | `GraphIndexBuilderConfig` | `addHierarchy` | on | Adds HNSW-style upper layers for faster entry into the graph. |
-| Refinement | `GraphIndexBuilderConfig` | `refineFinalGraph` | on | A final pass over every node that improves its neighbors. |
+| Hierarchy | `GraphIndexBuilderConfig` | `addHierarchy` | on | Adds HNSW-style upper layers for faster entry into the graph; see [Hierarchical or flat](graph-construction.md#hierarchical-or-flat). |
+| Refinement | `GraphIndexBuilderConfig` | `refineFinalGraph` | on | During cleanup, searches again for the neighbors of the nodes in the upper layers. Runs only on hierarchical graphs. |
 
 Construction scoring can use full vectors or compact codes. Building from ASH codes
 (`ashBuildScoreProvider`, or `scoring: symmetric` in BenchYAML) needs neither the source vectors

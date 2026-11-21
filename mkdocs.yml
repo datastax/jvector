@@ -62,6 +62,7 @@ nav:
       - "Tutorial 3: Larger than memory": tutorials/3-larger-than-memory-tutorial.md
   - Guides:
       - Choosing an index: choosing-an-index.md
+      - Graph construction: graph-construction.md
       - Fused and separated layouts: fused-and-separated.md
       - Tuning construction and search: tuning.md
       - Memory and disk sizing: sizing.md
@@ -69,11 +70,15 @@ nav:
       - Compaction: compaction.md
       - Batched input vector access: batched-vector-access.md
       - Deferred batch serialization: deferred-batch-writer.md
-  - ASH:
-      - Configuration and defaults: ash-configuration.md
-      - Query-projection precision: ash-projection-precision.md
-      - Integrating ASH queries: ash-query-integration.md
-      - Performance: ash-performance.md
+  - Quantizers:
+      - Product quantization (PQ): pq.md
+      - ASH (experimental):
+          - Configuration and defaults: ash-configuration.md
+          - Query-projection precision: ash-projection-precision.md
+          - Integrating ASH queries: ash-query-integration.md
+          - Performance: ash-performance.md
+      - NVQ (reranking): nvq.md
+      - Binary quantization (BQ): bq.md
   - Benchmarking:
       - Running benchmarks: benchmarking.md
       - BenchYAML guide: benchyaml-guide.md
