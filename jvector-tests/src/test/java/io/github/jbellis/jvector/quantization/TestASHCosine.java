@@ -89,6 +89,26 @@ public class TestASHCosine {
         return out;
     }
 
+    /**
+     * Normalizes {@code sample} until two rounds in a row give identical bits. On the Panama provider the lane sum in
+     * the dot product can change order once the JIT compiles it, which can change the last bit of a normalized
+     * vector; after this, the copies a test normalizes match what a model normalizes later in the same run.
+     */
+    private static void stabilizeNormalization(VectorFloat<?>[] sample) {
+        int previous = 0;
+        for (int round = 0; round < 100; round++) {
+            for (int k = 0; k < 20_000; k++) VectorUtil.l2normalize(sample[k % sample.length].copy());
+            int hash = 1;
+            for (VectorFloat<?> v : sample) {
+                var copy = v.copy();
+                VectorUtil.l2normalize(copy);
+                for (int d = 0; d < copy.length(); d++) hash = 31 * hash + Float.floatToRawIntBits(copy.get(d));
+            }
+            if (round > 0 && hash == previous) return;
+            previous = hash;
+        }
+    }
+
     private static VectorFloat<?>[] normalized(VectorFloat<?>[] vectors) {
         VectorFloat<?>[] out = new VectorFloat<?>[vectors.length];
         for (int i = 0; i < out.length; i++) {
@@ -105,6 +125,7 @@ public class TestASHCosine {
     @Test
     public void cosineOnRawVectorsIsDotProductOnNormalizedVectors() throws Exception {
         VectorFloat<?>[] raw = varyingLengths(1200, 3);
+        stabilizeNormalization(raw);
         VectorFloat<?>[] unit = normalized(raw);
         VectorFloat<?>[] queries = varyingLengths(6, 4);
         VectorFloat<?>[] unitQueries = normalized(queries);
