@@ -27,6 +27,13 @@ theme:
         icon: material/brightness-4
         name: Switch to light mode
 
+# Version picker. The publish workflow deploys main as "dev" and each release
+# as its major.minor version, with the newest release aliased "latest".
+extra:
+  version:
+    provider: mike
+    default: [latest, dev]
+
 markdown_extensions:
   - admonition
   - attr_list

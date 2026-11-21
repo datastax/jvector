@@ -10,7 +10,9 @@ import posixpath
 import re
 
 REPO_URL = "https://github.com/datastax/jvector"
-BRANCH = "main"
+# The git ref the links point at: main for the dev docs, the release tag for a
+# release's docs, so each version links to files as they were in that version.
+BRANCH = os.environ.get("DOCS_GIT_REF", "main")
 
 _ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 _LINK = re.compile(r"(\]\()([^)\s]+)(\))")
