@@ -39,6 +39,14 @@ public enum VectorSimilarityFunction {
     public float compare(VectorFloat<?> v1, VectorFloat<?> v2) {
       return 1 / (1 + VectorUtil.squareL2Distance(v1, v2));
     }
+
+    @Override
+    public void compare(VectorFloat<?> q, VectorFloat<?>[] targets, int count, float[] results) {
+      VectorUtil.squareL2Distance(q, targets, count, results);
+      for (int i = 0; i < count; i++) {
+        results[i] = 1 / (1 + results[i]);
+      }
+    }
   },
 
   /**
@@ -53,6 +61,14 @@ public enum VectorSimilarityFunction {
     public float compare(VectorFloat<?> v1, VectorFloat<?> v2) {
       return (1 + VectorUtil.dotProduct(v1, v2)) / 2;
     }
+
+    @Override
+    public void compare(VectorFloat<?> q, VectorFloat<?>[] targets, int count, float[] results) {
+      VectorUtil.dotProduct(q, targets, count, results);
+      for (int i = 0; i < count; i++) {
+        results[i] = (1 + results[i]) / 2;
+      }
+    }
   },
 
   /**
@@ -66,6 +82,14 @@ public enum VectorSimilarityFunction {
     public float compare(VectorFloat<?> v1, VectorFloat<?> v2) {
       return (1 + VectorUtil.cosine(v1, v2)) / 2;
     }
+
+    @Override
+    public void compare(VectorFloat<?> q, VectorFloat<?>[] targets, int count, float[] results) {
+      VectorUtil.cosine(q, targets, count, results);
+      for (int i = 0; i < count; i++) {
+        results[i] = (1 + results[i]) / 2;
+      }
+    }
   };
 
   /**
@@ -77,4 +101,16 @@ public enum VectorSimilarityFunction {
    * @return the value of the similarity function applied to the two vectors
    */
   public abstract float compare(VectorFloat<?> v1, VectorFloat<?> v2);
+
+  /**
+   * Computes {@code compare(q, targets[i])} into {@code results[i]} for each {@code i < count}. Each result equals
+   * the one {@link #compare(VectorFloat, VectorFloat)} returns for the same pair; scoring the targets together lets
+   * the vector provider overlap their memory loads.
+   *
+   * @param q a vector
+   * @param targets the vectors to compare with {@code q}, each of its dimension
+   * @param count how many of {@code targets} to compare
+   * @param results receives the scores, at least {@code count} long
+   */
+  public abstract void compare(VectorFloat<?> q, VectorFloat<?>[] targets, int count, float[] results);
 }

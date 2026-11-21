@@ -465,6 +465,8 @@ public class OnHeapGraphIndex implements MutableGraphIndex {
     }
 
     private class FrozenView implements View {
+        private final BatchedNeighborScorer neighborScorer = new BatchedNeighborScorer();
+
         @Override
         public NodesIterator getNeighborsIterator(int level, int node) {
             return OnHeapGraphIndex.this.getNeighborsIterator(level, node);
@@ -473,13 +475,7 @@ public class OnHeapGraphIndex implements MutableGraphIndex {
 
         @Override
         public void processNeighbors(int level, int node, ScoreFunction scoreFunction, IntMarker visited, NeighborProcessor neighborProcessor) {
-            for (var it = getNeighborsIterator(level, node); it.hasNext(); ) {
-                var friendOrd = it.nextInt();
-                if (visited.mark(friendOrd)) {
-                    float friendSimilarity = scoreFunction.similarityTo(friendOrd);
-                    neighborProcessor.process(friendOrd, friendSimilarity);
-                }
-            }
+            neighborScorer.processNeighbors(getNeighborsIterator(level, node), scoreFunction, visited, neighborProcessor);
         }
 
         @Override

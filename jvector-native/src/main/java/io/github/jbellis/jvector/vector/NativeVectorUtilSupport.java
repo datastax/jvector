@@ -52,6 +52,30 @@ class NativeVectorUtilSupport extends PanamaVectorUtilSupport
                 .getString(0);
     }
 
+    // The bulk kernels inherited from the Panama provider would not reproduce the native single-pair results, so
+    // score one pair at a time with the native kernels.
+
+    @Override
+    public void dotProduct(VectorFloat<?> q, VectorFloat<?>[] targets, int count, float[] results) {
+        for (int i = 0; i < count; i++) {
+            results[i] = dotProduct(q, targets[i]);
+        }
+    }
+
+    @Override
+    public void cosine(VectorFloat<?> q, VectorFloat<?>[] targets, int count, float[] results) {
+        for (int i = 0; i < count; i++) {
+            results[i] = cosine(q, targets[i]);
+        }
+    }
+
+    @Override
+    public void squareDistance(VectorFloat<?> q, VectorFloat<?>[] targets, int count, float[] results) {
+        for (int i = 0; i < count; i++) {
+            results[i] = squareDistance(q, targets[i]);
+        }
+    }
+
     /**
      * Returns the value of {@code JVECTOR_MAX_ISA} that was in effect when the
      * native library was loaded, or {@code null} if the variable was absent or
