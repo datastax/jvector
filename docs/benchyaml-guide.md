@@ -265,7 +265,7 @@ D is the dataset dimension.
 | ASH `optimizer` | `ITQ`, `RANDOM` | Training transform. Required for a new model. |
 | ASH `compressionRatio` | 8, 16, 32, 64, 128, 256 | Nominal FP32-to-code ratio. The parser rounds to whole projected dimensions and uses a minimum payload. Specify either `compressionRatio` or `encodedBits`. |
 | ASH `encodedBits` | Positive integer bit budget | Includes a 40-bit header. The payload must be divisible by `bitsPerDimension` and yield 1 through D projected dimensions. |
-| ASH `bitsPerDimension` | 1–9 in core ASH. 1, 2, or 4 for fused ASH. | Bits per projected dimension in the stored codes. Defaults to 1. |
+| ASH `bitsPerDimension` | 1–9, in memory and fused. 1, 2 and 4 have the fastest kernels. | Bits per projected dimension in the stored codes. Defaults to 1. |
 | ASH `landmarkCount` | 1–256 | Number of landmarks. Defaults to 1. The model is trained for the dataset's similarity. Symmetric and mixed construction require one landmark. |
 | ASH `trainingStart`, `trainingCount` | Base ordinals inside the dataset | Optional. Trains the model only on `trainingCount` base vectors starting at `trainingStart` (default 0), as an index that has seen only its first vectors would. All base vectors are still encoded. Omitted, training samples the whole set. A windowed model gets its own cache entries, and its codes are always re-encoded rather than loaded. |
 | PQ `m` | Integer from 1 through D | Number of subspaces. Specify either `m` or `mFactor`. |

@@ -50,10 +50,11 @@ import java.util.function.Supplier;
  * scores the whole neighborhood in {@code enableSimilarityToNeighbors(origin)},
  * then {@code similarityToNeighbor(origin, i)} is a cheap score lookup.</p>
  *
- * <p>The fused layout supports only {@code bitsPerDimension in {1,2,4}} because
- * it is based on 4-bit projection groups and a 16-entry query LUT per group.
- * Core standalone ASH may support additional bit widths, but those are not part
- * of the fused graph hot path.</p>
+ * <p>The fused layout supports {@code bitsPerDimension} 1 through 9, as core ASH
+ * does. 1, 2 and 4 bits are packed in 4-bit projection groups scored with a
+ * 16-entry query LUT per group. The other widths are stored as field blocks and
+ * their neighborhoods are scored with an INT8-rounded query and integer dot
+ * products; see {@link FusedASHLayout}.</p>
  */
 @Experimental
 public class FusedASH extends AbstractFeature implements FusedFeature {
