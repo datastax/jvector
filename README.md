@@ -25,7 +25,7 @@ grows ("[the curse of dimensionality](https://en.wikipedia.org/wiki/Curse_of_dim
 large datasets, an approximate answer in logarithmic time is usually more useful than an exact
 answer in linear time.
 
-ANN indexes are either partition-based, like [LSH or IVF](https://docs.nvidia.com/cuvs/getting-started/introduction/vector-search)
+ANN indexes are either partition-based, like [LSH or IVF](https://www.ibm.com/think/topics/vector-search)
 and [ScaNN](https://github.com/google-research/google-research/tree/master/scann), or graph-based,
 like [HNSW](https://arxiv.org/abs/1603.09320) and
 [DiskANN](https://www.microsoft.com/en-us/research/project/project-akupara-approximate-nearest-neighbor-search-for-large-scale-semantic-search/).
