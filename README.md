@@ -25,7 +25,8 @@ grows ("[the curse of dimensionality](https://en.wikipedia.org/wiki/Curse_of_dim
 large datasets, an approximate answer in logarithmic time is usually more useful than an exact
 answer in linear time.
 
-ANN indexes are either partition-based, like [LSH or IVF](https://www.ibm.com/think/topics/vector-search)
+[ANN indexes](https://www.ibm.com/think/topics/vector-search) are either partition-based, like
+[LSH](https://en.wikipedia.org/wiki/Locality-sensitive_hashing) or [IVF](https://doi.org/10.1109/TPAMI.2010.57)
 and [ScaNN](https://github.com/google-research/google-research/tree/master/scann), or graph-based,
 like [HNSW](https://arxiv.org/abs/1603.09320) and
 [DiskANN](https://www.microsoft.com/en-us/research/project/project-akupara-approximate-nearest-neighbor-search-for-large-scale-semantic-search/).
@@ -65,13 +66,40 @@ and one index can hold far more vectors than would fit uncompressed:
 
 ## Getting started
 
-JVector is published to Maven Central as `io.github.jbellis:jvector`. Run with these JVM options to
-enable SIMD acceleration (see [SIMD and native acceleration](#simd-and-native-acceleration)):
+### Prerequisites
+
+- **JDK 22 or newer** to build. The library itself runs on Java 11 and newer.
+- **Maven 3.8 or newer** and **Git**.
+- **Linux x86-64 or AArch64** for the native library, which needs GCC 12 or newer (11 or newer on
+  AArch64), [Meson](https://mesonbuild.com/) and [Ninja](https://ninja-build.org/); the
+  `-Dnative.onednn=true` option below also needs CMake 3.13 or newer. On Ubuntu,
+  `bash build_native_lib.sh --auto-install-deps` (in `jvector-native/src/main/native/src`) installs them.
+- **macOS and other platforms** build without the native library and use the Panama Vector API on
+  Java 20 and newer. Everything below runs there except HelloASHWorldInt8 and HelloASHWorldFp16.
+
+### Using JVector in your project
+
+JVector is published to Maven Central as `io.github.jbellis:jvector`:
+
+```xml
+<dependency>
+  <groupId>io.github.jbellis</groupId>
+  <artifactId>jvector</artifactId>
+  <version>4.1.0</version>
+</dependency>
+```
+
+or with Gradle, `implementation("io.github.jbellis:jvector:4.1.0")`. ASH requires 4.1.0 or later.
+
+Run with these JVM options to enable SIMD acceleration (see
+[SIMD and native acceleration](#simd-and-native-acceleration)):
 
 ```text
 --add-modules jdk.incubator.vector
 --enable-native-access=ALL-UNNAMED
 ```
+
+### Hello world programs
 
 The fastest way in is the hello-world programs in [jvector-examples](./jvector-examples). They download
 small public datasets on first use. Build them once from the repository root:
@@ -81,16 +109,18 @@ mvn -pl jvector-examples -am -DskipTests package -Dnative.onednn=true
 JAR=$(ls jvector-examples/target/jvector-examples-*-jar-with-dependencies.jar)
 ```
 
-`-Dnative.onednn=true` adds the oneDNN library that ASH uses for FP16 query projection and, on some
-processors, INT8 (see [Building and testing](#building-and-testing)). It needs CMake and adds a few
-minutes to the first build. Without it, the library falls back to slower ASH query projection on
-those paths, and HelloASHWorldFp16 cannot run.
+`-Dnative.onednn=true` builds the oneDNN add-on from source and packages it in the jar; ASH uses it
+for FP16 query projection and, on some processors, INT8 (see the
+[native build guide](./jvector-native/src/main/native/README.md#recommended-onednn-build-and-package)).
+It needs CMake and adds a few minutes to the first build. Without it, the library falls back to
+slower ASH query projection on those paths, and HelloASHWorldFp16 cannot run.
 
 | Program | What it shows |
 | --- | --- |
 | [HelloVectorWorld](./jvector-examples/src/main/java/io/github/jbellis/jvector/example/HelloVectorWorld.java) | Build an in-memory graph and search it, in about twenty lines |
-| [HelloASHWorldInt8](./jvector-examples/src/main/java/io/github/jbellis/jvector/example/HelloASHWorldInt8.java) | Train ASH, build a graph, write a fused ASH index with NVQ reranking, reopen it, and search synchronously and through the queued API, with INT8 query projection; needs x86-64 with AVX-512 VNNI or AVX-VNNI |
-| [HelloASHWorldFp16](./jvector-examples/src/main/java/io/github/jbellis/jvector/example/HelloASHWorldFp16.java) | The same with FP16 query projection; needs x86-64 with AVX-512 FP16 (Intel Sapphire Rapids or newer) and the oneDNN add-on |
+| [HelloASHWorld](./jvector-examples/src/main/java/io/github/jbellis/jvector/example/HelloASHWorld.java) | Train ASH, build a graph, write a fused ASH index with NVQ reranking, reopen it, and search synchronously and through the queued API; runs on any processor, with the fastest query projection it supports |
+| [HelloASHWorldInt8](./jvector-examples/src/main/java/io/github/jbellis/jvector/example/HelloASHWorldInt8.java) | The same with INT8 query projection required; needs x86-64 with AVX-512 VNNI or AVX-VNNI |
+| [HelloASHWorldFp16](./jvector-examples/src/main/java/io/github/jbellis/jvector/example/HelloASHWorldFp16.java) | The same with FP16 query projection required; needs x86-64 with AVX-512 FP16 (Intel Sapphire Rapids or newer) and the oneDNN add-on |
 | [HelloBatchedVectors](./jvector-examples/src/main/java/io/github/jbellis/jvector/example/HelloBatchedVectors.java) and [HelloBatchedQuantization](./jvector-examples/src/main/java/io/github/jbellis/jvector/example/HelloBatchedQuantization.java) | Batched access to file-backed vectors, and encoding them with PQ and NVQ |
 
 ```bash
@@ -98,10 +128,23 @@ java --add-modules jdk.incubator.vector --enable-native-access=ALL-UNNAMED \
   -cp "$JAR" io.github.jbellis.jvector.example.HelloVectorWorld
 ```
 
+The first run downloads `ada002-100k` (about 650 MB); then it builds the graph and prints the ten
+nearest neighbors of one query, in under a minute on an 8-core machine:
+
+```text
+Nearest neighbors to the first query in ada002-100k (99287 indexed vectors)
+vector 68115  score 0.980714
+vector 48543  score 0.980705
+...
+```
+
 Run the others the same way, changing the class name. On Linux,
-`grep -o -m1 -w 'avx512_fp16\|avx512_vnni\|avx_vnni' /proc/cpuinfo` shows which ASH program your
-processor supports. Each ASH program writes its index (`ash-int8.graph` or `ash-fp16.graph`) to the
-current directory and never overwrites one; delete it or pass a new path as the argument to run again.
+`grep -o -m1 -w 'avx512_fp16\|avx512_vnni\|avx_vnni' /proc/cpuinfo` shows whether your processor
+supports HelloASHWorldInt8 or HelloASHWorldFp16. Each ASH program writes its index (`ash.graph`,
+`ash-int8.graph` or `ash-fp16.graph`) to the current directory and never overwrites one; delete it
+or pass a new path as the argument to run again. The programs and tutorials download about 1.3 GB
+of datasets into `dataset_cache/`, and the BenchYAML example below writes a 510 MB index while it
+runs; set `DATASET_CACHE_DIR` to keep the downloads elsewhere.
 
 The [examples README](./jvector-examples/README.md) covers each program, and the
 [tutorials](./docs/tutorials/) walk through the API step by step, starting with
@@ -302,7 +345,8 @@ Run the tests with:
 ```bash
 mvn test                                       # all modules, with the SIMD providers on JDK 20+
 mvn -DskipScalar=false test                    # also run the scalar provider tests
-mvn -Pjdk11 test                               # against Java 11
+mvn -pl jvector-tests -am -Pjdk11 -DskipSIMD=true \
+  -Djvm=/path/to/jdk-11/bin/java test           # scalar tests on a Java 11 runtime
 mvn -Dsurefire.failIfNoSpecifiedTests=false -Dtest=TestNeighborArray test   # one class
 ```
 

@@ -27,16 +27,19 @@ java --add-modules jdk.incubator.vector --enable-native-access=ALL-UNNAMED \
 
 ### Hello ASH world
 
-Two self-contained introductions build and query a fused ASH disk index over the
+Three self-contained introductions build and query a fused ASH disk index over the
 public `e5-small-v2-100k` dataset (downloaded and cached automatically):
 
+- [HelloASHWorld](src/main/java/io/github/jbellis/jvector/example/HelloASHWorld.java):
+  runs on any processor, projecting queries with the default `auto` precision,
+  the fastest the vectorization provider supports. Start here.
 - [HelloASHWorldInt8](src/main/java/io/github/jbellis/jvector/example/HelloASHWorldInt8.java):
   INT8 query projection, for x86-64 processors with AVX-512 VNNI or AVX-VNNI.
 - [HelloASHWorldFp16](src/main/java/io/github/jbellis/jvector/example/HelloASHWorldFp16.java):
   native FP16 query projection, for x86-64 processors with AVX-512 FP16 (Intel Sapphire Rapids or
   newer); it also needs the oneDNN add-on.
 
-Both teach the same six steps: load vectors, train/encode ASH, construct the graph,
+All three teach the same six steps: load vectors, train/encode ASH, construct the graph,
 write fused ASH neighborhoods with NVQ reranking vectors, reopen and search
 synchronously, then submit individual queries through the queued API.
 They use ASH(b=2,d=192) for 384-dimensional inputs. Stored-code precision (`b`)
@@ -47,15 +50,17 @@ With the jar built as above:
 
 ```bash
 java --add-modules jdk.incubator.vector --enable-native-access=ALL-UNNAMED -Xmx8g \
+  -cp "$JAR" io.github.jbellis.jvector.example.HelloASHWorld
+java --add-modules jdk.incubator.vector --enable-native-access=ALL-UNNAMED -Xmx8g \
   -cp "$JAR" io.github.jbellis.jvector.example.HelloASHWorldInt8
 java --add-modules jdk.incubator.vector --enable-native-access=ALL-UNNAMED -Xmx8g \
   -cp "$JAR" io.github.jbellis.jvector.example.HelloASHWorldFp16
 ```
 
-Run the program matching your CPU. On Linux,
+HelloASHWorld runs anywhere. To require a precision, run the program matching your CPU. On Linux,
 `grep -o -m1 -w 'avx512_fp16\|avx512_vnni\|avx_vnni' /proc/cpuinfo` lists the features that
 apply. An unsupported precision fails instead of silently changing precision; HelloASHWorldFp16
-reports this only after it has built and saved its index. Each saves `ash-int8.graph` or `ash-fp16.graph`
+reports this only after it has built and saved its index. Each saves `ash.graph`, `ash-int8.graph` or `ash-fp16.graph`
 and prints top-ten vector ordinals, similarity scores and visited-node counts
 for the first held-out query using both synchronous and queued search. An optional
 argument selects a new output path;
@@ -109,7 +114,8 @@ downloading them on first use:
 See [Benchmarking with BenchYAML](../README.md#benchmarking-with-benchyaml) for selecting datasets
 and configurations, and [How to run benchmarks](../docs/benchmarking.md) for the details.
 
-To run `SiftSmall`/`Bench` without the JVM vector module available, you can use the following invocations:
+Maven itself must run on JDK 22 or newer. To run `SiftSmall` or `Bench` without the JVM vector
+module, so that they use the scalar Java provider, add `-Pjdk11`:
 
 > `mvn -Pjdk11 compile exec:exec@bench`
 
