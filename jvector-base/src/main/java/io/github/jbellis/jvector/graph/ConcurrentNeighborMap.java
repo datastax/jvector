@@ -289,7 +289,8 @@ public class ConcurrentNeighborMap {
         private Neighbors insert(int neighborId, float score, float overflow, ConcurrentNeighborMap map) {
             assert neighborId != nodeId : "can't add self as neighbor at node " + nodeId;
 
-            int hardMax = (int) (overflow * map.maxDegree);
+            // in double, as OnHeapGraphIndex sizes maxOverflowDegree: in float, 1.4f * 5 rounds up to 7, not 6
+            int hardMax = (int) (map.maxDegree * (double) overflow);
             assert hardMax <= map.maxOverflowDegree
                     : String.format("overflow %s could exceed max overflow degree %d", overflow, map.maxOverflowDegree);
 
