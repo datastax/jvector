@@ -147,6 +147,18 @@ trains and encodes quickly, and scores with SIMD lookups. JVector is the first g
 it. On large datasets at matched code sizes, fused ASH builds faster than fused PQ, is more
 accurate, and searches faster in nearly every case; see [ASH performance](./docs/ash-performance.md).
 
+At the same code size, ASH reaches higher recall at a given throughput on each of these datasets:
+
+<img src="./docs/images/ash-pq-qps-recall-mpnet.png" alt="QPS vs recall@10 for fused ASH and fused PQ on MPNet 10M" width="600">
+<img src="./docs/images/ash-pq-qps-recall-cohere.png" alt="QPS vs recall@10 for fused ASH and fused PQ on Cohere English v3 10M" width="600">
+<img src="./docs/images/ash-pq-qps-recall-cap.png" alt="QPS vs recall@10 for fused ASH and fused PQ on CAP 6M" width="600">
+
+<sub>Fused ASH and fused PQ at 2 bits per dimension (32× compression), on a Google Cloud
+n2-standard-64: each index was built once on 32 cores and queried on 32 cores, with the index in
+memory and queries it had not seen. Points are rerank depths up to 640, from recall 0.7 up; the
+deepest is the mean of three runs. ASH used queued execution and adaptive termination, PQ direct
+execution. Each index is one segment with NVQ reranking vectors.</sub>
+
 Start with the HelloASHWorld programs above, then:
 
 - [ASH configuration and defaults](./docs/ash-configuration.md): model parameters, construction
