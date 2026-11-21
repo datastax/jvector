@@ -42,3 +42,7 @@ jvector-native/src/target/meson-build/**
 jvector-native/target/meson-build/**
 .run/*.run.xml
 bench-profiles/**
+mkdocs.yml
+.github/workflows/docs-site.yml
+.github/docs-site/requirements.txt
+.github/docs-site/hooks.py
