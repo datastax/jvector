@@ -25,7 +25,7 @@ grows ("[the curse of dimensionality](https://en.wikipedia.org/wiki/Curse_of_dim
 large datasets, an approximate answer in logarithmic time is usually more useful than an exact
 answer in linear time.
 
-ANN indexes are either partition-based, like [LSH or IVF](https://www.datastax.com/guides/what-is-a-vector-index)
+ANN indexes are either partition-based, like [LSH or IVF](https://docs.nvidia.com/cuvs/getting-started/introduction/vector-search)
 and [ScaNN](https://github.com/google-research/google-research/tree/master/scann), or graph-based,
 like [HNSW](https://arxiv.org/abs/1603.09320) and
 [DiskANN](https://www.microsoft.com/en-us/research/project/project-akupara-approximate-nearest-neighbor-search-for-large-scale-semantic-search/).
@@ -40,9 +40,9 @@ can live on disk. Construction uses nonblocking concurrency control, so it scale
 
 Graph indexes need their vectors close at hand, and full-precision vectors soon outgrow memory:
 10 million 1,024-dimension vectors take about 41 GB. JVector compresses them with vector
-quantization, here 32× to about 1.3 GB, and the quantizer also sets much of the build time. With the
-same code size, JVector's new ASH quantizer builds indexes 2.3 to 2.6 times faster than product
-quantization (PQ); see [Choosing a quantizer](#choosing-a-quantizer).
+quantization, here 32× to about 1.3 GB, and the quantizer also sets much of the build time. On that
+dataset, Cohere English v3 10M, JVector's new ASH quantizer builds the index 2.3 to 2.6 times faster
+than product quantization (PQ) with the same code size; see [Choosing a quantizer](#choosing-a-quantizer).
 
 ![Build time vs cores for fused ASH and fused PQ](./docs/images/ash-pq-build-time-vs-cores.png)
 
@@ -83,20 +83,25 @@ JAR=$(ls jvector-examples/target/jvector-examples-*-jar-with-dependencies.jar)
 
 `-Dnative.onednn=true` adds the oneDNN library that ASH uses for FP16 query projection and, on some
 processors, INT8 (see [Building and testing](#building-and-testing)). It needs CMake and adds a few
-minutes to the first build. Without it, everything still runs, with slower ASH query projection on
-those paths.
+minutes to the first build. Without it, the library falls back to slower ASH query projection on
+those paths, and HelloASHWorldFp16 cannot run.
 
 | Program | What it shows |
 | --- | --- |
 | [HelloVectorWorld](./jvector-examples/src/main/java/io/github/jbellis/jvector/example/HelloVectorWorld.java) | Build an in-memory graph and search it, in about twenty lines |
-| [HelloASHWorldFp16](./jvector-examples/src/main/java/io/github/jbellis/jvector/example/HelloASHWorldFp16.java) | Train ASH, build a graph, write a fused ASH index with NVQ reranking, reopen it, and search synchronously and through the queued API |
-| [HelloASHWorldInt8](./jvector-examples/src/main/java/io/github/jbellis/jvector/example/HelloASHWorldInt8.java) | The same with INT8 query projection, for x86-64 processors with VNNI |
+| [HelloASHWorldInt8](./jvector-examples/src/main/java/io/github/jbellis/jvector/example/HelloASHWorldInt8.java) | Train ASH, build a graph, write a fused ASH index with NVQ reranking, reopen it, and search synchronously and through the queued API, with INT8 query projection; needs x86-64 with AVX-512 VNNI or AVX-VNNI |
+| [HelloASHWorldFp16](./jvector-examples/src/main/java/io/github/jbellis/jvector/example/HelloASHWorldFp16.java) | The same with FP16 query projection; needs x86-64 with AVX-512 FP16 (Intel Sapphire Rapids or newer) and the oneDNN add-on |
 | [HelloBatchedVectors](./jvector-examples/src/main/java/io/github/jbellis/jvector/example/HelloBatchedVectors.java) and [HelloBatchedQuantization](./jvector-examples/src/main/java/io/github/jbellis/jvector/example/HelloBatchedQuantization.java) | Batched access to file-backed vectors, and encoding them with PQ and NVQ |
 
 ```bash
 java --add-modules jdk.incubator.vector --enable-native-access=ALL-UNNAMED \
   -cp "$JAR" io.github.jbellis.jvector.example.HelloVectorWorld
 ```
+
+Run the others the same way, changing the class name. On Linux,
+`grep -o -m1 -w 'avx512_fp16\|avx512_vnni\|avx_vnni' /proc/cpuinfo` shows which ASH program your
+processor supports. Each ASH program writes its index (`ash-int8.graph` or `ash-fp16.graph`) to the
+current directory and never overwrites one; delete it or pass a new path as the argument to run again.
 
 The [examples README](./jvector-examples/README.md) covers each program, and the
 [tutorials](./docs/tutorials/) walk through the API step by step, starting with
@@ -153,7 +158,7 @@ At the same code size, ASH reaches higher recall at a given throughput on each o
 <img src="./docs/images/ash-pq-qps-recall-cohere.png" alt="QPS vs recall@10 for fused ASH and fused PQ on Cohere English v3 10M" width="600">
 <img src="./docs/images/ash-pq-qps-recall-cap.png" alt="QPS vs recall@10 for fused ASH and fused PQ on CAP 6M" width="600">
 
-<sub>Fused ASH and fused PQ at 2 bits per dimension (32× compression), on a Google Cloud
+<sub>Fused ASH and fused PQ with the same code size (32× compression), on a Google Cloud
 n2-standard-64: each index was built once on 32 cores and queried on 32 cores, with the index in
 memory and queries it had not seen. Points are rerank depths up to 640, from recall 0.7 up; the
 deepest is the mean of three runs. ASH used queued execution and adaptive termination, PQ direct
@@ -201,7 +206,7 @@ a larger-than-memory index reads one page per node it expands instead of sometim
 
 BenchYAML builds and measures indexes from YAML descriptions of datasets, index parameters and
 measurements. For a first run, benchmark one small public dataset from the repository root. It downloads
-on first use (about 430 MB), then builds and searches 100,000 vectors in about a minute and prints one table:
+on first use (about 430 MB), then builds and searches 100,000 vectors in about a minute and prints recall and throughput tables:
 
 ```bash
 mvn compile exec:exec@bench -pl jvector-examples -am -DbenchArgs=cohere-english-v3-100k
@@ -261,7 +266,7 @@ projection, INT8 on other VNNI CPUs, and batch encoding. Each falls back to a po
 
 - Foundations: the [HNSW](https://ieeexplore.ieee.org/abstract/document/8594636) and
   [DiskANN](https://suhasjs.github.io/files/diskann_neurips19.pdf) papers, and
-  [a higher-level explainer](https://www.datastax.com/guides/hierarchical-navigable-small-worlds)
+  [a higher-level explainer](https://en.wikipedia.org/wiki/Hierarchical_navigable_small_world)
 - [ASH: Asymmetric Scalar Hashing With Learned Dimensionality Reduction for High-Fidelity Vector Quantization](https://dl.acm.org/doi/10.1145/3799682.3841072), Tepper and Willke (CIKM 2026)
 - [Product quantization](https://doi.org/10.1109/TPAMI.2010.57), Jégou, Douze and Schmid (TPAMI 2011)
 - [NVQ](https://arxiv.org/abs/2509.18471)

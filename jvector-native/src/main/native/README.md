@@ -992,7 +992,7 @@ continues to use Highway FP32. The FP32 loader validates the same ABI as FP16;
 missing/older add-ons and unsupported operations keep Highway. FP16 automatic
 mode additionally falls back for operands outside FP16's finite range. Explicit
 `fp16` and `int8` modes require support; invalid inputs, allocation failures and execution
-errors propagate. See [implementation and measured encoding scope](../../../../docs/native-ash-preparation.md#preferred-onednn-fp32-encoding-projection-november-1-2026).
+errors propagate. See [implementation and measured encoding scope](../../../../docs/native-ash-preparation.md#onednn-fp32-encoding-projection).
 
 ### Ownership, parallelism and tests
 

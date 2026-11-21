@@ -140,10 +140,10 @@ for (NodeScore ns : result.getNodes()) {
 }
 ```
 
-For the full example, refer `jvector-examples/../VectorIntro.java`. Run it using
+For the full example, see [`VectorIntro.java`](../../jvector-examples/src/main/java/io/github/jbellis/jvector/example/tutorial/VectorIntro.java). Run it from the root of this repo using
 ```sh
 mvn compile exec:exec@tutorial -Dtutorial=intro -pl jvector-examples -am
 ```
 
 Next tutorial:
-- The OnDiskGraphIndex
+- [The OnDiskGraphIndex](./2-disk-tutorial.md)
