@@ -21,6 +21,9 @@ import io.github.jbellis.jvector.LuceneTestCase;
 import io.github.jbellis.jvector.TestUtil;
 import io.github.jbellis.jvector.disk.SimpleMappedReader;
 import io.github.jbellis.jvector.graph.similarity.BuildScoreProvider;
+import io.github.jbellis.jvector.graph.similarity.DefaultSearchScoreProvider;
+import io.github.jbellis.jvector.graph.similarity.ScoreFunction;
+import io.github.jbellis.jvector.graph.similarity.SearchScoreProvider;
 import io.github.jbellis.jvector.quantization.PQVectors;
 import io.github.jbellis.jvector.quantization.ProductQuantization;
 import io.github.jbellis.jvector.vector.VectorSimilarityFunction;
@@ -36,7 +39,9 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.HashSet;
+import java.util.List;
 import java.util.Random;
+import java.util.concurrent.ForkJoinPool;
 import java.util.function.Supplier;
 
 import static io.github.jbellis.jvector.TestUtil.assertGraphEquals;
@@ -380,23 +385,23 @@ public class GraphIndexBuilderTest extends LuceneTestCase {
             }
 
             @Override
-            public io.github.jbellis.jvector.graph.similarity.SearchScoreProvider searchProviderFor(VectorFloat<?> vector) {
+            public SearchScoreProvider searchProviderFor(VectorFloat<?> vector) {
                 return withReranker(exact.searchProviderFor(vector));
             }
 
             @Override
-            public io.github.jbellis.jvector.graph.similarity.SearchScoreProvider searchProviderFor(int node1) {
+            public SearchScoreProvider searchProviderFor(int node1) {
                 return withReranker(exact.searchProviderFor(node1));
             }
 
             @Override
-            public io.github.jbellis.jvector.graph.similarity.SearchScoreProvider diversityProviderFor(int node1) {
+            public SearchScoreProvider diversityProviderFor(int node1) {
                 return exact.diversityProviderFor(node1);
             }
 
-            private io.github.jbellis.jvector.graph.similarity.SearchScoreProvider withReranker(io.github.jbellis.jvector.graph.similarity.SearchScoreProvider provider) {
-                var scoreFunction = (io.github.jbellis.jvector.graph.similarity.ScoreFunction.ExactScoreFunction) provider.scoreFunction();
-                return new io.github.jbellis.jvector.graph.similarity.DefaultSearchScoreProvider(scoreFunction, scoreFunction);
+            private SearchScoreProvider withReranker(SearchScoreProvider provider) {
+                var scoreFunction = (ScoreFunction.ExactScoreFunction) provider.scoreFunction();
+                return new DefaultSearchScoreProvider(scoreFunction, scoreFunction);
             }
         };
         try (var builder = new GraphIndexBuilder(withReranker, 2, 8, 40, 1.2f, 1.2f, false)) {
@@ -431,8 +436,8 @@ public class GraphIndexBuilderTest extends LuceneTestCase {
             vectors.add(position, vts.createFloatVector(new float[] {-10f, 0f}));
             var ravv = new ListRandomAccessVectorValues(vectors, 2);
             var bsp = BuildScoreProvider.randomAccessScoreProvider(ravv, VectorSimilarityFunction.DOT_PRODUCT);
-            var pool = new java.util.concurrent.ForkJoinPool(1);
-            try (var builder = new GraphIndexBuilder(bsp, 2, java.util.List.of(8), 40, 1.2f, 1.2f, true, true, pool, pool)) {
+            var pool = new ForkJoinPool(1);
+            try (var builder = new GraphIndexBuilder(bsp, 2, List.of(8), 40, 1.2f, 1.2f, true, true, pool, pool)) {
                 for (int node = 0; node < ravv.size(); node++) {
                     builder.addGraphNode(node, ravv.getVector(node));
                 }
