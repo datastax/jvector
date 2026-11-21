@@ -3,9 +3,10 @@
 JVector is a Java library for approximate nearest neighbor (ANN) vector search. It builds graph
 indexes that combine an HNSW-style hierarchy with Vamana (the algorithm behind DiskANN) in every
 layer, can be built concurrently and incrementally, and can be searched from disk with compressed
-vectors. Product quantization (PQ) is the stable, widely deployed way to compress them. The
-experimental Asymmetric Scalar Hashing (ASH) quantizer is more accurate at the same code size and
-builds indexes faster. JVector targets Java 11 and uses SIMD acceleration on newer JVMs.
+vectors. [Product quantization (PQ)](https://doi.org/10.1109/TPAMI.2010.57) is the stable, widely deployed way to compress them. The
+experimental [Asymmetric Scalar Hashing (ASH)](https://dl.acm.org/doi/10.1145/3799682.3841072) quantizer is more accurate at the same code size and
+builds indexes faster. JVector targets newer JVMs, using native SIMD kernels on Java 22 and later,
+and also supports Java 11.
 
 - [Why graph indexes](#why-graph-indexes)
 - [How JVector searches](#how-jvector-searches)
@@ -35,9 +36,15 @@ dataset up front.
 ## How JVector searches
 
 JVector's graph has an in-memory hierarchy of upper layers for fast navigation and a base layer that
-can live on disk. Construction uses nonblocking concurrency control and scales linearly with cores:
+can live on disk. Construction uses nonblocking concurrency control, so it scales with cores.
 
-![JVector scales linearly as thread count increases](https://github.com/jbellis/jvector/assets/42158/f0127bfc-6c45-48b9-96ea-95b2120da0d9)
+Graph indexes need their vectors close at hand, and full-precision vectors soon outgrow memory:
+10 million 1,024-dimension vectors take about 41 GB. JVector compresses them with vector
+quantization, here 32× to about 1.3 GB, and the quantizer also sets much of the build time. With the
+same code size, JVector's new ASH quantizer builds indexes 2.3 to 2.6 times faster than product
+quantization (PQ); see [Choosing a quantizer](#choosing-a-quantizer).
+
+![Build time vs cores for fused ASH and fused PQ](./docs/images/ash-pq-build-time-vs-cores.png)
 
 Searches run in two passes. The first pass traverses the graph using compact, approximate scores
 from a quantizer; the second reranks the best candidates with a more accurate representation stored
@@ -47,14 +54,14 @@ in the index:
 | --- | --- |
 | Traversal | Product quantization (PQ), optionally with anisotropic weighting; binary quantization (BQ); Asymmetric Scalar Hashing (ASH, experimental); or full-precision vectors |
 | Fused traversal | Fused PQ or fused ASH: each node's adjacency list carries its neighbors' codes, so the codes are read with the graph instead of held in memory |
-| Reranking | Full-precision (FP32) vectors or NVQ, a high-accuracy non-uniform quantization |
+| Reranking | Full-precision (FP32) vectors or [NVQ](https://arxiv.org/abs/2509.18471), a high-accuracy non-uniform quantization |
 
 [This two-pass design reduces memory use and latency while preserving accuracy](https://thenewstack.io/why-vector-size-matters/).
 JVector can also use two-pass searches while *building* an index, so indexes larger than memory can
 be constructed, and searches stay logarithmic within a single index instead of merging results
 from many:
 
-![Much larger indexes](https://github.com/jbellis/jvector/assets/42158/34cb8094-68fa-4dc3-b3ce-4582fdbd77e1)
+![Vectors that fit in 32 GB of memory, uncompressed and 32× compressed](./docs/images/vectors-in-32gb.png)
 
 ## Getting started
 
@@ -103,6 +110,24 @@ Integrators should also read:
 
 ## Choosing a quantizer
 
+A quantizer compresses each vector to a short code. Scoring a query against a code is much cheaper
+than against a full vector, and the codes for a large index fit in memory or in a small part of
+each disk read. Building a graph is a long series of searches: each new vector searches the graph
+for its neighbors. JVector can score these searches with the codes, so a quantizer's training,
+encoding and scoring speeds set much of an index's build time.
+
+A *fused* index stores each node's neighbors' codes in that node's on-disk record, next to its
+adjacency list. A search then reads the codes it needs along with the graph, instead of holding every
+code in memory; see [Building and serving larger-than-memory indexes](./docs/larger-than-memory-indexes.md).
+
+[Product quantization (PQ)](https://doi.org/10.1109/TPAMI.2010.57) splits each vector into
+subvectors and replaces each with the nearest entry of a codebook learned for it (see
+[the PQ tutorial](./docs/tutorials/3-larger-than-memory-tutorial.md)).
+[Asymmetric Scalar Hashing (ASH)](https://dl.acm.org/doi/10.1145/3799682.3841072), new and
+experimental, reduces each vector's dimension with a learned projection and quantizes each projected
+dimension to a few bits (see [ASH](#ash)). The build-time plot above compares fused ASH and fused PQ
+with the same 133-byte codes, from training through writing the index.
+
 | Quantizer | Use it for | Notes |
 | --- | --- | --- |
 | **PQ** | Graph traversal; the stable default | Fused or in memory; any similarity; optional anisotropic weighting |
@@ -115,17 +140,12 @@ Integrators should also read:
 ASH is experimental: its public types are marked `@Experimental`, and their API may change between
 releases. PQ remains the recommended choice when stability matters most.
 
-ASH (Asymmetric Scalar Hashing) reduces the dimension of database vectors with a learned orthonormal
-projection, then scalar-quantizes each projected dimension to a few bits, while keeping queries in
-their original form. At the same code size it is more accurate than additive and scalar quantizers,
+ASH (Asymmetric Scalar Hashing; [paper](https://dl.acm.org/doi/10.1145/3799682.3841072)) reduces the dimension of database
+vectors with a learned orthonormal projection, then scalar-quantizes each projected dimension to a
+few bits, while keeping queries in their original form. At the same code size it is more accurate than additive and scalar quantizers,
 trains and encodes quickly, and scores with SIMD lookups. JVector is the first graph index to support
 it. On large datasets at matched code sizes, fused ASH builds faster than fused PQ, is more
 accurate, and searches faster in nearly every case; see [ASH performance](./docs/ash-performance.md).
-
-![Build time vs cores for fused ASH and fused PQ](./docs/images/ash-pq-build-time-vs-cores.png)
-
-Dataset: Cohere English v3 10M, derived from
-[Cohere/msmarco-v2-embed-english-v3](https://huggingface.co/datasets/Cohere/msmarco-v2-embed-english-v3).
 
 Start with the HelloASHWorld programs above, then:
 
@@ -231,6 +251,7 @@ projection, INT8 on other VNNI CPUs, and batch encoding. Each falls back to a po
   [DiskANN](https://suhasjs.github.io/files/diskann_neurips19.pdf) papers, and
   [a higher-level explainer](https://www.datastax.com/guides/hierarchical-navigable-small-worlds)
 - [ASH: Asymmetric Scalar Hashing With Learned Dimensionality Reduction for High-Fidelity Vector Quantization](https://dl.acm.org/doi/10.1145/3799682.3841072), Tepper and Willke (CIKM 2026)
+- [Product quantization](https://doi.org/10.1109/TPAMI.2010.57), Jégou, Douze and Schmid (TPAMI 2011)
 - [NVQ](https://arxiv.org/abs/2509.18471)
 - [Anisotropic PQ](https://arxiv.org/abs/1908.10396)
 - [Quicker ADC](https://arxiv.org/abs/1812.09162)
