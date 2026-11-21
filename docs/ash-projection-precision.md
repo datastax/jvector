@@ -57,7 +57,11 @@ the environment variable `JVECTOR_ASH_INT8_ONEDNN` makes INT8 use the add-on
 everywhere, for example to compare its AMX kernels; both compute the same integers,
 so the results are identical.
 Explicit FP16 and INT8 settings fail clearly if the required backend is unavailable, including
-when a virtual machine does not expose the needed hardware features.
+when a virtual machine does not expose the needed hardware features. `setQueryOptions` checks
+its precision when called; a precision from the `jvector.ash.queryProjection` property is checked at
+the model's first query, because training, encoding and compaction never depend on query settings.
+To check before building anything, call `ASHQueryProjection.FP16.isSupported()` (or
+`requireSupported()`, which throws with the reason and what to use instead).
 
 The model caches its query-projection view on first use. Changing the property
 afterwards does not reconfigure an existing view, and `setQueryOptions` throws

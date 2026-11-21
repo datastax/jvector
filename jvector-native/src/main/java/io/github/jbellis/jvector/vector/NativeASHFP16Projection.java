@@ -15,6 +15,7 @@
  */
 package io.github.jbellis.jvector.vector;
 
+import io.github.jbellis.jvector.vector.cnative.NativeSimdOps;
 import io.github.jbellis.jvector.vector.cnative.jvector_ash_fp16_result;
 import java.lang.foreign.Arena;
 import java.lang.foreign.MemorySegment;
@@ -75,15 +76,46 @@ final class NativeASHFP16Projection implements VectorUtilSupport.AshProjection {
         this.fallback = fallback;
     }
 
+    /** Probes the add-on once, without a model: null when FP16 query projection works here, else why not. */
+    static String unsupportedReason(String isa) {
+        String reason = Probe.REASON;
+        return reason == null ? null : "FP16 ASH query projection is not available on this processor (Highway tier "
+                + isa + "): " + reason + ". It needs AVX-512 FP16, as on Intel Sapphire Rapids or newer, and the"
+                + " oneDNN add-on (-Dnative.onednn=true). Use auto or int8.";
+    }
+
+    private static String activeIsa() {
+        return NativeSimdOps.jvector_simd_get_active_isa().reinterpret(Long.MAX_VALUE).getString(0);
+    }
+
+    private static final class Probe {
+        static final String REASON = probe();
+
+        private static String probe() {
+            if (Bindings.UNAVAILABLE != null) return "the oneDNN add-on is unavailable (" + Bindings.UNAVAILABLE + ")";
+            int rows = 64, columns = 128;
+            try (Arena setup = Arena.ofConfined()) {
+                MemorySegment matrix = setup.allocate(java.lang.foreign.ValueLayout.JAVA_FLOAT, (long) rows * columns);
+                for (int r = 0; r < rows; r++)
+                    matrix.setAtIndex(java.lang.foreign.ValueLayout.JAVA_FLOAT, (long) r * columns + r, 1f);
+                MemorySegment status = jvector_ash_fp16_result.allocate(setup);
+                MemorySegment pointer = jvector_ash_fp16_create(matrix, rows, columns, status);
+                if (pointer.address() != 0) jvector_ash_fp16_destroy(pointer);
+                int code = jvector_ash_fp16_result.status(status);
+                if (code == OK) return null;
+                if (code == UNSUPPORTED) return "oneDNN has no optimized FP16 kernel for it";
+                return "oneDNN reports " + jvector_ash_fp16_result.message(status).getString(0).replaceAll("[.\\s]+$", "");
+            }
+        }
+    }
+
     /** Model initialization only; returns fallback for genuinely unsupported automatic selection. */
     static VectorUtilSupport.AshProjection prepare(MemorySegment matrix, int rows, int columns,
                                                    VectorUtilSupport.AshProjection fallback,
                                                    boolean required) {
         if (Bindings.UNAVAILABLE != null) {
             if (!required) return fallback;
-            throw new UnsupportedOperationException("ASH FP16 query projection library is unavailable ("
-                    + Bindings.UNAVAILABLE + "); "
-                    + "build with -Dnative.onednn=true or select fp32/auto");
+            throw new UnsupportedOperationException(unsupportedReason(activeIsa()));
         }
         try (Arena setup = Arena.ofConfined()) {
             MemorySegment status = jvector_ash_fp16_result.allocate(setup);
@@ -91,6 +123,10 @@ final class NativeASHFP16Projection implements VectorUtilSupport.AshProjection {
             int code = jvector_ash_fp16_result.status(status);
             if (pointer.address() == 0) {
                 if (!required && (code == UNSUPPORTED || code == RANGE)) return fallback;
+                if (code == UNSUPPORTED) {
+                    String reason = unsupportedReason(activeIsa());
+                    if (reason != null) throw new UnsupportedOperationException(reason);
+                }
                 throw failure(code, status);
             }
             if (code != OK) {

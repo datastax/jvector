@@ -59,8 +59,8 @@ java --add-modules jdk.incubator.vector --enable-native-access=ALL-UNNAMED -Xmx8
 
 HelloASHWorld runs anywhere. To require a precision, run the program matching your CPU. On Linux,
 `grep -o -m1 -w 'avx512_fp16\|avx512_vnni\|avx_vnni' /proc/cpuinfo` lists the features that
-apply. An unsupported precision fails instead of silently changing precision; HelloASHWorldFp16
-reports this only after it has built and saved its index. Each saves `ash.graph`, `ash-int8.graph` or `ash-fp16.graph`
+apply. An unsupported precision fails at startup, before any work, with a message saying why and
+what to use instead; it never silently changes precision. Each saves `ash.graph`, `ash-int8.graph` or `ash-fp16.graph`
 and prints top-ten vector ordinals, similarity scores and visited-node counts
 for the first held-out query using both synchronous and queued search. An optional
 argument selects a new output path;

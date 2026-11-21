@@ -30,6 +30,8 @@ import java.util.Random;
 import static org.junit.Assert.assertArrayEquals;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertThrows;
+import static org.junit.Assert.assertTrue;
+import static org.junit.Assume.assumeFalse;
 
 public class TestASHQueryOptions {
     private static AsymmetricHashing model() throws java.io.IOException {
@@ -80,5 +82,44 @@ public class TestASHQueryOptions {
         assertThrows(IllegalArgumentException.class, () -> ash.setQueryOptions(ASHQueryProjection.AUTO, 0));
         assertEquals(ASHQueryProjection.INT8, ASHQueryProjection.parse(" Int8 "));
         assertThrows(IllegalArgumentException.class, () -> ASHQueryProjection.parse("bf16"));
+    }
+
+    @Test
+    public void capabilityCheckMatchesProjection() throws Exception {
+        assertTrue(ASHQueryProjection.AUTO.isSupported());
+        assertTrue(ASHQueryProjection.FP32.isSupported());
+        for (var precision : new ASHQueryProjection[] {ASHQueryProjection.FP16, ASHQueryProjection.INT8}) {
+            var ash = model();
+            if (precision.isSupported()) {
+                // A supported precision configures and projects queries.
+                ash.setQueryOptions(precision, 1);
+                ash.stiefelTransform.projectQuery(new float[ash.stiefelTransform.cols],
+                        new float[ash.stiefelTransform.rows]);
+                assertEquals(precision.name().toLowerCase(), ash.stiefelTransform.initializedQueryProjectionPrecision());
+            } else {
+                // An unsupported one fails when configured, not at the first query, and says what to use.
+                var failure = assertThrows(UnsupportedOperationException.class, () -> ash.setQueryOptions(precision, 1));
+                assertTrue(failure.getMessage(), failure.getMessage().contains("Use "));
+                assertThrows(UnsupportedOperationException.class, precision::requireSupported);
+            }
+        }
+    }
+
+    @Test
+    public void unsupportedDefaultPrecisionFailsClearlyAtTheFirstQuery() throws Exception {
+        var unsupported = ASHQueryProjection.FP16.isSupported() ? ASHQueryProjection.INT8 : ASHQueryProjection.FP16;
+        assumeFalse("both precisions are supported here", unsupported.isSupported());
+        String previous = System.getProperty(ASHQueryProjection.PROPERTY);
+        System.setProperty(ASHQueryProjection.PROPERTY, unsupported.name());
+        try {
+            // Training and encoding never depend on query settings.
+            var ash = model();
+            var failure = assertThrows(UnsupportedOperationException.class, () -> ash.stiefelTransform.projectQuery(
+                    new float[ash.stiefelTransform.cols], new float[ash.stiefelTransform.rows]));
+            assertTrue(failure.getMessage(), failure.getMessage().contains("Use "));
+        } finally {
+            if (previous == null) System.clearProperty(ASHQueryProjection.PROPERTY);
+            else System.setProperty(ASHQueryProjection.PROPERTY, previous);
+        }
     }
 }

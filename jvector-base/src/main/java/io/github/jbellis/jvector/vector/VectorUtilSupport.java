@@ -581,6 +581,23 @@ public interface VectorUtilSupport {
     return false;
   }
 
+  /**
+   * Why this provider cannot project ASH queries at {@code precision}, or null when it can.
+   * {@link ASHQueryProjection#AUTO} and {@link ASHQueryProjection#FP32} are always supported.
+   * Implementations answer without a trained model and cache the result.
+   */
+  default String ashQueryProjectionUnsupportedReason(ASHQueryProjection precision) {
+    switch (precision) {
+      case AUTO:
+      case FP32: return null;
+      case FP16:
+      case INT8: return precision.name() + " ASH query projection needs JVector's native vectorization provider"
+              + " (Java 22 or newer on Linux x86-64 or AArch64, with --enable-native-access), but this JVM uses "
+              + getClass().getSimpleName() + ". Use auto or fp32.";
+      default: throw new AssertionError(precision);
+    }
+  }
+
   /** Immutable provider-specific projection, safe to share between query threads. */
   interface AshProjection {
     /** Writes the full matrix-vector product; input and output must not alias. */
@@ -650,10 +667,10 @@ public interface VectorUtilSupport {
       switch (precision) {
         case AUTO:
         case FP32: return this;
-        case FP16: throw new UnsupportedOperationException(
-                "This provider does not support FP16 ASH query projection");
-        case INT8: throw new UnsupportedOperationException(
-                "This provider does not support INT8 ASH query projection");
+        case FP16:
+        case INT8: throw new UnsupportedOperationException(precision.name() + " ASH query projection needs"
+                + " JVector's native vectorization provider (Java 22 or newer on Linux x86-64 or AArch64, with"
+                + " --enable-native-access). Use auto or fp32.");
         default: throw new AssertionError(precision);
       }
     }

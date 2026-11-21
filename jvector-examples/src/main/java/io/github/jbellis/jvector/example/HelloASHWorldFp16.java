@@ -29,6 +29,7 @@ import io.github.jbellis.jvector.graph.disk.feature.FeatureId;
 import io.github.jbellis.jvector.graph.disk.feature.FusedASH;
 import io.github.jbellis.jvector.graph.disk.feature.NVQ;
 import io.github.jbellis.jvector.graph.similarity.BuildScoreProvider;
+import io.github.jbellis.jvector.quantization.ASHQueryProjection;
 import io.github.jbellis.jvector.quantization.AsymmetricHashing;
 import io.github.jbellis.jvector.quantization.NVQuantization;
 import io.github.jbellis.jvector.util.Bits;
@@ -46,8 +47,9 @@ import java.util.stream.IntStream;
 public class HelloASHWorldFp16 {
     public static void main(String[] args) throws Exception {
         // Select before loading any model. Training/encoding still use FP32.
-        System.setProperty("jvector.vectorization_provider", "native");
         System.setProperty("jvector.ash.queryProjection", "fp16");
+        // Check this processor before doing any work; the exception says why and what to use instead.
+        ASHQueryProjection.FP16.requireSupported();
         Path path = args.length == 0 ? Path.of("ash-fp16.graph") : Path.of(args[0]);
         if (Files.exists(path)) throw new IllegalArgumentException("Choose a new index path: " + path);
 

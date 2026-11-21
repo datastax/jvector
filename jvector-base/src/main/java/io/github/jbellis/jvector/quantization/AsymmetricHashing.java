@@ -1582,6 +1582,7 @@ public class AsymmetricHashing implements VectorCompressor<AsymmetricHashing.Qua
      * Base-vector encoding always uses FP32.
      */
     public void setQueryOptions(ASHQueryProjection precision, int maxBatchSize) {
+        Objects.requireNonNull(precision, "precision").requireSupported();
         stiefelTransform.configureQueries(precision, maxBatchSize);
     }
 

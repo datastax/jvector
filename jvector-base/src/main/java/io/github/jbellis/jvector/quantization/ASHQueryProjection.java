@@ -17,6 +17,7 @@
 package io.github.jbellis.jvector.quantization;
 
 import io.github.jbellis.jvector.annotations.Experimental;
+import io.github.jbellis.jvector.vector.VectorizationProvider;
 
 import java.util.Locale;
 
@@ -38,6 +39,29 @@ public enum ASHQueryProjection {
     /** The precision named by {@code jvector.ash.queryProjection}, or {@link #AUTO} when it is unset. */
     public static ASHQueryProjection fromSystemProperty() {
         return parse(System.getProperty(PROPERTY, "auto"));
+    }
+
+    /**
+     * Whether this JVM and processor can project queries at this precision. {@link #AUTO} and {@link #FP32}
+     * always can; {@link #FP16} and {@link #INT8} need the native vectorization provider and suitable hardware.
+     * The answer does not need a trained model, so applications can check before building an index.
+     */
+    public boolean isSupported() {
+        return unsupportedReason() == null;
+    }
+
+    /**
+     * Throws {@link UnsupportedOperationException}, saying why and what to use instead, when this precision
+     * is not supported; see {@link #isSupported()}.
+     */
+    public void requireSupported() {
+        String reason = unsupportedReason();
+        if (reason != null) throw new UnsupportedOperationException(reason);
+    }
+
+    private String unsupportedReason() {
+        if (this == AUTO || this == FP32) return null;
+        return VectorizationProvider.getInstance().getVectorUtilSupport().ashQueryProjectionUnsupportedReason(this);
     }
 
     /** Parses {@code auto}, {@code fp32}, {@code fp16} or {@code int8}, ignoring case. */

@@ -90,6 +90,8 @@ JVector is published to Maven Central as `io.github.jbellis:jvector`:
 ```
 
 or with Gradle, `implementation("io.github.jbellis:jvector:4.1.0")`. ASH requires 4.1.0 or later.
+[Building and installing JVector](./docs/building-and-installing.md) explains what the jar contains,
+the JVM options for each Java version, and how to build JVector from source for each platform.
 
 Run with these JVM options to enable SIMD acceleration (see
 [SIMD and native acceleration](#simd-and-native-acceleration)):
@@ -317,6 +319,9 @@ projection, INT8 on other VNNI CPUs, and batch encoding. Each falls back to a po
 - [Quicker ADC](https://arxiv.org/abs/1812.09162)
 
 ## Building and testing
+
+[Building and installing JVector](./docs/building-and-installing.md) covers builds for each platform
+and backend; this section summarizes them.
 
 JVector is a [multimodule Maven build](https://maven.apache.org/guides/mini/guide-multiple-modules.html)
 that produces a multirelease JAR usable from Java 11:
