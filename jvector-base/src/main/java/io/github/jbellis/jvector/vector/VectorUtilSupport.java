@@ -591,9 +591,12 @@ public interface VectorUtilSupport {
       case AUTO:
       case FP32: return null;
       case FP16:
-      case INT8: return precision.name() + " ASH query projection needs JVector's native vectorization provider"
-              + " (Java 22 or newer on Linux x86-64 or AArch64, with --enable-native-access), but this JVM uses "
-              + getClass().getSimpleName() + ". Use auto or fp32.";
+      case INT8: {
+        String provider = getClass().getSimpleName().replace("VectorUtilSupport", "");
+        return precision.name() + " query projection needs the native provider (Java 22+ on Linux x86-64 or"
+                + " AArch64); this JVM uses " + ("Default".equals(provider) ? "scalar" : provider)
+                + ". Use auto or fp32.";
+      }
       default: throw new AssertionError(precision);
     }
   }
@@ -668,9 +671,8 @@ public interface VectorUtilSupport {
         case AUTO:
         case FP32: return this;
         case FP16:
-        case INT8: throw new UnsupportedOperationException(precision.name() + " ASH query projection needs"
-                + " JVector's native vectorization provider (Java 22 or newer on Linux x86-64 or AArch64, with"
-                + " --enable-native-access). Use auto or fp32.");
+        case INT8: throw new UnsupportedOperationException(precision.name() + " query projection needs the"
+                + " native provider (Java 22+ on Linux x86-64 or AArch64). Use auto or fp32.");
         default: throw new AssertionError(precision);
       }
     }

@@ -95,10 +95,9 @@ public abstract class VectorizationProvider {
             Throwable cause = e instanceof InvocationTargetException && e.getCause() != null ? e.getCause() : e;
             String reason = String.valueOf(cause.getMessage() != null ? cause.getMessage() : cause)
                 .replaceAll("[.\\s]+$", "");
-            throw new RuntimeException("Failed to load forced NativeVectorizationProvider"
-                + " (jvector.vectorization_provider=native): " + reason + ". It needs Java 22 or newer on"
-                + " Linux x86-64 or AArch64, with the native library in the jvector jar and --enable-native-access."
-                + " Remove the property to let JVector choose a provider.", e);
+            throw new RuntimeException("Failed to load forced NativeVectorizationProvider: " + reason
+                + ". It needs Java 22+ on Linux x86-64 or AArch64; remove jvector.vectorization_provider"
+                + " to let JVector choose.", e);
           }
         default:
           throw new IllegalArgumentException("Unknown vectorization provider: " + forcedProvider);

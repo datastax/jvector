@@ -16,7 +16,6 @@
 
 package io.github.jbellis.jvector.vector;
 
-import io.github.jbellis.jvector.vector.cnative.NativeSimdOps;
 import io.github.jbellis.jvector.vector.cnative.jvector_ash_fp16_result;
 import java.lang.foreign.Arena;
 import java.lang.foreign.MemorySegment;
@@ -62,7 +61,7 @@ final class NativeASHInt8Projection implements VectorUtilSupport.AshProjection {
         static final String REASON = probe();
 
         private static String probe() {
-            if (Bindings.UNAVAILABLE != null) return "the oneDNN add-on is unavailable (" + Bindings.UNAVAILABLE + ")";
+            if (Bindings.UNAVAILABLE != null) return NativeASHAddOn.missing("INT8", Bindings.UNAVAILABLE);
             int rows = 64, columns = 128;
             try (Arena setup = Arena.ofConfined()) {
                 MemorySegment matrix = setup.allocate(java.lang.foreign.ValueLayout.JAVA_FLOAT, (long) rows * columns);
@@ -73,24 +72,21 @@ final class NativeASHInt8Projection implements VectorUtilSupport.AshProjection {
                 if (pointer.address() != 0) jvector_ash_int8_destroy(pointer);
                 int code = jvector_ash_fp16_result.status(status);
                 if (code == OK) return null;
-                if (code == UNSUPPORTED) return "oneDNN has no optimized INT8 kernel for it";
-                return "oneDNN reports " + jvector_ash_fp16_result.message(status).getString(0).replaceAll("[.\\s]+$", "");
+                if (code == UNSUPPORTED) return unsupportedCpu();
+                return "INT8 query projection failed to initialize: "
+                        + NativeASHAddOn.trim(jvector_ash_fp16_result.message(status).getString(0)) + ". Use auto or fp32.";
             }
         }
     }
 
-    /** The full explanation for an INT8 failure on this processor. */
-    static String explain(String reason) {
-        String isa = NativeSimdOps.jvector_simd_get_active_isa().reinterpret(Long.MAX_VALUE).getString(0);
-        return "INT8 ASH query projection is not available on this processor (Highway tier " + isa + "): "
-                + reason + ". It needs AVX-512 VNNI, or AVX-VNNI with the oneDNN add-on (-Dnative.onednn=true)."
-                + " Use auto or fp32.";
+    private static String unsupportedCpu() {
+        return "INT8 query projection needs AVX-512 VNNI or AVX-VNNI; this CPU's best tier is "
+                + NativeASHAddOn.activeIsa() + ". Use auto or fp32.";
     }
 
     static VectorUtilSupport.AshProjection prepare(MemorySegment matrix, int rows, int columns) {
         if (Bindings.UNAVAILABLE != null)
-            throw new UnsupportedOperationException(explain("the oneDNN add-on is unavailable ("
-                    + Bindings.UNAVAILABLE + ")"));
+            throw new UnsupportedOperationException(unsupportedReason());
         try (Arena setup = Arena.ofConfined()) {
             MemorySegment status = jvector_ash_fp16_result.allocate(setup);
             MemorySegment pointer = jvector_ash_int8_create(matrix, rows, columns, status);
@@ -118,7 +114,7 @@ final class NativeASHInt8Projection implements VectorUtilSupport.AshProjection {
     private static RuntimeException failure(int code, MemorySegment status) {
         String message = "ASH INT8 projection: " + jvector_ash_fp16_result.message(status).getString(0);
         if (code == NO_MEMORY) throw new OutOfMemoryError(message);
-        if (code == UNSUPPORTED) return new UnsupportedOperationException(explain("oneDNN has no optimized INT8 kernel for it"));
+        if (code == UNSUPPORTED) return new UnsupportedOperationException(unsupportedCpu());
         if (code == INVALID_ARGUMENT || code == RANGE) return new IllegalArgumentException(message);
         return new IllegalStateException(message + " (status " + code + ")");
     }

@@ -37,6 +37,26 @@ final class NativeASHAddOn {
     private NativeASHAddOn() {}
 
     /** Null if the add-on loaded, reports ABI 1 and exports every named symbol; otherwise why not. */
+    /** The short reason a query precision is unavailable because the add-on is missing or unusable. */
+    static String missing(String precision, String unavailable) {
+        return "library not loaded".equals(unavailable)
+                ? precision + " query projection needs the oneDNN add-on; build with -Dnative.onednn=true."
+                        + " Use auto or fp32."
+                : precision + " query projection: the oneDNN add-on is unusable (" + unavailable + ")."
+                        + " Use auto or fp32.";
+    }
+
+    /** The native library's selected instruction-set tier, such as avx3_dl. */
+    static String activeIsa() {
+        return io.github.jbellis.jvector.vector.cnative.NativeSimdOps.jvector_simd_get_active_isa()
+                .reinterpret(Long.MAX_VALUE).getString(0);
+    }
+
+    /** Drops trailing periods and spaces so a native message can end a sentence. */
+    static String trim(String message) {
+        return message.replaceAll("[.\\s]+$", "");
+    }
+
     static String unavailable(String... symbols) {
         return LOADED ? unavailable(SymbolLookup.loaderLookup(), symbols) : "library not loaded";
     }

@@ -61,13 +61,12 @@ class NativeVectorUtilSupport extends PanamaVectorUtilSupport
         switch (precision) {
             case AUTO:
             case FP32: return null;
-            case FP16: return NativeASHFP16Projection.unsupportedReason(getActiveIsa());
+            case FP16: return NativeASHFP16Projection.unsupportedReason();
             case INT8: {
                 // Mirrors NativeASHProjection.int8(): the Highway kernel unless the add-on is forced.
                 boolean forced = System.getenv("JVECTOR_ASH_INT8_ONEDNN") != null;
                 if (!forced && NativeASHInt8HighwayProjection.isAvailable()) return null;
-                String reason = NativeASHInt8Projection.unsupportedReason();
-                return reason == null ? null : NativeASHInt8Projection.explain(reason);
+                return NativeASHInt8Projection.unsupportedReason();
             }
             default: throw new AssertionError(precision);
         }
