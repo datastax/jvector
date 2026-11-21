@@ -56,10 +56,10 @@ in the index:
 | Fused traversal | Fused PQ or fused ASH: each node's adjacency list carries its neighbors' codes, so the codes are read with the graph instead of held in memory |
 | Reranking | Full-precision (FP32) vectors or [NVQ](https://arxiv.org/abs/2509.18471), a high-accuracy non-uniform quantization |
 
-[This two-pass design reduces memory use and latency while preserving accuracy](https://thenewstack.io/why-vector-size-matters/).
-JVector can also use two-pass searches while *building* an index, so indexes larger than memory can
-be constructed, and searches stay logarithmic within a single index instead of merging results
-from many:
+The compact codes only steer the traversal; the final ranking comes from the more accurate vectors,
+so [this two-pass design cuts memory use and latency while preserving accuracy](https://thenewstack.io/why-vector-size-matters/).
+JVector builds indexes the same way, so both building and serving need only the codes in memory,
+and one index can hold far more vectors than would fit uncompressed:
 
 ![Vectors that fit in 32 GB of memory, uncompressed and 32× compressed](./docs/images/vectors-in-32gb.png)
 
