@@ -931,7 +931,8 @@ public class GraphIndexBuilder implements Closeable, Accountable {
             // The threshold must be NEGATIVE_INFINITY, not 0.0f: DOT_PRODUCT scores are (1 + dot) / 2, which is
             // negative for non-normalized vectors, and a 0.0f floor would discard the only reachable candidates
             // of a node that is dissimilar to everything else.
-            var result = gs.search(ssp, beamWidth, beamWidth, Float.NEGATIVE_INFINITY, 0.0f, reachableOthers);
+            // The same goes for the rerank floor, which only matters for a score provider that has a reranker.
+            var result = gs.search(ssp, beamWidth, beamWidth, Float.NEGATIVE_INFINITY, Float.NEGATIVE_INFINITY, reachableOthers);
             for (int resumes = 0; ; resumes++) {
                 for (var candidate : result.getNodes()) {
                     if (!connectionTargets.getAndSet(candidate.node)) {
@@ -942,7 +943,7 @@ public class GraphIndexBuilder implements Closeable, Accountable {
                 if (result.getNodes().length == 0 || resumes >= 2 * graph.maxDegree()) {
                     return false;
                 }
-                result = gs.resume(beamWidth, beamWidth, Float.NEGATIVE_INFINITY, 0.0f);
+                result = gs.resume(beamWidth, beamWidth, Float.NEGATIVE_INFINITY, Float.NEGATIVE_INFINITY);
             }
         } catch (IOException e) {
             throw new UncheckedIOException(e);
