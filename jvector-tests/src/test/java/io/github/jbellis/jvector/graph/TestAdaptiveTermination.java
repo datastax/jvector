@@ -152,14 +152,53 @@ public class TestAdaptiveTermination extends RandomizedTest {
     @Test
     public void largerGammaNeverStopsWhereASmallerOneDoesNot() {
         Random random = getRandom();
-        for (int trial = 0; trial < 5_000; trial++) {
+        for (int trial = 0; trial < 20_000; trial++) {
             var vsf = VectorSimilarityFunction.values()[random.nextInt(3)];
-            float s1 = random.nextFloat(), s2 = random.nextFloat();
-            float g1 = random.nextFloat() * 2, g2 = g1 + random.nextFloat();
+            float s1 = score(random, vsf), s2 = score(random, vsf);
+            float g1 = random.nextInt(5) == 0 ? 0f : random.nextFloat() * 2, g2 = g1 + random.nextFloat();
             if (AdaptiveTermination.of(vsf, g2).shouldStop(s1, s2)) {
-                assertTrue(AdaptiveTermination.of(vsf, g1).shouldStop(s1, s2));
+                assertTrue(vsf + " " + s1 + " " + s2 + " " + g1 + " " + g2, AdaptiveTermination.of(vsf, g1).shouldStop(s1, s2));
             }
         }
+    }
+
+    @Test
+    public void aCandidateBetterThanTheKthResultNeverStops() {
+        Random random = getRandom();
+        for (int trial = 0; trial < 20_000; trial++) {
+            var vsf = VectorSimilarityFunction.values()[random.nextInt(3)];
+            float s1 = score(random, vsf), s2 = score(random, vsf);
+            float gamma = random.nextInt(5) == 0 ? 0f : random.nextFloat() * 2;
+            if (s1 > s2) {
+                assertFalse(vsf + " " + s1 + " " + s2, AdaptiveTermination.of(vsf, gamma).shouldStop(s1, s2));
+            }
+        }
+    }
+
+    /**
+     * DOT_PRODUCT of vectors that are not unit length scores (1 + dot) / 2, which can be negative or above 1, where
+     * 1 - score is not a distance. A k-th result scoring 1 or more stops the search at the first candidate that is
+     * not better, for any gamma.
+     */
+    @Test
+    public void unnormalizedDotProductKthAboveAnExactMatch() {
+        for (float gamma : new float[] {0f, 0.1f, 5f}) {
+            var rule = AdaptiveTermination.of(DOT_PRODUCT, gamma);
+            assertTrue(rule.shouldStop(0.9f, 3f));
+            assertTrue(rule.shouldStop(-2f, 1f));
+            assertFalse(rule.shouldStop(3.5f, 3f));
+        }
+        // and below 1 it is the COSINE rule
+        assertTrue(AdaptiveTermination.of(DOT_PRODUCT, 0.4f).shouldStop(0.5f, 0.75f)); // 1 - s: 0.5 vs 0.25 * 1.96
+        assertFalse(AdaptiveTermination.of(DOT_PRODUCT, 0.5f).shouldStop(0.5f, 0.75f)); // 0.5 vs 0.25 * 2.25
+    }
+
+    /** scores as the similarity function can produce them; DOT_PRODUCT ranges over vectors that are not unit length */
+    private static float score(Random random, VectorSimilarityFunction vsf) {
+        if (vsf == DOT_PRODUCT && random.nextBoolean()) {
+            return (float) (random.nextGaussian() * 3);
+        }
+        return random.nextInt(50) == 0 ? 1f : random.nextFloat();
     }
 
     private static double trueDistance(VectorSimilarityFunction vsf, VectorFloat<?> x, VectorFloat<?> y) {

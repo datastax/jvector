@@ -65,21 +65,31 @@ public class TestAdaptiveSearch extends RandomizedTest {
         final RandomAccessVectorValues ravv;
         final VectorSimilarityFunction vsf;
         final ImmutableGraphIndex graph;
+        /** unit vectors, or unnormalized Gaussian ones */
+        final boolean unit;
 
+        /** unit vectors for COSINE and DOT_PRODUCT, unnormalized Gaussian ones for EUCLIDEAN */
         Fixture(int n, int dim, VectorSimilarityFunction vsf, boolean hierarchy, Random random) {
+            this(n, dim, vsf, hierarchy, random, vsf != EUCLIDEAN);
+        }
+
+        Fixture(int n, int dim, VectorSimilarityFunction vsf, boolean hierarchy, Random random, boolean unit) {
             this.vsf = vsf;
+            this.unit = unit;
             vectors = new ArrayList<>(n);
             for (int i = 0; i < n; i++) {
-                // unit vectors for COSINE and DOT_PRODUCT, unnormalized Gaussian ones for EUCLIDEAN
-                vectors.add(vsf == EUCLIDEAN ? TestUtil.normalRandomVector(random, dim) : TestUtil.randomVector(random, dim));
+                vectors.add(vector(random, dim));
             }
             ravv = new ListRandomAccessVectorValues(vectors, dim);
             graph = new GraphIndexBuilder(ravv, vsf, 12, 40, 1.2f, 1.2f, hierarchy).build(ravv);
         }
 
+        private VectorFloat<?> vector(Random random, int dim) {
+            return unit ? TestUtil.randomVector(random, dim) : TestUtil.normalRandomVector(random, dim);
+        }
+
         VectorFloat<?> query(Random random) {
-            int dim = ravv.dimension();
-            return vsf == EUCLIDEAN ? TestUtil.normalRandomVector(random, dim) : TestUtil.randomVector(random, dim);
+            return vector(random, ravv.dimension());
         }
 
         SearchScoreProvider exact(VectorFloat<?> q) {
@@ -244,8 +254,11 @@ public class TestAdaptiveSearch extends RandomizedTest {
         Random random = getRandom();
         float[] gammas = {0f, 0.02f, 0.1f, 0.25f, 0.5f, 1f, 2f};
         for (boolean hierarchy : new boolean[] {false, true}) {
-            for (var vsf : new VectorSimilarityFunction[] {COSINE, EUCLIDEAN}) {
-                var f = new Fixture(2000, 20, vsf, hierarchy, random);
+            // unnormalized DOT_PRODUCT has no distance, but a larger gamma must still only extend the search
+            for (var f : new Fixture[] {new Fixture(2000, 20, COSINE, hierarchy, random),
+                                        new Fixture(2000, 20, EUCLIDEAN, hierarchy, random),
+                                        new Fixture(2000, 20, DOT_PRODUCT, hierarchy, random, false)}) {
+                var vsf = f.vsf;
                 try (var searcher = new GraphSearcher(f.graph)) {
                     for (int qi = 0; qi < 20; qi++) {
                         var q = f.query(random);
@@ -266,10 +279,31 @@ public class TestAdaptiveSearch extends RandomizedTest {
                             }
                             previous = r;
                         }
-                        // gamma actually matters
-                        assertTrue(vsf + " q=" + qi, growths > 0);
+                        // gamma actually matters (except where unnormalized dot products leave no distance to scale)
+                        if (f.unit || vsf == EUCLIDEAN) {
+                            assertTrue(vsf + " q=" + qi, growths > 0);
+                        }
                     }
                 }
+            }
+        }
+    }
+
+    /** The rule replaces the beam only in the base layer; the descent through upper layers is the usual greedy one. */
+    @Test
+    public void upperLayersAreSearchedGreedily() throws Exception {
+        Random random = getRandom();
+        var f = new Fixture(3000, 16, COSINE, true, random);
+        assertTrue(f.graph.getMaxLevel() > 0);
+        try (var searcher = new GraphSearcher(f.graph)) {
+            for (int qi = 0; qi < 30; qi++) {
+                var q = f.query(random);
+                int k = 1 + random.nextInt(20);
+                var beam = searcher.search(f.exact(q), k, k, Float.NEGATIVE_INFINITY, 0f, Bits.ALL);
+                var adaptive = searcher.search(f.exact(q), k, k, Float.NEGATIVE_INFINITY, 0f, Bits.ALL,
+                                               AdaptiveTermination.of(COSINE, 1f));
+                assertEquals(beam.getExpandedCount() - beam.getExpandedCountBaseLayer(),
+                             adaptive.getExpandedCount() - adaptive.getExpandedCountBaseLayer());
             }
         }
     }
@@ -474,6 +508,7 @@ public class TestAdaptiveSearch extends RandomizedTest {
             // nothing wanted
             var none = searcher.search(f.exact(q), 0, 0, 0f, 0f, Bits.ALL, rule);
             assertEquals(0, none.getNodes().length);
+            assertEquals(0, none.getVisitedCount());
             // nothing accepted: the whole reachable graph is searched and nothing returned
             var rejected = searcher.search(f.exact(q), 10, 10, 0f, 0f, Bits.NONE, rule);
             assertEquals(0, rejected.getNodes().length);

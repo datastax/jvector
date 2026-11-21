@@ -45,8 +45,9 @@ import java.util.Objects;
  *   <li>{@link VectorSimilarityFunction#COSINE}: the score is {@code (1 + cos) / 2}, and the distance is the
  *   Euclidean distance between the normalized vectors, {@code d^2 = 2 - 2 cos = 4 (1 - score)}.</li>
  *   <li>{@link VectorSimilarityFunction#DOT_PRODUCT}: as for COSINE, which is exact for unit-length vectors. For
- *   vectors that are not unit length the dot product is not a distance and this rule has no guarantee; a score above
- *   the one of an exact match makes the rule stop as soon as {@code rerankK} results are found.</li>
+ *   vectors that are not unit length the dot product is not a distance and this rule has no guarantee. A k-th result
+ *   scoring at least as well as an exact match of unit vectors (a dot product of 1 or more) counts as distance 0, so
+ *   the search then stops at the first candidate that scores no better than it.</li>
  * </ul>
  * Instances are immutable and may be shared between threads and searches.
  */
@@ -92,7 +93,13 @@ public final class AdaptiveTermination {
      * candidate with score {@code candidateScore}, the best one left. Scores are those of the similarity function.
      */
     public boolean shouldStop(float candidateScore, float kthBestScore) {
-        return squaredDistance(candidateScore) >= squaredFactor * squaredDistance(kthBestScore);
+        // A candidate scoring better than the k-th result never stops the search. With a distance this follows from
+        // the rule; with DOT_PRODUCT of vectors that are not unit length, 1 - score can be negative, so it is checked
+        // here, and a negative k-th distance is clamped to 0 so that a larger gamma never stops the search earlier.
+        if (candidateScore > kthBestScore) {
+            return false;
+        }
+        return squaredDistance(candidateScore) >= squaredFactor * Math.max(0, squaredDistance(kthBestScore));
     }
 
     /** the squared distance a score stands for, up to a constant factor that the ratio of the rule cancels */
