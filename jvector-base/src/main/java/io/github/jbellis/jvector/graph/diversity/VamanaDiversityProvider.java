@@ -25,6 +25,9 @@ import io.github.jbellis.jvector.util.DocIdSetIterator;
 import static java.lang.Math.min;
 
 public class VamanaDiversityProvider implements DiversityProvider {
+    /** how many selected neighbors to score per bulk call */
+    private static final int BATCH = 4;
+
     /** the diversity threshold; 1.0 is equivalent to HNSW; Vamana uses 1.2 or more */
     public final float alpha;
 
@@ -49,6 +52,8 @@ public class VamanaDiversityProvider implements DiversityProvider {
 
         int nSelected = diverseBefore;
         double shortEdges = Double.NaN;
+        int[] batchNodes = new int[BATCH];
+        float[] batchScores = new float[BATCH];
         // add diverse candidates, gradually increasing alpha to the threshold
         // (so that the nearest candidates are prioritized)
         float currentAlpha = 1.0f;
@@ -61,7 +66,7 @@ public class VamanaDiversityProvider implements DiversityProvider {
                 int cNode = neighbors.getNode(i);
                 float cScore = neighbors.getScore(i);
                 var sf = scoreProvider.diversityScoreFunctionFor(cNode);
-                if (isDiverse(cNode, cScore, neighbors, sf, selected, currentAlpha)) {
+                if (isDiverse(cNode, cScore, neighbors, sf, selected, currentAlpha, batchNodes, batchScores)) {
                     selected.set(i);
                     nSelected++;
                 }
@@ -80,16 +85,36 @@ public class VamanaDiversityProvider implements DiversityProvider {
 
     // is the candidate node with the given score closer to the base node than it is to any of the
     // already-selected neighbors
-    private static boolean isDiverse(int node, float score, NodeArray others, ScoreFunction sf, BitSet selected, float alpha) {
+    //
+    // The selected neighbors are scored BATCH at a time with one bulk call, which overlaps their memory loads, and
+    // checked in order; a rejection can therefore score up to BATCH - 1 neighbors more than needed, but the answer
+    // is the same as checking them one by one.
+    private static boolean isDiverse(int node, float score, NodeArray others, ScoreFunction sf, BitSet selected, float alpha,
+                                     int[] batchNodes, float[] batchScores) {
         assert others.size() > 0;
 
-        for (int i = selected.nextSetBit(0); i != DocIdSetIterator.NO_MORE_DOCS; i = selected.nextSetBit(i + 1)) {
-            int otherNode = others.getNode(i);
-            if (node == otherNode) {
-                break;
+        int i = selected.nextSetBit(0);
+        while (i != DocIdSetIterator.NO_MORE_DOCS) {
+            int count = 0;
+            boolean reachedSelf = false;
+            for (; count < BATCH && i != DocIdSetIterator.NO_MORE_DOCS; i = selected.nextSetBit(i + 1)) {
+                int otherNode = others.getNode(i);
+                if (node == otherNode) {
+                    reachedSelf = true;
+                    break;
+                }
+                batchNodes[count++] = otherNode;
             }
-            if (sf.similarityTo(otherNode) > score * alpha) {
-                return false;
+            if (count > 0) {
+                sf.similarityTo(batchNodes, count, batchScores);
+                for (int j = 0; j < count; j++) {
+                    if (batchScores[j] > score * alpha) {
+                        return false;
+                    }
+                }
+            }
+            if (reachedSelf) {
+                break;
             }
         }
         return true;

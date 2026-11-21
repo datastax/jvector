@@ -100,6 +100,41 @@ public final class VectorUtil {
   }
 
   /**
+   * Computes {@code dotProduct(q, targets[i])} into {@code results[i]} for each {@code i < count}, with the same
+   * result for each pair as the two-argument method; implementations may score several targets in one pass.
+   *
+   * @throws IllegalArgumentException if a target's dimension differs from the query's.
+   */
+  public static void dotProduct(VectorFloat<?> q, VectorFloat<?>[] targets, int count, float[] results) {
+    checkBulkLengths(q, targets, count, results);
+    impl.dotProduct(q, targets, count, results);
+  }
+
+  /** The bulk form of {@link #cosine(VectorFloat, VectorFloat)}; see {@link #dotProduct(VectorFloat, VectorFloat[], int, float[])}. */
+  public static void cosine(VectorFloat<?> q, VectorFloat<?>[] targets, int count, float[] results) {
+    checkBulkLengths(q, targets, count, results);
+    impl.cosine(q, targets, count, results);
+  }
+
+  /** The bulk form of {@link #squareL2Distance(VectorFloat, VectorFloat)}; see {@link #dotProduct(VectorFloat, VectorFloat[], int, float[])}. */
+  public static void squareL2Distance(VectorFloat<?> q, VectorFloat<?>[] targets, int count, float[] results) {
+    checkBulkLengths(q, targets, count, results);
+    impl.squareDistance(q, targets, count, results);
+  }
+
+  private static void checkBulkLengths(VectorFloat<?> q, VectorFloat<?>[] targets, int count, float[] results) {
+    if (count > targets.length || count > results.length) {
+      throw new IllegalArgumentException("count " + count + " exceeds targets (" + targets.length + ") or results (" + results.length + ")");
+    }
+    int length = q.length();
+    for (int i = 0; i < count; i++) {
+      if (targets[i].length() != length) {
+        throw new IllegalArgumentException("vector dimensions differ: " + length + "!=" + targets[i].length());
+      }
+    }
+  }
+
+  /**
    * Tries a bulk closest-centroid operation by squared L2 distance. Returns -1
    * when unsupported, allowing callers to retain their existing Java scan.
    * Equal distances retain the first centroid. No distance array is allocated.

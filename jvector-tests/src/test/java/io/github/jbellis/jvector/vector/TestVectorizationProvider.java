@@ -130,6 +130,53 @@ public class TestVectorizationProvider extends RandomizedTest {
         }
     }
 
+    /**
+     * The bulk similarity methods must return exactly what the pairwise ones do, for every provider, at lengths around
+     * the SIMD widths (where the pairwise methods change path) and at counts that leave a partial batch.
+     */
+    @Test
+    public void testBulkSimilarityEqualsPairwise() throws Exception {
+        var providers = new java.util.ArrayList<VectorizationProvider>();
+        providers.add(new DefaultVectorizationProvider());
+        providers.add(VectorizationProvider.getInstance());
+        if (hasSimd) {
+            providers.add((VectorizationProvider) Class.forName("io.github.jbellis.jvector.vector.PanamaVectorizationProvider")
+                                                       .getConstructor().newInstance());
+        }
+        int[] lengths = {1, 2, 3, 4, 5, 7, 8, 9, 15, 16, 17, 23, 31, 32, 33, 47, 48, 49, 63, 64, 65, 100, 1021, 1024};
+        for (var provider : providers) {
+            var vts = provider.getVectorTypeSupport();
+            var util = provider.getVectorUtilSupport();
+            for (int length : lengths) {
+                var q = copyOf(vts, TestUtil.randomVector(getRandom(), length));
+                for (int count = 0; count <= 9; count++) {
+                    VectorFloat<?>[] targets = new VectorFloat<?>[count + 1];
+                    for (int i = 0; i < count; i++) {
+                        targets[i] = copyOf(vts, TestUtil.randomVector(getRandom(), length));
+                    }
+                    float[] dot = new float[count + 1], cosine = new float[count + 1], l2 = new float[count + 1];
+                    util.dotProduct(q, targets, count, dot);
+                    util.cosine(q, targets, count, cosine);
+                    util.squareDistance(q, targets, count, l2);
+                    for (int i = 0; i < count; i++) {
+                        String where = provider.getClass().getSimpleName() + " length=" + length + " count=" + count + " i=" + i;
+                        Assert.assertEquals(where, util.dotProduct(q, targets[i]), dot[i], 0.0f);
+                        Assert.assertEquals(where, util.cosine(q, targets[i]), cosine[i], 0.0f);
+                        Assert.assertEquals(where, util.squareDistance(q, targets[i]), l2[i], 0.0f);
+                    }
+                }
+            }
+        }
+    }
+
+    private static VectorFloat<?> copyOf(VectorTypeSupport vts, VectorFloat<?> v) {
+        var copy = vts.createFloatVector(v.length());
+        for (int i = 0; i < v.length(); i++) {
+            copy.set(i, v.get(i));
+        }
+        return copy;
+    }
+
     private static float[] getVector(VectorFloat<?> vf) {
         final float[] arr = new float[vf.length()];
         for (int i = 0; i < vf.length(); ++i) {

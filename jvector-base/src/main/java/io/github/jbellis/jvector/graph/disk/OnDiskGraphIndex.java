@@ -19,6 +19,7 @@ package io.github.jbellis.jvector.graph.disk;
 import io.github.jbellis.jvector.annotations.VisibleForTesting;
 import io.github.jbellis.jvector.disk.RandomAccessReader;
 import io.github.jbellis.jvector.disk.ReaderSupplier;
+import io.github.jbellis.jvector.graph.BatchedNeighborScorer;
 import io.github.jbellis.jvector.graph.ImmutableGraphIndex;
 import io.github.jbellis.jvector.graph.NodesIterator;
 import io.github.jbellis.jvector.graph.RandomAccessVectorValues;
@@ -500,6 +501,7 @@ public class OnDiskGraphIndex implements ImmutableGraphIndex, AutoCloseable, Acc
         protected final RandomAccessReader reader;
         private final int[] neighbors;
         private int nodeDegree;
+        private final BatchedNeighborScorer neighborScorer = new BatchedNeighborScorer();
 
         public View(RandomAccessReader reader) {
             this.reader = reader;
@@ -661,14 +663,7 @@ public class OnDiskGraphIndex implements ImmutableGraphIndex, AutoCloseable, Acc
                     }
                 }
             } else {
-                var it = getNeighborsIterator(level, node);
-                while (it.hasNext()) {
-                    var friendOrd = it.nextInt();
-                    if (visited.mark(friendOrd)) {
-                        float friendSimilarity = scoreFunction.similarityTo(friendOrd);
-                        neighborProcessor.process(friendOrd, friendSimilarity);
-                    }
-                }
+                neighborScorer.processNeighbors(getNeighborsIterator(level, node), scoreFunction, visited, neighborProcessor);
             }
         }
 

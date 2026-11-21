@@ -54,6 +54,31 @@ public interface VectorUtilSupport {
   float squareDistance(VectorFloat<?> a, int aoffset, VectorFloat<?> b, int boffset, int length);
 
   /**
+   * Computes {@code dotProduct(q, targets[i])} into {@code results[i]} for each {@code i < count}. Implementations may
+   * score several targets in one pass, which overlaps their memory loads; each result must equal the one the
+   * two-argument method returns for the same pair. All vectors must have the length of {@code q}.
+   */
+  default void dotProduct(VectorFloat<?> q, VectorFloat<?>[] targets, int count, float[] results) {
+    for (int i = 0; i < count; i++) {
+      results[i] = dotProduct(q, targets[i]);
+    }
+  }
+
+  /** The bulk form of {@link #cosine(VectorFloat, VectorFloat)}, with the contract of the bulk dotProduct. */
+  default void cosine(VectorFloat<?> q, VectorFloat<?>[] targets, int count, float[] results) {
+    for (int i = 0; i < count; i++) {
+      results[i] = cosine(q, targets[i]);
+    }
+  }
+
+  /** The bulk form of {@link #squareDistance(VectorFloat, VectorFloat)}, with the contract of the bulk dotProduct. */
+  default void squareDistance(VectorFloat<?> q, VectorFloat<?>[] targets, int count, float[] results) {
+    for (int i = 0; i < count; i++) {
+      results[i] = squareDistance(q, targets[i]);
+    }
+  }
+
+  /**
    * Optionally finds the closest contiguous centroid in one bulk operation.
    * Returns {@code -1} when unsupported so callers can retain their Java loop
    * in its original compilation context. Supported implementations retain the

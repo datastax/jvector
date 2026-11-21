@@ -41,6 +41,17 @@ public interface ScoreFunction {
     float similarityTo(int node2);
 
     /**
+     * Computes {@code similarityTo(nodes[i])} into {@code results[i]} for each {@code i < count}. Search calls this
+     * with the unvisited neighbors of the node it expands, so an implementation can score them together, for example
+     * to overlap the memory loads of their vectors. Each result must equal what {@link #similarityTo(int)} returns.
+     */
+    default void similarityTo(int[] nodes, int count, float[] results) {
+        for (int i = 0; i < count; i++) {
+            results[i] = similarityTo(nodes[i]);
+        }
+    }
+
+    /**
      * Computes the similarity to the neighborIndex-th neighbor of origin.
      * Before calling this function, enableSimilarityToNeighbors must be called first with the same origin.
      * This function only works if it is called for the same origin node multiple times.
