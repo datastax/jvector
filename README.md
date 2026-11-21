@@ -122,6 +122,11 @@ trains and encodes quickly, and scores with SIMD lookups. JVector is the first g
 it. On large datasets at matched code sizes, fused ASH builds faster than fused PQ, is more
 accurate, and searches faster in nearly every case; see [ASH performance](./docs/ash-performance.md).
 
+![Build time vs cores for fused ASH and fused PQ](./docs/images/ash-pq-build-time-vs-cores.png)
+
+Dataset: Cohere English v3 10M, derived from
+[Cohere/msmarco-v2-embed-english-v3](https://huggingface.co/datasets/Cohere/msmarco-v2-embed-english-v3).
+
 Start with the HelloASHWorld programs above, then:
 
 - [ASH configuration and defaults](./docs/ash-configuration.md): model parameters, construction
