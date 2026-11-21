@@ -31,7 +31,7 @@ Three self-contained introductions build and query a fused ASH disk index over t
 public `e5-small-v2-100k` dataset (downloaded and cached automatically):
 
 - [HelloASHWorld](src/main/java/io/github/jbellis/jvector/example/HelloASHWorld.java):
-  runs on any processor, projecting queries with the default `auto` precision,
+  runs on any processor and Java 11 or newer, projecting queries with the default `auto` precision,
   the fastest the vectorization provider supports. Start here.
 - [HelloASHWorldInt8](src/main/java/io/github/jbellis/jvector/example/HelloASHWorldInt8.java):
   INT8 query projection, for x86-64 processors with AVX-512 VNNI or AVX-VNNI.
