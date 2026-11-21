@@ -22,6 +22,7 @@ import java.util.stream.Collectors;
 import java.util.stream.IntStream;
 
 import io.github.jbellis.jvector.example.Grid.ConfiguredSystem;
+import io.github.jbellis.jvector.graph.AdaptiveTermination;
 import io.github.jbellis.jvector.example.util.AccuracyMetrics;
 import io.github.jbellis.jvector.graph.SearchResult;
 
@@ -82,6 +83,7 @@ public class AccuracyBenchmark extends AbstractQueryBenchmark {
             int topK,
             int rerankK,
             boolean usePruning,
+            AdaptiveTermination termination,
             int queryRuns) {
 
         if (!(computeRecall || computeMAP)) {
@@ -94,7 +96,7 @@ public class AccuracyBenchmark extends AbstractQueryBenchmark {
         List<SearchResult> results = IntStream.range(0, totalQueries)
                 .parallel()
                 .mapToObj(i -> QueryExecutor.executeQuery(
-                        cs, topK, rerankK, usePruning, i))
+                        cs, topK, rerankK, usePruning, termination, i))
                 .collect(Collectors.toList());
 
         var list = new ArrayList<Metric>();

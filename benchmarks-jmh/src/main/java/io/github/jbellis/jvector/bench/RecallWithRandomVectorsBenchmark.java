@@ -54,6 +54,8 @@ public class RecallWithRandomVectorsBenchmark {
     private GraphIndexBuilder graphIndexBuilder;
     private ImmutableGraphIndex graphIndex;
     private PQVectors pqVectors;
+    // null = classic beam-width search
+    private AdaptiveTermination termination;
 
     // Add ground truth storage
     private ArrayList<int[]> groundTruth;
@@ -70,6 +72,10 @@ public class RecallWithRandomVectorsBenchmark {
     int k;
     @Param({"5"})
     int overQueryFactor;
+    // Adaptive termination gamma; negative means classic beam search (rerankK is the beam width).
+    // Otherwise rerankK is the number of results the stopping rule waits for: k exact, overQueryFactor * k with PQ.
+    @Param({"-1", "0.02", "0.05"})
+    float gamma;
 
     @Setup
     public void setup() throws IOException {
@@ -110,6 +116,8 @@ public class RecallWithRandomVectorsBenchmark {
 
         // Calculate ground truth for recall computation
         calculateGroundTruth();
+
+        termination = gamma < 0 ? null : AdaptiveTermination.of(VectorSimilarityFunction.EUCLIDEAN, gamma);
     }
 
     private VectorFloat<?> createRandomVector(int dimension) {
@@ -182,10 +190,11 @@ public class RecallWithRandomVectorsBenchmark {
                     );
                     ScoreFunction.ExactScoreFunction reranker = ravv.rerankerFor(queryVector, VectorSimilarityFunction.EUCLIDEAN);
                     ssp = new DefaultSearchScoreProvider(asf, reranker);
-                    searchResult = graphSearcher.search(ssp, k, overQueryFactor * k, 0.0f, 0.0f, Bits.ALL);
+                    searchResult = graphSearcher.search(ssp, k, overQueryFactor * k, 0.0f, 0.0f, Bits.ALL, termination);
                 } else { // Not quantized, used typical searcher
                     ssp = DefaultSearchScoreProvider.exact(queryVector, VectorSimilarityFunction.EUCLIDEAN, ravv);
-                    searchResult = graphSearcher.search(ssp, k, Bits.ALL);
+                    // Same as search(ssp, k, Bits.ALL) when termination is null
+                    searchResult = graphSearcher.search(ssp, k, k, Float.NEGATIVE_INFINITY, 0.0f, Bits.ALL, termination);
                 }
             }
 

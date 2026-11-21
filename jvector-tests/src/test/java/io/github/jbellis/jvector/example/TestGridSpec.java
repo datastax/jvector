@@ -193,4 +193,48 @@ public class TestGridSpec {
         var e = assertThrows(NullPointerException.class, () -> GridSpec.fromConfig(config));
         assertTrue(e.getMessage(), e.getMessage().contains("useSavedIndexIfExists"));
     }
+
+    @Test
+    public void adaptiveGammasAreOptionalAndValidated() {
+        // absent: beam search only
+        assertEquals(List.of(), search().adaptiveGammaGrid);
+
+        var base = SearchConfig.builder()
+                .searchCompressors(List.of(ds -> CompressorParameters.NONE))
+                .topKGrid(Map.of(10, List.of(1.0)))
+                .usePruningGrid(List.of(true));
+        assertEquals(List.of(0f, 0.05f), base.adaptiveGammaGrid(List.of(0f, 0.05f)).build().adaptiveGammaGrid);
+        assertEquals(List.of(), base.adaptiveGammaGrid(null).build().adaptiveGammaGrid);
+        for (float bad : new float[] {-0.1f, Float.NaN, Float.POSITIVE_INFINITY}) {
+            var e = assertThrows(IllegalArgumentException.class, () -> base.adaptiveGammaGrid(List.of(0.05f, bad)).build());
+            assertTrue(e.getMessage(), e.getMessage().contains("adaptiveGamma"));
+        }
+    }
+
+    @Test
+    public void fromConfigMapsAdaptiveGammas() {
+        var none = new Compression();
+        none.type = "None";
+        var construction = new ConstructionParameters();
+        construction.outDegree = List.of(16);
+        construction.efConstruction = List.of(100);
+        construction.neighborOverflow = List.of(1.2f);
+        construction.addHierarchy = List.of(false);
+        construction.refineFinalGraph = List.of(false);
+        construction.reranking = List.of("FP");
+        construction.fusedGraph = List.of(false);
+        construction.compression = List.of(none);
+        construction.useSavedIndexIfExists = false;
+        var searchParams = new SearchParameters();
+        searchParams.compression = List.of(none);
+        searchParams.topKOverquery = Map.of(10, List.of(1.0));
+        searchParams.useSearchPruning = List.of(false);
+        var config = new MultiConfig();
+        config.construction = construction;
+        config.search = searchParams;
+
+        assertEquals(List.of(), GridSpec.fromConfig(config).search.adaptiveGammaGrid);
+        searchParams.adaptiveGamma = List.of(0.02f, 0.05f);
+        assertEquals(List.of(0.02f, 0.05f), GridSpec.fromConfig(config).search.adaptiveGammaGrid);
+    }
 }

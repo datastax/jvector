@@ -48,6 +48,9 @@ final class BenchResultCollector implements GridListener {
         params.put("topK", row.topK);
         params.put("overquery", row.overquery);
         params.put("usePruning", row.usePruning);
+        if (row.adaptiveGamma != null) {
+            params.put("adaptiveGamma", row.adaptiveGamma);
+        }
 
         // Collect all metrics including memory and disk usage
         Map<String, Object> allMetrics = new HashMap<>();

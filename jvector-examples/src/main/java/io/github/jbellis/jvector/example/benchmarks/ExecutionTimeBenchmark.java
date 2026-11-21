@@ -19,6 +19,7 @@ package io.github.jbellis.jvector.example.benchmarks;
 import java.util.List;
 import java.util.stream.IntStream;
 import io.github.jbellis.jvector.example.Grid.ConfiguredSystem;
+import io.github.jbellis.jvector.graph.AdaptiveTermination;
 import io.github.jbellis.jvector.graph.SearchResult;
 
 /**
@@ -54,6 +55,7 @@ public class ExecutionTimeBenchmark extends AbstractQueryBenchmark {
             int topK,
             int rerankK,
             boolean usePruning,
+            AdaptiveTermination termination,
             int queryRuns) {
 
         int totalQueries = cs.getDataSet().getQueryVectors().size();
@@ -67,7 +69,7 @@ public class ExecutionTimeBenchmark extends AbstractQueryBenchmark {
                     .parallel()
                     .forEach(i -> {
                         SearchResult sr = QueryExecutor.executeQuery(
-                                cs, topK, rerankK, usePruning, i);
+                                cs, topK, rerankK, usePruning, termination, i);
                         SINK += sr.getVisitedCount();
                     });
 

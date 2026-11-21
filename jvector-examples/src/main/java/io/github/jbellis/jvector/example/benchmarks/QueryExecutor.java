@@ -17,6 +17,7 @@
 package io.github.jbellis.jvector.example.benchmarks;
 
 import io.github.jbellis.jvector.example.Grid.ConfiguredSystem;
+import io.github.jbellis.jvector.graph.AdaptiveTermination;
 import io.github.jbellis.jvector.graph.SearchResult;
 import io.github.jbellis.jvector.util.Bits;
 import io.github.jbellis.jvector.vector.types.VectorFloat;
@@ -29,21 +30,31 @@ public class QueryExecutor {
      * @param topK       Number of top results.
      * @param rerankK    Number of candidates for reranking.
      * @param usePruning Whether to use pruning.
+     * @param termination Adaptive termination rule, or null for classic beam search with beam width rerankK.
      * @param i          The query vector index.
      * @return the SearchResult for query i.
      */
-    public static SearchResult executeQuery(ConfiguredSystem cs, int topK, int rerankK, boolean usePruning, int i) {
+    public static SearchResult executeQuery(ConfiguredSystem cs, int topK, int rerankK, boolean usePruning,
+                                            AdaptiveTermination termination, int i) {
         var queryVector = cs.getDataSet().getQueryVectors().get(i);
-        return executeQuery(cs, topK, rerankK, usePruning, queryVector);
+        return executeQuery(cs, topK, rerankK, usePruning, termination, queryVector);
     }
 
     // Overload to allow single query injection (e.g., for warm-up with random vectors)
-    public static SearchResult executeQuery(ConfiguredSystem cs, int topK, int rerankK, boolean usePruning, VectorFloat<?> queryVector
-    ) {
+    public static SearchResult executeQuery(ConfiguredSystem cs, int topK, int rerankK, boolean usePruning,
+                                            AdaptiveTermination termination, VectorFloat<?> queryVector) {
         var searcher = cs.getSearcher();
         searcher.usePruning(usePruning);
         var sf = cs.scoreProviderFor(queryVector, searcher.getView());
-        return searcher.search(sf, topK, rerankK, 0.0f, 0.0f, Bits.ALL);
+        return searcher.search(sf, topK, rerankK, 0.0f, 0.0f, Bits.ALL, termination);
+    }
+
+    /**
+     * The adaptive termination rule for {@code gamma} under the dataset's similarity function, or null
+     * (beam search) when {@code gamma} is null. Build it once per query configuration, not per query.
+     */
+    public static AdaptiveTermination termination(ConfiguredSystem cs, Float gamma) {
+        return gamma == null ? null : AdaptiveTermination.of(cs.getDataSet().getSimilarityFunction(), gamma);
     }
 }
 

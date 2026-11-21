@@ -33,6 +33,16 @@ You can use [`plot_output.py`](./plot_output.py) to graph the [pareto-optimal po
 
 > `mvn compile exec:exec@bench`
 
+YAML-driven runs (`BenchYAML`, `AutoBenchYAML`) take their search sweep from the `search:` section of
+`yaml-configs/index-parameters/*.yml`: `topKOverquery` maps each topK to overquery factors
+(rerankK = topK * overquery), `useSearchPruning` lists pruning settings, and the optional `adaptiveGamma`
+list (e.g. `adaptiveGamma: [0.02, 0.05, 0.1]`) additionally runs each topK/overquery cell with
+[Adaptive Beam Search](https://arxiv.org/abs/2505.15636) termination for each gamma, where rerankK is the
+number of results the stopping rule waits for instead of a beam width. Larger gamma searches more and recalls more;
+useful values are small (on 1024-dimension embeddings, 0.02 to 0.07 spans recall@10 0.95 to 0.996).
+Adaptive rows show a `Gamma` column in the console and fill the `adaptiveGamma` column of `experiments.csv`
+(blank for beam-search rows). Without the key, output is beam search only, as before.
+
 Some sample KNN datasets for testing based on ada-002 embeddings generated on wikipedia data are available in ivec/fvec format for testing at:
 
 ```
