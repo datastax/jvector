@@ -107,7 +107,12 @@ public class TestCallerBatchProcessor {
     @Test(timeout=20000)
     public void repeatedSlotReuseDoesNotLoseOrMisrouteRequests() throws Exception {
         var processor = new CallerBatchProcessor<>(2, 8, new IntegerOperation() {
-            public void apply(Integer value, int[] out) { Thread.yield(); out[0] = value; }
+            // Widen the slot-reuse window without giving up the CPU: on a loaded Windows runner,
+            // Thread.yield() here could hand a slot holder's CPU to another JVM for a full time slice.
+            public void apply(Integer value, int[] out) {
+                for (int i = 0; i < 4096; i++) Thread.onSpinWait();
+                out[0] = value;
+            }
         });
         var executor = Executors.newFixedThreadPool(16);
         var start = new CountDownLatch(1);
