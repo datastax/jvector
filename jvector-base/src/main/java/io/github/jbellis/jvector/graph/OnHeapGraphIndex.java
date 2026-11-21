@@ -66,8 +66,16 @@ public class OnHeapGraphIndex implements MutableGraphIndex {
     // The current entry node for searches
     private final AtomicReference<NodeAtLevel> entryPoint;
 
-    // Layers of the graph, with layer 0 as the bottom (dense) layer containing all nodes.
-    final List<ConcurrentNeighborMap> layers = new ArrayList<>();
+    // GraphIndexBuilder draws levels as floor(-ln(u) / ln(M)) with u >= 2^-53, so no node is above level 53.
+    private static final int MAX_LAYERS = 64;
+
+    // Layers of the graph, with layer 0 as the bottom (dense) layer containing all nodes. Slots never move, so
+    // searches read them without a lock or a volatile read: a slot is null until its layer exists, and a layer's
+    // fields are final, so a thread that sees the layer sees it fully built. Layers are added under the lock on
+    // this array, and layerCount (volatile) is raised only after a layer is in its slot, so a thread that reads
+    // layerCount sees every layer below it.
+    final ConcurrentNeighborMap[] layers = new ConcurrentNeighborMap[MAX_LAYERS];
+    private volatile int layerCount;
 
     private final CompletionTracker completions;
     private final ThreadSafeGrowableBitSet deletedNodes = new ThreadSafeGrowableBitSet(0);
@@ -101,12 +109,12 @@ public class OnHeapGraphIndex implements MutableGraphIndex {
         entryPoint = new AtomicReference<>();
         this.completions = new CompletionTracker(1024);
         // Initialize the base layer (layer 0) with a dense map.
-        this.layers.add(new ConcurrentNeighborMap(
+        this.layers[0] = new ConcurrentNeighborMap(
                 newDenseNodeMap(1024),
                 diversityProvider,
                 getDegree(0),
-                (int) (getDegree(0) * overflowRatio))
-        );
+                (int) (getDegree(0) * overflowRatio));
+        this.layerCount = 1;
         this.isHierarchical = isHierarchical;
     }
 
@@ -118,10 +126,13 @@ public class OnHeapGraphIndex implements MutableGraphIndex {
      * @return the Neighbors structure or null
      */
     Neighbors getNeighbors(int level, int node) {
-        if (level >= layers.size()) {
-            return null;
-        }
-        return layers.get(level).get(node);
+        var layer = layerOrNull(level);
+        return layer == null ? null : layer.get(node);
+    }
+
+    /** The layer at {@code level}, or null if it does not exist (yet); a plain read, see {@link #layers}. */
+    private ConcurrentNeighborMap layerOrNull(int level) {
+        return level < MAX_LAYERS ? layers[level] : null;
     }
 
     @Override
@@ -131,10 +142,11 @@ public class OnHeapGraphIndex implements MutableGraphIndex {
 
     @Override
     public NodesIterator getNeighborsIterator(int level, int node) {
-        if (level >= layers.size()) {
+        var layer = layerOrNull(level);
+        if (layer == null) {
             return NodesIterator.EMPTY_NODE_ITERATOR;
         }
-        var neighs = layers.get(level).get(node);
+        var neighs = layer.get(node);
         if (neighs == null) {
             return NodesIterator.EMPTY_NODE_ITERATOR;
         } else {
@@ -150,7 +162,7 @@ public class OnHeapGraphIndex implements MutableGraphIndex {
     @Override
     public int getMaxLevelForNode(int node) {
         int maxLayer = -1;
-        for (int lvl = 0; lvl < layers.size(); lvl++) {
+        for (int lvl = 0; lvl < layerCount; lvl++) {
             if (getNeighbors(lvl, node) == null) {
                 break;
             }
@@ -161,7 +173,7 @@ public class OnHeapGraphIndex implements MutableGraphIndex {
 
     @Override
     public int size(int level) {
-        return layers.get(level).size();
+        return layers[level].size();
     }
 
     public void addNode(NodeAtLevel nodeLevel) {
@@ -173,7 +185,7 @@ public class OnHeapGraphIndex implements MutableGraphIndex {
 
         // add the node to each layer
         for (int i = 0; i <= level; i++) {
-            layers.get(i).addNode(node);
+            layers[i].addNode(node);
         }
         maxNodeId.accumulateAndGet(node, Math::max);
     }
@@ -185,20 +197,24 @@ public class OnHeapGraphIndex implements MutableGraphIndex {
 
     @Override
     public boolean contains(int level, int node) {
-        return layers.get(level).contains(node);
+        return layers[level].contains(node);
     }
 
     private void ensureLayersExist(int level) {
-        for (int i = layers.size(); i <= level; i++) {
-            synchronized (layers) {
-                if (i == layers.size()) { // doublecheck after locking
-                    var denseMap = layers.get(0);
-                    var map = new ConcurrentNeighborMap(new SparseIntMap<>(),
-                                                        denseMap.diversityProvider,
-                                                        getDegree(level),
-                                                        (int) (getDegree(level) * overflowRatio));
-                    layers.add(map);
-                }
+        if (level < layerCount) {
+            return;
+        }
+        if (level >= MAX_LAYERS) {
+            throw new IllegalArgumentException("level " + level + " exceeds the maximum of " + (MAX_LAYERS - 1));
+        }
+        synchronized (layers) {
+            for (int i = layerCount; i <= level; i++) {
+                var denseMap = layers[0];
+                layers[i] = new ConcurrentNeighborMap(new SparseIntMap<>(),
+                                                      denseMap.diversityProvider,
+                                                      getDegree(i),
+                                                      (int) (getDegree(i) * overflowRatio));
+                layerCount = i + 1; // publish only after the layer is in its slot
             }
         }
     }
@@ -210,7 +226,7 @@ public class OnHeapGraphIndex implements MutableGraphIndex {
     public void connectNode(int level, int node, NodeArray nodes) {
         assert nodes != null;
         ensureLayersExist(level);
-        this.layers.get(level).addNode(node, nodes);
+        this.layers[level].addNode(node, nodes);
         maxNodeId.accumulateAndGet(node, Math::max);
     }
 
@@ -246,12 +262,12 @@ public class OnHeapGraphIndex implements MutableGraphIndex {
     @Override
     public NodesIterator getNodes(int level) {
         return NodesIterator.fromPrimitiveIterator(nodeStream(level).iterator(),
-                                                   layers.get(level).size());
+                                                   layers[level].size());
     }
 
     @Override
     public IntStream nodeStream(int level) {
-        var layer = layers.get(level);
+        var layer = layers[level];
         return level == 0
                 ? IntStream.range(0, getIdUpperBound()).filter(i -> layer.get(i) != null)
                 : ((SparseIntMap<Neighbors>) layer.neighbors).keysStream();
@@ -259,7 +275,7 @@ public class OnHeapGraphIndex implements MutableGraphIndex {
 
     @Override
     public long ramBytesUsed() {
-        var graphBytesUsed = IntStream.range(0, layers.size()).mapToLong(this::ramBytesUsedOneLayer).sum();
+        var graphBytesUsed = IntStream.range(0, layerCount).mapToLong(this::ramBytesUsedOneLayer).sum();
         return graphBytesUsed + completions.ramBytesUsed();
     }
 
@@ -268,32 +284,32 @@ public class OnHeapGraphIndex implements MutableGraphIndex {
         var REF_BYTES = RamUsageEstimator.NUM_BYTES_OBJECT_REF;
         var AH_BYTES = RamUsageEstimator.NUM_BYTES_ARRAY_HEADER;
 
-        long neighborSize = ramBytesUsedOneNode(level) * layers.get(level).size();
+        long neighborSize = ramBytesUsedOneNode(level) * layers[level].size();
         return OH_BYTES + REF_BYTES * 2L + AH_BYTES + neighborSize;
     }
 
     public long ramBytesUsedOneNode(int level) {
         // we include the REF_BYTES for the CNS reference here to make it self-contained for addGraphNode()
         int REF_BYTES = RamUsageEstimator.NUM_BYTES_OBJECT_REF;
-        return REF_BYTES + Neighbors.ramBytesUsed(layers.get(level).nodeArrayLength());
+        return REF_BYTES + Neighbors.ramBytesUsed(layers[level].nodeArrayLength());
     }
 
     @Override
     public void enforceDegree(int node) {
         for (int level = 0; level <= getMaxLevel(); level++) {
-            layers.get(level).enforceDegree(node);
+            layers[level].enforceDegree(node);
         }
     }
 
     @Override
     public void addEdges(int level, int node, NodeArray candidates, float overflowRatio) {
-        var newNeighbors = layers.get(level).insertDiverse(node, candidates);
-        layers.get(level).backlink(newNeighbors, node, overflowRatio);
+        var newNeighbors = layers[level].insertDiverse(node, candidates);
+        layers[level].backlink(newNeighbors, node, overflowRatio);
     }
 
     @Override
     public void replaceDeletedNeighbors(int level, int node, BitSet toDelete, NodeArray candidates) {
-        layers.get(level).replaceDeletedNeighbors(node, toDelete, candidates);
+        layers[level].replaceDeletedNeighbors(node, toDelete, candidates);
     }
 
     @Override
@@ -324,8 +340,8 @@ public class OnHeapGraphIndex implements MutableGraphIndex {
     @Override
     public int removeNode(int node) {
         int found = 0;
-        for (var layer : layers) {
-            if (layer.remove(node) != null) {
+        for (int lvl = 0, n = layerCount; lvl < n; lvl++) {
+            if (layers[lvl].remove(node) != null) {
                 found++;
             }
         }
@@ -340,7 +356,7 @@ public class OnHeapGraphIndex implements MutableGraphIndex {
 
     @Override
     public boolean containsNode(int nodeId) {
-        return layers.get(0).contains(nodeId);
+        return layers[0].contains(nodeId);
     }
 
     /**
@@ -358,12 +374,12 @@ public class OnHeapGraphIndex implements MutableGraphIndex {
 
     @Override
     public int getMaxLevel() {
-        for (int lvl = 0; lvl < layers.size(); lvl++) {
-            if (layers.get(lvl).size() == 0) {
+        for (int lvl = 0; lvl < layerCount; lvl++) {
+            if (layers[lvl].size() == 0) {
                 return (lvl > 0) ? lvl - 1 : 0;
             }
         }
-        return layers.size() - 1;
+        return layerCount - 1;
     }
 
     @Override
@@ -575,8 +591,8 @@ public class OnHeapGraphIndex implements MutableGraphIndex {
         out.writeInt(4); // The version
 
         // Write graph-level properties.
-        out.writeInt(layers.size());
-        for (int level = 0; level < layers.size(); level++) {
+        out.writeInt(layerCount);
+        for (int level = 0; level < layerCount; level++) {
             out.writeInt(getDegree(level));
         }
 
@@ -588,14 +604,14 @@ public class OnHeapGraphIndex implements MutableGraphIndex {
             out.writeInt(ENTRY_NODE_ABSENT);
         }
 
-        for (int level = 0; level < layers.size(); level++) {
+        for (int level = 0; level < layerCount; level++) {
             out.writeInt(size(level));
 
             // Save neighbors from the layer.
             var it = nodeStream(level).iterator();
             while (it.hasNext()) {
                 int nodeId = it.nextInt();
-                var neighbors = layers.get(level).get(nodeId);
+                var neighbors = layers[level].get(nodeId);
                 out.writeInt(nodeId);
                 out.writeInt(neighbors.size());
 
