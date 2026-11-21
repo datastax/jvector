@@ -64,6 +64,7 @@ public final class GridSpec {
                         .searchCompressors(search.getCompressorParameters())
                         .topKGrid(search.topKOverquery)
                         .usePruningGrid(search.useSearchPruning)
+                        .adaptiveGammaGrid(search.adaptiveGamma)
                         .build(),
                 Objects.requireNonNull(construction.useSavedIndexIfExists,
                         "construction.useSavedIndexIfExists must be set"));

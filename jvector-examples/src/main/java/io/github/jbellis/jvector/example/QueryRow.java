@@ -26,14 +26,17 @@ final class QueryRow {
     final int topK;
     final double overquery;
     final int rerankK;
+    /** Adaptive termination gamma, or null for a classic beam-width search. */
+    final Float adaptiveGamma;
     /** Query benchmark results followed by the index's construction metrics. */
     final List<Metric> metrics;
 
-    QueryRow(boolean usePruning, int topK, double overquery, int rerankK, List<Metric> metrics) {
+    QueryRow(boolean usePruning, int topK, double overquery, int rerankK, Float adaptiveGamma, List<Metric> metrics) {
         this.usePruning = usePruning;
         this.topK = topK;
         this.overquery = overquery;
         this.rerankK = rerankK;
+        this.adaptiveGamma = adaptiveGamma;
         this.metrics = metrics;
     }
 }

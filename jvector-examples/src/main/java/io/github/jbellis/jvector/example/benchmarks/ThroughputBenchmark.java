@@ -17,6 +17,7 @@
 package io.github.jbellis.jvector.example.benchmarks;
 
 import io.github.jbellis.jvector.example.Grid.ConfiguredSystem;
+import io.github.jbellis.jvector.graph.AdaptiveTermination;
 import io.github.jbellis.jvector.graph.SearchResult;
 import io.github.jbellis.jvector.vector.types.VectorFloat;
 import io.github.jbellis.jvector.vector.types.VectorTypeSupport;
@@ -133,6 +134,7 @@ public class ThroughputBenchmark extends AbstractQueryBenchmark {
             int topK,
             int rerankK,
             boolean usePruning,
+            AdaptiveTermination termination,
             int queryRuns) {
 
         if (!(computeAvgQps || computeMedianQps || computeMaxQps)) {
@@ -161,7 +163,7 @@ public class ThroughputBenchmark extends AbstractQueryBenchmark {
                                 }
                                 VectorUtil.l2normalize(randQ);
                                 SearchResult sr = QueryExecutor.executeQuery(
-                                        cs, topK, rerankK, usePruning, randQ);
+                                        cs, topK, rerankK, usePruning, termination, randQ);
                                 SINK += sr.getVisitedCount();
 
                                 long queryEnd = System.nanoTime();
@@ -215,7 +217,7 @@ public class ThroughputBenchmark extends AbstractQueryBenchmark {
                                 long queryStart = System.nanoTime();
 
                                 SearchResult sr = QueryExecutor.executeQuery(
-                                        cs, topK, rerankK, usePruning, i);
+                                        cs, topK, rerankK, usePruning, termination, i);
                                 // "Use" the result to prevent optimization
                                 visitedAdder.add(sr.getVisitedCount());
 

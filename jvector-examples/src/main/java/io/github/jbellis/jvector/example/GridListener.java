@@ -24,7 +24,7 @@ package io.github.jbellis.jvector.example;
  * <pre>
  * onSearchStart
  *   for each pruning setting: onPruningStart
- *     for each topK: onTopKStart, onQueryResult per overquery factor, onTopKEnd
+ *     for each topK: onTopKStart, onQueryResult per overquery factor (beam, then each adaptive gamma), onTopKEnd
  * </pre>
  */
 interface GridListener {

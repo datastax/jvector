@@ -24,6 +24,7 @@ import java.util.Map;
 /**
  * Prints a two‐dimensional table:
  *  - First column is the Overquery value (double)
+ *  - Optional Gamma column (adaptive termination gamma, or "beam"), when rows pass one
  *  - Subsequent columns are defined by Metric tuples
  */
 public class BenchmarkTablePrinter {
@@ -34,6 +35,8 @@ public class BenchmarkTablePrinter {
     private String headerFmt;
     private String rowFmt;
     private int[] colWidths;
+    // Whether the current table has a Gamma column; fixed when its header is printed.
+    private boolean gammaColumn;
 
     public BenchmarkTablePrinter() {
         headerFmt = null;
@@ -50,11 +53,12 @@ public class BenchmarkTablePrinter {
         colWidths = null;
     }
 
-    private void initializeHeader(List<Metric> cols) {
+    private void initializeHeader(List<Metric> cols, boolean withGamma) {
         if (headerFmt != null) {
             return;
         }
         this.colWidths = new int[cols.size() + 1];
+        this.gammaColumn = withGamma;
 
         // Build the format strings for header & rows
         StringBuilder hsb = new StringBuilder();
@@ -65,6 +69,10 @@ public class BenchmarkTablePrinter {
         hsb.append("%-12s");
         rsb.append("%-12.2f");
         colWidths[0] = 12;
+        if (withGamma) {
+            hsb.append(" %-8s");
+            rsb.append(" %-8s");
+        }
 
         // 2) One column per Metric
         int i = 0;
@@ -114,11 +122,16 @@ public class BenchmarkTablePrinter {
 
     private void printHeader(List<Metric> cols) {
         // Two header lines: split long headers onto a second line when possible
-        Object[] hdrs1 = new Object[cols.size() + 1];
-        Object[] hdrs2 = new Object[cols.size() + 1];
+        int lead = gammaColumn ? 2 : 1;
+        Object[] hdrs1 = new Object[cols.size() + lead];
+        Object[] hdrs2 = new Object[cols.size() + lead];
 
         hdrs1[0] = "Overquery";
         hdrs2[0] = "";
+        if (gammaColumn) {
+            hdrs1[1] = "Gamma";
+            hdrs2[1] = "";
+        }
 
         boolean anySecondLine = false;
 
@@ -127,8 +140,8 @@ public class BenchmarkTablePrinter {
             int width = colWidths[i + 1];
 
             String[] parts = splitHeader2(hdr, width);
-            hdrs1[i + 1] = parts[0];
-            hdrs2[i + 1] = parts[1];
+            hdrs1[i + lead] = parts[0];
+            hdrs2[i + lead] = parts[1];
             if (!parts[1].isEmpty()) anySecondLine = true;
         }
 
@@ -151,13 +164,31 @@ public class BenchmarkTablePrinter {
      */
     public void printRow(double overquery,
                          List<Metric> cols) {
-        initializeHeader(cols); // lazy: prints header on the first row after resetTable()
+        printRow(overquery, null, cols);
+    }
 
-        // Build argument array: First overquery, then each Metric.extract(...)
-        Object[] vals = new Object[cols.size() + 1];
+    /**
+     * Print a row of data with a Gamma column after Overquery.
+     *
+     * @param overquery the first‐column value
+     * @param gamma the Gamma column value, or null for a table without a Gamma column;
+     *              every row of one table must agree on whether it is null
+     * @param cols list of metrics to print
+     */
+    public void printRow(double overquery,
+                         String gamma,
+                         List<Metric> cols) {
+        initializeHeader(cols, gamma != null); // lazy: prints header on the first row after resetTable()
+
+        // Build argument array: First overquery, then gamma if present, then each Metric.extract(...)
+        int lead = gammaColumn ? 2 : 1;
+        Object[] vals = new Object[cols.size() + lead];
         vals[0] = overquery;
+        if (gammaColumn) {
+            vals[1] = gamma;
+        }
         for (int i = 0; i < cols.size(); i++) {
-            vals[i + 1] = cols.get(i).getValue();
+            vals[i + lead] = cols.get(i).getValue();
         }
 
         // Print the formatted row

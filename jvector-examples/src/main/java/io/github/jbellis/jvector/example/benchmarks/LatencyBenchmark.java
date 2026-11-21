@@ -21,6 +21,7 @@ import java.util.ArrayList;
 import java.util.Collections;
 
 import io.github.jbellis.jvector.example.Grid.ConfiguredSystem;
+import io.github.jbellis.jvector.graph.AdaptiveTermination;
 import io.github.jbellis.jvector.graph.SearchResult;
 
 /**
@@ -98,6 +99,7 @@ public class LatencyBenchmark extends AbstractQueryBenchmark {
             int topK,
             int rerankK,
             boolean usePruning,
+            AdaptiveTermination termination,
             int queryRuns) {
 
         if (!(computeAvgLatency || computeLatencySTD || computeP999Latency)) {
@@ -117,7 +119,7 @@ public class LatencyBenchmark extends AbstractQueryBenchmark {
             for (int i = 0; i < totalQueries; i++) {
                 long start = System.nanoTime();
                 SearchResult sr = QueryExecutor.executeQuery(
-                        cs, topK, rerankK, usePruning, i);
+                        cs, topK, rerankK, usePruning, termination, i);
                 long duration = System.nanoTime() - start;
                 // record latency for percentile computation
                 latencies.add(duration);

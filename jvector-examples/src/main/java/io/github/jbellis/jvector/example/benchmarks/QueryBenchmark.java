@@ -17,6 +17,7 @@
 package io.github.jbellis.jvector.example.benchmarks;
 
 import io.github.jbellis.jvector.example.Grid.ConfiguredSystem;
+import io.github.jbellis.jvector.graph.AdaptiveTermination;
 
 import java.util.List;
 
@@ -31,6 +32,7 @@ public interface QueryBenchmark {
             int topK,
             int rerankK,
             boolean usePruning,
+            AdaptiveTermination termination,
             int queryRuns
     );
 }

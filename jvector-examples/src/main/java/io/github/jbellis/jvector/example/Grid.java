@@ -22,6 +22,7 @@ import io.github.jbellis.jvector.example.benchmarks.AccuracyBenchmark;
 import io.github.jbellis.jvector.example.benchmarks.CountBenchmark;
 import io.github.jbellis.jvector.example.benchmarks.LatencyBenchmark;
 import io.github.jbellis.jvector.example.benchmarks.QueryBenchmark;
+import io.github.jbellis.jvector.example.benchmarks.QueryExecutor;
 import io.github.jbellis.jvector.example.benchmarks.QueryTester;
 import io.github.jbellis.jvector.example.benchmarks.ThroughputBenchmark;
 import io.github.jbellis.jvector.example.benchmarks.diagnostics.BenchmarkDiagnostics;
@@ -414,17 +415,36 @@ public class Grid {
                 listeners.forEach(l -> l.onTopKStart(ctx, usePruning, topK));
                 for (var overquery : ctx.search.topKGrid.get(topK)) {
                     int rerankK = (int) (topK * overquery);
-
-                    var results = tester.run(cs, topK, rerankK, usePruning, queryRuns);
-                    // Merge construction-phase metrics into the runtime results so selections can see them.
-                    constructionMetrics.appendTo(results);
-
-                    var row = new QueryRow(usePruning, topK, overquery, rerankK, results);
-                    listeners.forEach(l -> l.onQueryResult(ctx, row));
+                    // Beam search first, then each adaptive gamma with the same rerankK.
+                    runQueryRow(cs, ctx, constructionMetrics, tester, listeners, usePruning, topK, overquery, rerankK, null, queryRuns);
+                    for (var gamma : ctx.search.adaptiveGammaGrid) {
+                        runQueryRow(cs, ctx, constructionMetrics, tester, listeners, usePruning, topK, overquery, rerankK, gamma, queryRuns);
+                    }
                 }
                 listeners.forEach(l -> l.onTopKEnd(ctx, usePruning, topK));
             }
         }
+    }
+
+    /** Measures one query configuration; a null {@code adaptiveGamma} is a classic beam-width search. */
+    private static void runQueryRow(ConfiguredSystem cs,
+                                    SearchContext ctx,
+                                    ConstructionMetrics constructionMetrics,
+                                    QueryTester tester,
+                                    List<GridListener> listeners,
+                                    boolean usePruning,
+                                    int topK,
+                                    double overquery,
+                                    int rerankK,
+                                    Float adaptiveGamma,
+                                    int queryRuns) {
+        var termination = QueryExecutor.termination(cs, adaptiveGamma);
+        var results = tester.run(cs, topK, rerankK, usePruning, termination, queryRuns);
+        // Merge construction-phase metrics into the runtime results so selections can see them.
+        constructionMetrics.appendTo(results);
+
+        var row = new QueryRow(usePruning, topK, overquery, rerankK, adaptiveGamma, results);
+        listeners.forEach(l -> l.onQueryResult(ctx, row));
     }
 
     private static List<QueryBenchmark> setupBenchmarks(Map<String, List<String>> benchmarkSpec) {

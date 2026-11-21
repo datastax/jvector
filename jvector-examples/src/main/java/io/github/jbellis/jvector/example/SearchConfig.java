@@ -25,7 +25,7 @@ import java.util.function.Function;
 
 /**
  * The search-side sweep {@link Grid} runs against every index it builds: each search compressor,
- * each topK with its overquery factors, and each pruning setting.
+ * each topK with its overquery factors, each pruning setting, and optionally each adaptive termination gamma.
  *
  * <p>To add a search parameter, add a field, a {@link Builder} setter, and its use in {@link Grid}.</p>
  */
@@ -35,11 +35,17 @@ public final class SearchConfig {
     /** topK mapped to the overquery factors to try; each factor gives rerankK = topK * factor. */
     public final Map<Integer, List<Double>> topKGrid;
     public final List<Boolean> usePruningGrid;
+    /**
+     * Adaptive termination gammas (see {@link io.github.jbellis.jvector.graph.AdaptiveTermination}) run for
+     * every topK/overquery cell in addition to the classic beam search; empty runs beam search only.
+     */
+    public final List<Float> adaptiveGammaGrid;
 
     private SearchConfig(Builder b) {
         this.searchCompressors = b.searchCompressors;
         this.topKGrid = b.topKGrid;
         this.usePruningGrid = b.usePruningGrid;
+        this.adaptiveGammaGrid = b.adaptiveGammaGrid;
     }
 
     public static Builder builder() {
@@ -50,18 +56,30 @@ public final class SearchConfig {
         private List<Function<DataSet, CompressorParameters>> searchCompressors;
         private Map<Integer, List<Double>> topKGrid;
         private List<Boolean> usePruningGrid;
+        private List<Float> adaptiveGammaGrid = List.of();
 
         private Builder() {}
 
         public Builder searchCompressors(List<Function<DataSet, CompressorParameters>> searchCompressors) { this.searchCompressors = searchCompressors; return this; }
         public Builder topKGrid(Map<Integer, List<Double>> topKGrid) { this.topKGrid = topKGrid; return this; }
         public Builder usePruningGrid(List<Boolean> usePruningGrid) { this.usePruningGrid = usePruningGrid; return this; }
+        /** Optional; null or empty runs beam search only. */
+        public Builder adaptiveGammaGrid(List<Float> adaptiveGammaGrid) { this.adaptiveGammaGrid = adaptiveGammaGrid == null ? List.of() : List.copyOf(adaptiveGammaGrid); return this; }
 
-        /** @throws IllegalStateException if a parameter was not set */
+        /**
+         * @throws IllegalStateException if a parameter was not set
+         * @throws IllegalArgumentException if an adaptive gamma is not finite and non-negative
+         */
         public SearchConfig build() {
             require(searchCompressors, "searchCompressors");
             require(topKGrid, "topKGrid");
             require(usePruningGrid, "usePruningGrid");
+            // Fail before the first build rather than after an index is written.
+            for (float gamma : adaptiveGammaGrid) {
+                if (!(gamma >= 0) || Float.isInfinite(gamma)) {
+                    throw new IllegalArgumentException("search.adaptiveGamma values must be finite and >= 0, got " + gamma);
+                }
+            }
             return new SearchConfig(this);
         }
 

@@ -187,6 +187,7 @@ public final class RunArtifacts {
      *
      * @param buildParameters construction parameters by name; see {@link ExperimentsSchemaV1#fixedValues}
      *                        for which ones become columns
+     * @param adaptiveGamma   adaptive termination gamma, or null for a beam-search row
      */
     public void logRow(String datasetName,
                        Map<String, ?> buildParameters,
@@ -197,6 +198,7 @@ public final class RunArtifacts {
                        int topK,
                        double overquery,
                        int rerankK,
+                       Float adaptiveGamma,
                        List<Metric> logOutputs) {
         if (experimentsWriter == null || run == null) {
             return;
@@ -212,7 +214,8 @@ public final class RunArtifacts {
                 usePruning,
                 topK,
                 overquery,
-                rerankK
+                rerankK,
+                adaptiveGamma
         );
 
         try {
@@ -223,7 +226,7 @@ public final class RunArtifacts {
     }
 
     /**
-     * @deprecated Use {@link #logRow(String, Map, Set, String, String, boolean, int, double, int, List)},
+     * @deprecated Use {@link #logRow(String, Map, Set, String, String, boolean, int, double, int, Float, List)},
      * which takes the construction parameters by name.
      */
     @Deprecated
@@ -248,7 +251,7 @@ public final class RunArtifacts {
         buildParameters.put("addHierarchy", addHierarchy);
         buildParameters.put("refineFinalGraph", refineFinalGraph);
         logRow(datasetName, buildParameters, featureSetForIndex, buildCompressorString, searchCompressorString,
-                usePruning, topK, overquery, rerankK, logOutputs);
+                usePruning, topK, overquery, rerankK, null, logOutputs);
     }
 
     public RunContext run() { return run; }
