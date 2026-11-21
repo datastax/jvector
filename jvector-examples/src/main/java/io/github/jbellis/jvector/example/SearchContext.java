@@ -22,6 +22,8 @@ import io.github.jbellis.jvector.example.util.CompressorParameters;
 import io.github.jbellis.jvector.graph.disk.feature.FeatureId;
 
 import java.util.Set;
+import java.util.Map;
+import io.github.jbellis.jvector.quantization.AsymmetricHashing;
 import java.util.function.Function;
 
 /**
@@ -30,6 +32,8 @@ import java.util.function.Function;
  * <p>To give listeners more data, add a field here and set it where {@link Grid} creates the context.</p>
  */
 final class SearchContext {
+    final Map<String, Object> queryParameters;
+    final AsymmetricHashing ashQueryProjectionModel;
     final DataSet ds;
     final BuildConfig build;
     final SearchConfig search;
@@ -60,6 +64,18 @@ final class SearchContext {
                   Double indexBuildTimeS,
                   Long indexFileSizeBytes,
                   SystemMonitor.SystemSnapshot buildSnapshot) {
+        this(ds, build, search, requestedFeatures, indexFeatures, buildCompressorLabel, searchCompressor,
+                searchCompressorLabel, indexBuildTimeS, indexFileSizeBytes, buildSnapshot, Map.of(), null);
+    }
+
+    SearchContext(DataSet ds, BuildConfig build, SearchConfig search,
+                  Set<FeatureId> requestedFeatures, Set<FeatureId> indexFeatures,
+                  String buildCompressorLabel, Function<DataSet, CompressorParameters> searchCompressor,
+                  String searchCompressorLabel, Double indexBuildTimeS, Long indexFileSizeBytes,
+                  SystemMonitor.SystemSnapshot buildSnapshot, Map<String, Object> queryParameters,
+                  AsymmetricHashing ashQueryProjectionModel) {
+        this.queryParameters = java.util.Collections.unmodifiableMap(new java.util.LinkedHashMap<>(queryParameters));
+        this.ashQueryProjectionModel = ashQueryProjectionModel;
         this.ds = ds;
         this.build = build;
         this.search = search;

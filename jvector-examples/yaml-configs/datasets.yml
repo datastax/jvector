@@ -1,24 +1,29 @@
+# Datasets BenchYAML runs when no dataset is named on the command line.
+# The defaults are a few public 100k and 1M datasets that download on first use
+# (see dataset-catalogs/public-catalog.yaml). Uncomment others to include them.
 jvector-100k:
   - cohere-english-v3-100k
   - ada002-100k
   - openai-v3-small-1536-100k
-  - gecko-100k
-  - openai-v3-large-3072-100k
-  - openai-v3-large-1536-100k
-  - e5-small-v2-100k
-  - e5-base-v2-100k
-  - e5-large-v2-100k
+#  - gecko-100k
+#  - openai-v3-large-3072-100k
+#  - openai-v3-large-1536-100k
+#  - e5-small-v2-100k
+#  - e5-base-v2-100k
+#  - e5-large-v2-100k
 jvector-1M:
   - ada002-1M
-  - colbert-1M
+#  - colbert-1M
 ann-benchmarks:
-  - glove-25-angular
-  - glove-50-angular
-  - lastfm-64-dot
-  - glove-100-angular
-  - glove-200-angular
-  - nytimes-256-angular
   - sift-128-euclidean
+#  - glove-25-angular
+#  - glove-50-angular
+#  - lastfm-64-dot
+#  - glove-100-angular
+#  - glove-200-angular
+#  - nytimes-256-angular
+# The regression-tests section is what AutoBenchYAML (CI) selects from. Its datasets come
+# from a protected catalog, so BenchYAML skips this section unless a dataset is named.
 regression-tests:
   - cap-1M
   - cap-6M
@@ -26,15 +31,12 @@ regression-tests:
   - cohere-english-v3-10M
   - dpr-gemma-1m
   - dpr-gemma-10m
-openai-unconfigured:
-  - openai-3072-1m
-  - openai-1536-1m
+#openai-unconfigured:
+#  - openai-3072-1m
+#  - openai-1536-1m
 #other-datasets:
-#  - dpr-1M
-#  - dpr-10M
-#  - cap-1M
-#  - cap-6M
-#  - cohere-english-v3-1M
-#  - cohere-english-v3-10M
+#  - mpnet-1m
+#  - tahoe-x1-1m
+#  - personahub-1m
 # - deep-image-96-angular # large files not yet supported
 # - gist-960-euclidean # large files not yet supported

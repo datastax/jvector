@@ -179,9 +179,7 @@ abstract class AbstractGraphIndexFormat implements GraphIndexFormat {
 
     @Override
     public long featureOffsetForOrdinal(WriteContext ctx, int ordinal) {
-        int edgeSize = Integer.BYTES * (1 + ctx.graph.getDegree(0));
-        long inlineBytes = ordinal * (long) (Integer.BYTES + ctx.inlineFeatures.stream().mapToInt(Feature::featureSize).sum() + edgeSize);
-        return ctx.startOffset + ctx.headerSize + inlineBytes + Integer.BYTES;
+        return ctx.startOffset + ctx.headerSize + ctx.l0Layout.offset(ordinal) + Integer.BYTES;
     }
 
     @Override
@@ -306,12 +304,18 @@ abstract class AbstractGraphIndexFormat implements GraphIndexFormat {
                 for (; n < ctx.graph.getDegree(0); n++) {
                     out.writeInt(-1);
                 }
+                writeZeros(out, ctx.l0Layout.paddingAfter(newOrdinal, ctx.ordinalMapper.maxOrdinal()));
             }
         }
 
         writeSparseLevels(ctx, out, suppliers);
         writeSeparatedFeatures(ctx, out, suppliers);
         maybeWriteFooter(ctx, out);
+    }
+
+    /** Writes {@code count} zero bytes: page-alignment padding between records. */
+    static void writeZeros(IndexWriter out, int count) throws IOException {
+        if (count > 0) out.write(new byte[count]);
     }
 
     @Override
@@ -381,7 +385,7 @@ abstract class AbstractGraphIndexFormat implements GraphIndexFormat {
     public void writeHeaderFeatures(IndexWriter out, Map<FeatureId,? extends Feature> features) throws IOException {
         // we restrict pre-version-3 writers to INLINE_VECTORS features, so we don't need additional version-handling here
         for (Feature writer : features.values()) {
-            writer.writeHeader(out);
+            writer.writeHeader(out, getVersion());
         }
     }
 
@@ -389,7 +393,7 @@ abstract class AbstractGraphIndexFormat implements GraphIndexFormat {
     public int headerSize(Map<FeatureId,? extends Feature> features) {
         int size = this.commonHeaderSize();
 
-        size += features.values().stream().mapToInt(Feature::headerSize).sum();
+        size += features.values().stream().mapToInt(f -> f.headerSize(getVersion())).sum();
 
         return size;
     }

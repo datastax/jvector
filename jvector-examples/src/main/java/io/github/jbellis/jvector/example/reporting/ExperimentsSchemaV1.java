@@ -49,6 +49,10 @@ public final class ExperimentsSchemaV1 {
     }
 
     public static List<String> fixedColumns() {
+        return fixedColumns(false);
+    }
+
+    static List<String> fixedColumns(boolean includeIndexOptions) {
         List<String> columns = new ArrayList<>(List.of(
                 "schema_version",
                 "run_id",
@@ -64,8 +68,14 @@ public final class ExperimentsSchemaV1 {
                 "usePruning",
                 "topK",
                 "overquery",
-                "rerankK"
+                "rerankK",
+                "ash_query_projection_requested",
+                "ash_query_projection_effective"
         ));
+        if (includeIndexOptions) {
+            columns.addAll(List.of("index_type", "writer_mode", "reranking_type", "ash_construction_mode",
+                    "query_execution", "query_threads", "max_batch_size"));
+        }
         return List.copyOf(columns);
     }
 
@@ -124,6 +134,18 @@ public final class ExperimentsSchemaV1 {
         fixed.put("rerankK", Integer.toString(rerankK));
 
         return fixed;
+    }
+
+    static void addIndexOptions(Map<String, String> row, Map<String, ?> build, Map<String, ?> search) {
+        row.put("index_type", java.util.Objects.toString(build.get("type"), ""));
+        row.put("writer_mode", java.util.Objects.toString(build.get("writerMode"), ""));
+        row.put("reranking_type", java.util.Objects.toString(build.get("reranking"), ""));
+        row.put("ash_construction_mode", java.util.Objects.toString(build.get("ashConstruction"), ""));
+        row.put("query_execution", java.util.Objects.toString(search.get("executionMode"), ""));
+        String threadCountKey = "queued".equals(search.get("executionMode")) ? "workers" : "callerThreads";
+        Object threadCount = search.get(threadCountKey);
+        row.put("query_threads", threadCount instanceof Number ? threadCount.toString() : "");
+        row.put("max_batch_size", java.util.Objects.toString(search.get("maxBatchSize"), ""));
     }
 
     /**

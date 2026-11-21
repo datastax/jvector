@@ -20,6 +20,8 @@ import io.github.jbellis.jvector.graph.ImmutableGraphIndex;
 import io.github.jbellis.jvector.graph.RandomAccessVectorValues;
 import io.github.jbellis.jvector.graph.disk.feature.FeatureId;
 import io.github.jbellis.jvector.quantization.PQVectors;
+import io.github.jbellis.jvector.quantization.ASHVectors;
+import io.github.jbellis.jvector.vector.types.VectorFloat;
 
 import java.io.FileNotFoundException;
 import java.nio.file.Path;
@@ -36,6 +38,7 @@ final class FeatureProviders {
         register(new InlineVectorsProvider());
         register(new NVQProvider());
         register(new FusedPQProvider());
+        register(new FusedASHProvider());
     }
 
     private FeatureProviders() {}
@@ -89,8 +92,45 @@ final class FeatureProviders {
                                                RandomAccessVectorValues vectors,
                                                PQVectors buildPQ,
                                                ConstructionMetrics metrics) throws FileNotFoundException {
-        var writer = GraphBuilderFactory.writerBuilder(graph, outPath, vectors.size());
-        var ctx = new FeatureWriteContext(writer, graph, vectors, buildPQ, metrics);
+        return configureWriter(features, graph, outPath, vectors, buildPQ, null, null, metrics);
+    }
+
+    static FeatureWriteContext configureWriter(Set<FeatureId> features, ImmutableGraphIndex graph,
+                                               Path outPath, RandomAccessVectorValues vectors,
+                                               PQVectors buildPQ, ASHVectors buildASH,
+                                               VectorFloat<?> inputMean, ConstructionMetrics metrics) throws FileNotFoundException {
+        return configureWriter(features, graph, outPath, vectors, buildPQ, buildASH, inputMean, metrics, null);
+    }
+
+    static FeatureWriteContext configureWriter(Set<FeatureId> features, ImmutableGraphIndex graph,
+                                               Path outPath, RandomAccessVectorValues vectors,
+                                               PQVectors buildPQ, ASHVectors buildASH, VectorFloat<?> inputMean,
+                                               ConstructionMetrics metrics, String writerMode) throws FileNotFoundException {
+        return configureWriter(features, graph, outPath, vectors, buildPQ, buildASH, inputMean, metrics, writerMode,
+                io.github.jbellis.jvector.util.PhysicalCoreExecutor.getPhysicalCoreCount());
+    }
+
+    /** As above, with {@code writerThreads} parallel writer workers. */
+    static FeatureWriteContext configureWriter(Set<FeatureId> features, ImmutableGraphIndex graph,
+                                               Path outPath, RandomAccessVectorValues vectors,
+                                               PQVectors buildPQ, ASHVectors buildASH, VectorFloat<?> inputMean,
+                                               ConstructionMetrics metrics, String writerMode, int writerThreads)
+            throws FileNotFoundException {
+        return configureWriter(features, graph, outPath, vectors, buildPQ, buildASH, inputMean, metrics, writerMode,
+                writerThreads, null);
+    }
+
+    /** As above, padding base-layer records to {@code pageAlignment} bytes when it is not null. */
+    static FeatureWriteContext configureWriter(Set<FeatureId> features, ImmutableGraphIndex graph,
+                                               Path outPath, RandomAccessVectorValues vectors,
+                                               PQVectors buildPQ, ASHVectors buildASH, VectorFloat<?> inputMean,
+                                               ConstructionMetrics metrics, String writerMode, int writerThreads,
+                                               Integer pageAlignment)
+            throws FileNotFoundException {
+        var writer = GraphBuilderFactory.writerBuilder(graph, outPath, vectors.size(), writerMode, writerThreads);
+        if (pageAlignment != null) writer.withPageAlignment(pageAlignment);
+        var ctx = new FeatureWriteContext(writer, graph, vectors, buildPQ, buildASH, inputMean, metrics);
+        ctx.reportRecordLayout = pageAlignment != null;
         for (var id : features) {
             require(id).configure(ctx);
         }

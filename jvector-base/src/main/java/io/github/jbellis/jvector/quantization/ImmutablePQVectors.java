@@ -37,11 +37,24 @@ public class ImmutablePQVectors extends PQVectors {
      * @param vectorsPerChunk the number of vectors per chunk
      */
     public ImmutablePQVectors(ProductQuantization pq, ByteSequence<?>[] compressedDataChunks, int vectorCount, int vectorsPerChunk) {
+        this(pq, compressedDataChunks, vectorCount, vectorsPerChunk, true);
+    }
+
+    /**
+     * @param recordCodes whether {@code pq} must count these codes' lengths in its
+     *                    {@link ProductQuantization#maxEncodedNorm}: true unless it encoded them, or they were saved
+     *                    with it
+     */
+    ImmutablePQVectors(ProductQuantization pq, ByteSequence<?>[] compressedDataChunks, int vectorCount,
+                       int vectorsPerChunk, boolean recordCodes) {
         super(pq);
         this.compressedDataChunks = compressedDataChunks;
         this.vectorCount = vectorCount;
         this.vectorsPerChunk = vectorsPerChunk;
         this.codebookPartialSumsMap = new ConcurrentHashMap<>();
+        if (recordCodes) {
+            for (int i = 0; i < vectorCount; i++) pq.recordCode(getChunk(i), getOffsetInChunk(i));
+        }
     }
 
     @Override

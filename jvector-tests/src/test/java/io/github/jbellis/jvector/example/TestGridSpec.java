@@ -25,11 +25,16 @@ import io.github.jbellis.jvector.example.yaml.SearchParameters;
 import io.github.jbellis.jvector.graph.disk.feature.FeatureId;
 import org.junit.Test;
 
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.EnumSet;
 import java.util.List;
+import java.util.HashSet;
+import java.util.Set;
 import java.util.Map;
 import java.util.function.Function;
+import java.util.stream.Collectors;
 
 import static org.junit.Assert.*;
 
@@ -192,5 +197,39 @@ public class TestGridSpec {
 
         var e = assertThrows(NullPointerException.class, () -> GridSpec.fromConfig(config));
         assertTrue(e.getMessage(), e.getMessage().contains("useSavedIndexIfExists"));
+    }
+    @Test
+    public void checkedInIndexParametersParseAsSchema3() throws Exception {
+        Path directory = Path.of("jvector-examples", "yaml-configs", "index-parameters");
+        if (!Files.isDirectory(directory)) directory = Path.of("..").resolve(directory);
+        int checked = 0;
+        var sourceOnlyFiles = Set.of("colbert-1M.yml", "glove-25-angular.yml", "glove-50-angular.yml",
+                "glove-100-angular.yml", "glove-200-angular.yml", "lastfm-64-dot.yml",
+                "nytimes-256-angular.yml", "sift-128-euclidean.yml");
+        var sourceOnly = new HashSet<String>();
+        try (var paths = Files.list(directory)) {
+            for (var path : paths.filter(p -> p.toString().endsWith(".yml")).collect(Collectors.toList())) {
+                var config = MultiConfig.getConfig(path.toAbsolutePath().toString());
+                assertEquals(path.toString(), 3, config.getYamlSchemaVersion());
+                assertTrue(path.toString(), config.construction.neighborOverflow.stream().allMatch(Float.class::isInstance));
+                var spec = GridSpec.fromConfig(config);
+                var name = path.getFileName().toString();
+                if (sourceOnlyFiles.contains(name)) {
+                    for (var point : spec.buildPoints()) {
+                        assertEquals("onDisk", point.indexType);
+                        assertEquals(CompressorParameters.NONE, point.buildCompressor.apply(null));
+                        assertEquals("None", point.rerankingType);
+                        for (var search : spec.search.cases()) {
+                            assertEquals(CompressorParameters.NONE, search.searchCompressors.get(0).apply(null));
+                            assertEquals(List.of(Set.of(FeatureId.INLINE_VECTORS)), spec.featuresFor(point, search));
+                        }
+                    }
+                    sourceOnly.add(name);
+                }
+                checked++;
+            }
+        }
+        assertTrue(checked >= 26);
+        assertEquals(sourceOnlyFiles, sourceOnly);
     }
 }

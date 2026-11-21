@@ -63,6 +63,8 @@ public class MutablePQVectors extends PQVectors implements MutableCompressedVect
         // increase count first so get() works
         vectorCount.updateAndGet(current -> max(current, ordinal + 1));
         get(ordinal).zero();
+        // A zero code reconstructs to each subspace's first centroid, which searches can reach.
+        pq.recordCode(get(ordinal), 0);
     }
 
     private synchronized void ensureChunkCapacity(int ordinal) {

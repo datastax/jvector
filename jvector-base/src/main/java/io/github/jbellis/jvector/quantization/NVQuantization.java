@@ -158,7 +158,10 @@ public class NVQuantization implements VectorCompressor<NVQuantization.Quantized
 
     /**
      * Creates a NVQuantization instance by using the global mean and computing the data structures used to divide each
-     * vector into subvectors.
+     * vector into subvectors. The mean can be collected during any earlier input scan,
+     * for example with {@link io.github.jbellis.jvector.graph.VectorMean}, independently
+     * of the primary quantizer or loader. This method does not read input vectors.
+     * Use {@link #compute} when no precomputed mean is available.
      *
      * @param scaledGlobalMean the mean of the graph (its average vector)
      * @param nSubVectors number of subvectors

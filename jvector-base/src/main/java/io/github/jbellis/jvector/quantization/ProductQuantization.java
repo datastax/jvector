@@ -72,6 +72,11 @@ public class ProductQuantization implements VectorCompressor<ByteSequence<?>>, A
     final int[][] subvectorSizesAndOffsets;
     final float anisotropicThreshold; // parallel cost multiplier
     private final float[][] centroidNormsSquared; // precomputed norms of the centroids, for encoding
+    // The largest length of any reconstruction this model has encoded or holds codes for. Unknown for a model loaded
+    // from a format that did not store it, since it cannot know the lengths of the codes encoded before.
+    private final io.github.jbellis.jvector.util.MaxVectorLength maxEncoded = new io.github.jbellis.jvector.util.MaxVectorLength();
+    /** The first on-disk format version that stores {@link #maxEncodedNorm}. */
+    static final int MAX_NORM_VERSION = 7;
     private final ThreadLocal<VectorFloat<?>> partialSums; // for dot product, euclidean, and cosine partials
     private final AtomicReference<VectorFloat<?>> partialSquaredMagnitudes; // for cosine partials
 
@@ -439,6 +444,31 @@ public class ProductQuantization implements VectorCompressor<ByteSequence<?>>, A
             encodeAnisotropic(vector, dest);
         else
             encodeUnweighted(vector, dest);
+        recordCode(dest, 0);
+    }
+
+    /** The squared length of the reconstruction of the code at {@code offset}, relative to the global centroid. */
+    float reconstructedSquaredNorm(ByteSequence<?> code, int offset) {
+        float sum = 0;
+        for (int m = 0; m < M; m++) sum += centroidNormsSquared[m][Byte.toUnsignedInt(code.get(offset + m))];
+        return sum;
+    }
+
+    /** Counts the code at {@code offset} in {@link #maxEncodedNorm}. */
+    void recordCode(ByteSequence<?> code, int offset) {
+        maxEncoded.recordSquared(reconstructedSquaredNorm(code, offset));
+    }
+
+    /**
+     * The largest length of the reconstruction, relative to the global centroid if any, of any vector this model has
+     * encoded or holds codes for, including vectors encoded before it was saved and loaded. With the centered query's
+     * length it bounds every dot product PQ scores, which adaptive stopping needs to read PQ scores as distances.
+     * NaN until the model encodes or holds a code; positive infinity when unknown, for a model loaded from a format
+     * older than version {@value #MAX_NORM_VERSION}, which did not store it. In both cases dot-product searches stop
+     * by the standard rule.
+     */
+    public float maxEncodedNorm() {
+        return maxEncoded.get();
     }
 
     /**
@@ -608,6 +638,10 @@ public class ProductQuantization implements VectorCompressor<ByteSequence<?>>, A
             assert codebook.length() == clusterCount * subvectorSizesAndOffsets[i][0];
             vectorTypeSupport.writeFloatVector(out, codebook);
         }
+
+        if (version >= MAX_NORM_VERSION) {
+            out.writeFloat(maxEncodedNorm());
+        }
     }
 
     /**
@@ -641,7 +675,12 @@ public class ProductQuantization implements VectorCompressor<ByteSequence<?>>, A
 
     @Override
     public int compressorSize() {
-        int size = 0;
+        return compressorSize(OnDiskGraphIndex.CURRENT_VERSION);
+    }
+
+    /** The bytes {@link #write} writes at {@code version}, which must be 3 or later. */
+    public int compressorSize(int version) {
+        int size = version >= MAX_NORM_VERSION ? Float.BYTES : 0; // largest encoded length
         size += Integer.BYTES; // MAGIC
         size += Integer.BYTES; // STORAGE_VERSION
         size += Integer.BYTES; // globalCentroidLength
@@ -701,7 +740,14 @@ public class ProductQuantization implements VectorCompressor<ByteSequence<?>>, A
             codebooks[m] = codebook;
         }
 
-        return new ProductQuantization(codebooks, clusters, subvectorSizes, globalCentroid, anisotropicThreshold);
+        var pq = new ProductQuantization(codebooks, clusters, subvectorSizes, globalCentroid, anisotropicThreshold);
+        if (version >= MAX_NORM_VERSION) {
+            pq.maxEncoded.restore(in.readFloat());
+        } else {
+            // Older formats did not store the largest length, so codes encoded with this model have unknown lengths.
+            pq.maxEncoded.markUnknown();
+        }
+        return pq;
     }
 
     @Override

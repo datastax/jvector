@@ -19,18 +19,16 @@ package io.github.jbellis.jvector.example;
 import io.github.jbellis.jvector.disk.ReaderSupplierFactory;
 import io.github.jbellis.jvector.example.benchmarks.datasets.DataSet;
 import io.github.jbellis.jvector.graph.ImmutableGraphIndex;
+import io.github.jbellis.jvector.quantization.CompressedVectors;
 import io.github.jbellis.jvector.graph.disk.OnDiskGraphIndex;
-import io.github.jbellis.jvector.graph.disk.feature.Feature;
 import io.github.jbellis.jvector.graph.disk.feature.FeatureId;
 
 import java.io.IOException;
 import java.nio.file.Path;
-import java.util.EnumMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
-import java.util.function.IntFunction;
 
 /**
  * Builds the graph on heap from full-precision vectors, then writes each feature set to the work directory.
@@ -38,15 +36,26 @@ import java.util.function.IntFunction;
  */
 final class InMemoryBuild implements IndexBuildStrategy {
     private final Path workDirectory;
+    private final CompressedVectors encoded;
 
     InMemoryBuild(Path workDirectory) {
+        this(workDirectory, null);
+    }
+
+    InMemoryBuild(Path workDirectory, CompressedVectors encoded) {
         this.workDirectory = workDirectory;
+        this.encoded = encoded;
     }
 
     @Override
     public BuiltIndexes build(List<? extends Set<FeatureId>> featureSets, BuildConfig build, DataSet ds) throws IOException {
         var floatVectors = ds.getBaseRavv();
         Map<Set<FeatureId>, ImmutableGraphIndex> indexes = new LinkedHashMap<>();
+        if (build.indexType != null) {
+            long start = System.nanoTime();
+            var graph = GraphBuilderFactory.buildGraph(ds, build, encoded);
+            return new BuiltIndexes(Map.of(Set.of(), graph), Map.of(), (System.nanoTime() - start) / 1e9);
+        }
         var builder = GraphBuilderFactory.forFullPrecision(floatVectors, ds.getSimilarityFunction(), build);
         long start = System.nanoTime();
         var onHeapGraph = builder.build(floatVectors);
@@ -75,7 +84,7 @@ final class InMemoryBuild implements IndexBuildStrategy {
             try (var writer = ctx.buildWriter();
                  var view = ctx.afterBuildSuppliers().isEmpty() ? null : onHeapGraph.getView()) {
                 start = System.nanoTime();
-                writer.write(writeSuppliers(ctx, view));
+                writer.write(ctx.completedSuppliers(view));
                 System.out.format("Wrote %s in %.2fs%n", features, (System.nanoTime() - start) / 1_000_000_000.0);
             }
 
@@ -83,17 +92,5 @@ final class InMemoryBuild implements IndexBuildStrategy {
             indexes.put(features, index);
         }
         return new BuiltIndexes(indexes, new LinkedHashMap<>(), buildTimeS);
-    }
-
-    /** @param view a view of the completed graph, or null when no feature needs one */
-    private static Map<FeatureId, IntFunction<Feature.State>> writeSuppliers(FeatureWriteContext ctx,
-                                                                              ImmutableGraphIndex.View view) {
-        if (view == null) {
-            return ctx.ordinalSuppliers();
-        }
-        Map<FeatureId, IntFunction<Feature.State>> suppliers = new EnumMap<>(FeatureId.class);
-        suppliers.putAll(ctx.ordinalSuppliers());
-        ctx.afterBuildSuppliers().forEach((id, supplier) -> suppliers.put(id, supplier.apply(view)));
-        return suppliers;
     }
 }

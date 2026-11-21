@@ -37,6 +37,7 @@ public class TestIntMap extends RandomizedTest {
     @Test
     public void testInsert() {
         testInsertInternal(new DenseIntMap<>(100));
+        testInsertInternal(new PagedIntMap<>(100));
         testInsertInternal(new SparseIntMap<>());
     }
 
@@ -55,6 +56,7 @@ public class TestIntMap extends RandomizedTest {
     @Test
     public void testUpdate() {
         testUpdateInternal(new DenseIntMap<>(100));
+        testUpdateInternal(new PagedIntMap<>(100));
         testUpdateInternal(new SparseIntMap<>());
     }
 
@@ -74,6 +76,7 @@ public class TestIntMap extends RandomizedTest {
     @Test
     public void testRemove() {
         testRemoveInternal(new DenseIntMap<>(100));
+        testRemoveInternal(new PagedIntMap<>(100));
         testRemoveInternal(new SparseIntMap<>());
     }
 
@@ -95,6 +98,7 @@ public class TestIntMap extends RandomizedTest {
     public void testConcurrency() throws InterruptedException {
         for (int i = 0; i < 100; i++) {
             testConcurrencyOnce(new DenseIntMap<>(100));
+            testConcurrencyOnce(new PagedIntMap<>(100));
             testConcurrencyOnce(new SparseIntMap<>());
         }
     }

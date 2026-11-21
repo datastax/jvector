@@ -47,6 +47,19 @@ public interface RandomAccessReader extends AutoCloseable {
     long getPosition() throws IOException;
 
     /**
+     * Reads a single byte.
+     *
+     * <p>The default implementation preserves compatibility for custom
+     * RandomAccessReader implementations. Production readers should override this
+     * with a zero-allocation implementation.</p>
+     */
+    default byte readByte() throws IOException {
+        byte[] one = new byte[1];
+        readFully(one);
+        return one[0];
+    }
+
+    /**
      * Reads an integer.
      * @return the integer value
      * @throws IOException if an I/O error occurs

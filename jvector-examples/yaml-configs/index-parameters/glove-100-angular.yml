@@ -1,11 +1,12 @@
 # This is here for loader testing purposes only, use other datasets for realistic test data
-yamlSchemaVersion: 1
-onDiskIndexVersion: 6
+yamlSchemaVersion: 3
+onDiskIndexVersion: 7
 
 dataset: glove-100-angular
 useDatasetPrefetching: false
 
 construction:
+  type: onDisk
   outDegree: [32]
   efConstruction: [100]
   neighborOverflow: [1.2f]
@@ -15,13 +16,13 @@ construction:
   compression:
     - type: None
   reranking:
-    - NVQ
+    type: None
   useSavedIndexIfExists: No
 
 search:
   topKOverquery:
     10: [1.0, 2.0, 5.0, 10.0]
     100: [1.0, 2.0]
-  useSearchPruning: [Yes]
+  useSearchPruning: [No]
   compression:
     - type: None

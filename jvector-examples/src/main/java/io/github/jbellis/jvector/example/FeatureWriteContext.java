@@ -18,10 +18,12 @@ package io.github.jbellis.jvector.example;
 
 import io.github.jbellis.jvector.graph.ImmutableGraphIndex;
 import io.github.jbellis.jvector.graph.RandomAccessVectorValues;
+import io.github.jbellis.jvector.graph.disk.AbstractGraphIndexWriter;
 import io.github.jbellis.jvector.graph.disk.RandomAccessOnDiskGraphIndexWriter;
 import io.github.jbellis.jvector.graph.disk.feature.Feature;
 import io.github.jbellis.jvector.graph.disk.feature.FeatureId;
 import io.github.jbellis.jvector.quantization.PQVectors;
+import io.github.jbellis.jvector.quantization.ASHVectors;
 import io.github.jbellis.jvector.vector.types.VectorFloat;
 
 import java.io.IOException;
@@ -33,15 +35,16 @@ import java.util.function.Supplier;
 
 /** What a {@link FeatureProvider} needs to add its feature to one graph index writer. */
 final class FeatureWriteContext {
-    private final RandomAccessOnDiskGraphIndexWriter.Builder writer;
+    private final AbstractGraphIndexWriter.Builder<? extends RandomAccessOnDiskGraphIndexWriter, ?> writer;
     private final ImmutableGraphIndex graph;
     private final RandomAccessVectorValues vectors;
     // File-backed sources reuse scratch vectors; ordinal suppliers need a view per worker.
     private final Supplier<RandomAccessVectorValues> writerVectors;
     private final PQVectors buildPQ;
+    private final ASHVectors buildASH;
+    private final VectorFloat<?> inputMean;
     private final ConstructionMetrics metrics;
 
-    private final Map<FeatureId, IntFunction<Feature.State>> ordinalSuppliers = new EnumMap<>(FeatureId.class);
     private final Map<FeatureId, Function<VectorFloat<?>, Feature.State>> vectorSuppliers = new EnumMap<>(FeatureId.class);
     private final Map<FeatureId, Function<ImmutableGraphIndex.View, IntFunction<Feature.State>>> afterBuildSuppliers =
             new EnumMap<>(FeatureId.class);
@@ -50,11 +53,19 @@ final class FeatureWriteContext {
      * @param buildPQ PQ-encoded build vectors, or null for full-precision and non-PQ builds
      * @param metrics construction metrics sink, or null when not reporting
      */
-    FeatureWriteContext(RandomAccessOnDiskGraphIndexWriter.Builder writer,
+    FeatureWriteContext(AbstractGraphIndexWriter.Builder<? extends RandomAccessOnDiskGraphIndexWriter, ?> writer,
                         ImmutableGraphIndex graph,
                         RandomAccessVectorValues vectors,
                         PQVectors buildPQ,
                         ConstructionMetrics metrics) {
+        this(writer, graph, vectors, buildPQ, null, null, metrics);
+    }
+
+    FeatureWriteContext(AbstractGraphIndexWriter.Builder<? extends RandomAccessOnDiskGraphIndexWriter, ?> writer, ImmutableGraphIndex graph,
+                        RandomAccessVectorValues vectors, PQVectors buildPQ, ASHVectors buildASH,
+                        VectorFloat<?> inputMean, ConstructionMetrics metrics) {
+        this.buildASH = buildASH;
+        this.inputMean = inputMean;
         this.writer = writer;
         this.graph = graph;
         this.vectors = vectors;
@@ -71,6 +82,8 @@ final class FeatureWriteContext {
 
     /** PQ-encoded build vectors, or null for full-precision and non-PQ builds. */
     PQVectors buildPQ() { return buildPQ; }
+    ASHVectors buildASH() { return buildASH; }
+    VectorFloat<?> inputMean() { return inputMean; }
 
     void add(Feature feature) {
         writer.with(feature);
@@ -82,7 +95,6 @@ final class FeatureWriteContext {
      */
     void supplyFromVector(FeatureId id, Function<VectorFloat<?>, Feature.State> encode) {
         vectorSuppliers.put(id, encode);
-        ordinalSuppliers.put(id, ordinal -> encode.apply(writerVectors.get().getVector(ordinal)));
     }
 
     /** Registers a feature whose state needs the completed graph, such as fused neighbor codes. */
@@ -95,11 +107,31 @@ final class FeatureWriteContext {
         return metrics == null ? compute.get() : metrics.index(quantType).timeCompute(compute);
     }
 
+    /** Set when the configuration requests page alignment, so the build reports the resulting layout. */
+    boolean reportRecordLayout;
+
     RandomAccessOnDiskGraphIndexWriter buildWriter() throws IOException {
-        return writer.build();
+        var built = writer.build();
+        if (reportRecordLayout) {
+            System.out.println("Page alignment " + built.getFeatureSet() + ": " + built.describeRecordLayout());
+        }
+        return built;
     }
 
-    Map<FeatureId, IntFunction<Feature.State>> ordinalSuppliers() { return ordinalSuppliers; }
+    Map<FeatureId, IntFunction<Feature.State>> completedSuppliers(ImmutableGraphIndex.View view) {
+        return completedSuppliers(view, ordinal -> writerVectors.get().getVector(ordinal));
+    }
+
+    Map<FeatureId, IntFunction<Feature.State>> completedSuppliers(ImmutableGraphIndex.View view,
+                                                                  IntFunction<VectorFloat<?>> readVector) {
+        var suppliers = new EnumMap<FeatureId, IntFunction<Feature.State>>(FeatureId.class);
+        if (readVector != null) {
+            vectorSuppliers.forEach((id, supplier) ->
+                    suppliers.put(id, ordinal -> supplier.apply(readVector.apply(ordinal))));
+        }
+        afterBuildSuppliers.forEach((id, supplier) -> suppliers.put(id, supplier.apply(view)));
+        return suppliers;
+    }
 
     Map<FeatureId, Function<VectorFloat<?>, Feature.State>> vectorSuppliers() { return vectorSuppliers; }
 

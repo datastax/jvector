@@ -1,0 +1,30 @@
+# ada002-1M (1536 dimensions): in-memory graph built with full-precision vectors.
+# Searches traverse with 2-bit ASH codes (nominal 32x) and rescore with full-precision vectors.
+yamlSchemaVersion: 3
+onDiskIndexVersion: 7
+
+dataset: ada002-1M
+
+construction:
+  type: inMemory
+  outDegree: [32]
+  efConstruction: [100]
+  neighborOverflow: [1.2f]
+  addHierarchy: [Yes]
+  refineFinalGraph: [Yes]
+  compression:
+    - type: None
+  reranking:
+    type: FP32
+
+search:
+  topKOverquery:
+    10: [1.0, 2.0, 4.0]
+  useSearchPruning: [No]
+  compression:
+    - type: ASH
+      parameters:
+        compressionRatio: 32
+        optimizer: ITQ
+        landmarkCount: 1
+        bitsPerDimension: 2
