@@ -139,6 +139,15 @@ public final class ASHScorer {
     ASHScoreFunction scoreFunctionFor(QueryPrecompute qp, float[] lut) {
         var mode = ASHVectors.AshSingleKernel.fromProperty();
         var backend = VectorizationProvider.getInstance().getVectorUtilSupport();
+        // One-bit codes need no table: the masked-add kernel non-fused search uses.
+        if (ash.bitsPerDimension == 1
+                && mode != ASHVectors.AshSingleKernel.SCALAR
+                && backend.supportsAshMaskedLoad()) {
+            final int d = qp.d;
+            final int words = AsymmetricHashing.QuantizedVector.wordsForDims(d);
+            return v -> v.scale * (2f * backend.ashMaskedAdd_512(qp.qProj, 0, v.binaryVector, 0, d, words)
+                    - qp.sumQProj) + qp.dotQMuByLandmark[v.landmark & 255] + v.offset;
+        }
         // Two coordinates share each 2-bit LUT entry. Four-bit codes instead
         // use the backend's contiguous projection dot, avoiding a 16x larger table.
         if ((ash.bitsPerDimension == 2 || AsymmetricHashing.usesOffsetBinaryCode(ash.bitsPerDimension))
