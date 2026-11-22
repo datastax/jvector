@@ -526,15 +526,14 @@ public class ProductQuantization implements VectorCompressor<ByteSequence<?>>, A
     private static VectorFloat<?>[] extractSubvectors(List<VectorFloat<?>> vectors, int m, int[][] subvectorSizeAndOffset, VectorFloat<?> globalCentroid) {
         // Center the subvector rather than the whole vector, so that a centered copy of the training set is never
         // materialized. The input vectors may be the caller's own objects, so they must not be modified either.
-        VectorFloat<?> centroidSubvector = globalCentroid == null ? null : getSubVector(globalCentroid, m, subvectorSizeAndOffset);
+        // VectorUtil.sub copies the slice and subtracts the centroid slice in a single pass, which is cheaper than
+        // copying the slice and then subtracting the centroid from it in a second pass.
+        int subvectorSize = subvectorSizeAndOffset[m][0];
+        int subvectorOffset = subvectorSizeAndOffset[m][1];
         return vectors.stream()
-                .map(vector -> {
-                    var subvector = getSubVector(vector, m, subvectorSizeAndOffset);
-                    if (centroidSubvector != null) {
-                        VectorUtil.subInPlace(subvector, centroidSubvector);
-                    }
-                    return subvector;
-                })
+                .map(vector -> globalCentroid == null
+                        ? getSubVector(vector, m, subvectorSizeAndOffset)
+                        : VectorUtil.sub(vector, subvectorOffset, globalCentroid, subvectorOffset, subvectorSize))
                 .toArray(VectorFloat<?>[]::new);
     }
 
