@@ -45,6 +45,11 @@ public class MMapReader implements RandomAccessReader {
         return position;
     }
 
+    public byte readByte() {
+        return buffer.memory().getByte(position++);
+    }
+
+    @Override
     public int readInt() {
         try {
             return buffer.memory().getInt(position);

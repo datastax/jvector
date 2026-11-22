@@ -26,6 +26,9 @@ import java.lang.reflect.Field;
 import java.nio.ByteBuffer;
 import java.nio.MappedByteBuffer;
 import java.nio.channels.FileChannel;
+import java.nio.file.Files;
+import java.nio.file.StandardOpenOption;
+import java.nio.file.Path;
 
 /**
  * A memory-mapped array of pre-encoded fused codes, indexed by new ordinal.
@@ -88,13 +91,26 @@ public final class PreEncodedCodeCache implements AutoCloseable {
     private final ThreadLocal<ByteBuffer[]> viewsPerThread;
     private final ThreadLocal<ByteBuffer> warmByte = ThreadLocal.withInitial(() -> ByteBuffer.allocateDirect(1));
 
+    /**
+     * The least alignment direct I/O needs for offsets, lengths and buffer addresses; the file's
+     * store may need more (see {@link #directAlign()}).
+     */
+    public static final int DIRECT_ALIGN = 4096;
+    /** The largest file-store block size direct reads are attempted with. */
+    private static final long MAX_DIRECT_ALIGN = 1 << 20;
+    private final Path path;                  // null when the cache was mapped without one: no direct reads
+    private volatile FileChannel direct;      // opened on first use with the direct-I/O option
+    private volatile int directAlign = DIRECT_ALIGN;   // the alignment of direct reads of this file, once opened
+    private volatile boolean directUnavailable;
+
     private PreEncodedCodeCache(MappedByteBuffer[] chunks, int codeSize, int codesPerChunk,
-                                FileChannel channel, long baseOffset) {
+                                FileChannel channel, long baseOffset, Path path) {
         this.chunks = chunks;
         this.codeSize = codeSize;
         this.codesPerChunk = codesPerChunk;
         this.channel = channel;
         this.baseOffset = baseOffset;
+        this.path = path;
         this.viewsPerThread = ThreadLocal.withInitial(() -> {
             ByteBuffer[] views = new ByteBuffer[chunks.length];
             for (int i = 0; i < chunks.length; i++) {
@@ -116,11 +132,25 @@ public final class PreEncodedCodeCache implements AutoCloseable {
      */
     public static PreEncodedCodeCache map(FileChannel fc, long offset, int count, int codeSize)
             throws IOException {
-        return map(fc, offset, count, codeSize, MAX_CHUNK_BYTES);
+        return map(fc, null, offset, count, codeSize, MAX_CHUNK_BYTES);
+    }
+
+    /**
+     * As {@link #map(FileChannel, long, int, int)}, also recording the file's path so the cache can
+     * open it a second time for {@link #readRowsDirect direct reads}.
+     */
+    public static PreEncodedCodeCache map(FileChannel fc, Path path, long offset, int count, int codeSize)
+            throws IOException {
+        return map(fc, path, offset, count, codeSize, MAX_CHUNK_BYTES);
     }
 
     /** As {@link #map(FileChannel, long, int, int)} with an explicit chunk target, so tests can exercise the multi-chunk path. */
     static PreEncodedCodeCache map(FileChannel fc, long offset, int count, int codeSize, int maxChunkBytes)
+            throws IOException {
+        return map(fc, null, offset, count, codeSize, maxChunkBytes);
+    }
+
+    static PreEncodedCodeCache map(FileChannel fc, Path path, long offset, int count, int codeSize, int maxChunkBytes)
             throws IOException {
         if (codeSize <= 0) {
             throw new IllegalArgumentException("codeSize must be positive, got " + codeSize);
@@ -147,14 +177,134 @@ public final class PreEncodedCodeCache implements AutoCloseable {
                                offset + firstCode * codeSize,
                                codesHere * codeSize);
         }
-        return new PreEncodedCodeCache(chunks, codeSize, codesPerChunk, fc, offset);
+        return new PreEncodedCodeCache(chunks, codeSize, codesPerChunk, fc, offset, path);
+    }
+
+    /** Bytes of the whole section: every row of every chunk. */
+    public long sectionBytes() {
+        long bytes = 0;
+        for (MappedByteBuffer c : chunks) {
+            bytes += c.capacity();
+        }
+        return bytes;
+    }
+
+    /**
+     * Whether {@link #readRowsDirect} can be used: the cache knows its file, the file system
+     * accepts the direct-I/O open option (tmpfs, for one, does not) and an aligned read through
+     * it succeeds.
+     */
+    public boolean supportsDirect() {
+        return directChannel() != null;
+    }
+
+    /**
+     * The alignment of this file's direct reads: offsets, lengths and buffer addresses must be
+     * multiples of it. It is the file store's block size, at least {@link #DIRECT_ALIGN}, once the
+     * direct channel is open; a file store with 64 KB blocks (some XFS and btrfs volumes on 64 KB
+     * page kernels, HFS+, NFS) rejects 4 KB alignment.
+     */
+    public int directAlign() {
+        directChannel();
+        return directAlign;
+    }
+
+    private FileChannel directChannel() {
+        FileChannel d = direct;
+        if (d != null || directUnavailable || path == null) {
+            return d;
+        }
+        synchronized (this) {
+            if (direct == null && !directUnavailable) {
+                FileChannel opened = null;
+                try {
+                    long block = Files.getFileStore(path).getBlockSize();
+                    if (block <= 0 || block > MAX_DIRECT_ALIGN || Long.bitCount(block) != 1) {
+                        throw new IOException("file store block size " + block + " is not a power of two up to " + MAX_DIRECT_ALIGN);
+                    }
+                    int align = (int) Math.max(DIRECT_ALIGN, block);
+                    opened = FileChannel.open(path, StandardOpenOption.READ, com.sun.nio.file.ExtendedOpenOption.DIRECT);
+                    // an open that succeeds does not guarantee that reads do: probe one aligned read
+                    ByteBuffer probe = ByteBuffer.allocateDirect(2 * align).alignedSlice(align);
+                    probe.limit(align);
+                    opened.read(probe, 0);
+                    directAlign = align;
+                    direct = opened;
+                } catch (IOException | UnsupportedOperationException | IllegalArgumentException e) {
+                    log.info("Direct reads of {} unavailable ({}); the cache is read through its mapping", path, e.toString());
+                    directUnavailable = true;
+                    if (opened != null) {
+                        try {
+                            opened.close();
+                        } catch (IOException ignored) {
+                            // the mapping remains the way to read the cache
+                        }
+                    }
+                }
+            }
+            return direct;
+        }
+    }
+
+    /** A direct buffer aligned for {@link #readRowsDirect} of this cache, holding at least {@code bytes}. */
+    public ByteBuffer allocateAligned(int bytes) {
+        int align = directAlign();
+        return ByteBuffer.allocateDirect(bytes + align).alignedSlice(align);
+    }
+
+    /** Buffer capacity {@link #readRowsDirect} needs for {@code count} rows at once. */
+    public int directBufferBytes(int count) {
+        int align = directAlign();
+        return (int) Math.min(Integer.MAX_VALUE - align, (long) count * codeSize + 2L * align);
+    }
+
+    /**
+     * Reads the rows {@code [firstOrdinal, firstOrdinal + count)} straight from the file into
+     * {@code dst}, bypassing the page cache: the bytes land in the caller's buffer and nothing is
+     * cached, mapped or evicted on their account. For a pass that reads a store larger than RAM
+     * once from end to end, this keeps the kernel's memory reclaim out of the walk, where a mapping
+     * read of the same rows must evict a resident page for every page it brings in. Offsets and
+     * lengths are widened to {@link #directAlign()} as direct I/O requires, so {@code dst} needs
+     * {@link #directBufferBytes} capacity, allocated by {@link #allocateAligned}, and the rows
+     * start at the returned offset.
+     *
+     * @return the offset in {@code dst} at which row {@code firstOrdinal} begins
+     */
+    public int readRowsDirect(int firstOrdinal, int count, ByteBuffer dst) throws IOException {
+        FileChannel d = directChannel();
+        if (d == null) {
+            throw new IOException("direct reads unavailable for " + path);
+        }
+        final int align = directAlign;
+        long start = baseOffset + (long) firstOrdinal * codeSize;
+        long end = start + (long) count * codeSize;
+        long alignedStart = start & -(long) align;
+        long alignedEnd = (end + align - 1) & -(long) align;
+        int bytes = (int) (alignedEnd - alignedStart);
+        if (bytes > dst.capacity()) {
+            throw new IllegalArgumentException("buffer of " + dst.capacity() + " bytes cannot hold " + count + " rows (" + bytes + " aligned bytes)");
+        }
+        dst.clear();
+        dst.limit(bytes);
+        long pos = alignedStart;
+        while (dst.hasRemaining()) {
+            int n = d.read(dst, pos);
+            if (n < 0) {
+                break;
+            }
+            pos += n;
+            if (pos % align != 0) {
+                // a short read is the end of the file: the aligned tail ran past it, and nothing beyond is a row
+                break;
+            }
+        }
+        return (int) (start - alignedStart);
     }
 
     /** Bytes of the mapped region for {@code count} codes. */
     public static long sectionBytes(int count, int codeSize) {
         return (long) count * codeSize;
     }
-
 
     /** Bytes per code. */
     public int codeSize() {
@@ -230,6 +380,15 @@ public final class PreEncodedCodeCache implements AutoCloseable {
 
     @Override
     public void close() {
+        FileChannel d = direct;
+        if (d != null) {
+            try {
+                d.close();
+            } catch (IOException ignored) {
+                // nothing further to release
+            }
+            direct = null;
+        }
         if (UNSAFE == null) {
             return;
         }

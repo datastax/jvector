@@ -213,6 +213,40 @@ public class TestVectorGraph extends LuceneTestCase {
         assert resumed.getRerankedCount() < rerankK;
     }
 
+    @Test
+    // a search or resume for zero results returns none, on a new or a reused searcher, with or without rerankK > 0
+    public void testZeroTopK() {
+        testZeroTopK(false);
+        testZeroTopK(true);
+    }
+
+    public void testZeroTopK(boolean addHierarchy) {
+        int size = 1000;
+        int dim = 2;
+        var vectors = vectorValues(size, dim);
+        var builder = new GraphIndexBuilder(vectors, similarityFunction, 20, 30, 1.0f, 1.4f, addHierarchy);
+        var graph = builder.build(vectors);
+        var pqv = ProductQuantization.compute(vectors, 2, 256, false).encodeAll(vectors);
+        var query = randomVector(dim);
+        var exact = new DefaultSearchScoreProvider(vectors.rerankerFor(query, similarityFunction));
+        var reranked = new DefaultSearchScoreProvider(pqv.scoreFunctionFor(query, similarityFunction),
+                                                      vectors.rerankerFor(query, similarityFunction));
+
+        for (boolean reused : new boolean[] {false, true}) {
+            var searcher = new GraphSearcher(graph);
+            if (reused) {
+                assertEquals(10, searcher.search(reranked, 10, 30, 0.0f, 0.0f, Bits.ALL).getNodes().length);
+                assertEquals(0, searcher.resume(0, 30).getNodes().length);
+            }
+            for (var result : List.of(searcher.search(exact, 0, Bits.ALL),
+                                      searcher.search(reranked, 0, Bits.ALL),
+                                      searcher.search(reranked, 0, 10, 0.0f, 0.0f, Bits.ALL))) {
+                assertEquals(0, result.getNodes().length);
+                assertEquals(0, result.getVisitedCount());
+            }
+        }
+    }
+
     // If an exception is thrown during search, the next search should still function
     @Test
     public void testExceptionalTermination() {

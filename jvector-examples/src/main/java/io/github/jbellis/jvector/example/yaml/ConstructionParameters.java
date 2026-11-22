@@ -18,69 +18,185 @@ package io.github.jbellis.jvector.example.yaml;
 
 import io.github.jbellis.jvector.graph.disk.feature.FeatureId;
 
+import java.util.ArrayList;
 import java.util.EnumSet;
+import java.util.LinkedHashSet;
 import java.util.List;
-import java.util.stream.Collectors;
+import java.util.Map;
+import java.util.function.Predicate;
 
 
 public class ConstructionParameters extends CommonParameters {
+    public String type;
+    public String writerMode;
+    /** onDisk only: pad base-layer records so each starts on this page boundary (a power of two); omit for none. */
+    public Integer pageAlignment;
     public List<Integer> outDegree;
+    /**
+     * Schema 3: maximum out-degrees of the layers above the base layer to sweep; omit for {@code outDegree} on every
+     * layer. With it, {@code outDegree} is the base layer's degree. Needs {@code addHierarchy} Yes.
+     */
+    public List<Integer> upperLayerDegree;
     public List<Integer> efConstruction;
     public List<Float> neighborOverflow;
     public List<Boolean> addHierarchy;
     public List<Boolean> refineFinalGraph;
-    public List<String> reranking;
+    /** Schema 2 accepts a list of features. Schema 3 accepts a single map with a type. */
+    public Object reranking;
     public List<Boolean> fusedGraph;
     public Boolean useSavedIndexIfExists;
+    /** Schema 3: threads for training, encoding, graph insertion and writing; an integer or max. */
+    public Object workers;
+    /**
+     * Schema 3: insert the base vectors in arrival order into a streaming index, which encodes each as it arrives,
+     * instead of encoding them all first. An {@code onDisk} streaming index is written and reloaded, as a flush does.
+     */
+    public Boolean streaming;
+    /**
+     * streaming only: vectors scored exactly before a cold index fixes a random-projection model, or 0 to start with
+     * the construction compressor's model.
+     */
+    public List<Integer> coldStartSize;
+    /** streaming only: whether a cold index trains its first model on its sample while vectors arrive. */
+    public List<Boolean> trainWhileStreaming;
+
+    /** The construction worker count, or null when the YAML leaves it to the platform default. */
+    public Integer resolvedWorkers() {
+        return workers == null ? null : Workers.resolve(workers, "construction.workers");
+    }
+
+    void validateSchema3() {
+        if (type == null || !List.of("inMemory", "onDisk").contains(type)) {
+            throw new IllegalArgumentException("construction.type must be inMemory or onDisk");
+        }
+        if (writerMode != null && !List.of("sequential", "parallel").contains(writerMode)) {
+            throw new IllegalArgumentException("construction.writerMode must be sequential or parallel");
+        }
+        if (!"onDisk".equals(type) && (writerMode != null || fusedGraph != null || pageAlignment != null)) {
+            throw new IllegalArgumentException("construction.writerMode, pageAlignment, and fusedGraph require onDisk");
+        }
+        if (Boolean.TRUE.equals(streaming)) {
+            validateSweep("coldStartSize", coldStartSize, value -> value >= 0);
+            if (compression == null || compression.size() != 1 || !"ASH".equals(compression.get(0).type)) {
+                throw new IllegalArgumentException("construction.streaming requires a single ASH construction.compression");
+            }
+            if ("inMemory".equals(type) && "NVQ".equals(rerankingType())) {
+                throw new IllegalArgumentException("An inMemory streaming index reranks with the source vectors: use reranking FP32 or None");
+            }
+            if (fusedGraph != null && fusedGraph.contains(Boolean.TRUE)) {
+                throw new IllegalArgumentException("construction.streaming writes its codes beside the index: use fusedGraph No");
+            }
+            if (trainWhileStreaming != null) validateSweep("trainWhileStreaming", trainWhileStreaming, value -> true);
+        } else if (coldStartSize != null || trainWhileStreaming != null) {
+            throw new IllegalArgumentException("construction.coldStartSize and trainWhileStreaming require construction.streaming Yes");
+        }
+        if (pageAlignment != null && (pageAlignment < 512 || pageAlignment > (1 << 20) || Integer.bitCount(pageAlignment) != 1)) {
+            throw new IllegalArgumentException("construction.pageAlignment must be a power of two from 512 to 1048576");
+        }
+        validateSweep("outDegree", outDegree, value -> value > 0);
+        if (upperLayerDegree != null) {
+            validateSweep("upperLayerDegree", upperLayerDegree, value -> value > 0);
+            if (addHierarchy == null || addHierarchy.contains(Boolean.FALSE))
+                throw new IllegalArgumentException("construction.upperLayerDegree requires addHierarchy Yes");
+            if (Boolean.TRUE.equals(streaming))
+                throw new IllegalArgumentException("construction.upperLayerDegree is not supported for streaming builds");
+        }
+        validateSweep("efConstruction", efConstruction, value -> value > 0);
+        validateSweep("neighborOverflow", neighborOverflow, value -> Float.isFinite(value) && value >= 1);
+        validateSweep("addHierarchy", addHierarchy, value -> true);
+        validateSweep("refineFinalGraph", refineFinalGraph, value -> true);
+        if (fusedGraph != null) validateSweep("fusedGraph", fusedGraph, value -> true);
+        rerankingType();
+        resolvedWorkers();
+        validateCompression("construction", false);
+    }
+
+    private static <T> void validateSweep(String name, List<T> values, Predicate<T> valid) {
+        if (values == null || values.isEmpty() || values.stream().anyMatch(value -> value == null || !valid.test(value))) {
+            throw new IllegalArgumentException("construction." + name + " requires a nonempty list of valid values");
+        }
+    }
+
+    public String rerankingType() {
+        if (reranking == null) return "None";
+        if (!(reranking instanceof Map<?, ?>)) {
+            throw new IllegalArgumentException("construction.reranking must be a map with a type in schema 3");
+        }
+        var fields = (Map<?, ?>) reranking;
+        if (fields.size() != 1 || !(fields.get("type") instanceof String)
+                || !List.of("None", "FP32", "NVQ").contains(fields.get("type"))) {
+            throw new IllegalArgumentException("construction.reranking.type must be None, FP32, or NVQ");
+        }
+        return (String) fields.get("type");
+    }
+
+    public boolean usesNVQReranking() {
+        if (reranking instanceof List<?>) return ((List<?>) reranking).contains("NVQ");
+        return "NVQ".equals(rerankingType());
+    }
 
     public List<EnumSet<FeatureId>> getFeatureSets() {
-        List<EnumSet<FeatureId>> featureSets = null;
-        if (reranking == null || reranking.isEmpty()) {
-            throw new IllegalArgumentException("construction.reranking is required (e.g. [FP] or [NVQ])");
-        }
-        if (fusedGraph == null || fusedGraph.isEmpty()) {
-            throw new IllegalArgumentException("construction.fusedGraph is required (e.g. [No] or [Yes])");
-        }
-        for (var fusedItem : fusedGraph) {
-            var newFeatures = reranking.stream().map(item -> {
-                EnumSet<FeatureId> features;
+        var featureSets = new LinkedHashSet<EnumSet<FeatureId>>();
+        boolean hasPQConstruction = hasConstructionCompressor("PQ");
+        boolean hasASHConstruction = hasConstructionCompressor("ASH");
 
-                switch (item) {
+        for (var fusedItem : fusedGraph) {
+            if (!(reranking instanceof List<?>)) {
+                throw new IllegalArgumentException("construction.reranking must be a list in schema 2");
+            }
+            for (var item : (List<?>) reranking) {
+                EnumSet<FeatureId> baseFeatures;
+
+                switch (String.valueOf(item)) {
                     case "FP":
-                        if (fusedItem) {
-                            features = EnumSet.of(FeatureId.INLINE_VECTORS, FeatureId.FUSED_PQ);
-                        } else {
-                            features = EnumSet.of(FeatureId.INLINE_VECTORS);
-                        }
+                        baseFeatures = EnumSet.of(FeatureId.INLINE_VECTORS);
                         break;
                     case "NVQ":
-                        if (fusedItem) {
-                            features = EnumSet.of(FeatureId.NVQ_VECTORS, FeatureId.FUSED_PQ);
-                        } else {
-                            features = EnumSet.of(FeatureId.NVQ_VECTORS);
-                        }
+                        baseFeatures = EnumSet.of(FeatureId.NVQ_VECTORS);
                         break;
                     default:
                         throw new IllegalArgumentException("Only 'FP' and 'NVQ' are supported");
                 }
 
-                return features;
-            }).collect(Collectors.toList());
-            if (featureSets == null) {
-                featureSets = newFeatures;
-            } else {
-                featureSets.addAll(newFeatures);
+                if (!fusedItem) {
+                    featureSets.add(baseFeatures);
+                    continue;
+                }
+
+                boolean addedFused = false;
+                if (hasPQConstruction) {
+                    var features = EnumSet.copyOf(baseFeatures);
+                    features.add(FeatureId.FUSED_PQ);
+                    featureSets.add(features);
+                    addedFused = true;
+                }
+                if (hasASHConstruction) {
+                    var features = EnumSet.copyOf(baseFeatures);
+                    features.add(FeatureId.FUSED_ASH);
+                    featureSets.add(features);
+                    addedFused = true;
+                }
+
+                if (!addedFused) {
+                    throw new IllegalArgumentException(
+                            "fusedGraph=Yes requires construction compression type PQ or ASH");
+                }
             }
         }
 
-        return featureSets;
+        return new ArrayList<>(featureSets);
     }
 
-    /**
-     * Feature sets for int8 datasets, which are stored natively as bytes and have no reranking or fused-graph
-     * options, so there is nothing to configure.
-     */
-    public List<EnumSet<FeatureId>> getInt8FeatureSets() {
-        return List.of(EnumSet.of(FeatureId.INLINE_BYTE_VECTORS));
+    private boolean hasConstructionCompressor(String type) {
+        if (compression == null) {
+            return false;
+        }
+
+        for (Compression c : compression) {
+            if (c != null && c.type != null && c.type.equalsIgnoreCase(type)) {
+                return true;
+            }
+        }
+        return false;
     }
 }

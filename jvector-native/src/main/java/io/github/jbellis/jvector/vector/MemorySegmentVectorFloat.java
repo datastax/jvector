@@ -34,8 +34,13 @@ import java.util.Objects;
  */
 final public class MemorySegmentVectorFloat implements VectorFloat<MemorySegment>, FloatArray
 {
+    private static final long SHALLOW_BYTES = RamUsageEstimator.shallowSizeOfInstance(MemorySegmentVectorFloat.class);
+    /** A heap float-array segment and its keep-alive scope, created on first native access. */
+    private static final long VIEW_BYTES;
     private static final VarHandle STORAGE;
     static {
+        var probe = MemorySegment.ofArray(new float[0]);
+        VIEW_BYTES = RamUsageEstimator.shallowSizeOf(probe) + RamUsageEstimator.shallowSizeOf(probe.scope());
         try {
             STORAGE = MethodHandles.lookup().findVarHandle(MemorySegmentVectorFloat.class, "segment", Object.class);
         } catch (ReflectiveOperationException e) {
@@ -63,9 +68,10 @@ final public class MemorySegmentVectorFloat implements VectorFloat<MemorySegment
     @Override
     public long ramBytesUsed()
     {
-        int OH_BYTES = RamUsageEstimator.NUM_BYTES_OBJECT_HEADER;
-        int REF_BYTES = RamUsageEstimator.NUM_BYTES_OBJECT_REF;
-        return OH_BYTES + REF_BYTES + (long) length() * Float.BYTES;
+        // The float array, plus its segment view once native access has created one.
+        Object current = STORAGE.get(this);
+        return SHALLOW_BYTES + RamUsageEstimator.sizeOfArray(length(), Float.BYTES)
+                + (current instanceof MemorySegment ? VIEW_BYTES : 0);
     }
 
     @Override
@@ -144,9 +150,8 @@ final public class MemorySegmentVectorFloat implements VectorFloat<MemorySegment
 
     @Override
     public void writeTo(IndexWriter writer) throws IOException {
-        for (int i = 0; i < length(); i++) {
-            writer.writeFloat(get(i));
-        }
+        // The storage is always a whole heap array, so it is written in one call rather than a float at a time.
+        writer.writeFloats(array(), 0, length());
     }
 
     @Override

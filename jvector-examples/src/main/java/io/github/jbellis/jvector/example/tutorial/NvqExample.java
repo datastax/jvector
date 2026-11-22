@@ -24,7 +24,6 @@ import java.util.stream.Collectors;
 import java.util.stream.IntStream;
 
 import io.github.jbellis.jvector.disk.ReaderSupplierFactory;
-import io.github.jbellis.jvector.example.benchmarks.datasets.DataSet;
 import io.github.jbellis.jvector.example.benchmarks.datasets.DataSets;
 import io.github.jbellis.jvector.example.util.AccuracyMetrics;
 import io.github.jbellis.jvector.graph.GraphIndexBuilder;
@@ -52,7 +51,7 @@ public class NvqExample {
     public static void main(String[] args) throws IOException {
         // Load a preconfigured dataset
         String datasetName = args.length == 0 ? "ada002-100k" : args[0];
-        DataSet ds = DataSets.loadDataSet(datasetName).orElseThrow(() ->
+        var ds = DataSets.loadDataSet(datasetName).orElseThrow(() ->
             new RuntimeException("dataset not found"))
         .getDataSet();
         var dim = ds.getDimension();

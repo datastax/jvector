@@ -571,6 +571,9 @@ public class GraphIndexBuilder implements Closeable, Accountable {
         this.searchers = ExplicitThreadLocal.withInitial(() -> {
             var gs = new GraphSearcher(graph);
             gs.usePruning(false);
+            // Construction keeps adaptive stopping where the build provider asks for it, as ASH's does; the other
+            // build providers name no similarity function, so their searches keep the standard rule.
+            gs.useAdaptiveTermination(true);
             return gs;
         });
 
@@ -665,6 +668,9 @@ public class GraphIndexBuilder implements Closeable, Accountable {
         this.searchers = ExplicitThreadLocal.withInitial(() -> {
             var gs = new GraphSearcher(graph);
             gs.usePruning(false);
+            // Construction keeps adaptive stopping where the build provider asks for it, as ASH's does; the other
+            // build providers name no similarity function, so their searches keep the standard rule.
+            gs.useAdaptiveTermination(true);
             return gs;
         });
 
@@ -843,13 +849,16 @@ public class GraphIndexBuilder implements Closeable, Accountable {
                 ssp = scoreProvider.searchProviderFor(node);
 
                 if (graph.getNeighborsIterator(lvl, node).size() > 0) {
-                    gs.searchOneLayer(ssp, beamWidth, 0.0f, lvl, acceptedBits);
+                    // Threshold NEGATIVE_INFINITY, not 0.0f: only COSINE and EUCLIDEAN scores are bounded below by 0.
+                    // DOT_PRODUCT scores are (1 + dot) / 2, which is negative for non-normalized vectors, and a 0.0f
+                    // floor would discard every candidate of a node that is dissimilar to everything else.
+                    gs.searchOneLayer(ssp, beamWidth, Float.NEGATIVE_INFINITY, lvl, acceptedBits);
 
                     var candidates = new NodeArray(gs.approximateResults.size());
                     gs.approximateResults.foreach(candidates::insertSorted);
                     graph.addEdges(lvl, node, candidates, neighborOverflow);
                 } else {
-                    gs.searchOneLayer(ssp, 1, 0.0f, lvl, acceptedBits);
+                    gs.searchOneLayer(ssp, 1, Float.NEGATIVE_INFINITY, lvl, acceptedBits);
                 }
                 gs.setEntryPointsFromPreviousLayer();
             }
@@ -961,9 +970,9 @@ public class GraphIndexBuilder implements Closeable, Accountable {
                 // Move downward from entry.level to 1
                 for (int lvl = entry.level; lvl > 0; lvl--) {
                     if (lvl > nodeLevel.level) {
-                        gs.searchOneLayer(searchScoreProvider, 1, 0.0f, lvl, gs.getView().liveNodes());
+                        gs.searchOneLayer(searchScoreProvider, 1, Float.NEGATIVE_INFINITY, lvl, gs.getView().liveNodes());
                     } else {
-                        gs.searchOneLayer(searchScoreProvider, beamWidth, 0.0f, lvl, gs.getView().liveNodes());
+                        gs.searchOneLayer(searchScoreProvider, beamWidth, Float.NEGATIVE_INFINITY, lvl, gs.getView().liveNodes());
                         NodeScore[] neighbors = new NodeScore[gs.approximateResults.size()];
                         AtomicInteger index = new AtomicInteger();
                         // TODO extract an interface that lets us avoid the copy here and in toScratchCandidates
@@ -977,7 +986,10 @@ public class GraphIndexBuilder implements Closeable, Accountable {
                 }
 
                 // Now do the main search at layer 0
-                result = gs.resume(beamWidth, beamWidth, 0.0f, 0.0f);
+                // The threshold and the rerank floor are NEGATIVE_INFINITY, not 0.0f, as in the layer searches above and
+                // in improveConnections. A score provider with a reranker only reranks candidates at or above the floor,
+                // so a floor of 0 would drop the candidates with a negative score (DOT_PRODUCT, non-normalized vectors).
+                result = gs.resume(beamWidth, beamWidth, Float.NEGATIVE_INFINITY, Float.NEGATIVE_INFINITY);
             }
 
             updateNeighborsOneLayer(0, nodeLevel.node, result.getNodes(), naturalScratchPooled, inProgressBefore, concurrentScratchPooled, searchScoreProvider);

@@ -50,6 +50,10 @@ interface FeatureProvider {
      *
      * @param buildPQ the PQ-encoded build vectors, or null when the build used another compressor
      */
+    default void checkCompressedBuild(io.github.jbellis.jvector.quantization.CompressedVectors encoded) {
+        checkCompressedBuild(encoded instanceof PQVectors ? (PQVectors) encoded : null);
+    }
+
     default void checkCompressedBuild(PQVectors buildPQ) {
     }
 }

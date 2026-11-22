@@ -22,8 +22,9 @@ import java.util.EnumSet;
 import java.util.Set;
 
 /**
- * Version 7 adds inline int8 vectors while retaining the V6 graph record layout.
- * Each node record carries its byte vector inline, one byte per dimension.
+ * Version 7 adds ASH feature payloads while retaining the V6 graph record layout.
+ * Feature headers describe the quantizer and the fused source representation.
+ * It also adds inline int8 vectors, one byte per dimension in each node record.
  */
 final class GraphIndexFormatV7 extends GraphIndexFormatV6 {
     GraphIndexFormatV7() {
@@ -33,6 +34,8 @@ final class GraphIndexFormatV7 extends GraphIndexFormatV6 {
     /** The extension is restricted to V7; earlier formats retain their feature sets. */
     private static Set<FeatureId> supportedFeatures() {
         var features = EnumSet.copyOf(allFeatures());
+        features.add(FeatureId.FUSED_ASH);
+        features.add(FeatureId.PAGE_ALIGNMENT);
         features.add(FeatureId.INLINE_BYTE_VECTORS);
         return features;
     }

@@ -34,6 +34,11 @@ public interface Feature extends Comparable<Feature> {
 
     int headerSize();
 
+    /** The bytes {@link #writeHeader(IndexWriter, int)} writes at {@code version}. */
+    default int headerSize(int version) {
+        return headerSize();
+    }
+
     int featureSize();
 
     /**
@@ -44,6 +49,18 @@ public interface Feature extends Comparable<Feature> {
      */
     @Deprecated
     void writeHeader(IndexWriter out) throws IOException;
+
+    /**
+     * Memory retained by this feature for a loaded index, including any model read from the index
+     * header, which the index alone holds. Per-thread scratch is excluded. Every feature must
+     * define it, so none can fall back to a size that misses what it holds.
+     */
+    long ramBytesUsed();
+
+    /** The part of {@link #ramBytesUsed} held in native memory, outside the Java heap. */
+    default long nativeBytesUsed() {
+        return 0;
+    }
 
     /**
      * Writes this feature's header for a graph written at {@code version}. Features that serialize a

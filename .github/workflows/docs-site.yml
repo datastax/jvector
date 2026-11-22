@@ -1,0 +1,173 @@
+name: Docs site
+
+# Builds the documentation site from docs/ and publishes it to GitHub Pages.
+#
+# - Pull requests only build, so broken links fail early.
+# - Pushes to main publish the "dev" version.
+# - A published release (not a pre-release) publishes its major.minor version
+#   (for example 4.1) and moves the "latest" alias to it.
+# - Manual runs can publish a version from any tag, for example to rebuild one.
+#
+# mike keeps every version on the gh-pages branch; the deploy job publishes
+# that branch's contents through GitHub Actions. Only main may deploy to the
+# github-pages environment, so a release run saves its version to gh-pages and
+# then starts a deploy-only run on main.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "docs/**"
+      - "mkdocs.yml"
+      - ".github/docs-site/**"
+      - ".github/workflows/docs-site.yml"
+  pull_request:
+    paths:
+      - "docs/**"
+      - "mkdocs.yml"
+      - ".github/docs-site/**"
+      - ".github/workflows/docs-site.yml"
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag to publish (for example 4.1.0); leave blank to publish main as dev"
+        required: false
+        default: ""
+      latest:
+        description: "Move the latest alias to this version"
+        type: boolean
+        default: false
+      deploy_only:
+        description: "Only republish what is already on gh-pages"
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: docs-site-${{ github.event_name == 'pull_request' && github.ref || 'publish' }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  check:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -r .github/docs-site/requirements.txt
+      - run: mkdocs build --strict
+
+  publish:
+    if: >-
+      github.event_name != 'pull_request' &&
+      !(github.event_name == 'release' && github.event.release.prerelease)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      actions: write
+    env:
+      DEPLOY_ONLY: ${{ inputs.deploy_only == true }}
+    steps:
+      - name: Choose the version
+        if: env.DEPLOY_ONLY != 'true'
+        id: version
+        env:
+          EVENT: ${{ github.event_name }}
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+          INPUT_TAG: ${{ inputs.tag }}
+          INPUT_LATEST: ${{ inputs.latest }}
+        run: |
+          tag=""
+          latest=false
+          if [ "$EVENT" = "release" ]; then
+            tag="$RELEASE_TAG"; latest=true
+          elif [ "$EVENT" = "workflow_dispatch" ] && [ -n "$INPUT_TAG" ]; then
+            tag="$INPUT_TAG"; latest="$INPUT_LATEST"
+          fi
+          if [ -n "$tag" ]; then
+            if ! [[ "$tag" =~ ^([0-9]+)\.([0-9]+)\. ]]; then
+              echo "Tag $tag is not a major.minor.patch version" >&2; exit 1
+            fi
+            echo "ref=$tag" >> "$GITHUB_OUTPUT"
+            echo "version=${BASH_REMATCH[1]}.${BASH_REMATCH[2]}" >> "$GITHUB_OUTPUT"
+          else
+            echo "ref=main" >> "$GITHUB_OUTPUT"
+            echo "version=dev" >> "$GITHUB_OUTPUT"
+          fi
+          echo "latest=$latest" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ steps.version.outputs.ref || 'main' }}
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        if: env.DEPLOY_ONLY != 'true'
+        with:
+          python-version: "3.12"
+      - if: env.DEPLOY_ONLY != 'true'
+        run: pip install -r .github/docs-site/requirements.txt
+
+      - name: Deploy the version to gh-pages
+        if: env.DEPLOY_ONLY != 'true'
+        env:
+          DOCS_GIT_REF: ${{ steps.version.outputs.ref }}
+          VERSION: ${{ steps.version.outputs.version }}
+          LATEST: ${{ steps.version.outputs.latest }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git fetch origin gh-pages:gh-pages || true
+          if [ "$LATEST" = "true" ]; then
+            # Do not move latest back to an older line (for example a 4.0.x patch after 4.1).
+            current=$(mike list --json | python3 -c 'import json,sys; print(next((v["version"] for v in json.load(sys.stdin) if "latest" in v["aliases"]), ""))')
+            if [ -n "$current" ] && [ "$(printf '%s\n%s\n' "$current" "$VERSION" | sort -V | tail -1)" != "$VERSION" ]; then
+              LATEST=false
+            fi
+          fi
+          if [ "$LATEST" = "true" ]; then
+            mike deploy --push --update-aliases "$VERSION" latest
+            mike set-default --push latest
+          else
+            mike deploy --push "$VERSION"
+            # Until the first release is published, the site opens on dev.
+            if ! mike list --json | python3 -c 'import json,sys; sys.exit(0 if any("latest" in v["aliases"] for v in json.load(sys.stdin)) else 1)'; then
+              mike set-default --push "$VERSION"
+            fi
+          fi
+
+      - name: Collect the site
+        if: github.ref == 'refs/heads/main'
+        run: |
+          git fetch origin gh-pages:gh-pages 2>/dev/null || true
+          rm -rf pages && mkdir pages
+          git archive gh-pages | tar -x -C pages
+      - if: github.ref == 'refs/heads/main'
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: pages
+
+      - name: Start the deploy on main
+        if: github.ref != 'refs/heads/main'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh workflow run docs-site.yml --repo "$GITHUB_REPOSITORY" --ref main -f deploy_only=true
+
+  deploy:
+    needs: publish
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4

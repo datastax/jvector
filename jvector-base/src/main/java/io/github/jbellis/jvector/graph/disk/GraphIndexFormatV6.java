@@ -128,7 +128,7 @@ class GraphIndexFormatV6 extends GraphIndexFormatV5 {
         // In V6, this accounts for the number of features and the ordinal of each feature
         size += Integer.BYTES + features.size() * Integer.BYTES;
 
-        size += features.values().stream().mapToInt(Feature::headerSize).sum();
+        size += features.values().stream().mapToInt(f -> f.headerSize(getVersion())).sum();
 
         return size;
     }

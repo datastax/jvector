@@ -25,15 +25,18 @@
 //   VNNI, VBMI, VBMI2, IFMA, BITALG, VPOPCNTDQ, GFNI, VAES, VPCLMULQDQ
 //
 // Compiled with -march=icelake-server.
-//
-// This file uses raw Intel AVX-512 intrinsics directly — NO Google Highway —
-// so we get exactly the instructions we intend with zero abstraction overhead.
-
-#include <cmath>
-#include <cstdint>
-#include <cstddef>
-#include <immintrin.h>        // AVX-512 + VNNI intrinsics
+// Highway will select HWY_AVX3_DL as the static target. The ASH kernels use
+// Highway; the int8 similarity kernels below use raw AVX-512 VNNI intrinsics,
+// so they get exactly the instructions intended.
 #include "jvector_simd.h"
+#include "hwy/highway.h"
+#include "assert_hwy_targets.h"
+
+#include <cstddef>
+#include <cstdint>
+#include <immintrin.h>        // AVX-512 + VNNI intrinsics
+
+namespace hn = hwy::HWY_NAMESPACE;
 
 // =============================================================================
 // Register naming convention
@@ -84,7 +87,23 @@
 // 4× unrolling fully hides the 3-cycle latency.
 // =============================================================================
 
+#include <algorithm>
+#include <cmath>
+#include <cstring>
+#include <limits>
+
 namespace AVX3_DL {
+#define JVECTOR_ASH_PAIR_ONLY
+#include "ash_symmetric-inl.h"
+// The INT8 neighborhood kernel needs VBMI byte permutes and multishifts and VNNI dot products.
+#define JVECTOR_ASH_INT8_NEIGHBORHOOD_ONLY
+#include "ash_neighborhood-inl.h"
+#undef JVECTOR_ASH_INT8_NEIGHBORHOOD_ONLY
+#undef JVECTOR_ASH_PAIR_ONLY
+// INT8 query projection on 256-bit registers (see ash_projection_i8-inl.h).
+#define JV_ASH_I8_WIDE 0
+#include "ash_projection_i8-inl.h"
+#undef JV_ASH_I8_WIDE
 
 // ---------------------------------------------------------------------------
 // Horizontal reduce: sum all 16 int32 lanes of a zmm register.

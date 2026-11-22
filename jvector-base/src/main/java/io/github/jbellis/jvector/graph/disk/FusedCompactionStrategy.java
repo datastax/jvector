@@ -84,6 +84,12 @@ public final class FusedCompactionStrategy extends QuantizationCompactionStrateg
     }
 
     @Override
+    @SuppressWarnings("unchecked")
+    public void adoptCompressor(VectorCompressor<?> trained) {
+        this.retrainedCompressor = (VectorCompressor<ByteSequence<?>>) java.util.Objects.requireNonNull(trained, "trained");
+    }
+
+    @Override
     public VectorCompressor<?> compressor() {
         return retrainedCompressor;
     }

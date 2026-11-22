@@ -21,11 +21,13 @@ import io.github.jbellis.jvector.disk.IndexWriter;
 import io.github.jbellis.jvector.disk.RandomAccessReader;
 import io.github.jbellis.jvector.graph.disk.CommonHeader;
 import io.github.jbellis.jvector.graph.disk.OnDiskGraphIndex;
+import io.github.jbellis.jvector.util.RamUsageEstimator;
 import io.github.jbellis.jvector.vector.VectorizationProvider;
 import io.github.jbellis.jvector.vector.types.ByteSequence;
 import io.github.jbellis.jvector.vector.types.VectorTypeSupport;
 
 import java.io.IOException;
+import java.io.UncheckedIOException;
 
 /**
  * Stores signed int8 (byte) vectors inline in an {@link io.github.jbellis.jvector.graph.disk.OnDiskGraphIndex}.
@@ -43,9 +45,26 @@ public class InlineByteVectors extends AbstractFeature {
     private static final VectorTypeSupport vts = VectorizationProvider.getInstance().getVectorTypeSupport();
 
     private final int dimension;
+    // The largest length of the vectors this feature has written, for the header.
+    private final MaxVectorNorm written = new MaxVectorNorm();
+    // The largest length stored in a loaded index's header; NaN when unknown.
+    private final float stored;
 
     public InlineByteVectors(int dimension) {
+        this(dimension, Float.NaN);
+    }
+
+    private InlineByteVectors(int dimension, float stored) {
         this.dimension = dimension;
+        this.stored = stored;
+    }
+
+    /**
+     * The largest length of the stored vectors: from the header of a loaded index, or of the vectors written so far.
+     * NaN when unknown, as for a writer that wrote its header first.
+     */
+    public float maxVectorNorm() {
+        return Float.isNaN(stored) ? written.get() : stored;
     }
 
     @Override
@@ -53,10 +72,15 @@ public class InlineByteVectors extends AbstractFeature {
         return FeatureId.INLINE_BYTE_VECTORS;
     }
 
-    /** No extra header bytes — dimension is already in the {@link CommonHeader}. */
     @Override
     public int headerSize() {
-        return 0;
+        return headerSize(OnDiskGraphIndex.CURRENT_VERSION);
+    }
+
+    /** The common header holds the dimension; the feature header stores the largest vector length. */
+    @Override
+    public int headerSize(int version) {
+        return MaxVectorNorm.headerSize(version);
     }
 
     /** One byte per component. */
@@ -69,24 +93,36 @@ public class InlineByteVectors extends AbstractFeature {
         return dimension;
     }
 
+    /** This feature and its record of the largest vector length; the vectors stay on disk. */
+    @Override
+    public long ramBytesUsed() {
+        return RamUsageEstimator.shallowSizeOf(this) + written.ramBytesUsed();
+    }
+
     static InlineByteVectors load(CommonHeader header, RandomAccessReader reader) {
-        return new InlineByteVectors(header.dimension);
+        try {
+            return new InlineByteVectors(header.dimension, MaxVectorNorm.read(reader, header.version));
+        } catch (IOException e) {
+            throw new UncheckedIOException(e);
+        }
     }
 
     @Deprecated
     @Override
-    public void writeHeader(IndexWriter out) {
+    public void writeHeader(IndexWriter out) throws IOException {
         writeHeader(out, OnDiskGraphIndex.CURRENT_VERSION);
     }
 
     @Override
-    public void writeHeader(IndexWriter out, int version) {
-        // common header carries dimension; nothing extra needed
+    public void writeHeader(IndexWriter out, int version) throws IOException {
+        written.write(out, version);
     }
 
     @Override
     public void writeInline(IndexWriter out, Feature.State state) throws IOException {
-        vts.writeByteSequence(out, ((State) state).vector);
+        var vector = ((State) state).vector;
+        written.record(vector);
+        vts.writeByteSequence(out, vector);
     }
 
     public static class State implements Feature.State {

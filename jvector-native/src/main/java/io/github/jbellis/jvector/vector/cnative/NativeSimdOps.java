@@ -1393,68 +1393,6 @@ public class NativeSimdOps {
         }
     }
 
-    private static class closest_centroid_f32 {
-        public static final FunctionDescriptor DESC = FunctionDescriptor.of(
-            NativeSimdOps.C_INT,
-            NativeSimdOps.C_POINTER,
-            NativeSimdOps.C_LONG,
-            NativeSimdOps.C_POINTER,
-            NativeSimdOps.C_INT,
-            NativeSimdOps.C_LONG
-        );
-
-        public static final MemorySegment ADDR = NativeSimdOps.findOrThrow("closest_centroid_f32");
-
-        public static final MethodHandle HANDLE = Linker.nativeLinker().downcallHandle(ADDR, DESC, Linker.Option.critical(true));
-    }
-
-    /**
-     * Function descriptor for:
-     * {@snippet lang=c :
-     * int closest_centroid_f32(const float *point, size_t pointOffset, const float *centroids, int centroidCount, size_t dimension)
-     * }
-     */
-    public static FunctionDescriptor closest_centroid_f32$descriptor() {
-        return closest_centroid_f32.DESC;
-    }
-
-    /**
-     * Downcall method handle for:
-     * {@snippet lang=c :
-     * int closest_centroid_f32(const float *point, size_t pointOffset, const float *centroids, int centroidCount, size_t dimension)
-     * }
-     */
-    public static MethodHandle closest_centroid_f32$handle() {
-        return closest_centroid_f32.HANDLE;
-    }
-
-    /**
-     * Address for:
-     * {@snippet lang=c :
-     * int closest_centroid_f32(const float *point, size_t pointOffset, const float *centroids, int centroidCount, size_t dimension)
-     * }
-     */
-    public static MemorySegment closest_centroid_f32$address() {
-        return closest_centroid_f32.ADDR;
-    }
-
-    /**
-     * {@snippet lang=c :
-     * int closest_centroid_f32(const float *point, size_t pointOffset, const float *centroids, int centroidCount, size_t dimension)
-     * }
-     */
-    public static int closest_centroid_f32(MemorySegment point, long pointOffset, MemorySegment centroids, int centroidCount, long dimension) {
-        var mh$ = closest_centroid_f32.HANDLE;
-        try {
-            if (TRACE_DOWNCALLS) {
-                traceDowncall("closest_centroid_f32", point, pointOffset, centroids, centroidCount, dimension);
-            }
-            return (int)mh$.invokeExact(point, pointOffset, centroids, centroidCount, dimension);
-        } catch (Throwable ex$) {
-           throw new AssertionError("should not reach here", ex$);
-        }
-    }
-
     private static class add_in_place_f32 {
         public static final FunctionDescriptor DESC = FunctionDescriptor.ofVoid(
             NativeSimdOps.C_POINTER,
@@ -1570,48 +1508,6 @@ public class NativeSimdOps {
             mh$.invokeExact(v1, value, length);
         } catch (Throwable ex$) {
            throw new AssertionError("should not reach here", ex$);
-        }
-    }
-
-    private static class scale_to_f32 {
-        public static final FunctionDescriptor DESC = FunctionDescriptor.ofVoid(
-            NativeSimdOps.C_POINTER, NativeSimdOps.C_POINTER, NativeSimdOps.C_LONG, NativeSimdOps.C_FLOAT, NativeSimdOps.C_LONG);
-        public static final MemorySegment ADDR = NativeSimdOps.findOrThrow("scale_to_f32");
-        public static final MethodHandle HANDLE = Linker.nativeLinker().downcallHandle(ADDR, DESC, Linker.Option.critical(true));
-    }
-
-    public static FunctionDescriptor scale_to_f32$descriptor() { return scale_to_f32.DESC; }
-    public static MethodHandle scale_to_f32$handle() { return scale_to_f32.HANDLE; }
-    public static MemorySegment scale_to_f32$address() { return scale_to_f32.ADDR; }
-
-    public static void scale_to_f32(MemorySegment source, MemorySegment destination, long destinationOffset, float multiplier, long length) {
-        var mh$ = scale_to_f32.HANDLE;
-        try {
-            if (TRACE_DOWNCALLS) { traceDowncall("scale_to_f32", source, destination, destinationOffset, multiplier, length); }
-            mh$.invokeExact(source, destination, destinationOffset, multiplier, length);
-        } catch (Throwable ex$) {
-            throw new AssertionError("should not reach here", ex$);
-        }
-    }
-
-    private static class subtract_add_in_place_f32 {
-        public static final FunctionDescriptor DESC = FunctionDescriptor.ofVoid(
-            NativeSimdOps.C_POINTER, NativeSimdOps.C_POINTER, NativeSimdOps.C_POINTER, NativeSimdOps.C_LONG);
-        public static final MemorySegment ADDR = NativeSimdOps.findOrThrow("subtract_add_in_place_f32");
-        public static final MethodHandle HANDLE = Linker.nativeLinker().downcallHandle(ADDR, DESC, Linker.Option.critical(true));
-    }
-
-    public static FunctionDescriptor subtract_add_in_place_f32$descriptor() { return subtract_add_in_place_f32.DESC; }
-    public static MethodHandle subtract_add_in_place_f32$handle() { return subtract_add_in_place_f32.HANDLE; }
-    public static MemorySegment subtract_add_in_place_f32$address() { return subtract_add_in_place_f32.ADDR; }
-
-    public static void subtract_add_in_place_f32(MemorySegment oldSum, MemorySegment newSum, MemorySegment point, long length) {
-        var mh$ = subtract_add_in_place_f32.HANDLE;
-        try {
-            if (TRACE_DOWNCALLS) { traceDowncall("subtract_add_in_place_f32", oldSum, newSum, point, length); }
-            mh$.invokeExact(oldSum, newSum, point, length);
-        } catch (Throwable ex$) {
-            throw new AssertionError("should not reach here", ex$);
         }
     }
 
@@ -2146,6 +2042,189 @@ public class NativeSimdOps {
                 traceDowncall("sum_f32", v, length);
             }
             return (float)mh$.invokeExact(v, length);
+        } catch (Throwable ex$) {
+           throw new AssertionError("should not reach here", ex$);
+        }
+    }
+
+    private static class scale_to_f32 {
+        public static final FunctionDescriptor DESC = FunctionDescriptor.ofVoid(
+            NativeSimdOps.C_POINTER,
+            NativeSimdOps.C_POINTER,
+            NativeSimdOps.C_LONG,
+            NativeSimdOps.C_FLOAT,
+            NativeSimdOps.C_LONG
+        );
+
+        public static final MemorySegment ADDR = NativeSimdOps.findOrThrow("scale_to_f32");
+
+        public static final MethodHandle HANDLE = Linker.nativeLinker().downcallHandle(ADDR, DESC, Linker.Option.critical(true));
+    }
+
+    /**
+     * Function descriptor for:
+     * {@snippet lang=c :
+     * void scale_to_f32(const float *source, float *destination, size_t destinationOffset, float multiplier, size_t length)
+     * }
+     */
+    public static FunctionDescriptor scale_to_f32$descriptor() {
+        return scale_to_f32.DESC;
+    }
+
+    /**
+     * Downcall method handle for:
+     * {@snippet lang=c :
+     * void scale_to_f32(const float *source, float *destination, size_t destinationOffset, float multiplier, size_t length)
+     * }
+     */
+    public static MethodHandle scale_to_f32$handle() {
+        return scale_to_f32.HANDLE;
+    }
+
+    /**
+     * Address for:
+     * {@snippet lang=c :
+     * void scale_to_f32(const float *source, float *destination, size_t destinationOffset, float multiplier, size_t length)
+     * }
+     */
+    public static MemorySegment scale_to_f32$address() {
+        return scale_to_f32.ADDR;
+    }
+
+    /**
+     * {@snippet lang=c :
+     * void scale_to_f32(const float *source, float *destination, size_t destinationOffset, float multiplier, size_t length)
+     * }
+     */
+    public static void scale_to_f32(MemorySegment source, MemorySegment destination, long destinationOffset, float multiplier, long length) {
+        var mh$ = scale_to_f32.HANDLE;
+        try {
+            if (TRACE_DOWNCALLS) {
+                traceDowncall("scale_to_f32", source, destination, destinationOffset, multiplier, length);
+            }
+            mh$.invokeExact(source, destination, destinationOffset, multiplier, length);
+        } catch (Throwable ex$) {
+           throw new AssertionError("should not reach here", ex$);
+        }
+    }
+
+    private static class subtract_add_in_place_f32 {
+        public static final FunctionDescriptor DESC = FunctionDescriptor.ofVoid(
+            NativeSimdOps.C_POINTER,
+            NativeSimdOps.C_POINTER,
+            NativeSimdOps.C_POINTER,
+            NativeSimdOps.C_LONG
+        );
+
+        public static final MemorySegment ADDR = NativeSimdOps.findOrThrow("subtract_add_in_place_f32");
+
+        public static final MethodHandle HANDLE = Linker.nativeLinker().downcallHandle(ADDR, DESC, Linker.Option.critical(true));
+    }
+
+    /**
+     * Function descriptor for:
+     * {@snippet lang=c :
+     * void subtract_add_in_place_f32(float *oldSum, float *newSum, const float *point, size_t length)
+     * }
+     */
+    public static FunctionDescriptor subtract_add_in_place_f32$descriptor() {
+        return subtract_add_in_place_f32.DESC;
+    }
+
+    /**
+     * Downcall method handle for:
+     * {@snippet lang=c :
+     * void subtract_add_in_place_f32(float *oldSum, float *newSum, const float *point, size_t length)
+     * }
+     */
+    public static MethodHandle subtract_add_in_place_f32$handle() {
+        return subtract_add_in_place_f32.HANDLE;
+    }
+
+    /**
+     * Address for:
+     * {@snippet lang=c :
+     * void subtract_add_in_place_f32(float *oldSum, float *newSum, const float *point, size_t length)
+     * }
+     */
+    public static MemorySegment subtract_add_in_place_f32$address() {
+        return subtract_add_in_place_f32.ADDR;
+    }
+
+    /**
+     * {@snippet lang=c :
+     * void subtract_add_in_place_f32(float *oldSum, float *newSum, const float *point, size_t length)
+     * }
+     */
+    public static void subtract_add_in_place_f32(MemorySegment oldSum, MemorySegment newSum, MemorySegment point, long length) {
+        var mh$ = subtract_add_in_place_f32.HANDLE;
+        try {
+            if (TRACE_DOWNCALLS) {
+                traceDowncall("subtract_add_in_place_f32", oldSum, newSum, point, length);
+            }
+            mh$.invokeExact(oldSum, newSum, point, length);
+        } catch (Throwable ex$) {
+           throw new AssertionError("should not reach here", ex$);
+        }
+    }
+
+    private static class closest_centroid_f32 {
+        public static final FunctionDescriptor DESC = FunctionDescriptor.of(
+            NativeSimdOps.C_INT,
+            NativeSimdOps.C_POINTER,
+            NativeSimdOps.C_LONG,
+            NativeSimdOps.C_POINTER,
+            NativeSimdOps.C_INT,
+            NativeSimdOps.C_LONG
+        );
+
+        public static final MemorySegment ADDR = NativeSimdOps.findOrThrow("closest_centroid_f32");
+
+        public static final MethodHandle HANDLE = Linker.nativeLinker().downcallHandle(ADDR, DESC, Linker.Option.critical(true));
+    }
+
+    /**
+     * Function descriptor for:
+     * {@snippet lang=c :
+     * int closest_centroid_f32(const float *point, size_t pointOffset, const float *centroids, int centroidCount, size_t dimension)
+     * }
+     */
+    public static FunctionDescriptor closest_centroid_f32$descriptor() {
+        return closest_centroid_f32.DESC;
+    }
+
+    /**
+     * Downcall method handle for:
+     * {@snippet lang=c :
+     * int closest_centroid_f32(const float *point, size_t pointOffset, const float *centroids, int centroidCount, size_t dimension)
+     * }
+     */
+    public static MethodHandle closest_centroid_f32$handle() {
+        return closest_centroid_f32.HANDLE;
+    }
+
+    /**
+     * Address for:
+     * {@snippet lang=c :
+     * int closest_centroid_f32(const float *point, size_t pointOffset, const float *centroids, int centroidCount, size_t dimension)
+     * }
+     */
+    public static MemorySegment closest_centroid_f32$address() {
+        return closest_centroid_f32.ADDR;
+    }
+
+    /**
+     * {@snippet lang=c :
+     * int closest_centroid_f32(const float *point, size_t pointOffset, const float *centroids, int centroidCount, size_t dimension)
+     * }
+     */
+    public static int closest_centroid_f32(MemorySegment point, long pointOffset, MemorySegment centroids, int centroidCount, long dimension) {
+        var mh$ = closest_centroid_f32.HANDLE;
+        try {
+            if (TRACE_DOWNCALLS) {
+                traceDowncall("closest_centroid_f32", point, pointOffset, centroids, centroidCount, dimension);
+            }
+            return (int)mh$.invokeExact(point, pointOffset, centroids, centroidCount, dimension);
         } catch (Throwable ex$) {
            throw new AssertionError("should not reach here", ex$);
         }

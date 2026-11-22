@@ -19,7 +19,7 @@ package io.github.jbellis.jvector.example;
 import io.github.jbellis.jvector.graph.disk.feature.FeatureId;
 import io.github.jbellis.jvector.graph.disk.feature.InlineByteVectors;
 
-/** Signed int8 vectors stored alongside each node, used for exact reranking of int8 datasets. */
+/** Signed int8 vectors stored inline with each node, scored exactly when searching int8 datasets. */
 final class InlineByteVectorsProvider implements FeatureProvider {
     @Override
     public FeatureId id() {
@@ -29,9 +29,11 @@ final class InlineByteVectorsProvider implements FeatureProvider {
     @Override
     public void configure(FeatureWriteContext ctx) {
         var byteVectors = ctx.byteVectors();
+        // A parallel writer reads from several threads; each reads through its own view.
+        var reader = byteVectors.threadLocalSupplier();
         ctx.add(new InlineByteVectors(byteVectors.dimension()));
         ctx.supplyByOrdinal(FeatureId.INLINE_BYTE_VECTORS,
-                            ordinal -> new InlineByteVectors.State(byteVectors.getVector(ordinal)));
+                            ordinal -> new InlineByteVectors.State(reader.get().getVector(ordinal)));
     }
 
     @Override

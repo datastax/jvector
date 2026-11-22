@@ -23,6 +23,7 @@ import io.github.jbellis.jvector.graph.disk.OnDiskGraphIndex;
 import io.github.jbellis.jvector.graph.similarity.ScoreFunction;
 import io.github.jbellis.jvector.quantization.NVQScorer;
 import io.github.jbellis.jvector.quantization.NVQuantization;
+import io.github.jbellis.jvector.util.RamUsageEstimator;
 import io.github.jbellis.jvector.vector.VectorSimilarityFunction;
 import io.github.jbellis.jvector.vector.types.VectorFloat;
 
@@ -55,6 +56,11 @@ public class SeparatedNVQ extends AbstractSeparatedFeature {
     @Override
     public FeatureId id() {
         return FeatureId.SEPARATED_NVQ;
+    }
+
+    @Override
+    public long ramBytesUsed() {
+        return RamUsageEstimator.shallowSizeOf(this) + RamUsageEstimator.shallowSizeOf(scorer) + nvq.ramBytesUsed();
     }
 
     @Override

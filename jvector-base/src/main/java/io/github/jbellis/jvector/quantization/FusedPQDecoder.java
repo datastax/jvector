@@ -124,6 +124,17 @@ public abstract class FusedPQDecoder implements ScoreFunction.ApproximateScoreFu
         protected float distanceToScore(float distance) {
             return (distance + 1) / 2;
         }
+
+        /** PQ scores the centered query against centered reconstructions, so their lengths bound the score. */
+        @Override
+        public float dotProductBound() {
+            var center = pq.globalCentroid;
+            double squared = VectorUtil.dotProduct(query, query);
+            if (center != null) {
+                squared += VectorUtil.dotProduct(center, center) - 2.0 * VectorUtil.dotProduct(query, center);
+            }
+            return (float) Math.sqrt(Math.max(0.0, squared)) * pq.maxEncodedNorm();
+        }
     }
 
     static class EuclideanDecoder extends FusedPQDecoder {

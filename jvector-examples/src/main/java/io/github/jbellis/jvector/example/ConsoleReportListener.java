@@ -23,12 +23,15 @@ import io.github.jbellis.jvector.example.reporting.SearchSelection;
 
 import java.util.LinkedHashMap;
 import java.util.Map;
+import java.util.ArrayList;
+import java.util.List;
 
 /** Prints a results table per pruning setting and topK, showing the console selection from run-config.yml. */
 final class ConsoleReportListener implements GridListener {
     private final RunArtifacts artifacts;
 
     // Per (index, search compressor), so missing-metric warnings repeat for each configuration.
+    private final List<QueryRow> rows = new ArrayList<>();
     private SearchSelection selection;
     private BenchmarkTablePrinter printer;
     private ReportingSelectionResolver.ResolvedSelection resolved;
@@ -50,7 +53,10 @@ final class ConsoleReportListener implements GridListener {
         Map<String, Object> indexConfig = new LinkedHashMap<>();
         indexConfig.put("featureSetForIndex", ctx.indexFeatures);
         indexConfig.putAll(ctx.build.reportedParameters());
-        printer.printConfig(indexConfig, Map.of("usePruning", usePruning));
+        var queryConfig = new LinkedHashMap<String, Object>();
+        queryConfig.put("usePruning", usePruning);
+        queryConfig.putAll(ctx.queryParameters);
+        printer.printConfig(indexConfig, queryConfig);
     }
 
     @Override
@@ -59,17 +65,19 @@ final class ConsoleReportListener implements GridListener {
         resolved = selection.resolveForTopK(topK);
         // Force header to re-print for this topK (columns change)
         printer.resetTable();
+        rows.clear();
     }
 
     @Override
     public void onQueryResult(SearchContext ctx, QueryRow row) {
         // Best-effort runtime availability warnings (warn once per key)
         selection.warnMissing(row.metrics, resolved);
-        printer.printRow(row.overquery, selection.apply(row.metrics, resolved));
+        rows.add(row);
     }
 
     @Override
     public void onTopKEnd(SearchContext ctx, boolean usePruning, int topK) {
+        for (var row : rows) printer.printRow(row.overquery, selection.apply(row.metrics, resolved));
         printer.printFooter();
     }
 }

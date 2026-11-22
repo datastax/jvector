@@ -108,11 +108,11 @@ SearchScoreProvider ssp = DefaultSearchScoreProvider.exact(query, vsf, graphRavv
 SearchResult sr = searcher.search(ssp, topK, rerankK, 0.0f, 0.0f, Bits.ALL);
 ```
 
-The code from this tutorial is available in `DiskIntro.java`. Run it from the root of this repo using
+The code from this tutorial is available in [`DiskIntro.java`](../../jvector-examples/src/main/java/io/github/jbellis/jvector/example/tutorial/DiskIntro.java). Run it from the root of this repo using
 ```sh
 mvn compile exec:exec@tutorial -Dtutorial=disk -pl jvector-examples -am
 ```
 The full example also illustrates the impact that adjusting `rerankK` has on recall.
 
 Next tutorial:
-- Larger than memory indexes with Product Quantization
+- [Larger than memory indexes with Product Quantization](./3-larger-than-memory-tutorial.md)

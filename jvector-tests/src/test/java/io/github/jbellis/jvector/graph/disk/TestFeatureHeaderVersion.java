@@ -16,6 +16,7 @@
 
 package io.github.jbellis.jvector.graph.disk;
 
+import io.github.jbellis.jvector.vector.VectorSimilarityFunction;
 import com.carrotsearch.randomizedtesting.RandomizedTest;
 import com.carrotsearch.randomizedtesting.annotations.ThreadLeakScope;
 import io.github.jbellis.jvector.TestUtil;
@@ -24,9 +25,14 @@ import io.github.jbellis.jvector.disk.IndexWriter;
 import io.github.jbellis.jvector.graph.ListRandomAccessVectorValues;
 import io.github.jbellis.jvector.graph.disk.feature.Feature;
 import io.github.jbellis.jvector.graph.disk.feature.FeatureId;
+import io.github.jbellis.jvector.graph.disk.feature.FusedASH;
 import io.github.jbellis.jvector.graph.disk.feature.FusedPQ;
+import io.github.jbellis.jvector.graph.disk.feature.SeparatedVectors;
+import io.github.jbellis.jvector.graph.disk.feature.InlineByteVectors;
+import io.github.jbellis.jvector.graph.disk.feature.InlineVectors;
 import io.github.jbellis.jvector.graph.disk.feature.NVQ;
 import io.github.jbellis.jvector.graph.disk.feature.SeparatedNVQ;
+import io.github.jbellis.jvector.quantization.AsymmetricHashing;
 import io.github.jbellis.jvector.quantization.NVQuantization;
 import io.github.jbellis.jvector.quantization.ProductQuantization;
 import org.junit.Test;
@@ -38,6 +44,7 @@ import java.util.EnumMap;
 import java.util.List;
 
 import static org.junit.Assert.assertArrayEquals;
+import static org.junit.Assert.assertEquals;
 
 /**
  * A feature header embedded in a graph serializes its compressor at the graph's version, not at
@@ -57,6 +64,10 @@ public class TestFeatureHeaderVersion extends RandomizedTest {
         var ravv = new ListRandomAccessVectorValues(TestUtil.createRandomVectors(512, DIMENSION), DIMENSION);
         var pq = ProductQuantization.compute(ravv, 8, 256, false);
         var nvq = NVQuantization.compute(ravv, 2);
+        var ash = AsymmetricHashing.initialize(ravv, VectorSimilarityFunction.DOT_PRODUCT, AsymmetricHashing.RANDOM,
+                AsymmetricHashing.HEADER_BITS + DIMENSION, 1);
+        var fusedAsh = new FusedASH(MAX_DEGREE, ash);
+        int blockSize = fusedAsh.blockSize();
 
         // Each feature's header is its compressor at the graph's version, plus any fields of its own.
         var cases = List.of(
@@ -65,6 +76,22 @@ public class TestFeatureHeaderVersion extends RandomizedTest {
                 new Case(FeatureId.SEPARATED_NVQ, new SeparatedNVQ(nvq, 1234L), (out, v) -> {
                     nvq.write(out, v);
                     out.writeLong(1234L);
+                }),
+                new Case(FeatureId.FUSED_ASH, fusedAsh, (out, v) -> {
+                    ash.write(out, v);
+                    out.writeInt(blockSize);
+                }),
+                // Full-precision vectors store their largest length from version 7: unknown until any are written.
+                new Case(FeatureId.INLINE_VECTORS, new InlineVectors(DIMENSION), (out, v) -> {
+                    if (v >= 7) out.writeFloat(Float.NaN);
+                }),
+                new Case(FeatureId.SEPARATED_VECTORS, new SeparatedVectors(DIMENSION, 4321L), (out, v) -> {
+                    out.writeLong(4321L);
+                    if (v >= 7) out.writeFloat(Float.NaN);
+                }),
+                // Int8 vectors arrive at version 7 and store their largest length like full-precision vectors.
+                new Case(FeatureId.INLINE_BYTE_VECTORS, new InlineByteVectors(DIMENSION), (out, v) -> {
+                    if (v >= 7) out.writeFloat(Float.NaN);
                 }));
 
         for (int version = 2; version <= OnDiskGraphIndex.CURRENT_VERSION; version++) {
@@ -79,6 +106,7 @@ public class TestFeatureHeaderVersion extends RandomizedTest {
                 // The format's own framing (feature ids, counts) precedes the header.
                 byte[] header = Arrays.copyOfRange(written, written.length - expected.length, written.length);
                 assertArrayEquals(c.id + " at version " + version, expected, header);
+                assertEquals(c.id + " header size at version " + version, expected.length, c.feature.headerSize(version));
             }
         }
     }

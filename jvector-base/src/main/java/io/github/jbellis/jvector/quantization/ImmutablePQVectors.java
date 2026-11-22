@@ -22,12 +22,15 @@ import io.github.jbellis.jvector.vector.VectorUtil;
 import io.github.jbellis.jvector.vector.types.ByteSequence;
 import io.github.jbellis.jvector.vector.types.VectorFloat;
 
-import java.util.Map;
-import java.util.concurrent.ConcurrentHashMap;
+import io.github.jbellis.jvector.util.RamUsageEstimator;
+
+import java.util.concurrent.atomic.AtomicReferenceArray;
 
 public class ImmutablePQVectors extends PQVectors {
     private final int vectorCount;
-    private final Map<VectorSimilarityFunction, VectorFloat<?>> codebookPartialSumsMap;
+    private final long retainedBytes;
+    // One lazily created scoring table per similarity function, by ordinal.
+    private final AtomicReferenceArray<VectorFloat<?>> codebookPartialSums;
 
     /**
      * Construct an immutable PQVectors instance with the given ProductQuantization and compressed data chunks.
@@ -37,11 +40,38 @@ public class ImmutablePQVectors extends PQVectors {
      * @param vectorsPerChunk the number of vectors per chunk
      */
     public ImmutablePQVectors(ProductQuantization pq, ByteSequence<?>[] compressedDataChunks, int vectorCount, int vectorsPerChunk) {
+        this(pq, compressedDataChunks, vectorCount, vectorsPerChunk, true);
+    }
+
+    /**
+     * @param recordCodes whether {@code pq} must count these codes' lengths in its
+     *                    {@link ProductQuantization#maxEncodedNorm}: true unless it encoded them, or they were saved
+     *                    with it
+     */
+    ImmutablePQVectors(ProductQuantization pq, ByteSequence<?>[] compressedDataChunks, int vectorCount,
+                       int vectorsPerChunk, boolean recordCodes) {
         super(pq);
-        this.compressedDataChunks = compressedDataChunks;
+        // Own the reference array; callers may still update code values, whose sizes are fixed.
+        this.compressedDataChunks = compressedDataChunks.clone();
         this.vectorCount = vectorCount;
         this.vectorsPerChunk = vectorsPerChunk;
-        this.codebookPartialSumsMap = new ConcurrentHashMap<>();
+        this.codebookPartialSums = new AtomicReferenceArray<>(VectorSimilarityFunction.values().length);
+        if (recordCodes) {
+            for (int i = 0; i < vectorCount; i++) pq.recordCode(getChunk(i), getOffsetInChunk(i));
+        }
+        retainedBytes = storageBytes() + RamUsageEstimator.shallowSizeOf(codebookPartialSums)
+                + RamUsageEstimator.sizeOfArray(VectorSimilarityFunction.values().length, RamUsageEstimator.NUM_BYTES_OBJECT_REF);
+    }
+
+    /** Cached vector storage, plus the model and the scoring tables created so far. Allocates nothing. */
+    @Override
+    public long ramBytesUsed() {
+        long bytes = retainedBytes + pq.ramBytesUsed();
+        for (int i = 0; i < codebookPartialSums.length(); i++) {
+            VectorFloat<?> table = codebookPartialSums.get(i);
+            if (table != null) bytes += table.ramBytesUsed();
+        }
+        return bytes;
     }
 
     @Override
@@ -55,7 +85,11 @@ public class ImmutablePQVectors extends PQVectors {
     }
 
     private VectorFloat<?> getOrCreateCodebookPartialSums(VectorSimilarityFunction vsf) {
-        return codebookPartialSumsMap.computeIfAbsent(vsf, pq::createCodebookPartialSums);
+        VectorFloat<?> table = codebookPartialSums.get(vsf.ordinal());
+        if (table != null) return table;
+        // Concurrent first callers may each build a table; only the first is kept.
+        codebookPartialSums.compareAndSet(vsf.ordinal(), null, pq.createCodebookPartialSums(vsf));
+        return codebookPartialSums.get(vsf.ordinal());
     }
 
     @Override

@@ -1,9 +1,11 @@
-yamlSchemaVersion: 1
+# Signed int8 vectors stored inline and scored exactly; int8 supports no compression or reranking.
+yamlSchemaVersion: 3
 onDiskIndexVersion: 7
 
 dataset: wikipedia-2023-11-en-mxbai-int8-1m
 
 construction:
+  type: onDisk
   outDegree: [32]
   efConstruction: [100]
   neighborOverflow: [1.2f]
@@ -12,6 +14,8 @@ construction:
   fusedGraph: [No]
   compression:
     - type: None
+  reranking:
+    type: None
   useSavedIndexIfExists: No
 
 search:

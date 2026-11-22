@@ -52,6 +52,15 @@ public abstract class PQVectors implements CompressedVectors {
         this.pq = pq;
     }
 
+    /**
+     * The largest length of any stored vector's reconstruction, relative to the global centroid if any, or more:
+     * the PQ model's {@link ProductQuantization#maxEncodedNorm}, which counts every code it encoded or holds. With the
+     * centered query's length it bounds every dot product PQ scores. NaN when unknown.
+     */
+    public float maxReconstructedNorm() {
+        return pq.maxEncodedNorm();
+    }
+
     public static ImmutablePQVectors load(RandomAccessReader in) throws IOException {
         // pq codebooks
         var pq = ProductQuantization.load(in);
@@ -72,7 +81,7 @@ public abstract class PQVectors implements CompressedVectors {
             chunks[layout.fullSizeChunks] = vectorTypeSupport.readByteSequence(in, layout.lastChunkBytes);
         }
 
-        return new ImmutablePQVectors(pq, chunks, vectorCount, layout.fullChunkVectors);
+        return new ImmutablePQVectors(pq, chunks, vectorCount, layout.fullChunkVectors, false);
     }
 
     public static PQVectors load(RandomAccessReader in, long offset) throws IOException {
@@ -146,7 +155,7 @@ public abstract class PQVectors implements CompressedVectors {
         else
             VectorAccess.forEach(ravv, vectorCount, ordinalsMapping, simdExecutor, encode);
 
-        return new ImmutablePQVectors(pq, chunks, vectorCount, layout.fullChunkVectors);
+        return new ImmutablePQVectors(pq, chunks, vectorCount, layout.fullChunkVectors, false);
     }
 
     @Override
@@ -426,16 +435,28 @@ public abstract class PQVectors implements CompressedVectors {
         return new io.github.jbellis.jvector.graph.disk.SidecarCompactionStrategy(ctx, this, retrainer);
     }
 
-    /** For compaction use. See {@link CompressedVectors#writeSidecarHeader}. */
+    /** For compaction use. See {@link CompressedVectors#writeSidecarHeader(IndexWriter, VectorCompressor, int)}. */
     @Override
+    @Deprecated
     public void writeSidecarHeader(IndexWriter out, VectorCompressor<?> mergedCompressor, int count) throws IOException {
+        writeSidecarHeader(out, mergedCompressor, count, io.github.jbellis.jvector.graph.disk.OnDiskGraphIndex.CURRENT_VERSION);
+    }
+
+    /**
+     * For compaction use. See {@link CompressedVectors#writeSidecarHeader(IndexWriter, VectorCompressor, int, int)}:
+     * the merged PQ is serialized at {@code version}, the output's format version, so a sidecar reads back with the
+     * layout of the graph it belongs to (versions 3 and above carry the PQ magic and version; 2 writes the older
+     * layout, which cannot hold an anisotropic threshold).
+     */
+    @Override
+    public void writeSidecarHeader(IndexWriter out, VectorCompressor<?> mergedCompressor, int count, int version) throws IOException {
         if (!(mergedCompressor instanceof ProductQuantization)) {
             throw new IllegalArgumentException(
                     "PQVectors sidecar header requires ProductQuantization; got "
                             + mergedCompressor.getClass().getSimpleName());
         }
         ProductQuantization mergedPQ = (ProductQuantization) mergedCompressor;
-        mergedPQ.write(out, io.github.jbellis.jvector.graph.disk.OnDiskGraphIndex.CURRENT_VERSION);
+        mergedPQ.write(out, version);
         out.writeInt(count);
         out.writeInt(mergedPQ.getSubspaceCount());
     }
@@ -447,19 +468,25 @@ public abstract class PQVectors implements CompressedVectors {
         return 1024;
     }
 
+    /**
+     * Retained vector storage plus the compressor's model ({@link ProductQuantization#ramBytesUsed()}).
+     * Built-in subclasses cache the storage part and add their scoring tables once created.
+     */
     @Override
     public long ramBytesUsed() {
-        int REF_BYTES = RamUsageEstimator.NUM_BYTES_OBJECT_REF;
-        int OH_BYTES = RamUsageEstimator.NUM_BYTES_OBJECT_HEADER;
-        int AH_BYTES = RamUsageEstimator.NUM_BYTES_ARRAY_HEADER;
+        return pq.ramBytesUsed() + storageBytes();
+    }
 
-        long codebooksSize = pq.ramBytesUsed();
-        long chunksArraySize = OH_BYTES + AH_BYTES + (long) validChunkCount() * REF_BYTES;
-        long dataSize = 0;
-        for (int i = 0; i < validChunkCount(); i++) {
-            dataSize += compressedDataChunks[i].ramBytesUsed();
+    /**
+     * This object, the chunk array and each chunk's {@link ByteSequence#ramBytesUsed()}. Chunks that
+     * share backing storage are each charged for it.
+     */
+    protected long storageBytes() {
+        long bytes = RamUsageEstimator.shallowSizeOf(this) + RamUsageEstimator.shallowSizeOf(compressedDataChunks);
+        for (var chunk : compressedDataChunks) {
+            if (chunk != null) bytes += chunk.ramBytesUsed();
         }
-        return codebooksSize + chunksArraySize + dataSize;
+        return bytes;
     }
 
     @Override
