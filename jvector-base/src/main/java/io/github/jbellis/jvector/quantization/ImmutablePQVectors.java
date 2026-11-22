@@ -22,13 +22,15 @@ import io.github.jbellis.jvector.vector.VectorUtil;
 import io.github.jbellis.jvector.vector.types.ByteSequence;
 import io.github.jbellis.jvector.vector.types.VectorFloat;
 
-import java.util.Map;
-import java.util.concurrent.ConcurrentHashMap;
+import io.github.jbellis.jvector.util.RamUsageEstimator;
+
+import java.util.concurrent.atomic.AtomicReferenceArray;
 
 public class ImmutablePQVectors extends PQVectors {
     private final int vectorCount;
     private final long retainedBytes;
-    private final Map<VectorSimilarityFunction, VectorFloat<?>> codebookPartialSumsMap;
+    // One lazily created scoring table per similarity function, by ordinal.
+    private final AtomicReferenceArray<VectorFloat<?>> codebookPartialSums;
 
     /**
      * Construct an immutable PQVectors instance with the given ProductQuantization and compressed data chunks.
@@ -43,13 +45,20 @@ public class ImmutablePQVectors extends PQVectors {
         this.compressedDataChunks = compressedDataChunks.clone();
         this.vectorCount = vectorCount;
         this.vectorsPerChunk = vectorsPerChunk;
-        this.codebookPartialSumsMap = new ConcurrentHashMap<>();
-        retainedBytes = super.ramBytesUsed();
+        this.codebookPartialSums = new AtomicReferenceArray<>(VectorSimilarityFunction.values().length);
+        retainedBytes = storageBytes() + RamUsageEstimator.shallowSizeOf(codebookPartialSums)
+                + RamUsageEstimator.sizeOfArray(VectorSimilarityFunction.values().length, RamUsageEstimator.NUM_BYTES_OBJECT_REF);
     }
 
+    /** Cached vector storage, plus the model and the scoring tables created so far. Allocates nothing. */
     @Override
     public long ramBytesUsed() {
-        return retainedBytes;
+        long bytes = retainedBytes + pq.ramBytesUsed();
+        for (int i = 0; i < codebookPartialSums.length(); i++) {
+            VectorFloat<?> table = codebookPartialSums.get(i);
+            if (table != null) bytes += table.ramBytesUsed();
+        }
+        return bytes;
     }
 
     @Override
@@ -63,7 +72,11 @@ public class ImmutablePQVectors extends PQVectors {
     }
 
     private VectorFloat<?> getOrCreateCodebookPartialSums(VectorSimilarityFunction vsf) {
-        return codebookPartialSumsMap.computeIfAbsent(vsf, pq::createCodebookPartialSums);
+        VectorFloat<?> table = codebookPartialSums.get(vsf.ordinal());
+        if (table != null) return table;
+        // Concurrent first callers may each build a table; only the first is kept.
+        codebookPartialSums.compareAndSet(vsf.ordinal(), null, pq.createCodebookPartialSums(vsf));
+        return codebookPartialSums.get(vsf.ordinal());
     }
 
     @Override

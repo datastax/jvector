@@ -80,7 +80,8 @@ public class TestFusedPQMemoryAccounting {
                 assertFalse("The entry point must have a cached source", sources.isEmpty());
                 long sourceBytes = sources.values().stream().mapToLong(FusedFeature.InlineSource::ramBytesUsed).sum();
                 long retained = loaded.ramBytesUsed();
-                assertTrue(retained >= sourceBytes + RamUsageEstimator.shallowSizeOf(loaded));
+                // The graph alone holds the codebooks it read from its header, so it counts them.
+                assertTrue(retained >= sourceBytes + RamUsageEstimator.shallowSizeOf(loaded) + pq.ramBytesUsed());
                 // Memory reporting is a cached read; it neither traverses nor changes the cache.
                 for (int i = 0; i < 1000; i++) assertEquals(retained, loaded.ramBytesUsed());
             }

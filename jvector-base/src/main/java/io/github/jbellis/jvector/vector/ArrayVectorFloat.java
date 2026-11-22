@@ -30,6 +30,8 @@ import java.util.Objects;
  */
 final public class ArrayVectorFloat implements VectorFloat<float[]>, FloatArray
 {
+    private static final long SHALLOW_BYTES = RamUsageEstimator.shallowSizeOfInstance(ArrayVectorFloat.class);
+
     private final float[] data;
 
     ArrayVectorFloat(int length)
@@ -97,8 +99,7 @@ final public class ArrayVectorFloat implements VectorFloat<float[]>, FloatArray
     @Override
     public long ramBytesUsed()
     {
-        int OH_BYTES = RamUsageEstimator.NUM_BYTES_OBJECT_HEADER;
-        return OH_BYTES + RamUsageEstimator.sizeOf(data);
+        return SHALLOW_BYTES + RamUsageEstimator.sizeOf(data);
     }
 
     @Override

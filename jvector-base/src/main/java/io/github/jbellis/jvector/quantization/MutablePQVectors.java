@@ -51,14 +51,14 @@ public class MutablePQVectors extends PQVectors implements MutableCompressedVect
         this.vectorCount = new AtomicInteger(0);
         this.vectorsPerChunk = VECTORS_PER_CHUNK;
         this.compressedDataChunks = new ByteSequence<?>[INITIAL_CHUNKS];
-        retainedBytes = pq.ramBytesUsed() + RamUsageEstimator.shallowSizeOf(this)
-                + RamUsageEstimator.shallowSizeOf(vectorCount)
+        retainedBytes = RamUsageEstimator.shallowSizeOf(this) + RamUsageEstimator.shallowSizeOf(vectorCount)
                 + RamUsageEstimator.shallowSizeOf(compressedDataChunks);
     }
 
+    /** Cached vector storage plus the model's live total. */
     @Override
     public long ramBytesUsed() {
-        return retainedBytes;
+        return retainedBytes + pq.ramBytesUsed();
     }
 
     @Override

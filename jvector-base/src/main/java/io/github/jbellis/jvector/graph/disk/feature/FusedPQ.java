@@ -97,6 +97,11 @@ public class FusedPQ extends AbstractFeature implements FusedFeature {
     }
 
     @Override
+    public long ramBytesUsed() {
+        return RamUsageEstimator.shallowSizeOf(this) + pq.ramBytesUsed();
+    }
+
+    @Override
     public int featureSize() {
         return pq.compressedVectorSize() * maxDegree;
     }
