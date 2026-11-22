@@ -127,12 +127,12 @@ public final class ASHScorer {
         }
         var mode = ASHVectors.AshSingleKernel.fromProperty();
         var backend = VectorizationProvider.getInstance().getVectorUtilSupport();
-        if (mode == ASHVectors.AshSingleKernel.SIMD && !backend.supportsAshCanonicalLutScoring()) {
+        boolean simd = backend.supportsAshCanonicalLutScoring() || backend.supportsAshOffsetBinaryDot();
+        if (mode == ASHVectors.AshSingleKernel.SIMD && !simd) {
             throw new IllegalStateException("ASH single-vector SIMD requested, but backend "
-                    + backend.getClass().getName() + " does not support canonical LUT scoring");
+                    + backend.getClass().getName() + " does not support offset-binary scoring");
         }
-        return genericMultibitDotProductScorer(qp,
-                mode != ASHVectors.AshSingleKernel.SCALAR && backend.supportsAshCanonicalLutScoring());
+        return genericMultibitDotProductScorer(qp, mode != ASHVectors.AshSingleKernel.SCALAR && simd);
     }
 
     /** Reuses a fused scorer's table for direct nodes when the backend supports it. */
@@ -301,16 +301,21 @@ public final class ASHScorer {
     }
 
     /**
-     * Offset-binary codes (3 and 5 to 9 bits): {@code scale * <Aq, code> + <q, mu_c> + offset}. The SIMD
-     * path sums the code's 4-bit groups through a query LUT prepared once per scorer; the scalar path
-     * decodes each field and is the independent reference.
+     * Offset-binary codes (3 and 5 to 9 bits): {@code scale * <Aq, code> + <q, mu_c> + offset}. The native
+     * SIMD path sums the code's 4-bit groups through a query LUT prepared once per scorer; the Panama path
+     * decodes fields in registers; the scalar path decodes each field and is the independent reference.
      */
     private CodeScorer genericMultibitDotProductScorer(QueryPrecompute qp, boolean simd) {
         final int d = qp.d;
         final int C = qp.C;
         final int bitsPerDimension = ash.bitsPerDimension;
+        final var backend = VectorizationProvider.getInstance().getVectorUtilSupport();
+        if (simd && !backend.supportsAshCanonicalLutScoring() && backend.supportsAshOffsetBinaryDot()) {
+            return (signBits, signOffset, code, codeOffset, scale, offset, c) ->
+                    scale * backend.ashOffsetBinaryDot(qp.qProj, code, codeOffset, d, bitsPerDimension)
+                    + qp.dotQMuByLandmark[c] + offset;
+        }
         if (simd) {
-            final var backend = VectorizationProvider.getInstance().getVectorUtilSupport();
             final int groups = FusedASHLayout.codeGroups(d, bitsPerDimension);
             // Query-owned: prepared scorers may outlive this thread or run concurrently.
             final float[] lut = new float[Math.multiplyExact(groups, 16)];

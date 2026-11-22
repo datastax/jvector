@@ -266,6 +266,140 @@ class PanamaVectorUtilSupport implements VectorUtilSupport {
     @Override
     public boolean supportsAshLutScoring() { return ASH_SIMD && PanamaASHKernels.supported(); }
 
+    // Offset-binary codes (3 and 5 to 9 bits) decoded in registers. A step of ASH_OB_STEP fields starts on a byte
+    // boundary (8 fields fill b bytes). Each float lane takes the little-endian 32-bit window that starts at the byte
+    // holding its field's first bit, shifts the field down and masks it; a field ends at most 16 bits into its window.
+    private static final VectorSpecies<Byte> ASH_OB_BYTES = VectorSpecies.of(byte.class, ASH_FLOATS.vectorShape());
+    private static final int ASH_OB_STEP = Math.max(8, ASH_FLOATS.length());
+    private static final int ASH_OB_VECTORS = ASH_OB_STEP / ASH_FLOATS.length();
+    // [bits][vector in step * lanes * 4 + byte]: window byte sources; [bits][vector in step * lanes + lane]: shifts
+    private static final int[][] ASH_OB_WINDOWS = new int[10][];
+    private static final int[][] ASH_OB_SHIFTS = new int[10][];
+    // The rest of a code whose array ends before a whole window load, copied so its steps still load in place
+    private static final ThreadLocal<byte[]> ASH_OB_TAIL = ThreadLocal.withInitial(() -> new byte[2 * ASH_OB_BYTES.length()]);
+
+    static {
+        int lanes = ASH_FLOATS.length();
+        for (int bits = 3; bits <= 9; bits++) {
+            if (bits == 4) continue;
+            int[] windows = new int[ASH_OB_STEP * 4], shifts = new int[ASH_OB_STEP];
+            for (int field = 0; field < ASH_OB_STEP; field++) {
+                int bit = field * bits;
+                for (int k = 0; k < 4; k++) windows[field * 4 + k] = Math.min(bit / 8 + k, ASH_OB_BYTES.length() - 1);
+                shifts[field] = bit & 7;
+            }
+            assert (ASH_OB_STEP - 1) * bits / 8 + 1 < ASH_OB_BYTES.length() && lanes * ASH_OB_VECTORS == ASH_OB_STEP;
+            ASH_OB_WINDOWS[bits] = windows;
+            ASH_OB_SHIFTS[bits] = shifts;
+        }
+    }
+
+    @Override
+    public boolean supportsAshOffsetBinaryDot() { return ASH_SIMD && PanamaASHKernels.supported(); }
+
+    @Override
+    public float ashOffsetBinaryDot(float[] query, byte[] code, int codeOffset, int dimensions, int bits) {
+        if (bits < 3 || bits > 9 || bits == 4) {
+            throw new IllegalArgumentException("Offset-binary codes have 3 or 5 to 9 bits per dimension, got " + bits);
+        }
+        Objects.checkFromIndexSize(0, dimensions, query.length);
+        int codeBytes = (int) (((long) dimensions * bits + 7) / 8);
+        Objects.checkFromIndexSize(codeOffset, codeBytes, code.length);
+        return ASH_OB_VECTORS == 1 ? ashOffsetBinaryDot1(query, code, codeOffset, dimensions, bits, codeBytes)
+                : ashOffsetBinaryDot2(query, code, codeOffset, dimensions, bits, codeBytes);
+    }
+
+    /** One vector of fields per step: 8 lanes (AVX2) or 16 (AVX-512). */
+    private static float ashOffsetBinaryDot1(float[] query, byte[] code, int codeOffset, int dimensions, int bits,
+                                             int codeBytes) {
+        int lanes = ASH_FLOATS.length(), load = ASH_OB_BYTES.length(), stepBytes = lanes * bits / 8;
+        var windows = VectorShuffle.fromArray(ASH_OB_BYTES, ASH_OB_WINDOWS[bits], 0);
+        var shifts = IntVector.fromArray(ASH_INTS, ASH_OB_SHIFTS[bits], 0);
+        int mask = (1 << bits) - 1;
+        float center = mask * 0.5f;
+        int steps = dimensions / lanes;
+        // Steps whose window load stays inside the array, then the rest from a copy
+        int inPlace = Math.max(0, Math.min(steps, Math.floorDiv(code.length - codeOffset - load, stepBytes) + 1));
+        FloatVector a0 = FloatVector.zero(ASH_FLOATS), a1 = FloatVector.zero(ASH_FLOATS);
+        int step = 0, at = codeOffset;
+        // Pairs of steps into two accumulators
+        for (; step + 1 < inPlace; step += 2, at += 2 * stepBytes) {
+            var f0 = ((IntVector) ByteVector.fromArray(ASH_OB_BYTES, code, at).rearrange(windows).reinterpretAsInts())
+                    .lanewise(VectorOperators.LSHR, shifts).and(mask);
+            var f1 = ((IntVector) ByteVector.fromArray(ASH_OB_BYTES, code, at + stepBytes).rearrange(windows)
+                    .reinterpretAsInts()).lanewise(VectorOperators.LSHR, shifts).and(mask);
+            var v0 = ((FloatVector) f0.convert(VectorOperators.I2F, 0)).sub(center);
+            var v1 = ((FloatVector) f1.convert(VectorOperators.I2F, 0)).sub(center);
+            a0 = FloatVector.fromArray(ASH_FLOATS, query, step * lanes).fma(v0, a0);
+            a1 = FloatVector.fromArray(ASH_FLOATS, query, (step + 1) * lanes).fma(v1, a1);
+        }
+        byte[] source = code;
+        for (; step < steps; step++, at += stepBytes) {
+            if (step == inPlace) {
+                source = ASH_OB_TAIL.get();
+                System.arraycopy(code, at, source, 0, codeOffset + codeBytes - at);
+                at = 0;
+            }
+            var f0 = ((IntVector) ByteVector.fromArray(ASH_OB_BYTES, source, at).rearrange(windows).reinterpretAsInts())
+                    .lanewise(VectorOperators.LSHR, shifts).and(mask);
+            var v0 = ((FloatVector) f0.convert(VectorOperators.I2F, 0)).sub(center);
+            a0 = FloatVector.fromArray(ASH_FLOATS, query, step * lanes).fma(v0, a0);
+        }
+        // Fixed-order lane sum: the same score whether or not C2 has compiled this thread's copy yet.
+        float sum = addLanesPairwise(a0.add(a1));
+        return sum + ashOffsetBinaryTail(query, code, codeOffset, steps * lanes, dimensions, bits);
+    }
+
+    /** Two vectors of fields per eight-field step: 4 lanes (NEON). */
+    private static float ashOffsetBinaryDot2(float[] query, byte[] code, int codeOffset, int dimensions, int bits,
+                                             int codeBytes) {
+        int lanes = ASH_FLOATS.length(), load = ASH_OB_BYTES.length(), stepBytes = bits;
+        var windows0 = VectorShuffle.fromArray(ASH_OB_BYTES, ASH_OB_WINDOWS[bits], 0);
+        var windows1 = VectorShuffle.fromArray(ASH_OB_BYTES, ASH_OB_WINDOWS[bits], 4 * lanes);
+        var shifts0 = IntVector.fromArray(ASH_INTS, ASH_OB_SHIFTS[bits], 0);
+        var shifts1 = IntVector.fromArray(ASH_INTS, ASH_OB_SHIFTS[bits], lanes);
+        int mask = (1 << bits) - 1;
+        float center = mask * 0.5f;
+        int steps = dimensions / 8;
+        int inPlace = Math.max(0, Math.min(steps, Math.floorDiv(code.length - codeOffset - load, stepBytes) + 1));
+        FloatVector a0 = FloatVector.zero(ASH_FLOATS), a1 = FloatVector.zero(ASH_FLOATS);
+        byte[] source = code;
+        int at = codeOffset;
+        for (int step = 0; step < steps; step++, at += stepBytes) {
+            if (step == inPlace) {
+                source = ASH_OB_TAIL.get();
+                System.arraycopy(code, at, source, 0, codeOffset + codeBytes - at);
+                at = 0;
+            }
+            var window = ByteVector.fromArray(ASH_OB_BYTES, source, at);
+            var f0 = ((IntVector) window.rearrange(windows0).reinterpretAsInts())
+                    .lanewise(VectorOperators.LSHR, shifts0).and(mask);
+            var f1 = ((IntVector) window.rearrange(windows1).reinterpretAsInts())
+                    .lanewise(VectorOperators.LSHR, shifts1).and(mask);
+            var v0 = ((FloatVector) f0.convert(VectorOperators.I2F, 0)).sub(center);
+            var v1 = ((FloatVector) f1.convert(VectorOperators.I2F, 0)).sub(center);
+            a0 = FloatVector.fromArray(ASH_FLOATS, query, step * 8).fma(v0, a0);
+            a1 = FloatVector.fromArray(ASH_FLOATS, query, step * 8 + lanes).fma(v1, a1);
+        }
+        float sum = addLanesPairwise(a0.add(a1));
+        return sum + ashOffsetBinaryTail(query, code, codeOffset, steps * 8, dimensions, bits);
+    }
+
+    /** Fields {@code [from, dimensions)}, in order. */
+    private static float ashOffsetBinaryTail(float[] query, byte[] code, int codeOffset, int from, int dimensions,
+                                             int bits) {
+        int mask = (1 << bits) - 1;
+        float center = mask * 0.5f, sum = 0f;
+        for (int j = from; j < dimensions; j++) {
+            int bit = j * bits, at = codeOffset + (bit >>> 3), shift = bit & 7;
+            int window = code[at] & 0xFF;
+            if (shift + bits > 8) window |= (code[at + 1] & 0xFF) << 8;
+            if (shift + bits > 16) window |= (code[at + 2] & 0xFF) << 16;
+            sum = Math.fma(query[j], ((window >>> shift) & mask) - center, sum);
+        }
+        return sum;
+    }
+
     @Override
     public String ashKernelDescription() { return PanamaASHKernels.description(); }
 

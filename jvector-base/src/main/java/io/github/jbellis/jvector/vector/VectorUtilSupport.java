@@ -137,6 +137,19 @@ public interface VectorUtilSupport {
     return ASHLutScoring.dotCanonical(code, codeOffset, groups, lut);
   }
 
+  /** Whether {@link #ashOffsetBinaryDot} has a SIMD kernel that decodes fields directly, without a query LUT. */
+  default boolean supportsAshOffsetBinaryDot() { return false; }
+
+  /**
+   * Dot product of a projected query with an offset-binary code (3 and 5 to 9 bits): dimension {@code j} is the
+   * unsigned {@code bits}-bit field at bits {@code [j*bits, (j+1)*bits)} of the little-endian code starting at
+   * {@code codeOffset}, with value {@code field - (2^bits - 1) / 2}. Its sum order is fixed, so a code scores the
+   * same before and after the JIT compiles the kernel. Requires {@link #supportsAshOffsetBinaryDot()}.
+   */
+  default float ashOffsetBinaryDot(float[] query, byte[] code, int codeOffset, int dimensions, int bits) {
+    throw new UnsupportedOperationException("Offset-binary ASH SIMD is unavailable on this backend");
+  }
+
   /** Dot product of a projected query with a canonical signed-magnitude 2/4-bit code. */
   default float ashProjectionDot(float[] query, byte[] code, int dimensions, int bitsPerDimension) {
     return ashProjectionDot(query, code, 0, dimensions, bitsPerDimension);
