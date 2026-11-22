@@ -283,7 +283,7 @@ public class GraphSearcher implements Closeable {
             throw new IllegalArgumentException(String.format("rerankK %d must be >= topK %d", rerankK, topK));
         }
 
-        if (entry == null) {
+        if (entry == null || topK == 0) {
             return new SearchResult(new SearchResult.NodeScore[0], 0, 0, 0, 0, Float.POSITIVE_INFINITY);
         }
 
@@ -597,6 +597,9 @@ public class GraphSearcher implements Closeable {
     }
 
     SearchResult resume(int topK, int rerankK, float threshold, float rerankFloor) {
+        if (topK == 0) {
+            return new SearchResult(new SearchResult.NodeScore[0], 0, 0, 0, 0, Float.POSITIVE_INFINITY);
+        }
         searchLayer0(topK, rerankK, threshold);
         return reranking(topK, rerankK, rerankFloor);
     }

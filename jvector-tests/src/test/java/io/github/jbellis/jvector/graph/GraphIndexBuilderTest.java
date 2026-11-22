@@ -21,6 +21,9 @@ import io.github.jbellis.jvector.LuceneTestCase;
 import io.github.jbellis.jvector.TestUtil;
 import io.github.jbellis.jvector.disk.SimpleMappedReader;
 import io.github.jbellis.jvector.graph.similarity.BuildScoreProvider;
+import io.github.jbellis.jvector.graph.similarity.DefaultSearchScoreProvider;
+import io.github.jbellis.jvector.graph.similarity.ScoreFunction;
+import io.github.jbellis.jvector.graph.similarity.SearchScoreProvider;
 import io.github.jbellis.jvector.quantization.PQVectors;
 import io.github.jbellis.jvector.quantization.ProductQuantization;
 import io.github.jbellis.jvector.vector.VectorSimilarityFunction;
@@ -36,7 +39,9 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.HashSet;
+import java.util.List;
 import java.util.Random;
+import java.util.concurrent.ForkJoinPool;
 import java.util.function.Supplier;
 
 import static io.github.jbellis.jvector.TestUtil.assertGraphEquals;
@@ -179,6 +184,61 @@ public class GraphIndexBuilderTest extends LuceneTestCase {
         assertEquals("entry node's neighbors are hidden from a fresh concurrent view after rescore -- " +
                      "rescore() must mark copied nodes complete",
                      rawEntryDegree, visibleEntryDegree);
+    }
+
+    /**
+     * The neighbor arrays are sized for (int) (M * overflow) computed in double, while inserts capped the list at the
+     * same product computed in float. For overflow factors such as 1.3 and 1.4 the float product rounds up to the next
+     * integer (1.4f * 5 == 7.0f, but 1.4f * 5.0 == 6.99999988), so an insert could exceed the array capacity and,
+     * with assertions on, failed "overflow 1.4 could exceed max overflow degree 6".
+     */
+    @Test
+    public void testOverflowFactorsThatRoundUpInFloat() throws IOException {
+        var vectors = createRandomFloatVectors(200, 8, getRandom());
+        var ravv = MockVectorValues.fromValues(vectors);
+        for (float overflow : new float[] {1.3f, 1.4f, 1.8f, 1.9f}) {
+            for (int m : new int[] {5, 10, 20}) {
+                try (var builder = new GraphIndexBuilder(ravv, VectorSimilarityFunction.EUCLIDEAN, m, 20, overflow, 1.2f, false)) {
+                    var graph = builder.build(ravv);
+                    try (var view = graph.getView()) {
+                        for (int node = 0; node < ravv.size(); node++) {
+                            assertTrue(view.getNeighborsIterator(0, node).size() <= m);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /**
+     * A builder over an existing graph may use a larger overflow than the graph's neighbor arrays were sized for;
+     * inserts must still stay within the arrays.
+     */
+    @Test
+    public void testExistingGraphWithLargerOverflow() throws IOException {
+        int m = 16;
+        var vectors = createRandomFloatVectors(400, 8, getRandom());
+        var ravv = MockVectorValues.fromValues(vectors);
+        var bsp = BuildScoreProvider.randomAccessScoreProvider(ravv, VectorSimilarityFunction.EUCLIDEAN);
+        try (var first = GraphIndexBuilder.builder(bsp, ravv.dimension(), m)
+                .withBeamWidth(20).withNeighborOverflow(1.2f).withAlpha(1.2f).build()) {
+            for (int node = 0; node < 200; node++) {
+                first.addGraphNode(node, ravv.getVector(node));
+            }
+            var graph = (OnHeapGraphIndex) first.getGraph();
+            try (var second = GraphIndexBuilder.builder(bsp, ravv.dimension(), graph)
+                    .withBeamWidth(20).withNeighborOverflow(2.0f).withAlpha(1.2f).build()) {
+                for (int node = 200; node < ravv.size(); node++) {
+                    second.addGraphNode(node, ravv.getVector(node));
+                }
+                second.cleanup();
+                try (var view = graph.getView()) {
+                    for (int node = 0; node < ravv.size(); node++) {
+                        assertTrue(view.getNeighborsIterator(0, node).size() <= m);
+                    }
+                }
+            }
+        }
     }
 
     @Test
@@ -350,5 +410,111 @@ public class GraphIndexBuilderTest extends LuceneTestCase {
                 }
             }
         }
+    }
+
+    /**
+     * The layer-0 search in addGraphNode used a rerank floor of 0. With a score provider that has a reranker, the
+     * candidates whose approximate score is negative (DOT_PRODUCT with non-normalized vectors) were then not reranked,
+     * so a node dissimilar to everything got at most the single best candidate instead of its neighbors.
+     */
+    @Test
+    public void testNegativeScoresAreRerankedWhenInsertingWithAReranker() throws IOException {
+        var random = new Random(1);
+        var vectors = new ArrayList<VectorFloat<?>>();
+        for (int i = 0; i < 200; i++) {
+            vectors.add(vts.createFloatVector(new float[] {10f + (float) random.nextGaussian(), (float) random.nextGaussian()}));
+        }
+        int position = 50;
+        vectors.add(position, vts.createFloatVector(new float[] {-10f, 0f}));
+        var ravv = new ListRandomAccessVectorValues(vectors, 2);
+        var exact = BuildScoreProvider.randomAccessScoreProvider(ravv, VectorSimilarityFunction.DOT_PRODUCT);
+        var withReranker = new BuildScoreProvider() {
+            @Override
+            public boolean isExact() {
+                return exact.isExact();
+            }
+
+            @Override
+            public VectorFloat<?> approximateCentroid() {
+                return exact.approximateCentroid();
+            }
+
+            @Override
+            public SearchScoreProvider searchProviderFor(VectorFloat<?> vector) {
+                return withReranker(exact.searchProviderFor(vector));
+            }
+
+            @Override
+            public SearchScoreProvider searchProviderFor(int node1) {
+                return withReranker(exact.searchProviderFor(node1));
+            }
+
+            @Override
+            public SearchScoreProvider diversityProviderFor(int node1) {
+                return exact.diversityProviderFor(node1);
+            }
+
+            private SearchScoreProvider withReranker(SearchScoreProvider provider) {
+                var scoreFunction = (ScoreFunction.ExactScoreFunction) provider.scoreFunction();
+                return new DefaultSearchScoreProvider(scoreFunction, scoreFunction);
+            }
+        };
+        try (var builder = new GraphIndexBuilder(withReranker, 2, 8, 40, 1.2f, 1.2f, false)) {
+            for (int node = 0; node < ravv.size(); node++) {
+                builder.addGraphNode(node, ravv.getVector(node));
+            }
+            try (var view = builder.getGraph().getView()) {
+                int degree = view.getNeighborsIterator(0, position).size();
+                assertTrue("node " + position + " has " + degree + " neighbors", degree > 1);
+            }
+        }
+    }
+
+    /**
+     * improveConnections runs from cleanup() on the nodes of the upper layers of a hierarchical graph. It must refine a
+     * node whose similarity to everything is negative (DOT_PRODUCT with non-normalized vectors) like any other: with a
+     * search threshold of 0 it found no candidates for such a node and left its neighbor lists as insertion made them.
+     * The vector goes in at positions where it lands in layer 1 or above (layers depend only on the builder's seeded
+     * random generator and the insertion order), and refinement is judged by the smallest neighbor count the node
+     * ends up with in any of its layers, in most of the builds so that the check does not hinge on a single graph.
+     */
+    @Test
+    public void testImproveConnectionsRefinesUpperLayerNodeWithOnlyNegativeSimilarities() throws IOException {
+        int[] positions = {71, 72, 85, 87, 138};
+        int refined = 0;
+        for (int position : positions) {
+            var random = new Random(1);
+            var vectors = new ArrayList<VectorFloat<?>>();
+            for (int i = 0; i < 200; i++) {
+                vectors.add(vts.createFloatVector(new float[] {10f + (float) random.nextGaussian(), (float) random.nextGaussian()}));
+            }
+            vectors.add(position, vts.createFloatVector(new float[] {-10f, 0f}));
+            var ravv = new ListRandomAccessVectorValues(vectors, 2);
+            var bsp = BuildScoreProvider.randomAccessScoreProvider(ravv, VectorSimilarityFunction.DOT_PRODUCT);
+            var pool = new ForkJoinPool(1);
+            try (var builder = new GraphIndexBuilder(bsp, 2, List.of(8), 40, 1.2f, 1.2f, true, true, pool, pool)) {
+                for (int node = 0; node < ravv.size(); node++) {
+                    builder.addGraphNode(node, ravv.getVector(node));
+                }
+                var graph = (OnHeapGraphIndex) builder.getGraph();
+                int topLevel = graph.getMaxLevelForNode(position);
+                assertTrue("the vector at " + position + " is expected to be in layer 1 or above", topLevel >= 1);
+
+                builder.cleanup();
+
+                int smallest = Integer.MAX_VALUE;
+                try (var view = graph.getView()) {
+                    for (int level = 0; level <= topLevel; level++) {
+                        smallest = Math.min(smallest, view.getNeighborsIterator(level, position).size());
+                    }
+                }
+                if (smallest >= 4) {
+                    refined++;
+                }
+            } finally {
+                pool.shutdown();
+            }
+        }
+        assertTrue("only " + refined + " of " + positions.length + " builds refined the node", refined >= 4);
     }
 }
