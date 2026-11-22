@@ -142,6 +142,18 @@ public interface VectorUtilSupport {
     return ashProjectionDot(query, code, 0, dimensions, bitsPerDimension);
   }
 
+  /**
+   * A 2- or 4-bit projected query rearranged for {@link #ashProjectionDotPrepared}, prepared once per query; null
+   * when this backend scores with {@link #ashProjectionDot} instead.
+   */
+  default float[] ashPrepareProjectionQuery(float[] query, int dimensions, int bitsPerDimension) { return null; }
+
+  /** {@link #ashProjectionDot} with a query from {@link #ashPrepareProjectionQuery}. */
+  default float ashProjectionDotPrepared(float[] prepared, byte[] code, int codeOffset, int dimensions,
+                                         int bitsPerDimension) {
+    throw new UnsupportedOperationException("Prepared ASH projection scoring is unavailable on this backend");
+  }
+
   /** As {@link #ashProjectionDot(float[], byte[], int, int)} for the code starting at {@code codeOffset}. */
   default float ashProjectionDot(float[] query, byte[] code, int codeOffset, int dimensions, int bitsPerDimension) {
     if (bitsPerDimension != 2 && bitsPerDimension != 4) {

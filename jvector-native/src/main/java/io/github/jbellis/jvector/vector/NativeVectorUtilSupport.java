@@ -182,6 +182,14 @@ class NativeVectorUtilSupport extends PanamaVectorUtilSupport
     @Override
     public boolean supportsNativeAshTwoBitProjectionDot() { return NativeASHKernels.isTwoBitDotAvailable(); }
 
+    /** Native 2- and 4-bit dots read the query directly; keep them rather than the Panama prepared kernel. */
+    @Override
+    public float[] ashPrepareProjectionQuery(float[] query, int dimensions, int bitsPerDimension) {
+        boolean nativeDot = bitsPerDimension == 2 ? NativeASHKernels.isTwoBitDotAvailable()
+                : bitsPerDimension == 4 && NativeASHKernels.isFourBitDotAvailable();
+        return nativeDot ? null : super.ashPrepareProjectionQuery(query, dimensions, bitsPerDimension);
+    }
+
     @Override
     public void requireNativeAshSingleScoring(int bitsPerDimension) {
         if (bitsPerDimension == 2

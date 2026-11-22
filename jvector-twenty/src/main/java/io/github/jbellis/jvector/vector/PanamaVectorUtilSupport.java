@@ -38,6 +38,9 @@ class PanamaVectorUtilSupport implements VectorUtilSupport {
     // which crashes or corrupts the heap. JDK 20 is past end of life, so ASH uses the
     // scalar kernels there. The constant folds away on later JDKs.
     private static final boolean ASH_SIMD = Runtime.version().feature() != 20;
+    // The prepared (gather-free) 2/4-bit projection dot. JDK 22's C2 loses its vectors to the heap once it is inlined
+    // into a scorer, running slower than the gather kernel; JDK 25 compiles it well. Earlier JDKs keep the gather kernel.
+    private static final boolean ASH_PREPARED_PROJECTION = Runtime.version().feature() >= 25;
     private static final VectorSpecies<Float> ASH_FLOATS = FloatVector.SPECIES_PREFERRED;
     private static final VectorSpecies<Integer> ASH_INTS = VectorSpecies.of(
             int.class, ASH_FLOATS.vectorShape());
@@ -336,6 +339,114 @@ class PanamaVectorUtilSupport implements VectorUtilSupport {
             total += query[i] * ((field & sign) == 0 ? -magnitude : magnitude);
         }
         return total;
+    }
+
+    /**
+     * The query in slot-major blocks: for each block of {@code lanes} code bytes, the query values of slot 0 of every
+     * byte, then slot 1, and so on, zero-padded to whole blocks. {@link #ashProjectionDotPrepared} then loads each
+     * slot's query values contiguously instead of gathering them, which is slow on some CPUs (Ice Lake).
+     */
+    @Override
+    public float[] ashPrepareProjectionQuery(float[] query, int dimensions, int bitsPerDimension) {
+        if (!ASH_PREPARED_PROJECTION || !supportsAshProjectionScoring()
+                || (bitsPerDimension != 2 && bitsPerDimension != 4)) return null;
+        Objects.checkFromIndexSize(0, dimensions, query.length);
+        int perByte = 8 / bitsPerDimension, lanes = ASH_FLOATS.length(), blockDims = lanes * perByte;
+        float[] prepared = new float[Math.multiplyExact((dimensions + blockDims - 1) / blockDims, blockDims)];
+        for (int i = 0; i < dimensions; i++) {
+            int block = i / blockDims, r = i - block * blockDims;
+            prepared[block * blockDims + (r % perByte) * lanes + r / perByte] = query[i];
+        }
+        return prepared;
+    }
+
+    @Override
+    public float ashProjectionDotPrepared(float[] prepared, byte[] code, int codeOffset, int dimensions,
+                                          int bitsPerDimension) {
+        if (bitsPerDimension != 2 && bitsPerDimension != 4) {
+            throw new IllegalArgumentException("Projection scoring requires 2 or 4 bits per dimension");
+        }
+        int perByte = 8 / bitsPerDimension, blockDims = ASH_FLOATS.length() * perByte;
+        Objects.checkFromIndexSize(codeOffset, (dimensions + perByte - 1) / perByte, code.length);
+        int blocks = (dimensions + blockDims - 1) / blockDims;
+        Objects.checkFromIndexSize(0, blocks * blockDims, prepared.length);
+        return bitsPerDimension == 2 ? ashPreparedDot2(prepared, code, codeOffset, dimensions, blocks)
+                : ashPreparedDot4(prepared, code, codeOffset, dimensions, blocks);
+    }
+
+    // One method per width with no vector-valued helpers, every slot decoded before any is accumulated.
+    private static float ashPreparedDot2(float[] prepared, byte[] code, int codeOffset, int dimensions, int blocks) {
+        int lanes = ASH_FLOATS.length(), loadBytes = ASH_BYTES.length();
+        // Blocks whose load stays inside the array; a code ending its array scores the rest in scalar code.
+        int inPlace = Math.max(0, Math.min(blocks, Math.floorDiv(code.length - codeOffset - loadBytes, lanes) + 1));
+        FloatVector a0 = FloatVector.zero(ASH_FLOATS), a1 = FloatVector.zero(ASH_FLOATS);
+        FloatVector a2 = FloatVector.zero(ASH_FLOATS), a3 = FloatVector.zero(ASH_FLOATS);
+        for (int block = 0, q = 0; block < inPlace; block++, q += 4 * lanes) {
+            var packed = (IntVector) ByteVector.fromArray(ASH_BYTES, code, codeOffset + block * lanes)
+                    .convertShape(VectorOperators.B2I, ASH_INTS, 0);
+            var f0 = packed;
+            var f2 = packed.lanewise(VectorOperators.LSHR, 2);
+            var f4 = packed.lanewise(VectorOperators.LSHR, 4);
+            var f6 = packed.lanewise(VectorOperators.LSHR, 6);
+            var m0 = ((FloatVector) f0.and(1).convertShape(VectorOperators.I2F, ASH_FLOATS, 0)).add(0.5f);
+            var m2 = ((FloatVector) f2.and(1).convertShape(VectorOperators.I2F, ASH_FLOATS, 0)).add(0.5f);
+            var m4 = ((FloatVector) f4.and(1).convertShape(VectorOperators.I2F, ASH_FLOATS, 0)).add(0.5f);
+            var m6 = ((FloatVector) f6.and(1).convertShape(VectorOperators.I2F, ASH_FLOATS, 0)).add(0.5f);
+            a0 = a0.add(FloatVector.fromArray(ASH_FLOATS, prepared, q)
+                    .mul(m0.blend(m0.neg(), f0.and(2).compare(VectorOperators.EQ, 0).cast(ASH_FLOATS))));
+            a1 = a1.add(FloatVector.fromArray(ASH_FLOATS, prepared, q + lanes)
+                    .mul(m2.blend(m2.neg(), f2.and(2).compare(VectorOperators.EQ, 0).cast(ASH_FLOATS))));
+            a2 = a2.add(FloatVector.fromArray(ASH_FLOATS, prepared, q + 2 * lanes)
+                    .mul(m4.blend(m4.neg(), f4.and(2).compare(VectorOperators.EQ, 0).cast(ASH_FLOATS))));
+            a3 = a3.add(FloatVector.fromArray(ASH_FLOATS, prepared, q + 3 * lanes)
+                    .mul(m6.blend(m6.neg(), f6.and(2).compare(VectorOperators.EQ, 0).cast(ASH_FLOATS))));
+        }
+        // Fixed-order lane sum: the same score whether or not C2 has compiled this thread's copy yet.
+        float sum = addLanesPairwise(a0.add(a1).add(a2.add(a3)));
+        return inPlace == blocks ? sum : sum + ashPreparedTail(prepared, code, codeOffset, dimensions, 2, inPlace, blocks);
+    }
+
+    // One method per width with no vector-valued helpers, every slot decoded before any is accumulated.
+    private static float ashPreparedDot4(float[] prepared, byte[] code, int codeOffset, int dimensions, int blocks) {
+        int lanes = ASH_FLOATS.length(), loadBytes = ASH_BYTES.length();
+        // Blocks whose load stays inside the array; a code ending its array scores the rest in scalar code.
+        int inPlace = Math.max(0, Math.min(blocks, Math.floorDiv(code.length - codeOffset - loadBytes, lanes) + 1));
+        FloatVector a0 = FloatVector.zero(ASH_FLOATS), a1 = FloatVector.zero(ASH_FLOATS);
+        for (int block = 0, q = 0; block < inPlace; block++, q += 2 * lanes) {
+            var packed = (IntVector) ByteVector.fromArray(ASH_BYTES, code, codeOffset + block * lanes)
+                    .convertShape(VectorOperators.B2I, ASH_INTS, 0);
+            var f0 = packed;
+            var f4 = packed.lanewise(VectorOperators.LSHR, 4);
+            var m0 = ((FloatVector) f0.and(7).convertShape(VectorOperators.I2F, ASH_FLOATS, 0)).add(0.5f);
+            var m4 = ((FloatVector) f4.and(7).convertShape(VectorOperators.I2F, ASH_FLOATS, 0)).add(0.5f);
+            a0 = a0.add(FloatVector.fromArray(ASH_FLOATS, prepared, q)
+                    .mul(m0.blend(m0.neg(), f0.and(8).compare(VectorOperators.EQ, 0).cast(ASH_FLOATS))));
+            a1 = a1.add(FloatVector.fromArray(ASH_FLOATS, prepared, q + lanes)
+                    .mul(m4.blend(m4.neg(), f4.and(8).compare(VectorOperators.EQ, 0).cast(ASH_FLOATS))));
+        }
+        // Fixed-order lane sum: the same score whether or not C2 has compiled this thread's copy yet.
+        float sum = addLanesPairwise(a0.add(a1));
+        return inPlace == blocks ? sum : sum + ashPreparedTail(prepared, code, codeOffset, dimensions, 4, inPlace, blocks);
+    }
+
+    /** Blocks {@code [first, blocks)} of a prepared projection dot, in scalar code: only a code ending its array. */
+    private static float ashPreparedTail(float[] prepared, byte[] code, int codeOffset, int dimensions, int bits,
+                                         int first, int blocks) {
+        int perByte = 8 / bits, lanes = ASH_FLOATS.length(), blockDims = lanes * perByte, sign = 1 << (bits - 1);
+        float sum = 0;
+        for (int block = first; block < blocks; block++) {
+            for (int lane = 0; lane < lanes; lane++) {
+                int base = block * blockDims + lane * perByte;
+                if (base >= dimensions) break;
+                int b = code[codeOffset + block * lanes + lane] & 255;
+                for (int slot = 0; slot < perByte && base + slot < dimensions; slot++) {
+                    int field = b >>> (slot * bits);
+                    float magnitude = (field & (sign - 1)) + 0.5f;
+                    sum += prepared[block * blockDims + slot * lanes + lane] * ((field & sign) == 0 ? -magnitude : magnitude);
+                }
+            }
+        }
+        return sum;
     }
 
     // One slot of a block: decode signed-magnitude fields and multiply by the gathered query.

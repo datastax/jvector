@@ -279,6 +279,14 @@ public final class ASHScorer {
                     + qp.dotQMuByLandmark[c] + offset;
         }
 
+        // A backend may rearrange the query once so each code slot's query values load contiguously.
+        final float[] prepared = simd ? backend.ashPrepareProjectionQuery(qp.qProj, d, bitsPerDimension) : null;
+        if (prepared != null) {
+            return (bits, bitsOffset, code, codeOffset, scale, offset, c) ->
+                    scale * backend.ashProjectionDotPrepared(prepared, code, codeOffset, d, bitsPerDimension)
+                    + qp.dotQMuByLandmark[c] + offset;
+        }
+
         return (bits, bitsOffset, code, codeOffset, scale, offset, c) -> {
             assert c < C : "Invalid landmark id " + c + " for landmarkCount=" + C;
 
