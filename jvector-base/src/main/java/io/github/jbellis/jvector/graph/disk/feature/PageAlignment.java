@@ -20,6 +20,7 @@ import io.github.jbellis.jvector.annotations.Experimental;
 import io.github.jbellis.jvector.disk.IndexWriter;
 import io.github.jbellis.jvector.disk.RandomAccessReader;
 import io.github.jbellis.jvector.graph.disk.CommonHeader;
+import io.github.jbellis.jvector.util.RamUsageEstimator;
 
 import java.io.IOException;
 import java.io.UncheckedIOException;
@@ -41,6 +42,12 @@ public final class PageAlignment extends AbstractFeature {
         if (headerPad < 0 || headerPad >= pageBytes) throw new IllegalArgumentException("Header padding must be less than a page: " + headerPad);
         this.pageBytes = pageBytes;
         this.headerPad = headerPad;
+    }
+
+    /** Only primitive fields. */
+    @Override
+    public long ramBytesUsed() {
+        return RamUsageEstimator.shallowSizeOf(this);
     }
 
     @Override
