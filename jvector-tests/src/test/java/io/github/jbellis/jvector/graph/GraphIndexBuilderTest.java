@@ -205,6 +205,37 @@ public class GraphIndexBuilderTest extends LuceneTestCase {
         }
     }
 
+    /**
+     * A builder over an existing graph may use a larger overflow than the graph's neighbor arrays were sized for;
+     * inserts must still stay within the arrays.
+     */
+    @Test
+    public void testExistingGraphWithLargerOverflow() throws IOException {
+        int m = 16;
+        var vectors = createRandomFloatVectors(400, 8, getRandom());
+        var ravv = MockVectorValues.fromValues(vectors);
+        var bsp = BuildScoreProvider.randomAccessScoreProvider(ravv, VectorSimilarityFunction.EUCLIDEAN);
+        try (var first = GraphIndexBuilder.builder(bsp, ravv.dimension(), m)
+                .withBeamWidth(20).withNeighborOverflow(1.2f).withAlpha(1.2f).build()) {
+            for (int node = 0; node < 200; node++) {
+                first.addGraphNode(node, ravv.getVector(node));
+            }
+            var graph = (OnHeapGraphIndex) first.getGraph();
+            try (var second = GraphIndexBuilder.builder(bsp, ravv.dimension(), graph)
+                    .withBeamWidth(20).withNeighborOverflow(2.0f).withAlpha(1.2f).build()) {
+                for (int node = 200; node < ravv.size(); node++) {
+                    second.addGraphNode(node, ravv.getVector(node));
+                }
+                second.cleanup();
+                try (var view = graph.getView()) {
+                    for (int node = 0; node < ravv.size(); node++) {
+                        assertTrue(view.getNeighborsIterator(0, node).size() <= m);
+                    }
+                }
+            }
+        }
+    }
+
     @Test
     public void testSaveAndLoad() throws IOException {
         int dimension = randomIntBetween(2, 32);
