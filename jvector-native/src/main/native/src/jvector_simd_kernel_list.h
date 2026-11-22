@@ -95,6 +95,8 @@
     KERNEL_ENTRY(float, ash_canonical_lut_dot_f32, (const unsigned char *code, const float *lut, int groups), (code, lut, groups)) \
     /* Contiguous canonical 4-bit dot; avoids the 16x larger query LUT. */ \
     KERNEL_ENTRY(float, ash_projection_dot_4bit_f32, (const float *query, const unsigned char *code, int dimensions), (query, code, dimensions)) \
+    /* Contiguous canonical 2-bit dot; decodes in registers instead of gathering from the query LUT. */ \
+    KERNEL_ENTRY(float, ash_projection_dot_2bit_f32, (const float *query, const unsigned char *code, int dimensions), (query, code, dimensions)) \
     /* Whole-neighborhood C=1 ASH, one downcall including headers and similarity. */ \
     KERNEL_ENTRY(int, ash_score_neighborhood_c1_f32, (const unsigned char *codes, const float *lut, float landmarkDot, int groups, int blockSize, int capacity, float *out), (codes, lut, landmarkDot, groups, blockSize, capacity, out)) \
     /* Whole-neighborhood C=1 ASH for offset-binary codes (3, 5-9 bits) with an INT8 query. */ \

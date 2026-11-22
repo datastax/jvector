@@ -120,6 +120,29 @@ class NativeASHCanonicalLutTest {
         }
     }
 
+    @Test void contiguousTwoBitDotMatchesIndependentDecoder() {
+        assertTrue(NativeASHKernels.isTwoBitDotAvailable(), "Native 2-bit ASH projection scoring is unavailable");
+        Random random = new Random(51823);
+        for (int dims : new int[] {0, 1, 2, 3, 4, 5, 63, 64, 65, 127, 128, 129, 383, 384, 512, 1536, 3073,
+                NativeASHKernels.MAX_CRITICAL_LANE_GROUPS, NativeASHKernels.MAX_CRITICAL_LANE_GROUPS + 1}) {
+            float[] query = new float[dims + 3];
+            byte[] code = new byte[(dims + 3) / 4 + 2];
+            random.nextBytes(code);
+            int codeOffset = 2;
+            double expected = 0, magnitude = 0;
+            for (int j = 0; j < dims; j++) {
+                query[j] = random.nextFloat() - .5f;
+                int field = (code[codeOffset + j / 4] >>> ((j & 3) * 2)) & 3;
+                double component = ((field & 1) + .5) * ((field & 2) == 0 ? -1 : 1);
+                expected += query[j] * component;
+                magnitude += Math.abs(query[j] * component);
+            }
+            assertEquals(expected, NativeASHKernels.dotTwoBit(query, code, codeOffset, dims), 1e-6 + magnitude * 2e-6);
+        }
+        assertThrows(IndexOutOfBoundsException.class, () -> NativeASHKernels.dotTwoBit(new float[5], new byte[1], 0, 5));
+        assertThrows(IndexOutOfBoundsException.class, () -> NativeASHKernels.dotTwoBit(new float[4], new byte[1], 1, 4));
+    }
+
     @Test void contiguousFourBitDotChecksBounds() {
         assertEquals(0f, NativeASHKernels.dotFourBit(new float[0], new byte[0], 0));
         assertThrows(NullPointerException.class, () -> NativeASHKernels.dotFourBit(null, new byte[1], 1));

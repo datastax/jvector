@@ -180,8 +180,12 @@ class NativeVectorUtilSupport extends PanamaVectorUtilSupport
     public boolean supportsNativeAshCanonicalLutScoring() { return NativeASHKernels.isCanonicalLutAvailable(); }
 
     @Override
+    public boolean supportsNativeAshTwoBitProjectionDot() { return NativeASHKernels.isTwoBitDotAvailable(); }
+
+    @Override
     public void requireNativeAshSingleScoring(int bitsPerDimension) {
-        if (bitsPerDimension == 2 && NativeASHKernels.isCanonicalLutAvailable()) return;
+        if (bitsPerDimension == 2
+                && (NativeASHKernels.isTwoBitDotAvailable() || NativeASHKernels.isCanonicalLutAvailable())) return;
         if (bitsPerDimension == 4 && NativeASHKernels.isFourBitDotAvailable()) return;
         throw new IllegalStateException("Required native ASH single scorer is unavailable for b="
                 + bitsPerDimension + (bitsPerDimension == 2
@@ -192,6 +196,9 @@ class NativeVectorUtilSupport extends PanamaVectorUtilSupport
     public float ashProjectionDot(float[] query, byte[] code, int codeOffset, int dimensions, int bitsPerDimension) {
         if (bitsPerDimension == 4 && NativeASHKernels.isFourBitDotAvailable()) {
             return NativeASHKernels.dotFourBit(query, code, codeOffset, dimensions);
+        }
+        if (bitsPerDimension == 2 && NativeASHKernels.isTwoBitDotAvailable()) {
+            return NativeASHKernels.dotTwoBit(query, code, codeOffset, dimensions);
         }
         if (REQUIRE_NATIVE_ASH) {
             requireNativeAshSingleScoring(bitsPerDimension);

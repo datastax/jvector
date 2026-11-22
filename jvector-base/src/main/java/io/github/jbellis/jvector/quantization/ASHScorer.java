@@ -148,6 +148,13 @@ public final class ASHScorer {
             return v -> v.scale * (2f * backend.ashMaskedAdd_512(qp.qProj, 0, v.binaryVector, 0, d, words)
                     - qp.sumQProj) + qp.dotQMuByLandmark[v.landmark & 255] + v.offset;
         }
+        if (ash.bitsPerDimension == 2
+                && mode != ASHVectors.AshSingleKernel.SCALAR
+                && backend.supportsNativeAshTwoBitProjectionDot()) {
+            final int d = qp.d;
+            return v -> v.scale * backend.ashProjectionDot(qp.qProj, v.extraBits, 0, d, 2)
+                    + qp.dotQMuByLandmark[v.landmark & 255] + v.offset;
+        }
         // Two coordinates share each 2-bit LUT entry. Four-bit codes instead
         // use the backend's contiguous projection dot, avoiding a 16x larger table.
         if ((ash.bitsPerDimension == 2 || AsymmetricHashing.usesOffsetBinaryCode(ash.bitsPerDimension))
@@ -247,7 +254,13 @@ public final class ASHScorer {
                 System.getProperty("jvector.vectorization_provider", "").trim())) {
             backend.requireNativeAshSingleScoring(bitsPerDimension);
         }
-        // The native two-bit kernel consumes a nibble LUT, prepared once per scorer.
+        // A native 2-bit dot decodes codes in registers instead of gathering from a query LUT.
+        if (simd && bitsPerDimension == 2 && backend.supportsNativeAshTwoBitProjectionDot()) {
+            return (bits, bitsOffset, code, codeOffset, scale, offset, c) ->
+                    scale * backend.ashProjectionDot(qp.qProj, code, codeOffset, d, bitsPerDimension)
+                    + qp.dotQMuByLandmark[c] + offset;
+        }
+        // The native two-bit LUT kernel consumes a nibble LUT, prepared once per scorer.
         // Keep it query-owned: prepared scorers may outlive this thread or run concurrently.
         if (simd && bitsPerDimension == 2 && backend.supportsNativeAshCanonicalLutScoring()) {
             final int groups = FusedASHLayout.codeGroups(d, bitsPerDimension);

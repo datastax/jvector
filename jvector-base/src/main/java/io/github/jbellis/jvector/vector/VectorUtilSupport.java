@@ -119,6 +119,9 @@ public interface VectorUtilSupport {
   /** Whether canonical LUT scoring is implemented by the native backend. */
   default boolean supportsNativeAshCanonicalLutScoring() { return false; }
 
+  /** Whether {@link #ashProjectionDot} has a native 2-bit kernel that decodes codes in registers. */
+  default boolean supportsNativeAshTwoBitProjectionDot() { return false; }
+
   /** Fail before scoring when the caller explicitly requires a native ASH single scorer. */
   default void requireNativeAshSingleScoring(int bitsPerDimension) {
     throw new IllegalStateException("Native ASH single scoring is unavailable for b=" + bitsPerDimension);

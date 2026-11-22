@@ -463,6 +463,64 @@ float ash_projection_dot_4bit_f32(const float *HWY_RESTRICT query,
     }
     return sum;
 }
+
+// A 2-bit field is a magnitude bit (value 0.5 or 1.5) and a sign bit; four coordinates share a byte.
+// Decode in registers against the contiguous projection: no per-coordinate table gathers.
+float ash_projection_dot_2bit_f32(const float *HWY_RESTRICT query,
+                                  const unsigned char *HWY_RESTRICT code, int dimensions) {
+    if (query == nullptr || code == nullptr || dimensions < 0) return NAN;
+    const hn::CappedTag<float, 16> d;
+    const hn::Rebind<uint8_t, decltype(d)> db;
+    const hn::Rebind<uint32_t, decltype(d)> du;
+    const size_t lanes = hn::Lanes(d);
+    const size_t count = static_cast<size_t>(dimensions);
+    const auto two = hn::Set(du, 3);
+#if HWY_TARGET <= HWY_AVX3
+    // Field values in the low four permute indices (fields are masked to two bits).
+    alignas(64) static constexpr float levels[16] = {
+        -.5f, -1.5f, .5f, 1.5f, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0};
+    const auto table = hn::LoadU(d, levels);
+#else
+    const auto one = hn::Set(du, 1);
+    const auto signBit = hn::Set(du, 2);
+    const auto half = hn::Set(d, 0.5f);
+#endif
+    auto acc0 = hn::Zero(d), acc1 = hn::Zero(d), acc2 = hn::Zero(d), acc3 = hn::Zero(d);
+    size_t i = 0;
+    for (; i + 4 * lanes <= count; i += 4 * lanes) {
+        const auto packed = hn::PromoteTo(du, hn::LoadU(db, code + i / 4));
+        const auto f0 = hn::And(packed, two);
+        const auto f1 = hn::And(hn::ShiftRight<2>(packed), two);
+        const auto f2 = hn::And(hn::ShiftRight<4>(packed), two);
+        const auto f3 = hn::ShiftRight<6>(packed);
+#if HWY_TARGET <= HWY_AVX3
+        const auto v0 = hn::VFromD<decltype(d)>{_mm512_permutexvar_ps(f0.raw, table.raw)};
+        const auto v1 = hn::VFromD<decltype(d)>{_mm512_permutexvar_ps(f1.raw, table.raw)};
+        const auto v2 = hn::VFromD<decltype(d)>{_mm512_permutexvar_ps(f2.raw, table.raw)};
+        const auto v3 = hn::VFromD<decltype(d)>{_mm512_permutexvar_ps(f3.raw, table.raw)};
+#else
+        auto decode = [&](decltype(f0) f) {
+            auto value = hn::Add(hn::ConvertTo(d, hn::And(f, one)), half);
+            return hn::IfThenElse(hn::RebindMask(d, hn::Eq(hn::And(f, signBit), hn::Zero(du))),
+                                  hn::Neg(value), value);
+        };
+        const auto v0 = decode(f0), v1 = decode(f1), v2 = decode(f2), v3 = decode(f3);
+#endif
+        hn::VFromD<decltype(d)> q0, q1, q2, q3;
+        hn::LoadInterleaved4(d, query + i, q0, q1, q2, q3);
+        acc0 = hn::MulAdd(q0, v0, acc0);
+        acc1 = hn::MulAdd(q1, v1, acc1);
+        acc2 = hn::MulAdd(q2, v2, acc2);
+        acc3 = hn::MulAdd(q3, v3, acc3);
+    }
+    float sum = hn::ReduceSum(d, hn::Add(hn::Add(acc0, acc1), hn::Add(acc2, acc3)));
+    for (; i < count; i++) {
+        const unsigned field = (code[i / 4] >> ((i & 3) * 2)) & 3;
+        const float value = static_cast<float>(field & 1) + 0.5f;
+        sum += query[i] * ((field & 2) ? value : -value);
+    }
+    return sum;
+}
 #endif // JVECTOR_ASH_INT8_NEIGHBORHOOD_ONLY
 
 #endif // JVECTOR_ASH_NEIGHBORHOOD_INL_H

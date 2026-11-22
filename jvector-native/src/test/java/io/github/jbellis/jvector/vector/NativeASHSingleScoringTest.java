@@ -90,9 +90,12 @@ class NativeASHSingleScoringTest {
                 assertEquals(expected[i], prepared.similarityTo(i), 2e-5f);
             }
         }
-        // A regression to the old direct b=2 dispatch must fail rather than silently use Java.
-        assertThrows(IllegalStateException.class, () -> new NativeVectorUtilSupport()
-                .ashProjectionDot(new float[2], new byte[1], 2, 2));
+        // Direct b=2 dispatch uses the native 2-bit dot rather than silently using Java.
+        assertTrue(NativeASHKernels.isTwoBitDotAvailable());
+        float[] query = {.25f, -.5f, .75f, 1f, -1.25f};
+        byte[] code = {(byte) 0b11_10_01_00, (byte) 0b10};
+        assertEquals(NativeASHKernels.dotTwoBit(query, code, 0, 5),
+                new NativeVectorUtilSupport().ashProjectionDot(query, code, 0, 5, 2), 0f);
     }
 
 }

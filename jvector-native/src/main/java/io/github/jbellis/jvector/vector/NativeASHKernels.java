@@ -92,6 +92,41 @@ final class NativeASHKernels {
 
     static boolean isFourBitDotAvailable() { return ADDRESS_OF_FOUR_BIT != null; }
 
+    private static final MemorySegment ADDRESS_OF_TWO_BIT =
+            SymbolLookup.loaderLookup().find("ash_projection_dot_2bit_f32").orElse(null);
+    private static final MethodHandle CRITICAL_TWO_BIT = ADDRESS_OF_TWO_BIT == null ? null
+            : Linker.nativeLinker().downcallHandle(ADDRESS_OF_TWO_BIT, CANONICAL_DESCRIPTOR,
+                    Linker.Option.critical(true));
+    private static final MethodHandle ORDINARY_TWO_BIT = ADDRESS_OF_TWO_BIT == null ? null
+            : Linker.nativeLinker().downcallHandle(ADDRESS_OF_TWO_BIT, CANONICAL_DESCRIPTOR);
+
+    static boolean isTwoBitDotAvailable() { return ADDRESS_OF_TWO_BIT != null; }
+
+    /** Projection dot with the 2-bit code starting at {@code codeOffset}. */
+    static float dotTwoBit(float[] query, byte[] code, int codeOffset, int dimensions) {
+        if (!isTwoBitDotAvailable()) {
+            throw new UnsupportedOperationException("Native 2-bit ASH projection scoring is unavailable");
+        }
+        Objects.requireNonNull(query, "query");
+        Objects.requireNonNull(code, "code");
+        Objects.checkFromIndexSize(0, dimensions, query.length);
+        long bytes = (dimensions + 3L) / 4;
+        if (codeOffset < 0 || codeOffset + bytes > code.length)
+            throw new IndexOutOfBoundsException("Canonical ASH code is too small");
+        if (dimensions == 0) return 0f;
+        if (dimensions <= MAX_CRITICAL_LANE_GROUPS) {
+            return dotTwoBitCritical(query, code, codeOffset, dimensions);
+        }
+        try (Arena arena = Arena.ofConfined()) {
+            long queryBytes = (long) dimensions * Float.BYTES;
+            MemorySegment nativeQuery = arena.allocate(queryBytes, Float.BYTES);
+            MemorySegment nativeCode = arena.allocate(bytes);
+            MemorySegment.copy(MemorySegment.ofArray(query), 0, nativeQuery, 0, queryBytes);
+            MemorySegment.copy(MemorySegment.ofArray(code), codeOffset, nativeCode, 0, bytes);
+            return invokeDot(ORDINARY_TWO_BIT, nativeQuery, nativeCode, dimensions);
+        }
+    }
+
     static float dotFourBit(float[] query, byte[] code, int dimensions) {
         return dotFourBit(query, code, 0, dimensions);
     }
@@ -171,6 +206,11 @@ final class NativeASHKernels {
     // static final handle inlines, escape analysis can scalar-replace it.
     private static float dotFourBitCritical(float[] query, byte[] code, int codeOffset, int dimensions) {
         return invokeDot(CRITICAL_FOUR_BIT, MemorySegment.ofArray(query),
+                MemorySegment.ofArray(code).asSlice(codeOffset), dimensions);
+    }
+
+    private static float dotTwoBitCritical(float[] query, byte[] code, int codeOffset, int dimensions) {
+        return invokeDot(CRITICAL_TWO_BIT, MemorySegment.ofArray(query),
                 MemorySegment.ofArray(code).asSlice(codeOffset), dimensions);
     }
 
