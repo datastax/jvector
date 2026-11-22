@@ -709,6 +709,49 @@ public class TestOnDiskGraphIndex extends RandomizedTest {
     }
 
     /**
+     * COSINE rejects zero int8 vectors once per vector, as ASH does: adding one leaves the graph unchanged,
+     * and a zero query can't be reranked from disk.
+     */
+    @Test
+    public void testInlineByteVectorsCosineRejectsZeroVectors() throws IOException {
+        int n = 20, dim = 8;
+        var vectors = randomByteVectors(n, dim);
+        for (int i = 0; i < n; i++) {
+            if (vectors.get(i).get(0) == 0) vectors.get(i).set(0, (byte) 1);
+        }
+        var rabvv = new ListRandomAccessByteVectorValues(vectors, dim);
+        var builder = GraphIndexBuilder.builder(rabvv, ByteVectorSimilarityFunction.COSINE, 8)
+                .withBeamWidth(20)
+                .withNeighborOverflow(1.2f)
+                .withAlpha(1.2f)
+                .build();
+        for (int i = 0; i < n; i++) builder.addGraphNode(i, rabvv.getVector(i));
+
+        var zero = vts.createByteSequence(dim);
+        assertThrows(IllegalArgumentException.class, () -> builder.addGraphNode(n, zero));
+        assertEquals(n, builder.getGraph().size());
+        builder.cleanup();
+
+        var outputPath = testDirectory.resolve("byte_vectors_cosine_zero");
+        try (var writer = new OnDiskGraphIndexWriter.Builder(builder.getGraph(), outputPath)
+                .with(new InlineByteVectors(dim))
+                .build())
+        {
+            writer.write(Feature.singleStateFactory(FeatureId.INLINE_BYTE_VECTORS,
+                    nodeId -> new InlineByteVectors.State(rabvv.getVector(nodeId))));
+        }
+        try (var rs = new SimpleMappedReader.Supplier(outputPath.toAbsolutePath());
+             var onDisk = OnDiskGraphIndex.load(rs);
+             var view = onDisk.getView())
+        {
+            assertThrows(IllegalArgumentException.class,
+                    () -> view.byteVectorRerankerFor(zero, ByteVectorSimilarityFunction.COSINE));
+            var reranker = view.byteVectorRerankerFor(rabvv.getVector(0), ByteVectorSimilarityFunction.COSINE);
+            assertEquals(1.0f, reranker.similarityTo(0), 1e-6f);
+        }
+    }
+
+    /**
      * featureSize() of InlineByteVectors must equal the dimension (1 byte per component),
      * confirming 4× compression vs float32 InlineVectors.
      */

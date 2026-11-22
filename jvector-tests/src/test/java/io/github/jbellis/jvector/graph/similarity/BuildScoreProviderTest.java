@@ -185,6 +185,13 @@ public class BuildScoreProviderTest {
         assertThrows(UnsupportedOperationException.class, () -> bsp.searchProviderFor(floatQuery));
     }
 
+    @Test
+    public void testByteVectorCosineRejectsZeroQuery() {
+        var bsp = BuildScoreProvider.byteVectorScoreProvider(byteRavv(), ByteVectorSimilarityFunction.COSINE);
+        assertThrows(IllegalArgumentException.class, () -> bsp.searchProviderFor(bseq((byte) 0, (byte) 0)));
+        assertNotNull(bsp.searchProviderFor(bseq((byte) 1, (byte) 0)));
+    }
+
     /** A byte RAVV whose getVector always returns the same per-instance buffer, like a disk-backed source. */
     private static class SharedBufferByteVectors implements RandomAccessByteVectorValues {
         private final List<ByteSequence<?>> data;

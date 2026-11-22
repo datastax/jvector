@@ -739,19 +739,21 @@ public class OnDiskGraphIndex implements ImmutableGraphIndex, AutoCloseable, Acc
          *
          * @throws UnsupportedOperationException if the graph was not written with
          *         {@link InlineByteVectors}
+         * @throws IllegalArgumentException for a query {@code bvsf} can't score, such as a zero vector under COSINE
          */
         public ScoreFunction.ExactScoreFunction byteVectorRerankerFor(ByteSequence<?> queryBytes,
                                                                        ByteVectorSimilarityFunction bvsf) {
             if (!features.containsKey(FeatureId.INLINE_BYTE_VECTORS)) {
                 throw new UnsupportedOperationException("No inline byte vectors in this graph");
             }
+            var query = bvsf.similarityInput(queryBytes);
             return new ScoreFunction.ExactScoreFunction() {
                 private final ByteSequence<?> scratch = vectorTypeSupport.createByteSequence(dimension);
 
                 @Override
                 public float similarityTo(int node) {
                     getByteVectorInto(node, scratch);
-                    return bvsf.compare(queryBytes, scratch);
+                    return bvsf.compare(query, scratch);
                 }
             };
         }

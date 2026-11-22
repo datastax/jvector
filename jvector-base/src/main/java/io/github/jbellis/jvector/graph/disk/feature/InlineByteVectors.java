@@ -62,6 +62,13 @@ public class InlineByteVectors extends AbstractFeature {
     /**
      * The largest length of the stored vectors: from the header of a loaded index, or of the vectors written so far.
      * NaN when unknown, as for a writer that wrote its header first.
+     *
+     * <p>The length is {@code sqrt(sum of squared components)} of the int8 values exactly as stored, with no scaling;
+     * if int8 vectors are later normalized before storage, it is the length of the normalized vectors. It is a
+     * length, not a score. Nothing reads it in search yet: it is reserved so int8 adaptive stopping can be added
+     * without another format version. That stopping must turn it into a score bound through
+     * {@link io.github.jbellis.jvector.vector.ByteVectorSimilarityFunction}'s own mapping (for {@code DOT_PRODUCT},
+     * {@code dot + 1}, or {@code 1 / (1 - dot)} when negative), not the float rule {@code (1 + dot) / 2}.
      */
     public float maxVectorNorm() {
         return Float.isNaN(stored) ? written.get() : stored;

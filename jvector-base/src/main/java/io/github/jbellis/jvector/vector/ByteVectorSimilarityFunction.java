@@ -70,7 +70,31 @@ public enum ByteVectorSimilarityFunction {
         public float compare(ByteSequence<?> v1, ByteSequence<?> v2) {
             return (1.0f + VectorUtil.cosine(v1, v2)) / 2.0f;
         }
+
+        @Override
+        public ByteSequence<?> similarityInput(ByteSequence<?> v) {
+            for (int i = 0; i < v.length(); i++) {
+                if (v.get(i) != 0) return v;
+            }
+            throw new IllegalArgumentException("COSINE similarity is undefined for a zero vector; callers must "
+                    + "reject zero vectors before indexing or searching them");
+        }
     };
+
+    /**
+     * The vector this function scores in place of {@code v}, as ASH's {@code similarityInput} is for float models.
+     * Every vector added to a graph and every query passes through here once, before any comparison, so the
+     * per-comparison kernels never see an input the function can't score. Today every function scores {@code v}
+     * itself and COSINE only rejects a zero vector; a function that later normalizes its inputs returns the
+     * normalized vector here.
+     *
+     * @param v a byte vector to index or search
+     * @return the vector to score: {@code v} itself for every current function
+     * @throws IllegalArgumentException for a zero vector under COSINE
+     */
+    public ByteSequence<?> similarityInput(ByteSequence<?> v) {
+        return v;
+    }
 
     /**
      * Calculates a similarity score between the two int8 vectors.

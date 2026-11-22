@@ -27,7 +27,9 @@ import java.io.IOException;
 
 /**
  * The largest length of the full-precision or int8 vectors a feature stores, kept in its header from format version
- * {@value #VERSION}. Dot-product searches that stop adaptively need it; without it they stop by the standard rule.
+ * {@value #VERSION}. Float dot-product searches that stop adaptively need it; without it they stop by the standard
+ * rule. Int8 headers store it for the same future use, but nothing reads it for them yet (see
+ * {@link InlineByteVectors#maxVectorNorm()}).
  *
  * <p>A feature records each vector as it writes it. A header written before any vector, as a sequential writer writes
  * it, stores NaN (unknown); a writer that rewrites the header after the vectors stores their largest length.

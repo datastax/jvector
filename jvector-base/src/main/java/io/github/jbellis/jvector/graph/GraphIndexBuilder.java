@@ -927,6 +927,8 @@ public class GraphIndexBuilder implements Closeable, Accountable {
      * @param vector the byte vector to add
      * @return an estimate of the number of extra bytes used by the graph after adding the given node
      * @throws UnsupportedOperationException if this builder was not constructed with a byte-vector score provider
+     * @throws IllegalArgumentException for a vector the similarity can't score, such as a zero vector under COSINE;
+     *         the graph is unchanged
      */
     public long addGraphNode(int node, ByteSequence<?> vector) {
         var ssp = scoreProvider.searchProviderFor(vector);

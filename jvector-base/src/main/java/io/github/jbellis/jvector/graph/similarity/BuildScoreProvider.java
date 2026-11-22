@@ -316,8 +316,10 @@ public interface BuildScoreProvider {
 
             @Override
             public SearchScoreProvider searchProviderFor(ByteSequence<?> vector) {
+                // Graph insertions and queries both arrive here, so this is where each vector is checked once.
+                var q = bvsf.similarityInput(vector);
                 var vc = vectorsCopy.get();
-                var sf = (ScoreFunction.ExactScoreFunction) node2 -> bvsf.compare(vector, vc.getVector(node2));
+                var sf = (ScoreFunction.ExactScoreFunction) node2 -> bvsf.compare(q, vc.getVector(node2));
                 return new DefaultSearchScoreProvider(sf);
             }
 

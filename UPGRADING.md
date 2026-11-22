@@ -7,6 +7,8 @@
   vectors (`FeatureId.INLINE_BYTE_VECTORS`), each node's byte vector stored inline, one byte per
   dimension. It also stores the largest vector length that adaptive dot-product stopping needs: one float
   at the end of each serialized PQ model, and of the inline-vector and separated-vector feature headers.
+  The inline int8 header stores it too, as the largest length of the stored byte vectors; nothing reads it
+  yet, and int8 adaptive stopping, when added, must map it through int8 scores rather than the float rule.
   Otherwise a version 7 file has the version 6 layout. ASH models (`AsymmetricHashing`, `ASHVectors`) also
   require version 7 or later when they are written or loaded. A model stores its similarity and, for
   `EUCLIDEAN`, a scale unit (8 bytes in all); ASH models written before these fields existed cannot be

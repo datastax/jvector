@@ -214,7 +214,8 @@ public class TestByteVectorSimilarityFunction extends RandomizedTest {
 
     @Test
     public void testCosineZeroVectorIsRejectedByAssertion() {
-        // Mirrors the float overload: zero vectors are unsupported and caught by an assertion, not defined.
+        // The kernel only asserts, as the float overload does; indexing and search reject zero vectors earlier,
+        // through ByteVectorSimilarityFunction.similarityInput.
         boolean assertionsEnabled = false;
         assert assertionsEnabled = true;
         org.junit.Assume.assumeTrue("requires -ea", assertionsEnabled);
@@ -224,6 +225,22 @@ public class TestByteVectorSimilarityFunction extends RandomizedTest {
         assertThrows(AssertionError.class, () -> VectorUtil.cosine(zero, zero));
         assertThrows(AssertionError.class, () -> VectorUtil.cosine(zero, nonZero));
         assertThrows(AssertionError.class, () -> VectorUtil.cosine(nonZero, zero));
+    }
+
+    @Test
+    public void testSimilarityInputRejectsZeroVectorsOnlyUnderCosine() {
+        // As ASH does for float COSINE models: rejected with an exception whether or not assertions are enabled.
+        var zero = seq(new byte[8]);
+        var nonZero = seq((byte) 0, (byte) 0, (byte) 0, (byte) 0, (byte) 0, (byte) 0, (byte) 0, (byte) -1);
+        var e = assertThrows(IllegalArgumentException.class,
+                () -> ByteVectorSimilarityFunction.COSINE.similarityInput(zero));
+        assertTrue(e.getMessage(), e.getMessage().contains("zero vector"));
+        assertSame(nonZero, ByteVectorSimilarityFunction.COSINE.similarityInput(nonZero));
+        for (var f : new ByteVectorSimilarityFunction[] {
+                ByteVectorSimilarityFunction.EUCLIDEAN, ByteVectorSimilarityFunction.DOT_PRODUCT}) {
+            assertSame(f.name(), zero, f.similarityInput(zero));
+            assertSame(f.name(), nonZero, f.similarityInput(nonZero));
+        }
     }
 
     // -----------------------------------------------------------------------
