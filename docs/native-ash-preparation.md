@@ -316,10 +316,14 @@ created. Vectors passed to the public constructor are copied, so repeated
 ordinals sharing one input vector are charged per ordinal. The model arrays must remain immutable after construction, as required by scoring.
 
 Cached fused ASH sources report their owned source object and quantized vector,
-including its primitive arrays, without charging the shared compressor. Shared
-graph-cache bookkeeping is accounted by `OnDiskGraphIndex`, not by the ASH source.
-Callers such as Cassandra add the compressor or full compressed collection
-separately. This ownership split avoids charging the same model for every source.
+including its primitive arrays. The ASH model read from a fused graph's header is
+held only by that index, so `FusedASH.ramBytesUsed()` counts it once and
+`OnDiskGraphIndex.ramBytesUsed()` includes it. As elsewhere in ASH, totals include
+native projections and `nativeBytesUsed()` reports that part. Codes or a model a
+caller loads separately, such as `ASHVectors` beside a graph, are separate copies
+and are counted by their own `ramBytesUsed()`. A native segment's Java handle is
+counted as the segment object and its scope; the arena bookkeeping behind the scope
+is estimated (roughly 60 bytes per segment).
 
 As with PQ, these retained model/collection estimates exclude worker-owned query
 buffers, native staging/oneDNN execution scratch, training temporaries and OS file
