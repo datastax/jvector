@@ -17,12 +17,14 @@
 package io.github.jbellis.jvector.graph;
 
 import io.github.jbellis.jvector.graph.similarity.BuildScoreProvider;
+import io.github.jbellis.jvector.util.ExplicitThreadLocal;
 import io.github.jbellis.jvector.vector.VectorSimilarityFunction;
 import io.github.jbellis.jvector.vector.VectorizationProvider;
 import io.github.jbellis.jvector.vector.types.VectorFloat;
 import io.github.jbellis.jvector.vector.types.VectorTypeSupport;
 import org.junit.Test;
 
+import java.io.IOException;
 import java.util.ArrayList;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -266,5 +268,102 @@ public class TestThreadLocalCopies {
         } finally {
             pool.shutdownNow();
         }
+    }
+
+    /** Shared RAVV over in-memory vectors whose copies fail to close. */
+    static class CloseFailingRavv implements RandomAccessVectorValues, AutoCloseable {
+        private final ArrayList<VectorFloat<?>> vectors;
+
+        CloseFailingRavv(ArrayList<VectorFloat<?>> vectors) {
+            this.vectors = vectors;
+        }
+
+        @Override
+        public int size() {
+            return vectors.size();
+        }
+
+        @Override
+        public int dimension() {
+            return 2;
+        }
+
+        @Override
+        public VectorFloat<?> getVector(int node) {
+            return vectors.get(node);
+        }
+
+        @Override
+        public boolean isValueShared() {
+            return true;
+        }
+
+        @Override
+        public RandomAccessVectorValues copy() {
+            return new CloseFailingRavv(vectors);
+        }
+
+        @Override
+        public void close() throws IOException {
+            throw new IOException("simulated close failure");
+        }
+    }
+
+    @Test
+    public void buildSucceedsWhenACopyFailsToClose() throws IOException {
+        var vectors = new ArrayList<VectorFloat<?>>();
+        for (int i = 0; i < 64; i++) {
+            var v = vts.createFloatVector(2);
+            v.set(0, i);
+            v.set(1, -i);
+            vectors.add(v);
+        }
+        var bsp = BuildScoreProvider.randomAccessScoreProvider(new ListRandomAccessVectorValues(vectors, 2),
+                                                               VectorSimilarityFunction.EUCLIDEAN);
+        var pool = new ForkJoinPool(4);
+        try (var builder = GraphIndexBuilder.builder(bsp, 2, 8)
+                .withBeamWidth(16)
+                .withNeighborOverflow(1.2f)
+                .withAlpha(1.2f)
+                .withSimdExecutor(pool)
+                .withParallelExecutor(pool)
+                .build()) {
+            // Every node is added before the copies are closed, so the failure must not cost the caller the graph
+            var graph = builder.build(new CloseFailingRavv(vectors));
+            assertEquals(64, graph.size(0));
+        } finally {
+            pool.shutdownNow();
+        }
+    }
+
+    @Test
+    public void explicitThreadLocalClosesEveryValueWhenOneFails() throws Exception {
+        AtomicInteger created = new AtomicInteger();
+        AtomicInteger closed = new AtomicInteger();
+        var tl = ExplicitThreadLocal.<AutoCloseable>withInitial(() -> {
+            int id = created.incrementAndGet();
+            return () -> {
+                if (id == 2) {
+                    throw new IOException("simulated close failure");
+                }
+                closed.incrementAndGet();
+            };
+        });
+        var threads = new Thread[8];
+        for (int i = 0; i < threads.length; i++) {
+            threads[i] = new Thread(tl::get);
+            threads[i].start();
+        }
+        for (var t : threads) {
+            t.join();
+        }
+
+        var e = assertThrows(IOException.class, tl::close);
+        assertEquals("simulated close failure", e.getMessage());
+        assertEquals("every value but the failing one is closed", 7, closed.get());
+
+        // The map is cleared despite the failure, so closing again closes nothing
+        tl.close();
+        assertEquals(7, closed.get());
     }
 }

@@ -54,17 +54,35 @@ public abstract class ExplicitThreadLocal<U> implements AutoCloseable {
 
     /**
      * Invoke the close() method on all AutoCloseable values in the map, and then clear the map.
+     * Every value is closed even if some fail: the first failure is thrown once all have been tried,
+     * with any later ones added as suppressed, and the map is cleared either way so that a second
+     * close() does not close a value again.
      * <p>
      * Not threadsafe.
      */
     @Override
     public void close() throws Exception {
-        for (U value : map.values()) {
-            if (value instanceof AutoCloseable) {
-                ((AutoCloseable) value).close();
+        Exception failure = null;
+        try {
+            for (U value : map.values()) {
+                if (value instanceof AutoCloseable) {
+                    try {
+                        ((AutoCloseable) value).close();
+                    } catch (Exception e) {
+                        if (failure == null) {
+                            failure = e;
+                        } else {
+                            failure.addSuppressed(e);
+                        }
+                    }
+                }
             }
+        } finally {
+            map.clear();
         }
-        map.clear();
+        if (failure != null) {
+            throw failure;
+        }
     }
 
     public static <U> ExplicitThreadLocal<U> withInitial(Supplier<U> initialValue) {

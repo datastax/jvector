@@ -738,6 +738,10 @@ public class GraphIndexBuilder implements Closeable, Accountable {
         }
     }
 
+    /**
+     * Closes the copies once the nodes are added. A copy that fails to close does not fail the build: every node is
+     * already in the graph, so the failure is attached to the build's own exception if it has one, and logged if not.
+     */
     private static void closeThreadLocalSupplier(Supplier<RandomAccessVectorValues> supplier, Throwable failure) {
         if (!(supplier instanceof AutoCloseable)) {
             return;
@@ -748,7 +752,7 @@ public class GraphIndexBuilder implements Closeable, Accountable {
             if (failure != null) {
                 failure.addSuppressed(e);
             } else {
-                throw new RuntimeException(e);
+                logger.warn("Failed to close thread-local vector copies after adding nodes", e);
             }
         }
     }
