@@ -107,7 +107,18 @@ public class CountBenchmark extends AbstractQueryBenchmark {
         LongAdder nodesExpandedBaseLayer = new LongAdder();
         int totalQueries = cs.getDataSet().getQueryVectors().size();
 
+        try (QueuedQueryExecution queued = cs.usesQueuedExecution()
+                ? new QueuedQueryExecution(cs, topK, rerankK, usePruning) : null) {
         for (int run = 0; run < queryRuns; run++) {
+            if (queued != null) {
+                var pass = queued.runPass(totalQueries, cs.getDataSet().getQueryVectors()::get, null, true);
+                for (SearchResult result : pass.results) {
+                    nodesVisited.add(result.getVisitedCount());
+                    nodesExpanded.add(result.getExpandedCount());
+                    nodesExpandedBaseLayer.add(result.getExpandedCountBaseLayer());
+                }
+                continue;
+            }
             IntStream.range(0, totalQueries)
                     .parallel()
                     .forEach(i -> {
@@ -117,6 +128,8 @@ public class CountBenchmark extends AbstractQueryBenchmark {
                         nodesExpanded.add(sr.getExpandedCount());
                         nodesExpandedBaseLayer.add(sr.getExpandedCountBaseLayer());
                     });
+        }
+
         }
 
         double avgVisited = nodesVisited.sum() / (double) (queryRuns * totalQueries);

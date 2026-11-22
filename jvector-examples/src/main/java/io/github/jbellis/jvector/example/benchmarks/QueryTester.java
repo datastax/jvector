@@ -20,6 +20,7 @@ import java.io.IOException;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.function.Supplier;
 
 import io.github.jbellis.jvector.example.Grid.ConfiguredSystem;
 import io.github.jbellis.jvector.example.benchmarks.diagnostics.BenchmarkDiagnostics;
@@ -77,6 +78,7 @@ public class QueryTester {
             int queryRuns) {
 
         List<Metric> results = new ArrayList<>();
+        List<Supplier<List<Metric>>> deferredReports = new ArrayList<>();
 
         // Capture memory and disk usage before/after running queries
         // Use NONE level to suppress logging output that would break the table
@@ -90,25 +92,35 @@ public class QueryTester {
             diagnostics.capturePrePhaseSnapshot("Query");
 
             for (var benchmark : benchmarks) {
-                var metrics = benchmark.runBenchmark(cs, topK, rerankK, usePruning, queryRuns);
+                var metrics = benchmark.runBenchmark(cs, topK, rerankK, usePruning, queryRuns, deferredReports::add);
                 results.addAll(metrics);
             }
+
+            // Fold/sort queued response samples only after all query measurements.
+            for (var report : deferredReports) results.addAll(report.get());
+            deferredReports.clear();
 
             // Capture memory and disk usage after running queries
             diagnostics.capturePostPhaseSnapshot("Query");
 
             // Add memory and disk metrics to results
-            var systemSnapshot = diagnostics.getLatestSystemSnapshot();
+            // Get both pre and post snapshots to calculate maximum memory usage
+            var preSnapshot = diagnostics.getPrePhaseSystemSnapshot();
+            var postSnapshot = diagnostics.getLatestSystemSnapshot();
             var diskSnapshot = diagnostics.getLatestDiskSnapshot();
 
-            if (systemSnapshot != null) {
-                // Max heap usage in MB
+            if (preSnapshot != null && postSnapshot != null) {
+                // Calculate max heap usage across pre and post snapshots
+                long maxHeapUsed = Math.max(preSnapshot.memoryStats.heapUsed,
+                                           postSnapshot.memoryStats.heapUsed);
                 results.add(Metric.of("search.system.max_heap_mb", "Max heap usage (MB)", ".1f",
-                        systemSnapshot.memoryStats.heapUsed / (1024.0 * 1024.0)));
+                        maxHeapUsed / (1024.0 * 1024.0)));
 
-                // Max off-heap usage (direct + mapped) in MB
+                // Calculate max off-heap usage (direct + mapped) across pre and post snapshots
+                long maxOffHeapUsed = Math.max(preSnapshot.memoryStats.getTotalOffHeapMemory(),
+                                               postSnapshot.memoryStats.getTotalOffHeapMemory());
                 results.add(Metric.of("search.system.max_offheap_mb", "Max offheap usage (MB)", ".1f",
-                        systemSnapshot.memoryStats.getTotalOffHeapMemory() / (1024.0 * 1024.0)));
+                        maxOffHeapUsed / (1024.0 * 1024.0)));
             }
 
             if (diskSnapshot != null) {
@@ -123,6 +135,9 @@ public class QueryTester {
 
         } catch (IOException e) {
             throw new RuntimeException(e);
+        } finally {
+            // Failure discards only this invocation's unreported snapshots.
+            deferredReports.clear();
         }
         return results;
     }

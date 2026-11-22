@@ -17,6 +17,7 @@
 package io.github.jbellis.jvector.example.yaml;
 
 import org.yaml.snakeyaml.Yaml;
+import software.amazon.awssdk.http.auth.aws.internal.signer.chunkedencoding.Chunk;
 
 import java.io.FileInputStream;
 import java.io.IOException;
@@ -27,6 +28,8 @@ import java.util.Map;
 
 public class DatasetCollection {
     private static final String defaultFile = "./jvector-examples/yaml-configs/datasets.yml";
+    /** The section CI benchmarks select from; its datasets need the protected catalog. */
+    public static final String REGRESSION_TESTS = "regression-tests";
 
     public final Map<String, List<String>> datasetNames;
 
@@ -53,5 +56,29 @@ public class DatasetCollection {
             }
         }
         return allDatasetNames;
+    }
+
+    /** All dataset names outside the given section. */
+    public List<String> getAllExcept(String section) {
+        List<String> names = new ArrayList<>();
+        for (var entry : datasetNames.entrySet()) {
+            if (!entry.getKey().equals(section) && entry.getValue() != null) {
+                names.addAll(entry.getValue());
+            }
+        }
+        return names;
+    }
+
+    public List<String> getSection(String section) {
+        List<String> sectionDatasetNames = new ArrayList<>();
+        for (var key : datasetNames.keySet()) {
+            if (key.equals(section)) {
+                var subList = datasetNames.get(key);
+                if (subList != null) {
+                    sectionDatasetNames.addAll(subList);
+                }
+            }
+        }
+        return sectionDatasetNames;
     }
 }

@@ -220,6 +220,25 @@ public class TestNodeQueue extends RandomizedTest {
   }
 
   @Test
+  public void testRerankWithZeroTopKLeavesEverythingUnused() {
+    // with topK == 0 nothing can enter the reranked queue; rerank used to read a stale slot of the empty reranked
+    // heap, take that for an eviction candidate and throw a NullPointerException unboxing its approximate score
+    var approximate = new NodeQueue(new BoundedLongHeap(10), NodeQueue.Order.MIN_HEAP);
+    for (int node = 0; node < 5; node++) {
+      approximate.push(node, 1f + node);
+    }
+    var reranked = new NodeQueue(new BoundedLongHeap(10), NodeQueue.Order.MIN_HEAP);
+    reranked.setMaxSize(0);
+    var unused = new NodesUnsorted(10);
+
+    float worstApproximateInTopK = approximate.rerank(0, node -> 10f + node, Float.NEGATIVE_INFINITY, reranked, unused);
+
+    assertEquals(0, reranked.size());
+    assertEquals(5, unused.size());
+    assertEquals(Float.POSITIVE_INFINITY, worstApproximateInTopK);
+  }
+
+  @Test
   public void testPushManyPartialIterator() {
     // Test with MIN_HEAP
     NodeQueue minQueue = new NodeQueue(new GrowableLongHeap(2), NodeQueue.Order.MIN_HEAP);

@@ -19,47 +19,43 @@ package io.github.jbellis.jvector.example;
 import io.github.jbellis.jvector.disk.BufferedRandomAccessWriter;
 import io.github.jbellis.jvector.disk.ReaderSupplierFactory;
 import io.github.jbellis.jvector.example.benchmarks.AccuracyBenchmark;
-import io.github.jbellis.jvector.example.benchmarks.BenchmarkTablePrinter;
+import io.github.jbellis.jvector.example.yaml.Measurement;
 import io.github.jbellis.jvector.example.benchmarks.CountBenchmark;
 import io.github.jbellis.jvector.example.benchmarks.LatencyBenchmark;
-import io.github.jbellis.jvector.example.benchmarks.Metric;
 import io.github.jbellis.jvector.example.benchmarks.QueryBenchmark;
 import io.github.jbellis.jvector.example.benchmarks.QueryTester;
 import io.github.jbellis.jvector.example.benchmarks.ThroughputBenchmark;
 import io.github.jbellis.jvector.example.benchmarks.diagnostics.BenchmarkDiagnostics;
 import io.github.jbellis.jvector.example.benchmarks.diagnostics.DiagnosticLevel;
 import io.github.jbellis.jvector.example.benchmarks.datasets.DataSet;
-import io.github.jbellis.jvector.example.benchmarks.diagnostics.DiskUsageMonitor;
-import io.github.jbellis.jvector.example.reporting.*;
 import io.github.jbellis.jvector.example.reporting.RunArtifacts;
 import io.github.jbellis.jvector.example.util.CompressorParameters;
-import io.github.jbellis.jvector.example.util.FilteredForkJoinPool;
 import io.github.jbellis.jvector.example.util.OnDiskGraphIndexCache;
-import io.github.jbellis.jvector.example.yaml.MetricSelection;
+import io.github.jbellis.jvector.management.GraphIndexBuilderConfig;
 import io.github.jbellis.jvector.graph.ImmutableGraphIndex;
-import io.github.jbellis.jvector.graph.GraphIndexBuilder;
 import io.github.jbellis.jvector.graph.GraphSearcher;
 import io.github.jbellis.jvector.graph.RandomAccessVectorValues;
 import io.github.jbellis.jvector.graph.disk.*;
-import io.github.jbellis.jvector.graph.disk.feature.Feature;
 import io.github.jbellis.jvector.graph.disk.feature.FeatureId;
-import io.github.jbellis.jvector.graph.disk.feature.FusedPQ;
-import io.github.jbellis.jvector.graph.disk.feature.InlineVectors;
-import io.github.jbellis.jvector.graph.disk.feature.NVQ;
-import io.github.jbellis.jvector.graph.similarity.BuildScoreProvider;
 import io.github.jbellis.jvector.graph.similarity.DefaultSearchScoreProvider;
 import io.github.jbellis.jvector.graph.similarity.ScoreFunction;
 import io.github.jbellis.jvector.graph.similarity.SearchScoreProvider;
 import io.github.jbellis.jvector.quantization.CompressedVectors;
-import io.github.jbellis.jvector.quantization.NVQuantization;
-import io.github.jbellis.jvector.quantization.PQVectors;
+import io.github.jbellis.jvector.quantization.AsymmetricHashing;
+import io.github.jbellis.jvector.quantization.ASHVectors;
+import io.github.jbellis.jvector.quantization.MutableASHVectors;
+import io.github.jbellis.jvector.graph.disk.feature.FusedASH;
+import io.github.jbellis.jvector.graph.disk.feature.FusedPQ;
+import io.github.jbellis.jvector.graph.disk.feature.NVQ;
+import io.github.jbellis.jvector.quantization.NVQVectors;
 import io.github.jbellis.jvector.quantization.ProductQuantization;
+import io.github.jbellis.jvector.vector.VectorSimilarityFunction;
+import io.github.jbellis.jvector.vector.VectorizationProvider;
 import io.github.jbellis.jvector.quantization.VectorCompressor;
 import io.github.jbellis.jvector.util.ExplicitThreadLocal;
 import io.github.jbellis.jvector.util.PhysicalCoreExecutor;
 import io.github.jbellis.jvector.vector.types.VectorFloat;
 
-import java.io.FileNotFoundException;
 import java.io.IOException;
 import java.io.UncheckedIOException;
 import java.nio.file.Files;
@@ -67,8 +63,6 @@ import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.util.*;
 import java.util.function.Function;
-import java.util.function.IntFunction;
-import java.util.stream.IntStream;
 import java.util.function.Supplier;
 
 /**
@@ -76,7 +70,7 @@ import java.util.function.Supplier;
  */
 public class Grid {
 
-    private static final String pqCacheDir = "pq_cache";
+    private static final String compressorCacheDir = "compressor_cache";
 
     private static final String indexCacheDir = "index_cache";
 
@@ -90,26 +84,54 @@ public class Grid {
 
     /**
      * Get the index build time for a dataset
+     *
+     * @deprecated Returns the most recent build for the dataset, which is not the current build config's
+     * when its indexes came from the index cache. Grid no longer reads it.
      */
+    @Deprecated
     public static Double getIndexBuildTimeSeconds(String datasetName) {
         return indexBuildTimes.get(datasetName);
     }
 
-    static void runAll(DataSet ds,
-                       boolean enableIndexCache,
-                       List<Integer> mGrid,
-                       List<Integer> efConstructionGrid,
-                       List<Float> neighborOverflowGrid,
-                       List<Boolean> addHierarchyGrid,
-                       List<Boolean> refineFinalGraphGrid,
-                       List<? extends Set<FeatureId>> featureSets,
-                       List<Function<DataSet, CompressorParameters>> buildCompressors,
-                       List<Function<DataSet, CompressorParameters>> compressionGrid,
-                       Map<Integer, List<Double>> topKGrid,
-                       List<Boolean> usePruningGrid,
-                       RunArtifacts artifacts
-                       ) throws IOException
+    /**
+     * Runs {@code spec} against {@code ds}, printing console tables and writing experiments.csv rows as
+     * selected by {@code artifacts}.
+     */
+    public static void run(DataSet ds, GridSpec spec, RunArtifacts artifacts) throws IOException {
+        runGrid(ds, spec, () -> setupBenchmarks(artifacts.benchmarksToCompute()), reportingListeners(artifacts), artifacts);
+    }
+
+    /**
+     * Runs {@code spec} against {@code ds} with the fixed regression benchmarks, printing console tables
+     * and returning one result per measurement.
+     */
+    public static List<BenchResult> runAndCollectResults(DataSet ds, GridSpec spec) throws IOException {
+        var collector = new BenchResultCollector();
+        runGrid(ds, spec, Grid::regressionBenchmarks,
+                List.of(new ConsoleReportListener(RunArtifacts.disabled()), collector), RunArtifacts.disabled());
+        return collector.results();
+    }
+
+    /** Console tables and experiments.csv rows, as selected by run-config.yml. */
+    private static List<GridListener> reportingListeners(RunArtifacts artifacts) {
+        return List.of(new ConsoleReportListener(artifacts), new ExperimentsLogListener(artifacts));
+    }
+
+    /**
+     * Shared sweep used by every entry point.
+     *
+     * @param benchmarks creates the query benchmarks for each index and search compressor
+     * @param listeners receive every measurement, in order
+     */
+    private static void runGrid(DataSet ds,
+                                GridSpec spec,
+                                Supplier<List<QueryBenchmark>> benchmarks,
+                                List<GridListener> listeners, RunArtifacts artifacts) throws IOException
     {
+        // Resolve every point first, so an incomplete sweep fails before any build.
+        final List<BuildConfig> buildPoints = spec.buildPoints();
+        var searchCases = spec.search.cases();
+        validateCases(ds, buildPoints, searchCases, spec);
         boolean success = false;
 
         // Always use a fresh temp directory for per-run artifacts
@@ -117,21 +139,19 @@ public class Grid {
 
         // Initialize index cache (creates stable directory when enabled, cleans up stale temp files; no-op otherwise)
         final OnDiskGraphIndexCache cache =
-                enableIndexCache
+                spec.enableIndexCache
                         ? OnDiskGraphIndexCache.initialize(Paths.get(indexCacheDir))
                         : OnDiskGraphIndexCache.disabled();
 
         try {
-            for (var addHierarchy :  addHierarchyGrid) {
-                for (var refineFinalGraph : refineFinalGraphGrid) {
-                    for (int M : mGrid) {
-                        for (float neighborOverflow : neighborOverflowGrid) {
-                            for (int efC : efConstructionGrid) {
-                                for (var bc : buildCompressors) {
-                                    runOneGraph(cache, featureSets, M, efC, neighborOverflow, addHierarchy, refineFinalGraph,
-                                            bc, compressionGrid, topKGrid, usePruningGrid, artifacts, ds, workDir);
-                                }
-                            }
+            for (var build : buildPoints) {
+                for (var search : searchCases) {
+                    var features = spec.featuresFor(build, search);
+                    if (build.indexType == null) {
+                        runOneGraph(cache, features, build, search, ds, workDir, benchmarks, listeners, artifacts);
+                    } else {
+                        for (var featureSet : features) {
+                            runOneGraph(cache, List.of(featureSet), build, search, ds, workDir, benchmarks, listeners, artifacts);
                         }
                     }
                 }
@@ -151,41 +171,61 @@ public class Grid {
                 }
             }
 
-            if (enableIndexCache) {
+            if (spec.enableIndexCache) {
                 System.out.println("Preserving index cache directory: " + indexCacheDir);
             }
             cachedCompressors.clear();
         }
     }
 
-    // Overload for legacy callers that do not use yaml-configs
-    static void runAll(DataSet ds,
-                       boolean enableIndexCache,
-                       List<Integer> mGrid,
-                       List<Integer> efConstructionGrid,
-                       List<Float> neighborOverflowGrid,
-                       List<Boolean> addHierarchyGrid,
-                       List<Boolean> refineFinalGraphGrid,
-                       List<? extends Set<FeatureId>> featureSets,
-                       List<Function<DataSet, CompressorParameters>> buildCompressors,
-                       List<Function<DataSet, CompressorParameters>> compressionGrid,
-                       Map<Integer, List<Double>> topKGrid,
-                       List<Boolean> usePruningGrid) throws IOException
-    {
-        runAll(ds,
-                enableIndexCache,
-                mGrid,
-                efConstructionGrid,
-                neighborOverflowGrid,
-                addHierarchyGrid,
-                refineFinalGraphGrid,
-                featureSets,
-                buildCompressors,
-                compressionGrid,
-                topKGrid,
-                usePruningGrid,
-                RunArtifacts.disabled() // legacy callers do not use reporting
-        );
+    private static void validateCases(DataSet ds, List<BuildConfig> builds, List<SearchConfig> searches, GridSpec spec) {
+        boolean usesAshProjection = false;
+        for (var build : builds) {
+            if (build.indexType == null) continue;
+            var construction = build.buildCompressor.apply(ds);
+            var ashMode = construction instanceof CompressorParameters.ASHParameters
+                    ? GraphBuilderFactory.ashConstructionMode(build) : null;
+            construction.validateFor(ds, false, ashMode);
+            usesAshProjection |= ashMode != null && !"symmetric-all".equals(ashMode);
+            for (var search : searches) {
+                var traversal = search.searchCompressors.get(0).apply(ds);
+                boolean fused = spec.featuresFor(build, search).stream().anyMatch(Grid::hasFusedScoring);
+                traversal.validateFor(ds, fused, null);
+                usesAshProjection |= traversal instanceof CompressorParameters.ASHParameters;
+                if ("queued".equals(search.queryExecution)
+                        && (long) search.resolvedRequestsPerWorker() * queryWorkerCountForMachine() > Integer.MAX_VALUE) {
+                    throw new IllegalArgumentException("search.requestsPerWorker exceeds the queue limit at the selected worker count");
+                }
+            }
+        }
+        String projection = System.getProperty("jvector.ash.queryProjection", "auto");
+        if (usesAshProjection && ("fp16".equals(projection) || "int8".equals(projection))) {
+            // Use the same provider and source dimension as the configured projection.
+            VectorizationProvider.getInstance().getVectorUtilSupport()
+                    .prepareAshProjection(new float[1][ds.getDimension()]).forQueryScoring();
+        }
+    }
+
+    /** What besides the graph settings determines a saved in-memory index: its compression and how it was built. */
+    private static String inMemoryIdentity(BuildConfig build, CompressorParameters buildParams, DataSet ds) {
+        String ashMode = buildParams instanceof CompressorParameters.ASHParameters
+                ? GraphBuilderFactory.ashConstructionMode(build) : null;
+        return compressorId(buildParams, ds) + (ashMode == null ? "" : ":" + ashMode) + streamingIdentity(build);
+    }
+
+    /** A streaming build's graph and codes depend on how it started and on its insert threads; empty otherwise. */
+    private static String streamingIdentity(BuildConfig build) {
+        return build.streaming ? ":streaming:cold" + build.coldStartSize
+                + ":train" + Boolean.TRUE.equals(build.trainWhileStreaming)
+                + ":inserts" + GraphBuilderFactory.constructionThreads(build) : "";
+    }
+
+    private static boolean hasFusedScoring(Set<FeatureId> features) {
+        return FeatureProviders.anyMatch(features, FeatureProvider::providesApproximateScoring);
+    }
+
+    private static int queryWorkerCountForMachine() {
+        return Math.max(1, Math.min(Runtime.getRuntime().availableProcessors(), PhysicalCoreExecutor.getPhysicalCoreCount()));
     }
 
     /**
@@ -227,110 +267,221 @@ public class Grid {
                             DataSet ds,
                             Path workDirectory) throws IOException
     {
-        // Prepare to collect index construction metrics for reporting....
-        var constructionMetrics = new ConstructionMetrics();
+        var build = BuildConfig.builder()
+                .M(M)
+                .efConstruction(efConstruction)
+                .neighborOverflow(neighborOverflow)
+                .addHierarchy(addHierarchy)
+                .refineFinalGraph(refineFinalGraph)
+                .buildCompressor(buildCompressor)
+                .build();
+        var search = SearchConfig.builder()
+                .searchCompressors(compressionGrid)
+                .topKGrid(topKGrid)
+                .usePruningGrid(usePruningGrid)
+                .build();
+        runOneGraph(cache, featureSets, build, search, ds, workDirectory,
+                () -> setupBenchmarks(artifacts.benchmarksToCompute()), reportingListeners(artifacts), artifacts);
+    }
 
-        // TODO this does not capture disk usage for cached indexes.  Need to update
+    private static void runOneGraph(OnDiskGraphIndexCache cache,
+                                    List<? extends Set<FeatureId>> featureSets,
+                                    BuildConfig build,
+                                    SearchConfig search,
+                                    DataSet ds,
+                                    Path workDirectory,
+                                    Supplier<List<QueryBenchmark>> benchmarks,
+                                    List<GridListener> listeners, RunArtifacts artifacts) throws IOException
+    {
+        // Prepare to collect index construction metrics for reporting....
+        var constructionMetrics = new ConstructionMetrics(build.indexType != null);
+
         // Capture initial memory and disk state
         try (var diagnostics = new BenchmarkDiagnostics(getDiagnosticLevel())) {
             diagnostics.startMonitoring("testDirectory", workDirectory);
             diagnostics.startMonitoring("indexCache", Paths.get(indexCacheDir));
             diagnostics.capturePrePhaseSnapshot("Graph Build");
+            ConsoleSections.stage("Construction");
+            System.out.println("Index files: " + workDirectory.toAbsolutePath()
+                    + (cache.isEnabled() ? " (saved indexes: " + cache.cacheDir().toAbsolutePath() + ")" : ""));
+            System.out.printf("%s: Dataset similarity function is %s%n", ds.getName(), ds.getSimilarityFunction());
 
             // Resolve build compressor (and label quant type) so we can record compute time
+            var buildParams = build.buildCompressor == null ? CompressorParameters.NONE : build.buildCompressor.apply(ds);
+            Supplier<VectorCompressor<?>> buildCodec = () -> buildParams == CompressorParameters.NONE
+                    ? null : getCompressor(buildParams, ds, constructionMetrics, Phase.INDEX, quantTypeOf(buildParams));
+
             VectorCompressor<?> buildCompressorObj = null;
-            String buildQuantType = null;
-
-            if (buildCompressor != null) {
-                var buildParams = buildCompressor.apply(ds);
-                buildQuantType = quantTypeOf(buildParams); // "PQ", "BQ", or null
-                buildCompressorObj = getCompressor(buildCompressor, ds, constructionMetrics, Phase.INDEX, buildQuantType);
-            }
-
-            Map<Set<FeatureId>, ImmutableGraphIndex> indexes = new HashMap<>();
-            if (buildCompressorObj == null) {
-                indexes = buildInMemory(featureSets, M, efConstruction, neighborOverflow, addHierarchy, refineFinalGraph, ds, workDirectory);
+            IndexBuildStrategy strategy;
+            if ("onDisk".equals(build.indexType)) {
+                var searchParams = search.searchCompressors.get(0).apply(ds);
+                boolean fused = featureSets.stream().anyMatch(Grid::hasFusedScoring);
+                Supplier<VectorCompressor<?>> fusedCodec = fused
+                        ? () -> getCompressor(searchParams, ds, constructionMetrics, Phase.INDEX, quantTypeOf(searchParams))
+                        : null;
+                // The graph depends on query projection only when construction scores with it;
+                // symmetric-all scoring never projects, so its graphs are shared across precisions.
+                String ashMode = buildParams instanceof CompressorParameters.ASHParameters
+                        ? GraphBuilderFactory.ashConstructionMode(build) : null;
+                String cacheIdentity = "schema3:" + compressorId(buildParams, ds)
+                        + (ashMode == null ? ""
+                                : ":" + ashMode + ("symmetric-all".equals(ashMode) ? ""
+                                        : ":" + System.getProperty("jvector.ash.queryProjection", "auto")))
+                        + (fused ? ":" + compressorId(searchParams, ds) : "")
+                        + (build.pageAlignment == null ? "" : ":page" + build.pageAlignment)
+                        + streamingIdentity(build);
+                strategy = new CompressedOnDiskBuild(cache, workDirectory, buildCodec, constructionMetrics,
+                        fusedCodec, cacheIdentity);
+            } else if (build.streaming) {
+                // The index encodes as vectors arrive; a model is trained up front only for a warm start.
+                Supplier<IndexBuildStrategy> fresh = () -> new StreamingBuild((CompressorParameters.ASHParameters) buildParams,
+                        () -> GraphBuilderFactory.inConstructionPool(build, buildCodec::get));
+                strategy = cache.isEnabled()
+                        ? new SavedInMemoryBuild(cache, inMemoryIdentity(build, buildParams, ds), fresh, () -> null, true)
+                        : fresh.get();
+            } else if ("inMemory".equals(build.indexType) && cache.isEnabled()) {
+                // Encoded only on a cache miss; the saved codes are searched when they match the search compression.
+                var encodedForBuild = new java.util.concurrent.atomic.AtomicReference<CompressedVectors>();
+                strategy = new SavedInMemoryBuild(cache, inMemoryIdentity(build, buildParams, ds), () -> {
+                    var encoded = encodeForConstruction(GraphBuilderFactory.inConstructionPool(build, buildCodec::get),
+                            ds.getBaseRavv(), constructionMetrics, GraphBuilderFactory.constructionPool(build));
+                    encodedForBuild.set(encoded);
+                    return new InMemoryBuild(workDirectory, encoded);
+                }, encodedForBuild::get, false);
             } else {
-                // If cache is disabled, we use the (tmp) workDirectory as the output
-                Path outputDir = cache.isEnabled() ? cache.cacheDir().toAbsolutePath() : workDirectory;
-
-                List<Set<FeatureId>> missing = new ArrayList<>();
-                // Map feature sets to their cache handles for the build phase
-                Map<Set<FeatureId>, OnDiskGraphIndexCache.WriteHandle> handles = new HashMap<>();
-
-                for (Set<FeatureId> fs : featureSets) {
-                    var key = cache.key(ds.getName(), fs, M, efConstruction, neighborOverflow, 1.2f, addHierarchy, refineFinalGraph, buildCompressorObj);
-                    var cached = cache.tryLoad(key);
-
-                    if (cached.isPresent()) {
-                        System.out.printf("%s: Using cached graph index for %s%n", key.datasetName, fs);
-                        indexes.put(fs, cached.get());
-                    } else {
-                        missing.add(fs);
-                        if (cache.isEnabled()) {
-                            var handle = cache.beginWrite(key, OnDiskGraphIndexCache.Overwrite.ALLOW);
-                            // Log cache miss / build start
-                            System.out.printf("%s: Building graph index (cached enabled) for %s%n", key.datasetName, fs);
-                            // Prepare the atomic write handle immediately
-                            handles.put(fs, handle);
-                        } else {
-                            System.out.printf("%s: Building graph index (cache disabled) for %s%n", key.datasetName, fs);
-                        }
-                    }
-                }
-
-                if (!missing.isEmpty()) {
-                    // At least one index needs to be built (b/c not in cache or cache is disabled)
-                    // We pass the handles map so buildOnDisk knows exactly where to write
-                    var newIndexes = buildOnDisk(missing, M, efConstruction, neighborOverflow, addHierarchy, refineFinalGraph,
-                            ds, outputDir, buildCompressorObj, handles, constructionMetrics);
-                    indexes.putAll(newIndexes);
+                buildCompressorObj = GraphBuilderFactory.inConstructionPool(build, buildCodec::get);
+                if ("inMemory".equals(build.indexType)) {
+                    strategy = new InMemoryBuild(workDirectory,
+                            encodeForConstruction(buildCompressorObj, ds.getBaseRavv(), constructionMetrics,
+                                    GraphBuilderFactory.constructionPool(build)));
+                } else {
+                    strategy = buildCompressorObj == null ? new InMemoryBuild(workDirectory)
+                            : new CompressedOnDiskBuild(cache, workDirectory, buildCompressorObj, constructionMetrics);
                 }
             }
+            var built = strategy.build(featureSets, build, ds);
+            if (strategy instanceof CompressedOnDiskBuild) {
+                buildCompressorObj = ((CompressedOnDiskBuild) strategy).buildCompressor();
+            }
+            final String buildCompressorString = buildCompressorObj == null
+                    ? compressorId(buildParams, ds) : buildCompressorObj.toString();
+            // Null when every index came from the index cache. Read it from here, not the per-dataset map,
+            // which still holds the previous build config's time in that case.
+            Double indexBuildTimeS = built.buildTimeS;
+            if (indexBuildTimeS != null) {
+                indexBuildTimes.put(ds.getName(), indexBuildTimeS);
+            }
+            var indexes = inConfiguredOrder(built.indexes, featureSets);
+            // Each index file is evicted once, before its first search, when the run asks for cold searches.
+            var evictedFiles = new HashSet<Path>();
 
             // Capture post-build memory and disk state
             diagnostics.capturePostPhaseSnapshot("Graph Build");
+            var buildSnapshot = diagnostics.getLatestSystemSnapshot();
 
             diagnostics.printDiskStatistics("Graph Index Build");
-            System.out.printf("Index build time: %f seconds%n%n", Grid.getIndexBuildTimeSeconds(ds.getName()));
-            constructionMetrics.indexBuildTimeS = Grid.getIndexBuildTimeSeconds(ds.getName());
+            if (indexBuildTimeS != null && constructionMetrics.graphBuildTimeS != null) {
+                System.out.printf(java.util.Locale.ROOT, "Index build time: %.1f s (graph %.1f s, flush %.1f s)%n%n",
+                        indexBuildTimeS, constructionMetrics.graphBuildTimeS, constructionMetrics.flushTimeS);
+            } else if (indexBuildTimeS != null) {
+                System.out.printf(java.util.Locale.ROOT, "Index build time: %.1f s%n%n", indexBuildTimeS);
+            } else {
+                System.out.printf("Index build time: not measured, all indexes loaded from the index cache%n%n");
+            }
+            constructionMetrics.indexBuildTimeS = indexBuildTimeS;
 
             try {
-                for (var cpSupplier : compressionGrid) {
+                for (var cpSupplier : search.searchCompressors) {
                     indexes.forEach((features, index) -> {
+                        constructionMetrics.indexFileSizeBytes = built.fileSize(features);
+                        constructionMetrics.codesFileSizeBytes = built.codesFileSize(features);
+                        var indexFile = built.files.get(features);
+                        if (measurement != null && measurement.evictIndex() && indexFile != null && evictedFiles.add(indexFile)) {
+                            evictFromPageCache(ds.getName(), indexFile);
+                        }
                         final Set<FeatureId> featureSetForIndex = index instanceof OnDiskGraphIndex ? ((OnDiskGraphIndex) index).getFeatureSet() : Set.of();
 
-                        CompressedVectors cv;
-                        if (featureSetForIndex.contains(FeatureId.FUSED_PQ)) {
-                            cv = null;
-                        } else {
-                            constructionMetrics.resetSearch(); // per (index, cpSupplier) config
+                        // Per (index, cpSupplier) config, so an index without search compression never reports
+                        // the previous index's search timings.
+                        constructionMetrics.resetSearch();
 
+                        CompressedVectors cv;
+                        if (hasFusedScoring(featureSetForIndex)) {
+                            cv = null;
+                            System.out.format("%s: using fused traversal codes from the disk index%n", ds.getName());
+                        } else {
                             var searchParams = cpSupplier.apply(ds);
                             String searchQuantType = quantTypeOf(searchParams); // "PQ", "BQ", or null
-                            var compressor = getCompressor(cpSupplier, ds, constructionMetrics, Phase.SEARCH, searchQuantType);
+                            // Codes written with the index and loaded when it was opened, as a deployed searcher has them.
+                            var loaded = built.storedCodes.get(features);
+                            var stored = loaded == null ? null : loaded.codes;
+                            // An index that built its own codes is searched with them; codes from a file are used
+                            // when they describe the configured search compression.
+                            boolean useStored = stored != null
+                                    && (loaded.builtWithIndex || searchParams.describes(stored.getCompressor()));
+                            var compressor = useStored || build.indexType != null && searchParams == CompressorParameters.NONE
+                                    ? null
+                                    : getCompressor(searchParams, ds, constructionMetrics, Phase.SEARCH, searchQuantType);
 
-                            if (compressor == null) {
+                            if (useStored && loaded.builtWithIndex) {
+                                cv = stored;
+                                // Written beside a flushed streaming index and loaded with it, or kept in memory.
+                                if (loaded.seconds > 0) constructionMetrics.search(searchQuantType).recordLoad(loaded.seconds);
+                                System.out.format("%s: using the %d %s codes the index built as vectors arrived%s [%.2f MB]%n",
+                                        ds.getName(), stored.count(), stored.getCompressor(),
+                                        loaded.seconds > 0 ? ", loaded with the index" : "",
+                                        stored.ramBytesUsed() / 1024f / 1024f);
+                            } else if (useStored) {
+                                cv = stored;
+                                constructionMetrics.search(searchQuantType).recordLoad(loaded.seconds);
+                                System.out.format("%s: using the %d %s traversal codes stored with the index [%.2f MB]%n", ds.getName(),
+                                        stored.count(), stored.getCompressor(), stored.ramBytesUsed() / 1024f / 1024f);
+                            } else if (compressor == null) {
                                 cv = null;
+                                System.out.format("%s: No search compressor configured, FULL PRECISION vectors will be used for search%n", ds.getName());
                             } else {
                                 long start = System.nanoTime();
                                 cv = constructionMetrics.search(searchQuantType)
                                         .timeEncode(() -> compressor.encodeAll(ds.getBaseRavv()));
                                 double encodingTimeS = (System.nanoTime() - start) / 1_000_000_000.0;
+                                if (cv == null) {
+                                    throw new IllegalStateException(String.format(
+                                            "Compressor '%s' was provided but failed to encode vectors for dataset '%s'. " +
+                                                    "Aborting to prevent false recall results.", compressor, ds.getName()));
+                                }
                                 System.out.format("%s: %s encoded %d vectors [%.2f MB] in %.2fs%n", ds.getName(), compressor, ds.getBaseVectors().size(), (cv.ramBytesUsed() / 1024f / 1024f), encodingTimeS);
                             }
                         }
 
-                        try (var cs = new ConfiguredSystem(ds, index, cv, featureSetForIndex)) {
-                            testConfiguration(cs, topKGrid, usePruningGrid, M, efConstruction, neighborOverflow, addHierarchy, refineFinalGraph, featureSetForIndex,
-                                    artifacts, constructionMetrics, workDirectory);
-                        } catch (Exception e) {
-                            throw new RuntimeException(e);
+                        NVQVectors memoryReranker = null;
+                        if (build.inMemoryIndex() && "NVQ".equals(build.rerankingType)) {
+                            var base = ds.getBaseRavv();
+                            var nvq = constructionMetrics.index("NVQ").timeCompute(() -> NVQProvider.train(base, null));
+                            memoryReranker = (NVQVectors) constructionMetrics.index("NVQ").timeEncode(() -> nvq.encodeAll(base));
+                        }
+                        // Each search worker count queries this same index with its own query workers.
+                        for (Integer workers : search.workerCounts()) {
+                            ConsoleSections.stage(workers == null ? "Search"
+                                    : "Search: " + workers + (workers == 1 ? " worker" : " workers"));
+                            try (var cs = new ConfiguredSystem(ds, index, cv, featureSetForIndex, build.rerankingType,
+                                    memoryReranker)) {
+                                if (search.compression != null) {
+                                    cs.configureQueryExecution(search.queryExecution, search.queuedBatchSize(),
+                                            workers, search.resolvedRequestsPerWorker());
+                                }
+                                var traversal = cv == null ? null : cv.getCompressor();
+                                if (traversal == null && build.indexType != null) traversal = cs.fusedCompressor();
+                                var ctx = new SearchContext(ds, build, search, features, featureSetForIndex,
+                                        buildCompressorString, cpSupplier,
+                                        traversal == null ? "None" : traversal.toString(),
+                                        indexBuildTimeS, built.fileSize(features), buildSnapshot,
+                                        queryParameters(cs), cs.ashQueryProjectionModel());
+                                testConfiguration(cs, ctx, constructionMetrics, workDirectory, benchmarks, listeners);
+                            } catch (Exception e) {
+                                throw new RuntimeException(e);
+                            }
                         }
                     });
-                }
-                for (var index : indexes.values()) {
-                    index.close();
                 }
 
                 // Log final diagnostics summary
@@ -338,6 +489,15 @@ public class Grid {
                     diagnostics.logSummary();
                 }
             } finally {
+                // Close before deleting: a failed search must not leave files open or mapped.
+                for (var index : indexes.values()) {
+                    try {
+                        index.close();
+                    } catch (Exception e) {
+                        // Log and move on; don't let a close-fail mask a real exception
+                        System.err.println("Cleanup Failed: Could not close index -> " + e.getMessage());
+                    }
+                }
                 // Clean up the tmp files for this run
                 for (int n = 0; n < featureSets.size(); n++) {
                     Path p = workDirectory.resolve("graph" + n);
@@ -352,159 +512,56 @@ public class Grid {
         }
     }
 
-    private static Map<Set<FeatureId>, ImmutableGraphIndex> buildOnDisk(List<? extends Set<FeatureId>> featureSets,
-                                                                        int M,
-                                                                        int efConstruction,
-                                                                        float neighborOverflow,
-                                                                        boolean addHierarchy,
-                                                                        boolean refineFinalGraph,
-                                                                        DataSet ds,
-                                                                        Path outputDir,
-                                                                        VectorCompressor<?> buildCompressor,
-                                                                        Map<Set<FeatureId>, OnDiskGraphIndexCache.WriteHandle> handles,
-                                                                        ConstructionMetrics constructionMetrics) throws IOException
-    {
-        Files.createDirectories(outputDir);
-
-        var floatVectors = ds.getBaseRavv();
-
-        // Record the encoding time if asked for....
-        PQVectors pq = (PQVectors) ((constructionMetrics != null)
-                ? constructionMetrics.index("PQ").timeEncode(() -> buildCompressor.encodeAll(floatVectors))
-                : buildCompressor.encodeAll(floatVectors));
-        var bsp = BuildScoreProvider.pqBuildScoreProvider(ds.getSimilarityFunction(), pq);
-        GraphIndexBuilder builder = new GraphIndexBuilder(bsp, floatVectors.dimension(), M, efConstruction, neighborOverflow, 1.2f, addHierarchy, refineFinalGraph);
-
-        // use the inline vectors index as the score provider for graph construction
-        Map<Set<FeatureId>, OnDiskGraphIndexWriter> writers = new HashMap<>();
-        Map<Set<FeatureId>, Map<FeatureId, IntFunction<Feature.State>>> suppliers = new HashMap<>();
-        OnDiskGraphIndexWriter scoringWriter = null;
-        int n = 0;
-        for (var features : featureSets) {
-            // if we are using index caching, use cache names instead of tmp names for index files....
-            Path graphPath;
-            if (handles.containsKey(features)) {
-                graphPath = handles.get(features).writePath();
-            } else {
-                graphPath = outputDir.resolve("graph" + n++);
-            }
-            var bws = builderWithSuppliers(features, builder.getGraph(), graphPath, floatVectors, pq.getCompressor(), constructionMetrics);
-            var writer = bws.builder.build();
-            writers.put(features, writer);
-            suppliers.put(features, bws.suppliers);
-            if (features.contains(FeatureId.INLINE_VECTORS) || features.contains(FeatureId.NVQ_VECTORS)) {
-                scoringWriter = writer;
-            }
-        }
-        if (scoringWriter == null) {
-            throw new IllegalStateException("Bench looks for either NVQ_VECTORS or INLINE_VECTORS feature set for scoring compressed builds.");
+    private static Map<String, Object> queryParameters(ConfiguredSystem cs) {
+        Map<String, Object> queryParams = new LinkedHashMap<>();
+        queryParams.put("executionMode", cs.usesQueuedExecution() ? "queued" : "direct");
+        if (cs.usesQueuedExecution()) {
+            queryParams.put("workers", cs.queryWorkerCount());
+            queryParams.put("queueCapacity", cs.queryQueueCapacity());
+            queryParams.put("maxBatchSize", cs.queryBatchSize());
+            var preparer = cs.queryPreparer();
+            queryParams.put("batchPreparation", preparer != null && preparer.supportsBatchPreparation());
+        } else {
+            int threads = cs.directCallerThreads();
+            queryParams.put("callerThreads", threads == 0 ? "common pool" : threads);
         }
 
-        // build the graph incrementally
-        long startTime = System.nanoTime();
-        var vv = floatVectors.threadLocalSupplier();
-        PhysicalCoreExecutor.pool().submit(() -> {
-            IntStream.range(0, floatVectors.size()).parallel().forEach(node -> {
-                writers.forEach((features, writer) -> {
-                    try {
-                        var stateMap = new EnumMap<FeatureId, Feature.State>(FeatureId.class);
-                        suppliers.get(features).forEach((featureId, supplier) -> {
-                            stateMap.put(featureId, supplier.apply(node));
-                        });
-                        writer.writeInline(node, stateMap);
-                    } catch (IOException e) {
-                        throw new UncheckedIOException(e);
-                    }
-                });
-                builder.addGraphNode(node, vv.get().getVector(node));
-            });
-        }).join();
-        builder.cleanup();
-
-        // write the edge lists and close the writers
-        // if our feature set contains Fused PQ, we need a Fused ADC write-time supplier (as we don't have neighbor information during writeInline)
-        writers.entrySet().stream().parallel().forEach(entry -> {
-            var writer = entry.getValue();
-            var features = entry.getKey();
-            Map<FeatureId, IntFunction<Feature.State>> writeSuppliers;
-            if (features.contains(FeatureId.FUSED_PQ)) {
-                writeSuppliers = new EnumMap<>(FeatureId.class);
-                var view = builder.getGraph().getView();
-                writeSuppliers.put(FeatureId.FUSED_PQ, ordinal -> new FusedPQ.State(view, pq, ordinal));
-            } else {
-                writeSuppliers = Map.of();
-            }
-            try {
-                writer.write(writeSuppliers);
-                writer.close();
-            } catch (IOException e) {
-                throw new UncheckedIOException(e);
-            }
-        });
-        builder.close();
-        double totalTime = (System.nanoTime() - startTime) / 1_000_000_000.0;
-        System.out.format("Build and write %s in %ss%n", featureSets, totalTime);
-        indexBuildTimes.put(ds.getName(), totalTime);
-
-        // Commit the index to cache atomically
-        for (var entry : handles.entrySet()) {
-            System.out.printf("Committing %s build to graph index cache...%n", entry.getKey());
-            entry.getValue().commit();
-        }
-
-        // open indexes
-        Map<Set<FeatureId>, ImmutableGraphIndex> indexes = new HashMap<>();
-        n = 0;
-        for (var features : featureSets) {
-            Path loadPath = handles.containsKey(features)
-                    ? handles.get(features).finalPath()
-                    : outputDir.resolve("graph" + n++);
-
-            indexes.put(features, OnDiskGraphIndex.load(ReaderSupplierFactory.open(loadPath)));
-        }
-
-        return indexes;
+        return queryParams;
     }
 
-    private static BuilderWithSuppliers builderWithSuppliers(Set<FeatureId> features,
-                                                             ImmutableGraphIndex onHeapGraph,
-                                                             Path outPath,
-                                                             RandomAccessVectorValues floatVectors,
-                                                             ProductQuantization pq,
-                                                             ConstructionMetrics constructionMetrics)
-            throws FileNotFoundException
-    {
-        var identityMapper = new OrdinalMapper.IdentityMapper(floatVectors.size() - 1);
-        var builder = new OnDiskGraphIndexWriter.Builder(onHeapGraph, outPath);
-        builder.withMapper(identityMapper);
 
-        Map<FeatureId, IntFunction<Feature.State>> suppliers = new EnumMap<>(FeatureId.class);
-        for (var featureId : features) {
-            switch (featureId) {
-                case INLINE_VECTORS:
-                    builder.with(new InlineVectors(floatVectors.dimension()));
-                    suppliers.put(FeatureId.INLINE_VECTORS, ordinal -> new InlineVectors.State(floatVectors.getVector(ordinal)));
-                    break;
-                case FUSED_PQ:
-                    if (pq == null) {
-                        System.out.println("Skipping Fused ADC feature due to null ProductQuantization");
-                        continue;
-                    }
-                    // no supplier as these will be used for writeInline, when we don't have enough information to fuse neighbors
-                    builder.with(new FusedPQ(onHeapGraph.maxDegree(), pq));
-                    break;
-                case NVQ_VECTORS:
-                    int nSubVectors = floatVectors.dimension() == 2 ? 1 : 2;
-                    var nvq = (constructionMetrics != null)
-                            ? constructionMetrics.index("NVQ").timeCompute(() -> NVQuantization.compute(floatVectors, nSubVectors))
-                            : NVQuantization.compute(floatVectors, nSubVectors);
-                    builder.with(new NVQ(nvq));
-                    suppliers.put(FeatureId.NVQ_VECTORS, ordinal -> new NVQ.State(nvq.encode(floatVectors.getVector(ordinal))));
-                    break;
+    // Entry-point policy only; the library's writer selection remains unchanged.
+    static void configureWriterForBenchmark() {
+        String value = System.getProperty("jvector.parallel_writer", "true").trim();
+        if (!value.equalsIgnoreCase("true") && !value.equalsIgnoreCase("false"))
+            throw new IllegalArgumentException("jvector.parallel_writer must be true or false");
+        GraphIndexBuilderConfig.getInstance().setParallelBuild(Boolean.parseBoolean(value));
+    }
 
-            }
+    /** Run YAML measurement settings for this invocation; null keeps the built-in behavior. */
+    private static Measurement measurement;
+
+    public static void setMeasurement(Measurement settings) {
+        measurement = settings;
+    }
+
+    /** Drops an index file from the page cache; pages the open index has already touched stay resident. */
+    private static void evictFromPageCache(String dataset, Path indexFile) {
+        try {
+            var residency = ColdFileCache.evict(indexFile);
+            System.out.printf("%s: index evicted from the page cache (%,d of %,d pages still resident)%n",
+                    dataset, residency.residentPages, residency.totalPages);
+        } catch (IOException e) {
+            throw new UncheckedIOException("measurement.evictIndex could not evict " + indexFile, e);
         }
-        return new BuilderWithSuppliers(builder, suppliers);
+    }
+
+    /** The throughput benchmark with the run's warmup and timed-pass settings. */
+    private static ThroughputBenchmark throughputBenchmark() {
+        var settings = measurement == null || measurement.throughput == null
+                ? new Measurement.Throughput() : measurement.throughput;
+        return ThroughputBenchmark.createEmpty(settings.warmupPasses(), settings.passes())
+                .withMeasurement(settings.warmup(), settings.untilCompiled(), settings.minSeconds());
     }
 
     public static void setDiagnosticLevel(int diagLevel) {
@@ -526,171 +583,56 @@ public class Grid {
         }
     }
 
-    private static class BuilderWithSuppliers {
-        public final OnDiskGraphIndexWriter.Builder builder;
-        public final Map<FeatureId, IntFunction<Feature.State>> suppliers;
-
-        public BuilderWithSuppliers(OnDiskGraphIndexWriter.Builder builder, Map<FeatureId, IntFunction<Feature.State>> suppliers) {
-            this.builder = builder;
-            this.suppliers = suppliers;
-        }
-    }
-
-    private static Map<Set<FeatureId>, ImmutableGraphIndex> buildInMemory(List<? extends Set<FeatureId>> featureSets,
-                                                                          int M,
-                                                                          int efConstruction,
-                                                                          float neighborOverflow,
-                                                                          boolean addHierarchy,
-                                                                          boolean refineFinalGraph,
-                                                                          DataSet ds,
-                                                                          Path testDirectory)
-            throws IOException
-    {
-        var floatVectors = ds.getBaseRavv();
-        Map<Set<FeatureId>, ImmutableGraphIndex> indexes = new HashMap<>();
-        long start;
-        var bsp = BuildScoreProvider.randomAccessScoreProvider(floatVectors, ds.getSimilarityFunction());
-        GraphIndexBuilder builder = new GraphIndexBuilder(bsp,
-                                                          floatVectors.dimension(),
-                                                          M,
-                                                          efConstruction,
-                                                          neighborOverflow,
-                                                          1.2f,
-                                                          addHierarchy,
-                                                          refineFinalGraph,
-                                                          PhysicalCoreExecutor.pool(),
-                                                          FilteredForkJoinPool.createFilteredPool());
-        start = System.nanoTime();
-        var onHeapGraph = builder.build(floatVectors);
-        System.out.format("Build (%s) M=%d overflow=%.2f ef=%d in %.2fs%n",
-                          "full res",
-                          M,
-                          neighborOverflow,
-                          efConstruction,
-                          (System.nanoTime() - start) / 1_000_000_000.0);
-        for (int i = 0; i <= onHeapGraph.getMaxLevel(); i++) {
-            System.out.format("  L%d: %d nodes, %.2f avg degree%n",
-                              i,
-                              onHeapGraph.size(i),
-                              onHeapGraph.getAverageDegree(i));
-        }
-        int n = 0;
-        for (var features : featureSets) {
-            if (features.contains(FeatureId.FUSED_PQ)) {
-                System.out.println("Skipping Fused ADC feature when building in memory");
-                continue;
-            }
-            var graphPath = testDirectory.resolve("graph" + n++);
-            var bws = builderWithSuppliers(features, onHeapGraph, graphPath, floatVectors, null, null);
-            try (var writer = bws.builder.build()) {
-                start = System.nanoTime();
-                writer.write(bws.suppliers);
-                System.out.format("Wrote %s in %.2fs%n", features, (System.nanoTime() - start) / 1_000_000_000.0);
-            }
-
-            var index = OnDiskGraphIndex.load(ReaderSupplierFactory.open(graphPath));
-            indexes.put(features, index);
-        }
-        return indexes;
-    }
-
     // avoid recomputing the compressor repeatedly (this is a relatively small memory footprint)
-    static final Map<String, VectorCompressor<?>> cachedCompressors = new IdentityHashMap<>();
+    static final Map<String, VectorCompressor<?>> cachedCompressors = new HashMap<>();
 
+    /**
+     * The built indexes in the order their feature sets were configured, so output order is the same on
+     * every run. EnumSet hash codes come from identity hashes, so HashMap order over them varies by JVM.
+     */
+    private static Map<Set<FeatureId>, ImmutableGraphIndex> inConfiguredOrder(
+            Map<Set<FeatureId>, ImmutableGraphIndex> built, List<? extends Set<FeatureId>> featureSets) {
+        Map<Set<FeatureId>, ImmutableGraphIndex> ordered = new LinkedHashMap<>();
+        for (var features : featureSets) {
+            var index = built.get(features);
+            if (index != null) {
+                ordered.putIfAbsent(features, index);
+            }
+        }
+        // Keep anything else a strategy returned so it is still searched and closed.
+        built.forEach(ordered::putIfAbsent);
+        return ordered;
+    }
+
+    /** Runs every query configuration against one index and search compressor, reporting each row to the listeners. */
     private static void testConfiguration(ConfiguredSystem cs,
-                                          Map<Integer, List<Double>> topKGrid,
-                                          List<Boolean> usePruningGrid,
-                                          int M,
-                                          int efConstruction,
-                                          float neighborOverflow,
-                                          boolean addHierarchy,
-                                          boolean refineFinalGraph,
-                                          Set<FeatureId> featureSetForIndex,
-                                          RunArtifacts artifacts,
+                                          SearchContext ctx,
                                           ConstructionMetrics constructionMetrics,
-                                          Path testDirectory) {
+                                          Path testDirectory,
+                                          Supplier<List<QueryBenchmark>> benchmarks,
+                                          List<GridListener> listeners) {
         int queryRuns = 2;
         System.out.format("%s: Using %s:%n", cs.ds.getName(), cs.index);
 
-        Map<String, List<String>> benchmarksToCompute = artifacts.benchmarksToCompute();
-        Map<String, List<String>> benchmarksToDisplay = artifacts.benchmarksToDisplay();
-        MetricSelection metricsToDisplay = artifacts.metricsToDisplay();
+        // Listeners validate their selections before any benchmark runs.
+        listeners.forEach(l -> l.onSearchStart(ctx));
+        QueryTester tester = new QueryTester(benchmarks.get(), testDirectory, cs.ds.getName());
 
-        Map<String, List<String>> benchmarksToLog = artifacts.benchmarksToLog();
-        MetricSelection metricsToLog = artifacts.metricsToLog();
-
-        // 1) Select what to report (console + logging)
-        SearchSelection consoleSel = SearchSelection.forConsole(benchmarksToDisplay, metricsToDisplay);
-        SearchSelection logSel = SearchSelection.forLogging(benchmarksToLog, metricsToLog);
-
-        // Fail-fast validations once per configuration
-        consoleSel.validate(benchmarksToCompute);
-        logSel.validate(benchmarksToCompute);
-
-        // 2) Select benchmarks to run (compute spec)
-        var benchmarks = setupBenchmarks(benchmarksToCompute);
-        QueryTester tester = new QueryTester(benchmarks, testDirectory, cs.ds.getName());
-
-        // 3) Setup benchmark table for printing
-        for (var usePruning : usePruningGrid) {
-            BenchmarkTablePrinter printer = new BenchmarkTablePrinter();
-
-            // Print the config once per index and query configuration (not per topK)
-            printer.printConfig(
-                    ordered( // Index configuration
-                        "featureSetForIndex", featureSetForIndex,
-                        "M",                  M,
-                        "efConstruction",     efConstruction,
-                        "neighborOverflow",   neighborOverflow,
-                        "addHierarchy",       addHierarchy,
-                        "refineFinalGraph",   refineFinalGraph
-                    ),
-                    ordered( // Query configuration
-                            "usePruning",         usePruning
-                    )
-            );
-
-            for (var topK : topKGrid.keySet()) {
-                // Resolving selections depends on topK
-                var consoleResolved = consoleSel.resolveForTopK(topK);
-                var logResolved = logSel.resolveForTopK(topK);
-
-                // Force header to re-print for this topK (columns change)
-                printer.resetTable();
-
-                for (var overquery : topKGrid.get(topK)) {
+        for (var usePruning : ctx.search.usePruningGrid) {
+            listeners.forEach(l -> l.onPruningStart(ctx, usePruning));
+            for (var topK : ctx.search.topKGrid.keySet()) {
+                listeners.forEach(l -> l.onTopKStart(ctx, usePruning, topK));
+                for (var overquery : ctx.search.topKGrid.get(topK)) {
                     int rerankK = (int) (topK * overquery);
 
                     var results = tester.run(cs, topK, rerankK, usePruning, queryRuns);
                     // Merge construction-phase metrics into the runtime results so selections can see them.
                     constructionMetrics.appendTo(results);
 
-                    // Best-effort runtime availability warnings (warn once per key)
-                    consoleSel.warnMissing(results, consoleResolved);
-                    logSel.warnMissing(results, logResolved);
-
-                    // Apply console selection and print
-                    var displayResults = consoleSel.apply(results, consoleResolved);
-                    printer.printRow(overquery, displayResults);
-
-                    // Apply log selection and write CSV row
-                    var logOutputs = logSel.apply(results, logResolved);
-                    artifacts.logRow(
-                            cs.ds.getName(),
-                            M,
-                            efConstruction,
-                            neighborOverflow,
-                            addHierarchy,
-                            refineFinalGraph,
-                            featureSetForIndex,
-                            usePruning,
-                            topK,
-                            overquery,
-                            rerankK,
-                            logOutputs
-                    );
+                    var row = new QueryRow(usePruning, topK, overquery, rerankK, results);
+                    listeners.forEach(l -> l.onQueryResult(ctx, row));
                 }
-                printer.printFooter();
+                listeners.forEach(l -> l.onTopKEnd(ctx, usePruning, topK));
             }
         }
     }
@@ -698,8 +640,7 @@ public class Grid {
     private static List<QueryBenchmark> setupBenchmarks(Map<String, List<String>> benchmarkSpec) {
         if (benchmarkSpec == null || benchmarkSpec.isEmpty()) {
             return List.of(
-                    ThroughputBenchmark.createEmpty(3, 3)
-                            .displayAvgQps(),
+                    throughputBenchmark().displayAvgQps(),
                     LatencyBenchmark.createDefault(),
                     CountBenchmark.createDefault(),
                     AccuracyBenchmark.createDefault()
@@ -715,7 +656,7 @@ public class Grid {
                 continue;
             }
             if (benchType.equals("throughput")) {
-                var bench = ThroughputBenchmark.createEmpty(3, 3);
+                var bench = throughputBenchmark();
                 for (var stat : benchmarkSpec.get(benchType)) {
                     if (stat.equals("AVG")) {
                         bench = bench.displayAvgQps();
@@ -779,18 +720,8 @@ public class Grid {
         return benchmarks;
     }
 
-    // Helper for printConfig (preserves insertion order)
-    private static Map<String, Object> ordered(Object... kv) {
-        if ((kv.length & 1) != 0)
-            throw new IllegalArgumentException("Need even number of args (k,v)*");
-
-        var m = new LinkedHashMap<String, Object>(kv.length / 2);
-        for (int i = 0; i < kv.length; i += 2) {
-            m.put((String) kv[i], kv[i + 1]);
-        }
-        return m; // insertion-ordered
-    }
-
+    /** @deprecated Use {@link #runAndCollectResults(DataSet, GridSpec)}, e.g. with {@link GridSpec#fromConfig}. */
+    @Deprecated
     public static List<BenchResult> runAllAndCollectResults(
             DataSet ds,
             boolean enableIndexCache,
@@ -804,170 +735,28 @@ public class Grid {
             List<Function<DataSet, CompressorParameters>> compressionGrid,
             Map<Integer, List<Double>> topKGrid,
             List<Boolean> usePruningGrid) throws IOException {
-
-        // Initialize index caching (if enabled)
-        final OnDiskGraphIndexCache cache =
-                enableIndexCache
-                        ? OnDiskGraphIndexCache.initialize(Paths.get(indexCacheDir))
-                        : OnDiskGraphIndexCache.disabled();
-
-        List<BenchResult> results = new ArrayList<>();
-        for (int m : mGrid) {
-            for (int ef : efConstructionGrid) {
-                for (float neighborOverflow : neighborOverflowGrid) {
-                    for (boolean addHierarchy : addHierarchyGrid) {
-                        for (boolean refineFinalGraph : refineFinalGraphGrid) {
-                            for (Set<FeatureId> features : featureSets) {
-                                for (Function<DataSet, CompressorParameters> buildCompressor : buildCompressors) {
-                                    for (Function<DataSet, CompressorParameters> searchCompressor : compressionGrid) {
-                                        Path testDirectory = Files.createTempDirectory("bench");
-                                        try (var diagnostics = new BenchmarkDiagnostics(getDiagnosticLevel())) {
-                                            // Capture initial state
-                                            diagnostics.startMonitoring("testDirectory", testDirectory);
-                                            diagnostics.startMonitoring("indexCache", Paths.get(indexCacheDir));
-                                            diagnostics.capturePrePhaseSnapshot("Build");
-                                            Map<Set<FeatureId>, ImmutableGraphIndex> indexes = new HashMap<>();
-
-                                            var compressor = getCompressor(buildCompressor, ds);
-                                            var searchCompressorObj = getCompressor(searchCompressor, ds);
-                                            CompressedVectors cvArg = (searchCompressorObj instanceof CompressedVectors) ? (CompressedVectors) searchCompressorObj : null;
-
-                                            // If cache is disabled, we use the (tmp) testDirectory as the output
-                                            Path outputDir = cache.isEnabled() ? cache.cacheDir().toAbsolutePath() : testDirectory;
-
-                                            List<Set<FeatureId>> missing = new ArrayList<>();
-                                            // Map feature sets to their cache handles for the build phase
-                                            Map<Set<FeatureId>, OnDiskGraphIndexCache.WriteHandle> handles = new HashMap<>();
-
-                                            for (Set<FeatureId> fs : featureSets) {
-                                                var key = cache.key(ds.getName(), fs, m, ef, neighborOverflow, 1.2f, addHierarchy, refineFinalGraph, compressor);
-                                                var cached = cache.tryLoad(key);
-
-                                                if (cached.isPresent()) {
-                                                    System.out.printf("%s: Using cached graph index for %s%n", key.datasetName, fs);
-                                                    indexes.put(fs, cached.get());
-                                                } else {
-                                                    missing.add(fs);
-                                                    if (cache.isEnabled()) {
-                                                        var handle = cache.beginWrite(key, OnDiskGraphIndexCache.Overwrite.ALLOW);
-                                                        // Log cache miss / build start
-                                                        System.out.printf("%s: Building graph index (cached enabled) for %s%n",
-                                                                key.datasetName, fs);
-                                                        // Prepare the atomic write handle immediately
-                                                        handles.put(fs, handle);
-                                                    } else {
-                                                        System.out.printf("%s: Building graph index (cache disabled) for %s%n", key.datasetName, fs);
-                                                    }
-                                                }
-                                            }
-
-                                            if (!missing.isEmpty()) {
-                                                // At least one index needs to be built (b/c not in cache or cache is disabled)
-                                                // We pass the handles map so buildOnDisk knows exactly where to write
-                                                var newIndexes = buildOnDisk(missing, m, ef, neighborOverflow, addHierarchy, refineFinalGraph,
-                                                        ds, outputDir, compressor, handles, null);
-                                                indexes.putAll(newIndexes);
-                                            }
-
-                                            ImmutableGraphIndex index = indexes.get(features);
-
-                                            // Capture post-build state
-                                            diagnostics.capturePostPhaseSnapshot("Build");
-                                            diagnostics.printDiskStatistics("Graph Index Build");
-                                            var buildSnapshot = diagnostics.getLatestSystemSnapshot();
-                                            DiskUsageMonitor.MultiDirectorySnapshot buildDiskSnapshot = diagnostics.getLatestDiskSnapshot();
-
-                                            try (ConfiguredSystem cs = new ConfiguredSystem(ds, index, cvArg, features)) {
-                                                int queryRuns = 2;
-                                                List<QueryBenchmark> benchmarks = List.of(
-                                                        (diagnostic_level > 0 ?
-                                                                ThroughputBenchmark.createDefault().withDiagnostics(getDiagnosticLevel()) :
-                                                                ThroughputBenchmark.createDefault()),
-                                                        LatencyBenchmark.createDefault(),
-                                                        CountBenchmark.createDefault(),
-                                                        AccuracyBenchmark.createDefault(),
-                                                        CountBenchmark.createDefault()
-                                                );
-                                                QueryTester tester = new QueryTester(benchmarks, testDirectory, ds.getName());
-                                                for (int topK : topKGrid.keySet()) {
-                                                    for (boolean usePruning : usePruningGrid) {
-                                                        for (double overquery : topKGrid.get(topK)) {
-                                                            int rerankK = (int) (topK * overquery);
-                                                            List<Metric> metricsList = tester.run(cs, topK, rerankK, usePruning, queryRuns);
-                                                            Map<String, Object> params = new LinkedHashMap<>();
-                                                            params.put("M", m);
-                                                            params.put("efConstruction", ef);
-                                                            params.put("neighborOverflow", neighborOverflow);
-                                                            params.put("addHierarchy", addHierarchy);
-                                                            params.put("refineFinalGraph", refineFinalGraph);
-                                                            params.put("features", features.toString());
-                                                            params.put("buildCompressor", buildCompressor.toString());
-                                                            params.put("searchCompressor", searchCompressor.toString());
-                                                            params.put("topK", topK);
-                                                            params.put("overquery", overquery);
-                                                            params.put("usePruning", usePruning);
-
-                                                            // Collect all metrics including memory and disk usage
-                                                            Map<String, Object> allMetrics = new HashMap<>();
-                                                            for (Metric metric : metricsList) {
-                                                                allMetrics.put(metric.getHeader(), metric.getValue());
-                                                            }
-
-                                                            // Add build time if available
-                                                            if (indexBuildTimes.containsKey(ds.getName())) {
-                                                                allMetrics.put("Index Build Time", indexBuildTimes.get(ds.getName()));
-                                                            }
-
-                                                            // Add memory metrics if available
-                                                            if (buildSnapshot != null) {
-                                                                allMetrics.put("Heap Memory Used (MB)", buildSnapshot.memoryStats.heapUsed / 1024.0 / 1024.0);
-                                                                allMetrics.put("Heap Memory Max (MB)", buildSnapshot.memoryStats.heapMax / 1024.0 / 1024.0);
-                                                                allMetrics.put("Off-Heap Direct (MB)", buildSnapshot.memoryStats.directBufferMemory / 1024.0 / 1024.0);
-                                                                allMetrics.put("Off-Heap Mapped (MB)", buildSnapshot.memoryStats.mappedBufferMemory / 1024.0 / 1024.0);
-                                                                allMetrics.put("Total Off-Heap (MB)", buildSnapshot.memoryStats.getTotalOffHeapMemory() / 1024.0 / 1024.0);
-                                                            }
-
-                                                            // Add disk metrics if available
-                                                            if (buildDiskSnapshot != null) {
-                                                                allMetrics.put("Disk Usage (MB)", buildDiskSnapshot.getTotalBytes() / 1024.0 / 1024.0);
-                                                                allMetrics.put("File Count", buildDiskSnapshot.getTotalFileCount());
-                                                            }
-
-                                                            results.add(new BenchResult(ds.getName(), params, allMetrics));
-                                                        }
-                                                    }
-                                                }
-                                            } catch (Exception e) {
-                                                throw new RuntimeException(e);
-                                            }
-                                        } finally {
-                                            for (int n = 0; n < 1; n++) {
-                                                try {
-                                                    Files.deleteIfExists(testDirectory.resolve("graph" + n));
-                                                } catch (IOException e) { /* ignore */ }
-                                            }
-                                            try {
-                                                Files.deleteIfExists(testDirectory);
-                                            } catch (IOException e) { /* ignore */ }
-
-                                            if (enableIndexCache) {
-                                                System.out.println("Preserving index cache directory: " + indexCacheDir);
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
-        return results;
+        var spec = GridSpec.fromGrids(addHierarchyGrid, refineFinalGraphGrid, mGrid, neighborOverflowGrid,
+                efConstructionGrid, buildCompressors, featureSets,
+                SearchConfig.builder()
+                        .searchCompressors(compressionGrid)
+                        .topKGrid(topKGrid)
+                        .usePruningGrid(usePruningGrid)
+                        .build(),
+                enableIndexCache);
+        return runAndCollectResults(ds, spec);
     }
 
-    /** Overload for non-reporting use */
-    private static VectorCompressor<?> getCompressor(Function<DataSet, CompressorParameters> cpSupplier, DataSet ds) {
-        return getCompressor(cpSupplier, ds, null, null, null);
+    /** Fixed benchmark set for regression runs; the summarizer and CI comparisons depend on its metric headers. */
+    private static List<QueryBenchmark> regressionBenchmarks() {
+        return List.of(
+                (diagnostic_level > 0 ?
+                        ThroughputBenchmark.createDefault().withDiagnostics(getDiagnosticLevel()) :
+                        ThroughputBenchmark.createDefault()),
+                LatencyBenchmark.createDefault(),
+                CountBenchmark.createDefault(),
+                AccuracyBenchmark.createDefault(),
+                CountBenchmark.createDefault()
+        );
     }
 
     /**
@@ -981,24 +770,23 @@ public class Grid {
      * <p>We do <b>not</b> record load times. If a cached compressor is loaded, no compute metric is emitted
      * (value remains {@code null} and will be blank in CSV/console).</p>
      *
-     * @param cpSupplier supplies dataset-specific compressor parameters (YAML-derived)
+     * @param cp dataset-specific compressor parameters (YAML-derived)
      * @param ds dataset being benchmarked
      * @param metrics per-run construction metrics sink (may be null)
      * @param phase which phase to attribute compute time to (index construction vs search-time setup)
      * @param quantType YAML quantization type label (e.g., PQ/BQ); if null, no quant metric is recorded
      */
-    private static VectorCompressor<?> getCompressor(Function<DataSet, CompressorParameters> cpSupplier,
+    private static VectorCompressor<?> getCompressor(CompressorParameters cp,
                                                      DataSet ds,
                                                      ConstructionMetrics metrics,
                                                      Phase phase,
                                                      String quantType) {
-        var cp = cpSupplier.apply(ds);
 
         // Core compute and save logic
         Supplier<VectorCompressor<?>> computeAndSaveAction = () -> {
             var start = System.nanoTime();
             var compressor = cp.computeCompressor(ds);
-            System.out.format("%s: %s codebooks computed in %.2fs,%n",
+            System.out.format(java.util.Locale.ROOT, "%s: trained %s in %.2f s%n",
                     ds.getName(), compressor, (System.nanoTime() - start) / 1_000_000_000.0);
 
             if (cp.supportsCaching()) {
@@ -1024,21 +812,41 @@ public class Grid {
         // Cache path
         var fname = cp.idStringFor(ds);
         return cachedCompressors.computeIfAbsent(fname, __ -> {
-            Path path = Paths.get(pqCacheDir).resolve(fname);
+            Path path = Paths.get(compressorCacheDir).resolve(fname);
             if (Files.exists(path)) {
-                return loadFromCache(ds, fname, path);
+                return loadFromCache(ds, cp, fname, path);
             }
             return executionWrapper.get();
         });
     }
 
+    private static String compressorId(CompressorParameters params, DataSet ds) {
+        if (params == CompressorParameters.NONE) return "None";
+        return params.supportsCaching() ? params.idStringFor(ds) : quantTypeOf(params);
+    }
+
+    static CompressedVectors encodeForConstruction(VectorCompressor<?> compressor, RandomAccessVectorValues vectors,
+                                                    ConstructionMetrics metrics) {
+        return encodeForConstruction(compressor, vectors, metrics, PhysicalCoreExecutor.pool());
+    }
+
+    /** Encodes with {@code pool}, which sets how many threads the encoding uses. */
+    static CompressedVectors encodeForConstruction(VectorCompressor<?> compressor, RandomAccessVectorValues vectors,
+                                                    ConstructionMetrics metrics, java.util.concurrent.ForkJoinPool pool) {
+        if (compressor == null) return null;
+        String quantType = compressor instanceof AsymmetricHashing ? "ASH"
+                : compressor instanceof ProductQuantization ? "PQ" : "BQ";
+        return metrics.index(quantType).timeEncode(() -> compressor.encodeAll(vectors, pool));
+    }
+
     // Load/save helpers for getCompressor
-    private static VectorCompressor<?> loadFromCache(DataSet ds, String fname, Path path) {
+    private static VectorCompressor<?> loadFromCache(DataSet ds, CompressorParameters cp, String fname, Path path) {
         try (var readerSupplier = ReaderSupplierFactory.open(path);
              var rar = readerSupplier.get()) {
-            var pq = ProductQuantization.load(rar);
-            System.out.format("%s: %s codebooks loaded from %s%n", ds.getName(), pq, fname);
-            return pq;
+            // Each compressor type has its own on-disk format, so the parameters that saved it read it back.
+            var compressor = cp.loadCompressor(rar);
+            System.out.format("%s: %s loaded from %s%n", ds.getName(), compressor, fname);
+            return compressor;
         } catch (IOException e) {
             throw new UncheckedIOException(e);
         }
@@ -1046,7 +854,7 @@ public class Grid {
 
     private static void saveToCache(String fname, VectorCompressor<?> compressor) {
         try {
-            Path path = Paths.get(pqCacheDir).resolve(fname);
+            Path path = Paths.get(compressorCacheDir).resolve(fname);
             Files.createDirectories(path.getParent());
             try (var writer = new BufferedRandomAccessWriter(path)) {
                 compressor.write(writer, OnDiskGraphIndex.CURRENT_VERSION);
@@ -1061,33 +869,216 @@ public class Grid {
         ImmutableGraphIndex index;
         CompressedVectors cv;
         Set<FeatureId> features;
+        private final Supplier<RandomAccessVectorValues> exactVectors;
+        private final boolean scoresFromIndex;
+        private final String rerankingType;
+        private final NVQVectors memoryReranker;
+        private boolean queuedExecution;
+        private int queryBatchSize = 8;
+        private int queryRequestsPerWorker = 8;
+        private io.github.jbellis.jvector.graph.similarity.QueryPreparer queryPreparer;
+        /** True when {@link #queryPreparer} comes from the search codes rather than the index's own features. */
+        private boolean preparedFromCodes;
+        private java.util.concurrent.ExecutorService queuedQueryWorkers;
+        private boolean closed;
+
+        private Integer searchWorkers;
+
+        /** Queued workers: the case's search.workers, else one per physical core the JVM can use. */
+        public int queryWorkerCount() {
+            return searchWorkers != null ? searchWorkers : queryWorkerCountForMachine();
+        }
+
+        /** Direct caller threads: the case's search.workers, else jvector.bench.queryThreads (0 = common pool). */
+        public int directCallerThreads() {
+            if (searchWorkers != null) return searchWorkers;
+            int threads = Integer.getInteger("jvector.bench.queryThreads", 0);
+            if (threads < 0) throw new IllegalArgumentException("queryThreads must be nonnegative");
+            return threads;
+        }
+
+        /** Shared across this configured index's warmups and all query measurements. */
+        public synchronized java.util.concurrent.ExecutorService queryWorkers() {
+            if (closed) throw new IllegalStateException("Configured system is closed");
+            if (queuedQueryWorkers == null) {
+                int count = queryWorkerCount();
+                // Drain tasks are reusable; an array queue avoids a linked queue
+                // node allocation on every isolated query activation.
+                queuedQueryWorkers = new java.util.concurrent.ThreadPoolExecutor(count, count,
+                        0L, java.util.concurrent.TimeUnit.MILLISECONDS,
+                        new java.util.concurrent.ArrayBlockingQueue<Runnable>(count),
+                        new java.util.concurrent.ThreadPoolExecutor.AbortPolicy());
+            }
+            return queuedQueryWorkers;
+        }
+
+        /** Select before launching queries; workers and search-owned state are reused. */
+        public synchronized void configureQueryExecution(String mode, int batchSize) {
+            configureQueryExecution(mode, batchSize, null);
+        }
+
+        /** As above, with this case's search worker count, or null for the JVM-wide setting. */
+        public synchronized void configureQueryExecution(String mode, int batchSize, Integer workers) {
+            configureQueryExecution(mode, batchSize, workers, Math.max(8, batchSize));
+        }
+
+        /** As above, admitting {@code requestsPerWorker} queued queries per worker. */
+        public synchronized void configureQueryExecution(String mode, int batchSize, Integer workers, int requestsPerWorker) {
+            if (requestsPerWorker <= 0) throw new IllegalArgumentException("requestsPerWorker must be positive");
+            if (queuedQueryWorkers != null && !java.util.Objects.equals(workers, searchWorkers))
+                throw new IllegalStateException("Query workers are already running; configure workers before searching");
+            searchWorkers = workers;
+            if (closed) throw new IllegalStateException("Configured system is closed");
+            if (!"direct".equals(mode) && !"queued".equals(mode))
+                throw new IllegalArgumentException("Query execution must be direct or queued");
+            if (batchSize <= 0 || batchSize == Integer.MAX_VALUE)
+                throw new IllegalArgumentException("Query batch size must be positive and fit its histogram");
+            queuedExecution = "queued".equals(mode);
+            queryBatchSize = batchSize;
+            queryRequestsPerWorker = requestsPerWorker;
+            if (queuedExecution && queryPreparer == null) {
+                queryPreparer = index.queryPreparer().orElse(null);
+                // Indexes that score with stored or in-memory ASH codes prepare queries with those codes' model.
+                if (queryPreparer == null && !scoresFromIndex) {
+                    if (cv instanceof ASHVectors) queryPreparer = ((ASHVectors) cv).queryPreparer();
+                    else if (cv instanceof MutableASHVectors) queryPreparer = ((MutableASHVectors) cv).queryPreparer();
+                    preparedFromCodes = queryPreparer != null;
+                }
+            }
+        }
+        public boolean usesQueuedExecution() { return queuedExecution; }
+        public int queryBatchSize() { return queryBatchSize; }
+        public int queryRequestsPerWorker() { return queryRequestsPerWorker; }
+        /** Queued queries admitted at once: requests per worker times workers, never less than one batch. */
+        public int queryQueueCapacity() {
+            return Math.max(queryBatchSize, Math.multiplyExact(queryRequestsPerWorker, queryWorkerCount()));
+        }
+        public io.github.jbellis.jvector.graph.similarity.QueryPreparer queryPreparer() { return queryPreparer; }
+
+        /** The score provider for a query prepared by {@link #queryPreparer}. */
+        public SearchScoreProvider scoreProviderFor(io.github.jbellis.jvector.graph.similarity.PreparedQuery prepared,
+                                                    ImmutableGraphIndex.View view) {
+            if (!preparedFromCodes) return ((ImmutableGraphIndex.ScoringView) view).scoreProviderFor(prepared, true);
+            var query = prepared.queryVector();
+            return rerankingType != null ? configuredScorer(query, prepared, view) : scoreProviderFor(query, prepared, view);
+        }
+
 
         private final ExplicitThreadLocal<GraphSearcher> searchers = ExplicitThreadLocal.withInitial(() -> {
-            return new GraphSearcher(index);
+            var searcher = new GraphSearcher(index);
+            // Benchmark knobs for the experimental adaptive stopping, off by default as in the library:
+            // jvector.bench.adaptive=true turns it on; jvector.bench.adaptiveGamma sets its margin.
+            String gamma = System.getProperty("jvector.bench.adaptiveGamma");
+            boolean adaptive = Boolean.parseBoolean(System.getProperty("jvector.bench.adaptive", "false"));
+            if (gamma != null) searcher.useAdaptiveTermination(adaptive, Float.parseFloat(gamma));
+            else searcher.useAdaptiveTermination(adaptive);
+            return searcher;
         });
 
         ConfiguredSystem(DataSet ds, ImmutableGraphIndex index, CompressedVectors cv, Set<FeatureId> features) {
+            this(ds, index, cv, features, null, null);
+        }
+
+        ConfiguredSystem(DataSet ds, ImmutableGraphIndex index, CompressedVectors cv, Set<FeatureId> features,
+                         String rerankingType, NVQVectors memoryReranker) {
+            this.rerankingType = rerankingType;
+            this.memoryReranker = memoryReranker;
             this.ds = ds;
             this.index = index;
             this.cv = cv;
             this.features = features;
+            this.scoresFromIndex = FeatureProviders.anyMatch(features, FeatureProvider::providesApproximateScoring);
+            // File-backed sources borrow scratch storage; concurrent scorers need separate views.
+            this.exactVectors = ds.getBaseRavv().threadLocalSupplier();
+        }
+
+        /** Top-K searches stop adaptively, reading scores as distances under the dataset's similarity function. */
+        private VectorSimilarityFunction adaptiveSimilarity() {
+            return ds.getSimilarityFunction();
+        }
+
+        /** Metadata from the same ASH model used for query scoring. */
+        public AsymmetricHashing ashQueryProjectionModel() {
+            if (features.contains(FeatureId.FUSED_ASH) && index instanceof OnDiskGraphIndex) {
+                var feature = ((OnDiskGraphIndex) index).getFeatures().get(FeatureId.FUSED_ASH);
+                return feature instanceof FusedASH ? ((FusedASH) feature).getASH() : null;
+            }
+            if (cv instanceof ASHVectors) return ((ASHVectors) cv).getCompressor();
+            return cv instanceof MutableASHVectors ? ((MutableASHVectors) cv).getCompressor() : null;
+        }
+
+        private VectorCompressor<?> fusedCompressor() {
+            if (index instanceof OnDiskGraphIndex) {
+                var disk = (OnDiskGraphIndex) index;
+                var ash = disk.getFeatures().get(FeatureId.FUSED_ASH);
+                if (ash instanceof FusedASH) return ((FusedASH) ash).getASH();
+                var pq = disk.getFeatures().get(FeatureId.FUSED_PQ);
+                if (pq instanceof FusedPQ) return ((FusedPQ) pq).getPQ();
+            }
+            return null;
         }
 
         public SearchScoreProvider scoreProviderFor(VectorFloat<?> queryVector, ImmutableGraphIndex.View view) {
+            return rerankingType != null ? configuredScorer(queryVector, null, view) : scoreProviderFor(queryVector, null, view);
+        }
+
+        /** The search codes' score function: from the prepared query when there is one, else from the raw query. */
+        private ScoreFunction.ApproximateScoreFunction codesScore(VectorFloat<?> query,
+                                                                  io.github.jbellis.jvector.graph.similarity.PreparedQuery prepared) {
+            if (prepared == null) return cv.precomputedScoreFunctionFor(query, ds.getSimilarityFunction());
+            return cv instanceof ASHVectors ? ((ASHVectors) cv).scoreFunctionFor(prepared)
+                    : ((MutableASHVectors) cv).scoreFunctionFor(prepared);
+        }
+
+        private SearchScoreProvider scoreProviderFor(VectorFloat<?> queryVector,
+                                                     io.github.jbellis.jvector.graph.similarity.PreparedQuery prepared,
+                                                     ImmutableGraphIndex.View view) {
             var scoringView = (ImmutableGraphIndex.ScoringView) view;
             ScoreFunction.ApproximateScoreFunction asf;
-            if (features.contains(FeatureId.FUSED_PQ)) {
+            if (scoresFromIndex) {
                 asf = scoringView.approximateScoreFunctionFor(queryVector, ds.getSimilarityFunction());
             } else {
                 // if we're not compressing then just use the exact score function
                 if (cv == null) {
-                    return DefaultSearchScoreProvider.exact(queryVector, ds.getSimilarityFunction(), ds.getBaseRavv());
+                    var exact = DefaultSearchScoreProvider.exact(queryVector, ds.getSimilarityFunction(), exactVectors.get());
+                    return DefaultSearchScoreProvider.forSimilarity(exact.scoreFunction(), null, adaptiveSimilarity());
                 }
 
-                asf = cv.precomputedScoreFunctionFor(queryVector, ds.getSimilarityFunction());
+                asf = codesScore(queryVector, prepared);
             }
             var rr = scoringView.rerankerFor(queryVector, ds.getSimilarityFunction());
-            return new DefaultSearchScoreProvider(asf, rr);
+            return new DefaultSearchScoreProvider(asf, rr, adaptiveSimilarity());
+        }
+
+        private SearchScoreProvider configuredScorer(VectorFloat<?> query,
+                                                     io.github.jbellis.jvector.graph.similarity.PreparedQuery prepared,
+                                                     ImmutableGraphIndex.View view) {
+            var similarity = ds.getSimilarityFunction();
+            var diskView = view instanceof OnDiskGraphIndex.View ? (OnDiskGraphIndex.View) view : null;
+            ScoreFunction score;
+            if (scoresFromIndex) {
+                score = diskView.approximateScoreFunctionFor(query, similarity);
+            } else if (cv != null) {
+                score = codesScore(query, prepared);
+            } else {
+                score = diskView == null
+                        ? DefaultSearchScoreProvider.exact(query, similarity, exactVectors.get()).scoreFunction()
+                        : diskView.rerankerFor(query, similarity);
+            }
+
+            ScoreFunction.ExactScoreFunction reranker = null;
+            if ("FP32".equals(rerankingType)) {
+                var vectors = diskView == null ? exactVectors.get() : diskView;
+                reranker = vectors.rerankerFor(query, similarity);
+            } else if ("NVQ".equals(rerankingType)) {
+                if (diskView == null) {
+                    reranker = memoryReranker.scoreFunctionFor(query, similarity)::similarityTo;
+                } else {
+                    var nvq = (NVQ) ((OnDiskGraphIndex) index).getFeatures().get(FeatureId.NVQ_VECTORS);
+                    reranker = nvq.rerankerFor(query, similarity, diskView);
+                }
+            }
+            return new DefaultSearchScoreProvider(score, reranker, adaptiveSimilarity());
         }
 
         public GraphSearcher getSearcher() {
@@ -1099,8 +1090,22 @@ public class Grid {
         }
 
         @Override
-        public void close() throws Exception {
-            searchers.close();
+        public synchronized void close() throws Exception {
+            closed = true;
+            try {
+                if (queuedQueryWorkers != null) {
+                    queuedQueryWorkers.shutdown();
+                    boolean interrupted = false;
+                    try {
+                        while (!queuedQueryWorkers.isTerminated()) {
+                            try { queuedQueryWorkers.awaitTermination(Long.MAX_VALUE, java.util.concurrent.TimeUnit.NANOSECONDS); }
+                            catch (InterruptedException e) { interrupted = true; }
+                        }
+                    } finally { if (interrupted) Thread.currentThread().interrupt(); }
+                }
+            } finally {
+                searchers.close();
+            }
         }
     }
 
@@ -1109,116 +1114,9 @@ public class Grid {
         if (cp == null || cp == CompressorParameters.NONE) return null;
         if (cp instanceof CompressorParameters.PQParameters) return "PQ";
         if (cp instanceof CompressorParameters.BQParameters) return "BQ";
+        if (cp instanceof CompressorParameters.ASHParameters) return "ASH";
+        if (cp instanceof CompressorParameters.NVQParameters) return "NVQ";
         // Unknown/unsupported type for quant timing purposes
         return null;
-    }
-
-    /**
-     * Construction/search quantization timing metrics captured while building an index and while encoding
-     * vectors for search-time evaluation.
-     *
-     * <p>Values may be {@code null} when not measured or not applicable (e.g., cache hit).</p>
-     *
-     * <p>Call {@link #appendTo(List)} to emit these as {@link Metric} entries so they can be selected for
-     * console/CSV reporting.</p>
-     */
-    static final class ConstructionMetrics {
-        // null means “not applicable / not measured”
-        public Double indexBuildTimeS;
-
-        // Index-construction phase (single pass per run)
-        private final Map<String, QuantStats> indexByType = new HashMap<>();
-
-        // Search phase (reset per evaluated config)
-        private final Map<String, QuantStats> searchByType = new HashMap<>();
-
-        ConstructionMetrics() {}
-
-        /** Clear search-phase quant timings for the next evaluated (index, compression) configuration. */
-        void resetSearch() {
-            searchByType.clear();
-        }
-
-        QuantHandle index(String quantType)  { return handle(indexByType, quantType); }
-        QuantHandle search(String quantType) { return handle(searchByType, quantType); }
-
-        private static QuantHandle handle(Map<String, QuantStats> map, String quantType) {
-            if (quantType == null) return QuantHandle.NOOP;
-            QuantStats qs = map.computeIfAbsent(quantType, __ -> new QuantStats());
-            return new QuantHandle(qs);
-        }
-
-        /** Adds construction + quant metrics as Metric entries (null => blank in CSV). */
-        void appendTo(List<Metric> out) {
-            if (indexBuildTimeS != null) {
-                out.add(Metric.of("construction.index_build_time_s",
-                        "Index build time (s)", ".2f", indexBuildTimeS));
-            }
-
-            // Index-construction quant timings
-            appendQuant(out, "construction.index_quant_time_s", "Idx", indexByType);
-
-            // Search-phase quant timings (note: search.* namespace matches other query-time metrics)
-            appendQuant(out, "search.search_quant_time_s", "Search", searchByType);
-        }
-
-        private static void appendQuant(List<Metric> out,
-                                        String prefix,
-                                        String phaseLabel,
-                                        Map<String, QuantStats> byType) {
-            final String hPrefix = (phaseLabel == null || phaseLabel.isBlank()) ? "" : (phaseLabel + " ");
-
-            for (var e : byType.entrySet()) {
-                String qt = e.getKey();
-                QuantStats qs = e.getValue();
-
-                // Compute
-                if (qs.computeTimeS != null) {
-                    out.add(Metric.of(prefix + "." + qt + ".compute_time_s",
-                            hPrefix + qt + " compute (s)", ".2f", qs.computeTimeS));
-                }
-
-                // Encoding (usually single; suffix only if multiple)
-                int n = qs.encodeTimesS.size();
-                if (n == 1) {
-                    out.add(Metric.of(prefix + "." + qt + ".encoding_time_s",
-                            hPrefix + qt + " encoding (s)", ".2f", qs.encodeTimesS.get(0)));
-                } else if (n > 1) {
-                    for (int i = 0; i < n; i++) {
-                        out.add(Metric.of(prefix + "." + qt + ".encoding_time_s." + i,
-                                hPrefix + qt + " encoding (s) #" + i, ".2f", qs.encodeTimesS.get(i)));
-                    }
-                }
-            }
-        }
-
-        private static final class QuantStats {
-            Double computeTimeS;
-            final List<Double> encodeTimesS = new ArrayList<>();
-        }
-
-        static final class QuantHandle {
-            static final QuantHandle NOOP = new QuantHandle(null);
-
-            private final QuantStats qs;
-
-            private QuantHandle(QuantStats qs) {
-                this.qs = qs;
-            }
-
-            <T> T timeCompute(java.util.function.Supplier<T> f) {
-                if (qs == null) return f.get();
-                long t0 = System.nanoTime();
-                try { return f.get(); }
-                finally { qs.computeTimeS = (System.nanoTime() - t0) / 1_000_000_000.0; }
-            }
-
-            <T> T timeEncode(java.util.function.Supplier<T> f) {
-                if (qs == null) return f.get();
-                long t0 = System.nanoTime();
-                try { return f.get(); }
-                finally { qs.encodeTimesS.add((System.nanoTime() - t0) / 1_000_000_000.0); }
-            }
-        }
     }
 }

@@ -24,6 +24,7 @@
 
 package io.github.jbellis.jvector.graph;
 
+import io.github.jbellis.jvector.graph.disk.OrdinalMapper;
 import io.github.jbellis.jvector.graph.similarity.ScoreFunction;
 import io.github.jbellis.jvector.util.Accountable;
 import io.github.jbellis.jvector.util.Bits;
@@ -35,7 +36,6 @@ import java.util.Objects;
 
 import java.io.Closeable;
 import java.io.IOException;
-import java.util.function.Function;
 
 /**
  * Represents a graph-based vector index.  Nodes are represented as ints, and edges are
@@ -48,6 +48,19 @@ import java.util.function.Function;
  * in a View that should be created per accessing thread.
  */
 public interface ImmutableGraphIndex extends AutoCloseable, Accountable {
+    /** Marks entry node as absent (fe, empty graph) */
+    int ENTRY_NODE_ABSENT = -1;
+
+    /**
+     * Optional numerical query preparation, independent of a mutable graph view.
+     * Obtain and reuse one preparer per loaded model. Returned preparers and query
+     * states belong to the caller; their byte counts exclude shared model weights.
+     * The preparer scores by the similarity the index's model was trained for.
+     */
+    default java.util.Optional<io.github.jbellis.jvector.graph.similarity.QueryPreparer> queryPreparer() {
+        return java.util.Optional.empty();
+    }
+
     /** Returns the number of nodes in the graph */
     @Deprecated
     default int size() {
@@ -213,6 +226,16 @@ public interface ImmutableGraphIndex extends AutoCloseable, Accountable {
      * except for OnHeapGraphIndex.ConcurrentGraphIndexView.)
      */
     interface ScoringView extends View {
+        /**
+         * Binds prepared numerical state to this view without projecting again.
+         * Keep the state unchanged through all uses of the provider, including
+         * resumed searches. Providers without this capability reject the call.
+         */
+        default io.github.jbellis.jvector.graph.similarity.SearchScoreProvider scoreProviderFor(
+                io.github.jbellis.jvector.graph.similarity.PreparedQuery query, boolean rerank) {
+            throw new UnsupportedOperationException("Prepared query scoring is unavailable");
+        }
+
         ScoreFunction.ExactScoreFunction rerankerFor(VectorFloat<?> queryVector, VectorSimilarityFunction vsf);
         ScoreFunction.ApproximateScoreFunction approximateScoreFunctionFor(VectorFloat<?> queryVector, VectorSimilarityFunction vsf);
     }

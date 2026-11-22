@@ -20,12 +20,19 @@ import io.github.jbellis.jvector.disk.IndexWriter;
 import io.github.jbellis.jvector.disk.RandomAccessReader;
 import io.github.jbellis.jvector.graph.ImmutableGraphIndex;
 import io.github.jbellis.jvector.graph.disk.CommonHeader;
+import io.github.jbellis.jvector.graph.disk.CompactionContext;
+import io.github.jbellis.jvector.graph.disk.FusedCompactionStrategy;
 import io.github.jbellis.jvector.graph.disk.OnDiskGraphIndex;
+import io.github.jbellis.jvector.graph.disk.PQRetrainer;
+import io.github.jbellis.jvector.graph.disk.QuantizationCompactionStrategy;
+import io.github.jbellis.jvector.graph.disk.VectorCompressorRetrainer;
 import io.github.jbellis.jvector.graph.similarity.ScoreFunction;
 import io.github.jbellis.jvector.quantization.FusedPQDecoder;
 import io.github.jbellis.jvector.quantization.PQVectors;
 import io.github.jbellis.jvector.quantization.ProductQuantization;
+import io.github.jbellis.jvector.quantization.VectorCompressor;
 import io.github.jbellis.jvector.util.ExplicitThreadLocal;
+import io.github.jbellis.jvector.util.RamUsageEstimator;
 import io.github.jbellis.jvector.vector.VectorSimilarityFunction;
 import io.github.jbellis.jvector.vector.VectorizationProvider;
 import io.github.jbellis.jvector.vector.types.ByteSequence;
@@ -67,14 +74,47 @@ public class FusedPQ extends AbstractFeature implements FusedFeature {
         return pq;
     }
 
+    /** For compaction use. See {@link FusedFeature#getCompressor}. */
+    @Override
+    @SuppressWarnings("unchecked")
+    public VectorCompressor<ByteSequence<?>> getCompressor() {
+        return (VectorCompressor<ByteSequence<?>>) (VectorCompressor<?>) pq;
+    }
+
+    /** For compaction use. See {@link FusedFeature#withCompressor}. */
+    @Override
+    public FusedFeature withCompressor(VectorCompressor<ByteSequence<?>> newCompressor, int maxDegree) {
+        if (!(newCompressor instanceof ProductQuantization)) {
+            throw new IllegalArgumentException(
+                    "FusedPQ requires ProductQuantization; got " + newCompressor.getClass().getSimpleName());
+        }
+        return new FusedPQ(maxDegree, (ProductQuantization) newCompressor);
+    }
+
     @Override
     public int headerSize() {
         return pq.compressorSize();
     }
 
     @Override
+    public int headerSize(int version) {
+        return pq.compressorSize(version);
+    }
+
+    @Override
+    public long ramBytesUsed() {
+        return RamUsageEstimator.shallowSizeOf(this) + pq.ramBytesUsed();
+    }
+
+    @Override
     public int featureSize() {
         return pq.compressedVectorSize() * maxDegree;
+    }
+
+    /** For compaction use. See {@link FusedFeature#codeSize}. */
+    @Override
+    public int codeSize() {
+        return pq.compressedVectorSize();
     }
 
     static FusedPQ load(CommonHeader header, RandomAccessReader reader) {
@@ -96,9 +136,25 @@ public class FusedPQ extends AbstractFeature implements FusedFeature {
         return FusedPQDecoder.newDecoder(neighbors, pq, hierarchyCachedFeatures, queryVector, reusableNeighborCodes.get(), reusableResults.get(), vsf, esf);
     }
 
+    /** For compaction use. See {@link FusedFeature#createCompactionStrategy}. */
+    @Override
+    public QuantizationCompactionStrategy createCompactionStrategy(CompactionContext ctx) {
+        ProductQuantization basePQ = this.pq;
+        VectorCompressorRetrainer retrainer =
+                vsf -> new PQRetrainer(ctx.sources, ctx.liveNodes, ctx.dimension)
+                        .retrain(vsf, basePQ);
+        return new FusedCompactionStrategy(ctx, this, retrainer);
+    }
+
+    @Deprecated
     @Override
     public void writeHeader(IndexWriter out) throws IOException {
-        pq.write(out, OnDiskGraphIndex.CURRENT_VERSION);
+        writeHeader(out, OnDiskGraphIndex.CURRENT_VERSION);
+    }
+
+    @Override
+    public void writeHeader(IndexWriter out, int version) throws IOException {
+        pq.write(out, version);
     }
 
     // this is an awkward fit for the Feature.State design since we need to
@@ -149,6 +205,7 @@ public class FusedPQ extends AbstractFeature implements FusedFeature {
     }
 
     public static class FusedPQInlineSource implements InlineSource {
+        private static final long SHALLOW_BYTES = RamUsageEstimator.shallowSizeOfInstance(FusedPQInlineSource.class);
         private ByteSequence<?> code;
 
         public FusedPQInlineSource(ByteSequence<?> code) {
@@ -157,7 +214,7 @@ public class FusedPQ extends AbstractFeature implements FusedFeature {
 
         @Override
         public long ramBytesUsed() {
-            return code.length();
+            return SHALLOW_BYTES + code.ramBytesUsed();
         }
 
         public ByteSequence<?> getCode() {

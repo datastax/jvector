@@ -1,0 +1,3160 @@
+/*
+ * Copyright DataStax, Inc.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ * http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+package io.github.jbellis.jvector.graph.disk;
+
+import java.io.FileNotFoundException;
+import java.io.IOException;
+import java.io.UncheckedIOException;
+import java.nio.ByteBuffer;
+import java.nio.ByteOrder;
+import java.nio.FloatBuffer;
+import java.nio.channels.FileChannel;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.StandardOpenOption;
+import java.util.*;
+import java.util.concurrent.*;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicLong;
+import java.util.concurrent.atomic.LongAdder;
+import java.util.stream.IntStream;
+import io.github.jbellis.jvector.annotations.Experimental;
+import io.github.jbellis.jvector.graph.*;
+import io.github.jbellis.jvector.graph.disk.feature.FeatureId;
+import io.github.jbellis.jvector.graph.disk.feature.FusedFeature;
+import io.github.jbellis.jvector.graph.disk.feature.FusedPQ;
+import io.github.jbellis.jvector.graph.similarity.DefaultSearchScoreProvider;
+import io.github.jbellis.jvector.graph.similarity.SearchScoreProvider;
+import io.github.jbellis.jvector.util.*;
+import io.github.jbellis.jvector.vector.VectorSimilarityFunction;
+import io.github.jbellis.jvector.vector.VectorUtil;
+import io.github.jbellis.jvector.graph.similarity.ScoreFunction;
+import io.github.jbellis.jvector.vector.types.VectorFloat;
+import io.github.jbellis.jvector.quantization.CompressedVectors;
+import io.github.jbellis.jvector.quantization.ProductQuantization;
+import io.github.jbellis.jvector.quantization.VectorCompressor;
+import io.github.jbellis.jvector.vector.VectorizationProvider;
+import io.github.jbellis.jvector.vector.types.VectorTypeSupport;
+import io.github.jbellis.jvector.vector.types.ByteSequence;
+import io.github.jbellis.jvector.vector.types.FloatArray;
+import io.github.jbellis.jvector.util.BoundedLongHeap;
+import io.github.jbellis.jvector.util.NumericUtils;
+import org.agrona.collections.IntHashSet;
+
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
+import static java.lang.Math.*;
+
+/**
+ * Merges several {@link OnDiskGraphIndex} sources into one on-disk graph.
+ * <p>
+ * Every live node keeps its own retained edges and gains cross-source edges, followed by
+ * Vamana-style diversity selection. At the base layer the sources are processed smallest first:
+ * a node gathers candidates only from the sources larger than its own, and each candidate is
+ * also offered back to the node it found, so the reverse direction of every source pair is
+ * supplied by propagation rather than by a second pass. The largest source therefore gathers
+ * nothing itself and only folds the offers it received into its retained edges. Base-layer
+ * candidates come from the cell join: the merge holds every live vector in a scratch region of
+ * the output, ordered so that each source's members of every cell (a level-1 node of the merged
+ * hierarchy) are contiguous, and a node's candidates are found by streaming the cells a beam over
+ * that hierarchy picks and scoring their vectors exactly. Only the pairwise diversity comparisons
+ * run on a compact wide code. The graph search remains for a node without a cell.
+ * <p>
+ * Ordinals in the output are assigned by the compactor: each source's live nodes are numbered by
+ * region so the cell join can scan a cell's members contiguously, deleted nodes get no ordinal,
+ * and the mapping is published through {@link #ordinalMappers()} once {@link #compact} has run.
+ * The upper layers are merged first, with a greedy descent to the layer followed by a beam search
+ * in every other source; their merged level 1 is the cell hierarchy the rest of the merge uses.
+ */
+public final class OnDiskGraphIndexCompactor implements Accountable {
+    private static final VectorTypeSupport vectorTypeSupport = VectorizationProvider.getInstance().getVectorTypeSupport();
+    private static final Logger log = LoggerFactory.getLogger(OnDiskGraphIndexCompactor.class);
+
+    // Compaction constants
+
+    private static final float DIVERSITY_ALPHA = 1.2f;
+    private static final int TARGET_BATCHES_PER_SOURCE = 40;
+    private static final int TARGET_NODES_PER_BATCH = 128;
+
+    /**
+     * The merge scans and scores on the vectors themselves, always: the cell walk streams each
+     * target's cells in ordinal order, so every candidate score is exact and the scan reads
+     * sequentially whether or not the store is resident. Only the finalize's pairwise diversity
+     * comparisons, the one place vectors are re-read at random, use a compact wide code that stays
+     * resident. One configuration for every input type and every memory regime; the input type
+     * decides only whether the output carries codes.
+     */
+    // The raw-vector store every merge scans: a sidecar strategy whose "code" is the vector.
+    private QuantizationCompactionStrategy vectorStore = QuantizationCompactionStrategy.NONE;
+    // The cell walk scans cells for a range of nodes at once. The range is bounded by this many nodes, by the
+    // memory its query vectors take and by the memory of its (cell, node) pairs, both shares of the heap,
+    // since a node probes many small cells to fill its scan budget; see exactJoinRange.
+    private static final int EXACT_JOIN_MAX_RANGE = 1 << 22;
+    private static final long EXACT_JOIN_QUERY_BYTES_MIN = 3L << 30;
+    private static final long EXACT_JOIN_PAIR_BYTES_MIN = 512L << 20, EXACT_JOIN_PAIR_BYTES_MAX = 32L << 30;
+    private static final int MIN_SEARCH_TOP_K = 2;
+    private static final int SEARCH_TOP_K_MULTIPLIER = 4;
+    // Fixed cell-walk budgets (bytes); 0 = the heap-derived defaults above (see withCellWalkBudgets).
+    private long walkPairBytes = 0, walkQueryBytes = 0;
+    // Records announced to the page cache this many nodes ahead of their read in the level-0 pass and
+    // the pre-encode (see withRecordAnnounceAhead); 0 = demand faults only.
+    static final int DEFAULT_RECORD_ANNOUNCE_AHEAD = 64;
+    private int recordAnnounceAhead = DEFAULT_RECORD_ANNOUNCE_AHEAD;
+
+    private List<OnDiskGraphIndex> sources;
+    // Optional non-fused compressed sidecar, parallel to `sources`. Null when sources carry their
+    // quantization inline (FUSED_PQ) or have none. When non-null, compact(Path, Path) retrains the
+    // compressor on merged vectors and writes a single merged CompressedVectors to compressedPath.
+    private final List<CompressedVectors> sourceCompressed;
+    private List<FixedBitSet> liveNodes;
+    private final List<Integer> numLiveNodesPerSource;
+    /**
+     * Compactor-assigned ordinals, built by {@link #buildRegionOrdinalMappers} at the start of
+     * {@link #compact}: each source's live nodes numbered by region, sources in ascending-size
+     * processing order. Record write offsets follow new ordinals, so processing in the same order
+     * makes the writer sequential, and consecutive nodes of every source explore the same region
+     * of every target. Callers read the mapping back via {@link #ordinalMappers()}.
+     */
+    private List<OrdinalMapper> remappers;
+    private List<Integer> maxDegrees;
+
+    private final int dimension;
+    private int maxOrdinal = -1;
+    private int numTotalNodes = 0;
+    private final ForkJoinPool executor;
+    private final int taskWindowSize;
+    private final VectorSimilarityFunction similarityFunction;
+
+    // ---- Pair-asymmetric cross-linking (reverse-edge propagation) ----
+    // L0 sources are processed in ascending live-size order with a barrier between sources, and a
+    // node searches only sources LARGER than its own. The reverse direction of each source pair is
+    // supplied by propagation instead of a search: when node u finds v in a larger source, u is
+    // offered as a reverse candidate for v, and v's diversity selection (which runs in a later
+    // group, after the barrier) unions those offers with v's retained same-source edges. Similarity
+    // is symmetric and offers carry exact scores, so the propagated candidates are exactly what v's
+    // own search would have scored — only WHERE candidates come from changes. The larger source of
+    // every pair therefore does no cross-source searching at all; under skewed source sizes that
+    // population dominates total search count, which is what this trades against the smaller
+    // reverse candidate budget (REVERSE_CANDIDATE_SLOTS vs searchTopK per source).
+    private static final int REVERSE_CANDIDATE_SLOTS = 16;
+
+
+    private int[] sizeRank;            // rank of each source in ascending live-node order
+    private int[] l0ProcessOrder;      // source indices in ascending live-node order
+    private BandedReverseCandidateBuffer reverseCandidates; // non-null only while L0 is being compacted
+    // The sidecar quantization strategy participating in this compaction (NONE when the caller
+    // did not supply per-source CompressedVectors). Set by compactGraphImpl; consulted wherever
+    // the fused path consults the inline strategy for codes.
+    private QuantizationCompactionStrategy activeSidecarStrategy = QuantizationCompactionStrategy.NONE;
+    // Wide code: a second, near-lossless PQ (2 dimensions per subspace) trained at merge time and kept in a
+    // scratch cache by new ordinal, encoded by the same pre-encode pass as the scan code. At level 0 the cell
+    // join reranks its candidates and scores the node's retained edges from it, and the diversity checks
+    // compare it, so no record but the node's own is read.
+    private ProductQuantization pqWide;
+    // Full-precision sources (no quantization anywhere): the scratch holds the vectors themselves, the
+    // hub map holds the upper layers' vectors, and level 0 scans, scores and diversifies on vectors.
+    private boolean exactMode;
+    private volatile ExactJoin exactJoin;   // full-precision merge: scan results of the node range level 0 is processing
+    private final LongAdder finalizeRowsTouched = new LongAdder(), finalizeRowsRequested = new LongAdder();
+    private ThreadLocal<Scratch> scratchLocal;  // the per-thread scratch of the current compaction (set by compactLevels)
+    // What level 0 evaluates candidates from: the wide code for coded sources, the vectors
+    // themselves for full-precision ones. Non-null only while level 0 runs.
+    private PreEncodedCodeCache candidateStore;
+    // Full-precision merge above the memory budget: the compact code the diversity test reads,
+    // while the walk keeps reading candidateStore (the vectors themselves).
+    private PreEncodedCodeCache diversityCache;
+    private final LongAdder l0WideScores = new LongAdder();
+    /**
+     * Dimensions per subspace of the wide code. Four, measured: on cap-6M (1536-d), cohere-10M
+     * (1024-d) and dpr-gemma-10m (768-d) the diversity test scored best at four dimensions per
+     * subspace, beating both the coarser code the old flat 192-subspace cap produced (by 2.6 pt at
+     * 1536-d) and the finer two-dimensional code that cap was meant to approximate (by 0.06 to
+     * 0.61 pt). Finer is not better here because the test asks whether two candidates are too
+     * similar, and a coarser code collides near-duplicates onto one centroid, which is exactly the
+     * answer the pruning rule wants.
+     */
+    private static final int WIDE_DIMS_PER_SUBSPACE = 4;
+
+    // ---- Cell join: level-0 cross-source candidates from an exact scan of the cell members ----
+    // The upper layers are merged first and their level 1 is the cell hierarchy. The output
+    // ordinals group every source's nodes by the merged level-1 node they descend to (their cell);
+    // each source's nodes of a cell form a contiguous ordinal range, so their vectors are
+    // contiguous in the vector store. A node's candidates in another source are found by
+    // streaming that source's members of the node's best cells and scoring them exactly.
+    // Requires an upper layer in some source; a node without a cell falls back to the graph search.
+    // Vectors scanned per (node, target) at most; governs how many cells are probed. This is the
+    // cell join's recall/time operating point together with the probe beam: the budget caps how
+    // deeply the probed cells are scanned, the beam decides which cells are probed at all. The
+    // beam must score enough cells to fill the budget: with every source's level-1 nodes as cells
+    // a cell holds a few members per source, so the beam is wide.
+    static final int CELL_BUDGET = 4096;
+    static final int CELL_ASSIGN_EF = 8;      // level-1 beam width when assigning a node's cell
+    static final int CELL_PROBE_EF = 64;      // level-1 beam width when choosing a node's probe cells
+    // The merged upper layers in source ids, per level >= 1: node i of a level is
+    // (mergedSrc[l][i], mergedNode[l][i]) and its neighbours sit at [i * degree + j], -1 padded.
+    // Merged before the ordinals exist (they define the cells), written after level 0.
+    private int[][] mergedSrc, mergedNode, mergedNbrSrc, mergedNbrNode;
+    private HubMap cellMap;                   // the merged upper layers, resident through level 0
+    private int[] cellWalkPosition;           // level-1 position -> cell (walk position)
+    private int[] cellToPosition;             // cell -> level-1 position in the hub map
+    private int[][] cellStart;                // [source][cell] -> first new ordinal of that source's nodes in the cell
+    private int cellCount;
+    private final LongAdder cellCodesScanned = new LongAdder();
+    private final LongAdder cellScans = new LongAdder();
+
+    /** Reverse-offer band width: peak buffer memory is O(band), independent of node count. */
+    private static final int OFFER_BAND_WIDTH = 1 << 20;
+    private Path spillParent; // parent dir of the compaction output; set by compact()
+    final AtomicLong retainedOnlyNodes = new AtomicLong();
+
+    /** Orders sources by live-node count (ties by index) and allocates the reverse buffer. */
+    private void setupCrossLink() {
+        int k = sources.size();
+        Integer[] order = new Integer[k];
+        for (int s = 0; s < k; s++) order[s] = s;
+        Arrays.sort(order, Comparator
+                .comparingInt((Integer s) -> numLiveNodesPerSource.get(s))
+                .thenComparingInt(s -> s));
+        l0ProcessOrder = new int[k];
+        sizeRank = new int[k];
+        for (int i = 0; i < k; i++) {
+            l0ProcessOrder[i] = order[i];
+            sizeRank[order[i]] = i;
+        }
+        reverseCandidates = new BandedReverseCandidateBuffer(sources.size(), maxOrdinal + 1,
+                                                             REVERSE_CANDIDATE_SLOTS, OFFER_BAND_WIDTH, spillParent);
+        log.info("Cross-link: L0 source order {} (ascending live nodes), {} reverse slots/node, {} ordinals/band",
+                Arrays.toString(l0ProcessOrder), REVERSE_CANDIDATE_SLOTS, OFFER_BAND_WIDTH);
+    }
+
+    // Whether the cell walk reads the store with direct I/O: null = decided by size (see walkReadsDirect).
+    private Boolean walkDirectSetting;
+    private Boolean walkDirect;               // the decision, made once per compaction
+
+    // ---- Sparse sources: the same-source join ----
+    // A node keeps only its LIVE same-source edges. When most of a source is live that is nearly all
+    // of them; when a source's live nodes are a minority, as in a shard of a sharded compaction
+    // (which keeps 1/M of every source), most of a node's edges point at dead nodes and nothing
+    // replaced them: measured on 2 x 1M vectors split into 64 shards, a node kept 0.5 of its 32
+    // same-source edges and the output was nearly bipartite between the sources. In a shard, a
+    // source below this live fraction is therefore searched for its own nodes like any other source:
+    // at level 0 it is one more target of the cell walk, elsewhere one more graph search. An ordinary
+    // compaction never joins a source with itself (the fraction is 0), whatever its deletions.
+    private static final float SHARD_SAME_SOURCE_JOIN_BELOW = 0.5f;
+    private float sameSourceJoinBelow = 0f;
+
+    // Sharded compaction: what is trained once for every shard. Null for an ordinary compaction.
+    private SharedTraining shared;
+
+    // The on-disk format version of the output.
+    private int version = OnDiskGraphIndex.CURRENT_VERSION;
+
+    /** Whether so few of source {@code s}'s nodes are live that its own nodes are joined like another source's. */
+    private boolean sparseSource(int s) {
+        return numLiveNodesPerSource.get(s) < (double) sameSourceJoinBelow * sources.get(s).size(0);
+    }
+
+    /** Whether any source is joined with itself (see {@link #sparseSource}). */
+    private boolean anySparseSource() {
+        for (int s = 0; s < sources.size(); s++) {
+            if (sparseSource(s)) {
+                return true;
+            }
+        }
+        return false;
+    }
+    /**
+     * Constructs a new OnDiskGraphIndexCompactor for graphs without a non-fused compressed sidecar.
+     * Equivalent to calling the 6-arg constructor with {@code sourceCompressed = null}.
+     */
+    @Experimental
+    public OnDiskGraphIndexCompactor(
+            List<OnDiskGraphIndex> sources,
+            List<FixedBitSet> liveNodes,
+            VectorSimilarityFunction similarityFunction,
+            ForkJoinPool executor) {
+        this(sources, null, liveNodes, similarityFunction, executor);
+    }
+
+    /**
+     * Constructs a new OnDiskGraphIndexCompactor to merge multiple graph indexes.
+     * Initializes thread pool, validates inputs, and prepares metadata for compaction.
+     *
+     * @param sourceCompressed parallel to {@code sources}, supplying the non-fused compressed
+     *                         vectors (e.g. {@link io.github.jbellis.jvector.quantization.PQVectors})
+     *                         that ship alongside each graph. Pass {@code null} when sources carry
+     *                         quantization inline (FUSED_PQ) or have none. Must not be combined
+     *                         with sources that carry the FUSED_PQ feature.
+     */
+    @Experimental
+    public OnDiskGraphIndexCompactor(
+            List<OnDiskGraphIndex> sources,
+            List<CompressedVectors> sourceCompressed,
+            List<FixedBitSet> liveNodes,
+            VectorSimilarityFunction similarityFunction,
+            ForkJoinPool executor) {
+        checkBeforeCompact(sources, sourceCompressed, liveNodes);
+
+        if (executor != null) {
+            this.executor = executor;
+        } else {
+            // Default to the shared physical-core pool. Compaction (PQ encode + parallel record
+            // flush) is compute- and memory-bandwidth-bound, so sizing to logical
+            // cores oversubscribes hyperthreaded hosts and costs throughput. This pool is
+            // process-wide and shared with index construction and quantization; the compactor
+            // never owns or shuts it down.
+            this.executor = PhysicalCoreExecutor.pool();
+        }
+        // Track the pool's real parallelism so task-window / backpressure sizing stays correct
+        // whether the executor is the shared default or a caller-injected pool.
+        this.taskWindowSize = this.executor.getParallelism();
+
+        this.sources = sources;
+        this.sourceCompressed = (sourceCompressed == null || sourceCompressed.isEmpty()) ? null : sourceCompressed;
+        this.liveNodes = liveNodes;
+        this.numLiveNodesPerSource = new ArrayList<>(this.sources.size());
+        for (int s = 0; s < this.sources.size(); s++) {
+            int numLiveNodes = this.liveNodes.get(s).cardinality();
+            this.numTotalNodes += numLiveNodes;
+            this.numLiveNodesPerSource.add(numLiveNodes);
+        }
+
+        maxDegrees = this.sources.stream()
+                .max(Comparator.comparingInt(s -> s.maxDegrees().size()))
+                .orElseThrow()
+                .maxDegrees();
+        dimension = this.sources.get(0).getDimension();
+        // Output ordinals are dense over the live nodes (buildRegionOrdinalMappers numbers them
+        // 0..live-1), so the extent is known before the mapping itself exists.
+        maxOrdinal = numTotalNodes - 1;
+        this.similarityFunction = similarityFunction;
+    }
+
+    /**
+     * Sets the on-disk format version of the output; the default is {@link OnDiskGraphIndex#CURRENT_VERSION}.
+     * The sources may be of any version the reader supports, and the output is written at this one.
+     * An output that carries fused PQ needs version 6; one with upper layers needs version 4 or above.
+     * A compressed sidecar written beside the graph ({@link #compact(Path, Path)}) serializes its merged
+     * compressor at the same version; a PQ with an anisotropic threshold needs version 3 or above there.
+     *
+     * @throws IllegalArgumentException if the version is not one the writer supports
+     */
+    @Experimental
+    public OnDiskGraphIndexCompactor withVersion(int version) {
+        try {
+            GraphIndexFormatFactory.forVersion(version);
+        } catch (GraphIndexFormatFactory.UnsupportedVersionException e) {
+            throw new IllegalArgumentException(e.getMessage(), e);
+        }
+        this.version = version;
+        return this;
+    }
+
+    // The settings below are the compactor's own: every one has a default it derives from the
+    // machine or the sources, and a caller is not expected to know better. They are package-private
+    // so the tests can exercise the paths they select.
+
+    /**
+     * Fixes the cell walk's range budgets instead of deriving them from the heap: {@code pairBytes}
+     * bounds the (cell, node) pair table of a range and {@code queryBytes} its query vectors (see
+     * {@link #exactJoinRange}). A value of 0 keeps the heap-derived default for that budget. Fixed
+     * budgets make the range, and so the sweep count and the walk's memory, a property of the
+     * configuration rather than of the machine the merge runs on.
+     */
+    OnDiskGraphIndexCompactor withCellWalkBudgets(long pairBytes, long queryBytes) {
+        if (pairBytes < 0 || queryBytes < 0) throw new IllegalArgumentException("budgets must be >= 0");
+        this.walkPairBytes = pairBytes;
+        this.walkQueryBytes = queryBytes;
+        return this;
+    }
+
+    /**
+     * Sets how many records ahead of its read a node's source record is announced to the page cache
+     * in the level-0 pass and the pre-encode ({@code POSIX_MADV_WILLNEED} on the native reader, a
+     * positional read elsewhere). Records of a region-ordered batch are scattered over the source, so
+     * without the announcement each read is a demand fault served one at a time. 0 disables it.
+     */
+    OnDiskGraphIndexCompactor withRecordAnnounceAhead(int ahead) {
+        if (ahead < 0) throw new IllegalArgumentException("ahead must be >= 0");
+        this.recordAnnounceAhead = ahead;
+        return this;
+    }
+
+    /**
+     * Whether the cell walk reads the store with direct I/O ({@code true}), through its mapping
+     * ({@code false}), or by a size test ({@code null}, the default): direct when the store does not
+     * fit in the memory beside the heap. See {@link #walkReadsDirect}.
+     */
+    OnDiskGraphIndexCompactor withWalkDirectReads(Boolean direct) {
+        this.walkDirectSetting = direct;
+        return this;
+    }
+
+    /**
+     * Whether the cell walk reads the store with direct I/O instead of through its mapping. Every
+     * range of the walk reads the targets' store once from end to end. When the store fits in the
+     * memory left beside the heap, the mapping serves every pass after the first from RAM and is the
+     * right choice. When it does not, a mapping read must evict a resident page for every page it
+     * brings in, and the kernel does that reclaim synchronously inside the reading threads (measured
+     * on a 1.5 TB store against 400 GB: a third of the machine in reclaim, the disks at a fraction of
+     * their rate); a direct read lands in the thread's own buffer and leaves the page cache alone.
+     */
+    private boolean walkReadsDirect(PreEncodedCodeCache store) {
+        if (walkDirect != null) {
+            return walkDirect;
+        }
+        long storeBytes = store.sectionBytes();
+        long beyondHeap = memoryBeyondHeap();
+        boolean direct;
+        if (!store.supportsDirect()) {
+            direct = false;
+        } else if (walkDirectSetting != null) {
+            direct = walkDirectSetting;
+        } else {
+            direct = beyondHeap > 0 && storeBytes > beyondHeap * 9 / 10;
+        }
+        log.info("Cell walk: store of {} MB, {} MB of memory beyond the heap: the walk reads the store {}",
+                 storeBytes >> 20, beyondHeap < 0 ? "unknown" : String.valueOf(beyondHeap >> 20),
+                 direct ? "with direct I/O" : "through its mapping");
+        walkDirect = direct;
+        return direct;
+    }
+
+    /** Physical (or container) memory minus the maximum heap, or -1 when the platform bean is unavailable. */
+    @SuppressWarnings("deprecation")
+    private static long memoryBeyondHeap() {
+        var bean = java.lang.management.ManagementFactory.getOperatingSystemMXBean();
+        if (!(bean instanceof com.sun.management.OperatingSystemMXBean)) {
+            return -1;
+        }
+        return ((com.sun.management.OperatingSystemMXBean) bean).getTotalPhysicalMemorySize() - Runtime.getRuntime().maxMemory();
+    }
+
+    /**
+     * Validates that all source indexes have compatible configurations and required features
+     * before attempting compaction. Ensures consistent dimensions, max degrees, hierarchical
+     * settings, and feature sets across all sources.
+     */
+    private void checkBeforeCompact(
+            List<OnDiskGraphIndex> sources,
+            List<CompressedVectors> sourceCompressed,
+            List<FixedBitSet> liveNodes) {
+        validateInputSizes(sources, liveNodes);
+        validateLiveNodesBounds(sources, liveNodes);
+        validateGraphConfiguration(sources);
+        validateFeatures(sources);
+        validateCompressed(sources, sourceCompressed);
+    }
+
+    /**
+     * Validates that the optional non-fused compressed sidecar list is consistent with
+     * {@code sources}: same size, no nulls, identical compressor type across entries, and not
+     * combined with FUSED_PQ (which already carries codes inline).
+     */
+    private void validateCompressed(List<OnDiskGraphIndex> sources, List<CompressedVectors> sourceCompressed) {
+        if (sourceCompressed == null || sourceCompressed.isEmpty()) {
+            return;
+        }
+        if (sourceCompressed.size() != sources.size()) {
+            throw new IllegalArgumentException("sourceCompressed must have the same size as sources");
+        }
+        // Inline (fused) and sidecar are mutually exclusive ways to carry quantization codes.
+        // Check for any fused feature rather than hard-coding FUSED_PQ so future fused types
+        // (e.g. FUSED_ASH) are rejected here without further edits.
+        for (var feature : sources.get(0).getFeatures().values()) {
+            if (feature.isFused()) {
+                throw new IllegalArgumentException(
+                        "sourceCompressed cannot be combined with a fused feature ("
+                                + feature.id() + "); choose one");
+            }
+        }
+        Class<?> compressorClass = null;
+        for (int s = 0; s < sourceCompressed.size(); s++) {
+            CompressedVectors cv = Objects.requireNonNull(sourceCompressed.get(s),
+                    "sourceCompressed[" + s + "] is null");
+            var compressor = Objects.requireNonNull(cv.getCompressor(),
+                    "sourceCompressed[" + s + "].getCompressor() is null");
+            if (compressorClass == null) {
+                compressorClass = compressor.getClass();
+            } else if (compressorClass != compressor.getClass()) {
+                throw new IllegalArgumentException(
+                        "sourceCompressed entries must all use the same compressor type; got "
+                                + compressorClass.getSimpleName() + " and "
+                                + compressor.getClass().getSimpleName());
+            }
+        }
+    }
+
+    /**
+     * Validates that input lists have consistent sizes and are non-null.
+     */
+    private void validateInputSizes(List<OnDiskGraphIndex> sources, List<FixedBitSet> liveNodes) {
+        if (sources.isEmpty()) {
+            throw new IllegalArgumentException("Must have at least one source");
+        }
+        Objects.requireNonNull(liveNodes, "liveNodes");
+        if (sources.size() != liveNodes.size()) {
+            throw new IllegalArgumentException("sources and liveNodes must have the same size");
+        }
+    }
+
+    /**
+     * Validates that liveNodes bitsets match the size of their corresponding sources.
+     */
+    private void validateLiveNodesBounds(List<OnDiskGraphIndex> sources, List<FixedBitSet> liveNodes) {
+        for (int s = 0; s < sources.size(); ++s) {
+            if (liveNodes.get(s).length() != sources.get(s).getIdUpperBound()) {
+                throw new IllegalArgumentException("source " + s + " out of bounds: liveNodes length "
+                        + liveNodes.get(s).length() + " != idUpperBound " + sources.get(s).getIdUpperBound());
+            }
+        }
+    }
+
+    /**
+     * Validates that all sources have consistent graph configuration (dimensions, degrees, hierarchy).
+     */
+    private void validateGraphConfiguration(List<OnDiskGraphIndex> sources) {
+        int dimension = sources.get(0).getDimension();
+        var refDegrees = sources.stream()
+                .max(Comparator.comparingInt(s -> s.maxDegrees().size()))
+                .orElseThrow()
+                .maxDegrees();
+        var addHierarchy = sources.get(0).isHierarchical();
+
+        for (OnDiskGraphIndex source : sources) {
+            if (source.getDimension() != dimension) {
+                throw new IllegalArgumentException("sources must have the same dimension");
+            }
+            int sharedLevels = Math.min(refDegrees.size(), source.maxDegrees().size());
+            for (int d = 0; d < sharedLevels; d++) {
+                if (!Objects.equals(source.maxDegrees().get(d), refDegrees.get(d))) {
+                    throw new IllegalArgumentException("sources must have the same max degrees");
+                }
+            }
+            if (addHierarchy != source.isHierarchical()) {
+                throw new IllegalArgumentException("sources must have the same hierarchical setting");
+            }
+        }
+    }
+
+    /**
+     * Validates that all sources have compatible features for compaction.
+     */
+    private void validateFeatures(List<OnDiskGraphIndex> sources) {
+        Set<FeatureId> refKeys = sources.get(0).getFeatures().keySet();
+        boolean sameFeatures = sources.stream()
+                .skip(1)
+                .map(s -> s.getFeatures().keySet())
+                .allMatch(refKeys::equals);
+
+        if (!sameFeatures) {
+            throw new IllegalArgumentException("Each source must have the same features");
+        }
+        if (!refKeys.contains(FeatureId.INLINE_VECTORS)) {
+            throw new IllegalArgumentException("Each source must have the INLINE_VECTORS feature");
+        }
+        if (refKeys.contains(FeatureId.PAGE_ALIGNMENT)) {
+            throw new IllegalArgumentException("Compacting page-aligned indexes is not supported");
+        }
+    }
+
+    /** Number of level-0 cell scans run so far (one per node and target); for tests and diagnostics. */
+    long cellScanCount() {
+        return cellScans.sum();
+    }
+
+    /**
+     * The output ordinal of every source node, one mapper per source: {@code oldToNew} of a live
+     * node is its ordinal in the compacted graph, of a deleted node {@link OrdinalMapper#OMITTED}.
+     * Available once {@link #compact} has assigned the ordinals.
+     */
+    public List<OrdinalMapper> ordinalMappers() {
+        if (remappers == null) {
+            throw new IllegalStateException("ordinals are assigned by compact()");
+        }
+        return remappers;
+    }
+
+    // ---- Sharded compaction: N sources into M outputs ----
+
+    /**
+     * What a sharded compaction does once for all of its shards: the codebooks, trained on the live
+     * nodes of every shard together. It belongs to the compactor {@link #sharded()} was called on,
+     * whose live nodes are those of all the shards; each shard's merge adopts the results instead
+     * of training on its own slice. Training is deferred to the first shard that needs it.
+     */
+    private final class SharedTraining {
+        final Once<VectorCompressor<?>> inline = new Once<>("inline compressor", () -> trainedCompressor(detectInlineStrategy()));
+        final Once<VectorCompressor<?>> sidecar = new Once<>("sidecar compressor", () -> trainedCompressor(detectSidecarStrategy()));
+        final Once<ProductQuantization> wide = new Once<>("wide code", OnDiskGraphIndexCompactor.this::trainWide);
+
+        private VectorCompressor<?> trainedCompressor(QuantizationCompactionStrategy strategy) {
+            strategy.retrain(similarityFunction);
+            return strategy.compressor();
+        }
+    }
+
+    /** A value computed by the first {@link #get} and shared by the rest. */
+    private static final class Once<T> {
+        private final String what;
+        private final java.util.function.Supplier<T> compute;
+        private boolean done;
+        private T value;
+
+        Once(String what, java.util.function.Supplier<T> compute) {
+            this.what = what;
+            this.compute = compute;
+        }
+
+        synchronized T get() {
+            if (!done) {
+                long t0 = System.nanoTime();
+                value = compute.get();
+                done = true;
+                if (value != null) {
+                    log.info("Sharded compaction: {} trained once for every shard in {} ms", what, (System.nanoTime() - t0) / 1_000_000);
+                }
+            }
+            return value;
+        }
+    }
+
+    /** Trains the strategy's compressor, or hands it the one a sharded compaction already trained. */
+    private void train(QuantizationCompactionStrategy strategy, boolean sidecar) {
+        if (shared == null) {
+            strategy.retrain(similarityFunction);
+        } else {
+            strategy.adoptCompressor((sidecar ? shared.sidecar : shared.inline).get());
+        }
+    }
+
+    /** The wide diversity code (see {@link #wideSubspaces}), trained on the live nodes. */
+    private ProductQuantization trainWide() {
+        return new PQRetrainer(sources, liveNodes, dimension).train(wideSubspaces());
+    }
+
+    /**
+     * A compaction of this compactor's sources into several outputs, one {@link #compactShard} call
+     * per output. What does not depend on the shard is done once and shared: the codebooks are
+     * trained on the live nodes this compactor was built with (those of every shard) and each
+     * shard's merge adopts them. A shard's merge is otherwise an ordinary compaction whose live
+     * nodes are the shard's, and it finds a node's same-source neighbours again, since most of
+     * the edges a node had in its source lead to nodes of other shards
+     * (see {@link #sparseSource}).
+     * <p>
+     * Shards may become known one at a time, as when each output is written as its rows arrive:
+     * nothing is done until the first {@link #compactShard}. Shards are compacted one at a time;
+     * a session is not thread-safe.
+     */
+    @Experimental
+    public final class ShardedCompaction {
+        private final SharedTraining training = new SharedTraining();
+        private int shardsCompacted;
+
+        private ShardedCompaction() {
+        }
+
+        /**
+         * Merges one shard into {@code graphPath}.
+         *
+         * @param shardLiveNodes per source, the nodes of this shard: a subset of the live nodes the
+         *                       compactor was built with, in bitsets of the same lengths
+         * @return the output ordinal of every source node in this shard, one mapper per source:
+         *         {@code oldToNew} of a node of the shard is its ordinal in {@code graphPath}, of
+         *         any other node {@link OrdinalMapper#OMITTED}. Every shard has its own mapping.
+         */
+        public List<OrdinalMapper> compactShard(List<FixedBitSet> shardLiveNodes, Path graphPath) throws FileNotFoundException {
+            return compactShard(shardLiveNodes, graphPath, null);
+        }
+
+        /**
+         * Merges one shard of sources that ship a compressed sidecar: the graph into
+         * {@code graphPath}, the merged compressed vectors into {@code compressedPath}.
+         */
+        public List<OrdinalMapper> compactShard(List<FixedBitSet> shardLiveNodes, Path graphPath, Path compressedPath) throws FileNotFoundException {
+            OnDiskGraphIndexCompactor shard = shardCompactor(shardLiveNodes);
+            if (compressedPath == null) {
+                shard.compact(graphPath);
+            } else {
+                shard.compact(graphPath, compressedPath);
+            }
+            return shard.ordinalMappers();
+        }
+
+        private OnDiskGraphIndexCompactor shardCompactor(List<FixedBitSet> shardLiveNodes) {
+            Objects.requireNonNull(shardLiveNodes, "shardLiveNodes");
+            if (shardLiveNodes.size() != sources.size()) {
+                throw new IllegalArgumentException("shardLiveNodes must have one bitset per source");
+            }
+            for (int s = 0; s < sources.size(); s++) {
+                FixedBitSet all = liveNodes.get(s), mine = shardLiveNodes.get(s);
+                if (mine.length() != all.length()) {
+                    throw new IllegalArgumentException("source " + s + ": shard bitset length " + mine.length() + " != " + all.length());
+                }
+                for (int n = mine.nextSetBit(0); n != DocIdSetIterator.NO_MORE_DOCS; n = n + 1 < mine.length() ? mine.nextSetBit(n + 1) : DocIdSetIterator.NO_MORE_DOCS) {
+                    if (!all.get(n)) {
+                        throw new IllegalArgumentException("source " + s + " node " + n + " is in the shard but not live in the compaction");
+                    }
+                }
+            }
+            OnDiskGraphIndexCompactor shard = new OnDiskGraphIndexCompactor(sources, sourceCompressed, shardLiveNodes, similarityFunction, executor);
+            shard.shared = training;
+            shard.version = version;
+            shard.walkPairBytes = walkPairBytes;
+            shard.walkQueryBytes = walkQueryBytes;
+            shard.recordAnnounceAhead = recordAnnounceAhead;
+            shard.walkDirectSetting = walkDirectSetting;
+            shard.sameSourceJoinBelow = SHARD_SAME_SOURCE_JOIN_BELOW;
+            log.info("Sharded compaction: shard {} with {} live nodes", shardsCompacted++, shard.numTotalNodes);
+            return shard;
+        }
+    }
+
+    /**
+     * Opens a sharded compaction of this compactor's sources; see {@link ShardedCompaction}. The
+     * live nodes this compactor was built with must be those of every shard together.
+     */
+    @Experimental
+    public ShardedCompaction sharded() {
+        return new ShardedCompaction();
+    }
+
+    /**
+     * Main compaction entry point. Merges all source indexes into a single output index at the
+     * specified path, handling PQ retraining if needed, and writing header, all layers, and footer.
+     */
+    @Experimental
+    public void compact(Path outputPath) throws FileNotFoundException {
+        QuantizationCompactionStrategy strategy = detectInlineStrategy();
+        // Whatever the sources carry, the merge itself runs on the vectors: the scratch holds them
+        // in merged-ordinal order and the whole merge is exact. A fused output still gets its codes
+        // from the inline strategy's pre-encode, which is what that output format needs.
+        QuantizationCompactionStrategy scratch = SidecarCompactionStrategy.scratchVectors(buildContext());
+        scratch.retrain(similarityFunction);
+        try {
+            activeSidecarStrategy = scratch;
+            vectorStore = scratch;
+            compactGraphImpl(outputPath, strategy);
+        } finally {
+            activeSidecarStrategy = QuantizationCompactionStrategy.NONE;
+            vectorStore = QuantizationCompactionStrategy.NONE;
+            // Release every mapping before resizing: both strategies can hold mappings on scratch
+            // sections of this same file, and a truncate under a live mapping fails on Windows.
+            strategy.onAfterClose(outputPath);
+            scratch.onAfterClose(outputPath);
+            scratch.releaseTransientState();
+            truncateScratchSections(outputPath, strategy, scratch);
+        }
+    }
+
+    /**
+     * Compaction entry point for graphs that ship a non-fused compressed sidecar (e.g.
+     * {@link io.github.jbellis.jvector.quantization.PQVectors}). Writes the merged graph to
+     * {@code graphPath} and the merged compressed vectors to {@code compressedPath}.
+     * <p>
+     * The compressor is retrained on a balanced sample of merged source vectors, then every live
+     * node is re-encoded against the new codebook. Requires that {@code sourceCompressed} was
+     * supplied to the constructor.
+     */
+    @Experimental
+    public void compact(Path graphPath, Path compressedPath) throws FileNotFoundException {
+        if (sourceCompressed == null) {
+            throw new IllegalStateException(
+                    "compact(graphPath, compressedPath) requires sourceCompressed to be supplied to the constructor");
+        }
+        Objects.requireNonNull(compressedPath, "compressedPath");
+
+        // Graph compaction proceeds without fused-PQ retrain (validateCompressed forbids
+        // FUSED_PQ when sourceCompressed is set), then the sidecar is written below.
+        QuantizationCompactionStrategy inlineStrategy = detectInlineStrategy();
+        QuantizationCompactionStrategy sidecarStrategy = detectSidecarStrategy();
+        QuantizationCompactionStrategy scratch = SidecarCompactionStrategy.scratchVectors(buildContext());
+        try {
+            train(sidecarStrategy, true);
+            scratch.retrain(similarityFunction);
+            activeSidecarStrategy = sidecarStrategy;
+            vectorStore = scratch;
+            compactGraphImpl(graphPath, inlineStrategy);
+            // Record the graph path with the sidecar strategy before writeSidecar: the strategy
+            // defers its cache-region truncation until the sidecar copy completes.
+            sidecarStrategy.onAfterClose(graphPath);
+            sidecarStrategy.writeSidecar(compressedPath);
+        } catch (IOException e) {
+            throw new RuntimeException("Sidecar compaction failed", e);
+        } finally {
+            activeSidecarStrategy = QuantizationCompactionStrategy.NONE;
+            vectorStore = QuantizationCompactionStrategy.NONE;
+            inlineStrategy.onAfterClose(graphPath);
+            scratch.onAfterClose(graphPath);
+            scratch.releaseTransientState();
+            sidecarStrategy.releaseTransientState();
+            // Every mapping on the graph file is released by now, including the sidecar strategy's,
+            // which held one until writeSidecar copied out of it. Resize once, here.
+            truncateScratchSections(graphPath, inlineStrategy, scratch, sidecarStrategy);
+        }
+    }
+
+    /**
+     * Pick the inline-codes strategy by asking the source's fused feature (if any) for its
+     * compaction strategy. Returns {@link QuantizationCompactionStrategy#NONE} when no fused feature is
+     * present. New fused quantization types extend the compactor purely by implementing
+     * {@link FusedFeature#createCompactionStrategy}.
+     */
+    private QuantizationCompactionStrategy detectInlineStrategy() {
+        for (var feature : sources.get(0).getFeatures().values()) {
+            if (feature instanceof FusedFeature) {
+                return ((FusedFeature) feature).createCompactionStrategy(buildContext());
+            }
+        }
+        return QuantizationCompactionStrategy.NONE;
+    }
+
+    /**
+     * Cuts the output file back to the start of the first reserved scratch section, once every
+     * strategy has released its mappings. Truncating under a live mapping succeeds on Linux but
+     * fails on Windows, so unmapping and resizing are two separate phases and this runs last.
+     * <p>
+     * The graph itself is already complete and valid at this point; an un-truncated tail only wastes
+     * disk, so a failure here is logged rather than thrown.
+     */
+    private void truncateScratchSections(Path outputPath, QuantizationCompactionStrategy... strategies) {
+        long cutAt = 0;
+        for (QuantizationCompactionStrategy st : strategies) {
+            if (st == null) {
+                continue;
+            }
+            long offset = st.pendingTruncateOffset();
+            if (offset > 0 && (cutAt == 0 || offset < cutAt)) {
+                cutAt = offset;
+            }
+        }
+        if (cutAt == 0) {
+            return;
+        }
+        try (FileChannel fc = FileChannel.open(outputPath, StandardOpenOption.WRITE)) {
+            if (fc.size() > cutAt) {
+                fc.truncate(cutAt);
+            }
+        } catch (IOException e) {
+            // Most likely cause on Windows: a mapping on this file could not be released, so the
+            // OS still holds it open. The graph is complete and valid either way.
+            log.warn("Could not truncate the scratch section from {}; the graph is complete and "
+                     + "valid, the unused tail past byte {} simply remains on disk", outputPath, cutAt, e);
+        }
+        for (QuantizationCompactionStrategy st : strategies) {
+            if (st != null) {
+                st.clearPendingTruncate();
+            }
+        }
+    }
+
+    /**
+     * Pick the sidecar-codes strategy by delegating to the first {@link CompressedVectors}'
+     * own factory. Returns {@link QuantizationCompactionStrategy#NONE} when no sidecar input was supplied
+     * to the constructor. New sidecar quantization types extend the compactor purely by
+     * implementing {@link CompressedVectors#createCompactionStrategy}.
+     */
+    private QuantizationCompactionStrategy detectSidecarStrategy() {
+        if (sourceCompressed == null) {
+            return QuantizationCompactionStrategy.NONE;
+        }
+        return sourceCompressed.get(0).createCompactionStrategy(buildContext());
+    }
+
+    /** Snapshot the compactor's state into a {@link CompactionContext} for strategies to consume. */
+    private CompactionContext buildContext() {
+        return new CompactionContext(sources, sourceCompressed, liveNodes, remappers,
+                dimension, maxOrdinal, executor, taskWindowSize, recordAnnounceAhead, version);
+    }
+
+    /**
+     * Internal graph-compaction body. Performs the full graph write but does <em>not</em> shut
+     * down {@link #executor}; the public {@code compact(...)} entry points own that lifecycle so
+     * follow-on passes (e.g. a sidecar write via {@link SidecarCompactionStrategy}) can keep using
+     * the executor.
+     * <p>
+     * Quantization-aware steps (codebook retrain, pre-encode caches, entry-node tail records,
+     * mmap cleanup) are delegated to {@code strategy}. For sources with no inline quantization,
+     * pass {@link QuantizationCompactionStrategy#NONE} for a fully no-op strategy hook set.
+     */
+    private void compactGraphImpl(Path outputPath, QuantizationCompactionStrategy strategy) throws FileNotFoundException {
+        this.spillParent = outputPath.toAbsolutePath().getParent();
+        train(strategy, false);
+
+        boolean fusedPQEnabled = strategy.writesCodesInline();
+        ProductQuantization pq = strategy.compressorAsPQ();
+        if (pq == null) {
+            // Sidecar mode: the retrained sidecar compressor is this merge's PQ — the ordinal
+            // pass and (via the pre-encode cache) approximate scoring use it exactly as the
+            // fused path uses the inline codebook.
+            pq = activeSidecarStrategy.compressorAsPQ();
+        }
+        int maxBaseDegree = java.util.Collections.max(maxDegrees);
+        io.github.jbellis.jvector.graph.disk.feature.FusedFeature outputFusedFeature =
+                strategy.outputFusedFeature(maxBaseDegree);
+
+        exactMode = vectorStore.compressor() instanceof RawVectorCode;
+        assert exactMode : "the merge always runs on a raw-vector store";
+        try {
+            mergeUpperLayers(pq, fusedPQEnabled);
+        } catch (IOException | ExecutionException | InterruptedException e) {
+            throw new RuntimeException(e);
+        }
+        try {
+        remappers = buildRegionOrdinalMappers(pq);
+        if (cellMap != null) {
+            log.info("Level-0 candidates are scanned and scored on the vectors themselves ({} B per node in scratch)",
+                     4 * dimension);
+            pqWide = shared != null ? shared.wide.get() : trainWide();
+            if (pqWide != null) {
+                vectorStore.setSecondaryCompressor(pqWide);
+                log.info("Diversity comparisons use a {}-subspace wide code ({} B per node); every candidate score stays exact",
+                         pqWide.getSubspaceCount(), pqWide.getSubspaceCount());
+            } else {
+                log.info("Too few vectors to train the wide code; diversity comparisons stay on the vectors");
+            }
+        }
+        // The strategies were built before the ordinals existed; refresh so code placement
+        // (pre-encode caches, sidecar order) follows the on-disk ordinals.
+        strategy.onRemappersUpdated(buildContext());
+        activeSidecarStrategy.onRemappersUpdated(buildContext());
+        if (vectorStore != activeSidecarStrategy) {
+            vectorStore.onRemappersUpdated(buildContext());
+        }
+
+        List<CommonHeader.LayerInfo> layerInfo = computeLayerInfoFromSources();
+        int[] entryNodeSource = resolveEntryNodeSource(); // {sourceIdx, originalOrdinal}
+        int entryNode = remappers.get(entryNodeSource[0]).oldToNew(entryNodeSource[1]);
+
+        log.info("Writing compacted graph : {} total nodes, maxOrdinal={}, dimension={}, degree={}",
+                numTotalNodes, maxOrdinal, dimension, maxDegrees.get(0));
+        try (CompactWriter writer = new CompactWriter(outputPath, version, maxOrdinal, numTotalNodes, 0, layerInfo, entryNode, dimension, maxDegrees, outputFusedFeature)) {
+            // Header has to be written first so the writer's position is past the header
+            // before any strategy that mmaps past the projected end of the output runs.
+            writer.writeHeader();
+            strategy.onAfterHeader(writer);
+            activeSidecarStrategy.onAfterHeader(writer);
+            if (vectorStore != activeSidecarStrategy) {
+                vectorStore.onAfterHeader(writer);
+            }
+
+            // Approximate cross-source scoring is available whenever a merged code cache exists:
+            // fused (inline codes) or sidecar (strategy pre-encode cache built just above).
+            boolean compressedPrecision = fusedPQEnabled || activeSidecarStrategy.getCodeCache() != null;
+            candidateStore = strategy.getSecondaryCache() != null ? strategy.getSecondaryCache() : activeSidecarStrategy.getSecondaryCache();
+            compactLevels(writer, similarityFunction, fusedPQEnabled, compressedPrecision, pq);
+
+            strategy.onAfterLevels(writer, entryNodeSource, maxDegrees);
+
+            writer.writeFooter();
+            log.info("Compaction complete: {}", outputPath);
+        } catch (IOException | ExecutionException | InterruptedException e) {
+            throw new RuntimeException(e);
+        }
+        } finally {
+            if (cellMap != null) {
+                cellMap.close();   // the level-1 vector mapping
+                cellMap = null;
+            }
+        }
+    }
+
+    /**
+     * Returns {sourceIdx, originalOrdinal} for the entry node of the compacted graph.
+     * The chosen node must exist at maxLevel (since the on-disk format sets entryNode.level =
+     * maxLevel). Prefers the designated entry node of any source whose maxLevel equals the global
+     * maxLevel; if all such entry nodes are deleted, falls back to the first live node at maxLevel
+     * across all sources.
+     */
+    private int[] resolveEntryNodeSource() {
+        int maxLevel = maxDegrees.size() - 1;
+
+        // The on-disk format sets entryNode.level = layerInfo.size() - 1 (i.e. maxLevel).
+        // So the chosen node must actually have neighbors written at maxLevel — meaning it
+        // must exist at maxLevel in its source.  Prefer the designated entry node of a
+        // maxLevel source; fall back to any live node that is at maxLevel.
+        for (int s = 0; s < sources.size(); s++) {
+            if (sources.get(s).getMaxLevel() >= maxLevel) {
+                int originalEntry = sources.get(s).getView().entryNode().node;
+                if (liveNodes.get(s).get(originalEntry)) {
+                    return new int[]{s, originalEntry};
+                }
+            }
+        }
+
+        // Entry nodes were all deleted: scan for any live node that exists at maxLevel.
+        for (int s = 0; s < sources.size(); s++) {
+            if (sources.get(s).getMaxLevel() < maxLevel) continue;
+            NodesIterator it = sources.get(s).getNodes(maxLevel);
+            while (it.hasNext()) {
+                int node = it.next();
+                if (liveNodes.get(s).get(node)) {
+                    return new int[]{s, node};
+                }
+            }
+        }
+
+        throw new IllegalStateException("No live nodes found at maxLevel=" + maxLevel);
+    }
+
+    /**
+     * Compacts all hierarchical levels of the graph, processing each level in batches.
+     * For level 0 (base layer), writes inline vectors and neighbors. For upper layers,
+     * writes only graph structure and optional PQ codes.
+     */
+    private void compactLevels(CompactWriter writer,
+                                 VectorSimilarityFunction similarityFunction,
+                                 boolean fusedPQEnabled,
+                                 boolean compressedPrecision,
+                                 ProductQuantization pq)
+            throws IOException, ExecutionException, InterruptedException {
+
+        int maxCandidateSize = maxCandidateSize();
+        int scratchDegree = scratchDegree();
+        // every worker's scratch is recorded so all of them, not only the calling thread's, are closed at the end
+        final List<Scratch> openedScratch = Collections.synchronizedList(new ArrayList<>());
+        final ThreadLocal<Scratch> threadLocalScratch = ThreadLocal.withInitial(() -> {
+            Scratch sc = new Scratch(maxCandidateSize, scratchDegree, dimension, sources, pq);
+            openedScratch.add(sc);
+            return sc;
+        });
+        scratchLocal = threadLocalScratch;
+
+        setupCrossLink();
+        if (exactMode && cellMap != null) {
+            // The vector store is always the sidecar scratch. Naming it explicitly matters when an
+            // writer's fused code cache, and reading 4d bytes from a code-sized entry underflows.
+            candidateStore = vectorStore.getCodeCache();
+            if (pqWide != null) {
+                diversityCache = vectorStore.getSecondaryCache();
+                log.info("Diversity code cache {}", diversityCache == null ? "unavailable; diversity comparisons fall back to the vectors" : "ready");
+            }
+        }
+
+        for (int level = 0; level < maxDegrees.size(); level++) {
+            int searchTopK = searchTopK(maxDegrees.get(level));
+            if (level == 0) log.info("Cross-link search budget: searchTopK={} per target", searchTopK);
+
+            CompactionParams params = new CompactionParams(fusedPQEnabled, compressedPrecision, searchTopK, pq);
+
+            if (level == 0) {
+                log.info("Compacting level 0 (base layer)");
+
+                ExecutorCompletionService<List<WriteResult>> ecs =
+                        new ExecutorCompletionService<>(executor);
+
+                java.util.function.Consumer<BatchSpec> submitOne = (bs) -> {
+                    ecs.submit(() -> {
+                        Scratch scratch = threadLocalScratch.get();
+                        return computeBaseBatch(writer, bs, scratch, params);
+                    });
+                };
+
+                var wropts = EnumSet.of(StandardOpenOption.WRITE, StandardOpenOption.READ);
+                try (FileChannel fc = FileChannel.open(writer.getOutputPath(), wropts)) {
+                    // A batch's records are consecutive ordinals, hence adjacent on disk: gather each
+                    // contiguous run into one positional write instead of one syscall per record.
+                    final ByteBuffer run = ByteBuffer.allocateDirect(4 << 20);
+                    java.util.function.Consumer<List<WriteResult>> writeResults = (results) -> {
+                        try {
+                            long runStart = -1, runEnd = -1;
+                            for (WriteResult r : results) {
+                                int len = r.data.remaining();
+                                if (runStart >= 0 && (r.fileOffset != runEnd || run.remaining() < len)) {
+                                    run.flip();
+                                    writeFully(fc, run, runStart);
+                                    run.clear();
+                                    runStart = -1;
+                                }
+                                if (len > run.capacity()) {
+                                    writeFully(fc, r.data, r.fileOffset);
+                                    continue;
+                                }
+                                if (runStart < 0) {
+                                    runStart = runEnd = r.fileOffset;
+                                }
+                                run.put(r.data);
+                                runEnd += len;
+                            }
+                            if (runStart >= 0) {
+                                run.flip();
+                                writeFully(fc, run, runStart);
+                                run.clear();
+                            }
+                        } catch (IOException e) {
+                            throw new RuntimeException(e);
+                        }
+                    };
+
+                    // Sources run smallest-first, one group at a time: the drain between groups is
+                    // the barrier that guarantees every reverse-candidate offer into a source has
+                    // completed before that source's own nodes read them.
+                    for (int s : l0ProcessOrder) {
+                        List<BatchSpec> batches = buildBatchesForSource(s, 0);
+                        // the largest source scans no other source, but a sparse one still scans itself
+                        boolean walk = exactMode && cellMap != null && candidateStore != null
+                                && (sizeRank[s] < sources.size() - 1 || sparseSource(s)) && !batches.isEmpty();
+                        if (!walk) {
+                            runBatchesWithBackpressure(batches, ecs, submitOne, writeResults);
+                            continue;
+                        }
+                        // Full-precision merge: the batches are in new-ordinal order and a source's live
+                        // nodes are one contiguous range, so a group of consecutive batches is a range of
+                        // new ordinals. The cell walk scans for the whole range before its batches run.
+                        OrdinalMapper m = remappers.get(s);
+                        int range = exactJoinRange(s, 0, 0, 0);
+                        log.info("Cell walk: source {} in ranges of {} nodes (pair budget {} MB{}, query budget {} MB{})", s, range,
+                                 (walkPairBytes > 0 ? walkPairBytes : Math.max(EXACT_JOIN_PAIR_BYTES_MIN, Math.min(EXACT_JOIN_PAIR_BYTES_MAX, Runtime.getRuntime().maxMemory() / 8))) >> 20,
+                                 walkPairBytes > 0 ? " fixed" : " from the heap",
+                                 (walkQueryBytes > 0 ? walkQueryBytes : Math.max(EXACT_JOIN_QUERY_BYTES_MIN, Runtime.getRuntime().maxMemory() / 16)) >> 20,
+                                 walkQueryBytes > 0 ? " fixed" : " from the heap");
+                        int gStart = 0;
+                        while (gStart < batches.size()) {
+                            ExactJoin previous = exactJoin;
+                            exactJoin = null;                       // released before the next walk allocates
+                            if (previous != null) {
+                                // size the next range from the pairs the previous one measured
+                                int next = exactJoinRange(s, previous.n, previous.pairsWalked, previous.maxTargetPairs);
+                                if (next != range) {
+                                    log.info("Cell walk: source {} ranges of {} nodes ({} pairs per node measured)",
+                                             s, next, previous.pairsWalked / Math.max(1, previous.n));
+                                    range = next;
+                                }
+                            }
+                            BatchSpec first = batches.get(gStart);
+                            int lo = m.oldToNew(first.nodes[first.start]);
+                            int gEnd = gStart, hi = lo;
+                            while (gEnd < batches.size()) {
+                                BatchSpec b = batches.get(gEnd);
+                                int last = m.oldToNew(b.nodes[b.end - 1]);
+                                if (gEnd > gStart && last + 1 - lo > range) break;
+                                hi = last + 1;
+                                gEnd++;
+                            }
+                            exactJoin = cellWalk(s, lo, hi, params.searchTopK);
+                            runBatchesWithBackpressure(batches.subList(gStart, gEnd), ecs, submitOne, writeResults);
+                            gStart = gEnd;
+                        }
+                        exactJoin = null;
+                    }
+                }
+
+                log.info("Cross-link: {} of {} nodes took the retained-only fast path", retainedOnlyNodes.get(), maxOrdinal + 1);
+                if (cellMap != null) {
+                    long scans = Math.max(1, cellScans.sum());
+                    if (finalizeRowsRequested.sum() > 0) {
+                        log.info("Finalize prefetch: {} rows touched for {} requested ({}x shared)",
+                                 finalizeRowsTouched.sum(), finalizeRowsRequested.sum(),
+                                 String.format("%.2f", finalizeRowsRequested.sum() / (double) finalizeRowsTouched.sum()));
+                    }
+                    log.info("Cell join: {} scans, {} codes/scan", cellScans.sum(), cellCodesScanned.sum() / scans);
+                }
+                reverseCandidates.close();
+                reverseCandidates = null; // consumed entirely within L0; scales with node count
+                if (candidateStore != null) {
+                    log.info("Wide code: {} candidate scores from the wide cache", l0WideScores.sum());
+                    candidateStore = null;   // the strategy unmaps it with its own cache
+                }
+                if (cellMap != null) {
+                    // the cells served the walk; the upper layers are written from the merged arrays, so the
+                    // hub map's mapping and vectors and the cell tables go before the upper-layer pass
+                    cellMap.close();
+                    cellMap = null;
+                    cellWalkPosition = null;
+                    cellToPosition = null;
+                    cellStart = null;
+                }
+                writer.offsetAfterInline();
+
+            } else {
+                log.info("Writing merged upper layer {} ({} nodes)", level, mergedSrc[level].length);
+                writeMergedUpperLayer(writer, level, params, threadLocalScratch);
+            }
+        }
+
+        for (Scratch sc : openedScratch) sc.close();
+        threadLocalScratch.remove();
+    }
+
+    /**
+     * Divides nodes at a given level across all source indexes into processing batches
+     * for parallel execution. Each batch contains a subset of nodes from one source.
+     */
+    private List<BatchSpec> buildBatches(int level) {
+        List<BatchSpec> batches = new ArrayList<>();
+        for (int s = 0; s < sources.size(); ++s) {
+            batches.addAll(buildBatchesForSource(s, level));
+        }
+        return batches;
+    }
+
+    /**
+     * Builds the processing batches for one source at one level. Split out from
+     * {@link #buildBatches} so L0 compaction can run sources one group at a time in size order
+     * (the cross-link barrier); upper layers still batch all sources together.
+     */
+    private List<BatchSpec> buildBatchesForSource(int s, int level) {
+        List<BatchSpec> batches = new ArrayList<>();
+        var source = sources.get(s);
+        if (level > source.getMaxLevel()) return batches;
+
+        int[] nodes;
+        int numNodes;
+        if (level == 0) {
+            // Enumerate live L0 nodes from the in-memory liveNodes bitset. source.getNodes(0)
+            // seeks and reads a 4-byte id at every node's record offset — a full random disk
+            // scan of the source (the dominant cost of full-precision compaction disk-cold,
+            // where nothing warms the cache first), and unnecessary: liveNodes already holds
+            // exactly the live ordinals. Also skips dead nodes up front rather than in-batch.
+            FixedBitSet alive = liveNodes.get(s);
+            numNodes = alive.cardinality();
+            nodes = new int[numNodes];
+            int i = 0;
+            for (int n = alive.nextSetBit(0);
+                 n != DocIdSetIterator.NO_MORE_DOCS;
+                 n = alive.nextSetBit(n + 1)) {
+                nodes[i++] = n;
+            }
+            if (numNodes > 1) {
+                // Merged ordinals were assigned in region order, so ordering processing by
+                // new ordinal gives locality AND sequential record writes at once.
+                OrdinalMapper mapper = remappers.get(s);
+                long[] keyed = new long[numNodes];
+                for (int k = 0; k < numNodes; k++) {
+                    keyed[k] = ((long) mapper.oldToNew(nodes[k]) << 32) | (nodes[k] & 0xFFFFFFFFL);
+                }
+                Arrays.parallelSort(keyed);
+                for (int k = 0; k < numNodes; k++) {
+                    nodes[k] = (int) keyed[k];
+                }
+                log.info("L0 source {}: {} nodes in region-ordinal order", s, numNodes);
+            }
+        } else {
+            NodesIterator sourceNodes = source.getNodes(level);
+            numNodes = sourceNodes.size();
+            nodes = new int[numNodes];
+            int i = 0;
+            while (sourceNodes.hasNext()) {
+                nodes[i++] = sourceNodes.next();
+            }
+        }
+
+        int numBatches = max(TARGET_BATCHES_PER_SOURCE, (numNodes + TARGET_NODES_PER_BATCH - 1) / TARGET_NODES_PER_BATCH);
+        if (numBatches > numNodes) numBatches = numNodes;
+        int batchSize = numBatches == 0 ? 0 : (numNodes + numBatches - 1) / numBatches;
+        for (int b = 0; b < numBatches; ++b) {
+            int start = min(numNodes, batchSize * b);
+            int end = min(numNodes, batchSize * (b + 1));
+            batches.add(new BatchSpec(s, nodes, start, end));
+        }
+
+        return batches;
+    }
+
+    /**
+     * Processes a batch of base layer (level 0) nodes from one source index. For each live node,
+     * gathers candidates from all sources, applies diversity selection, and creates write results
+     * containing the full node record data.
+     */
+   private List<WriteResult> computeBaseBatch(CompactWriter writer,
+                                              BatchSpec bs,
+                                              Scratch scratch,
+                                              CompactionParams params) throws IOException {
+
+        List<WriteResult> out = new ArrayList<>(bs.end - bs.start);
+        // Each node's own record read (adjacency + vector) is fully predictable, while search reads
+        // into other sources are data-dependent and stay demand-faulted. A batch whose ordinals form
+        // a dense range is streamed into the page cache whole; a region-ordered batch is scattered
+        // over the source, so its records are announced one at a time, a fixed number of nodes ahead
+        // of their read, which keeps the device busy instead of faulting them in one by one.
+        int lo = Integer.MAX_VALUE, hi = -1;
+        for (int i = bs.start; i < bs.end; i++) {
+            lo = Math.min(lo, bs.nodes[i]);
+            hi = Math.max(hi, bs.nodes[i]);
+        }
+        final boolean scattered = bs.end > bs.start && (long) hi - lo > 8L * (bs.end - bs.start);
+        if (bs.end > bs.start && !scattered) {
+            sources.get(bs.sourceIdx).prefetchL0Records(lo, hi);
+        } else if (scattered && recordAnnounceAhead > 0) {
+            OnDiskGraphIndex source = sources.get(bs.sourceIdx);
+            FixedBitSet live = liveNodes.get(bs.sourceIdx);
+            for (int i = bs.start; i < Math.min(bs.end, bs.start + recordAnnounceAhead); i++) {
+                if (live.get(bs.nodes[i])) source.announceL0Record(bs.nodes[i]);
+            }
+        }
+
+        // Warming is worth ~2x above the memory budget and pure cost below it, so it follows the
+        // same decision as the diversity representation.
+        if (exactMode && candidateStore != null && exactJoin != null) {
+            prefetchFinalizeRows(bs, scratch);
+        }
+        for (int i = bs.start; i < bs.end; i++) {
+            int node = bs.nodes[i];
+            if (!liveNodes.get(bs.sourceIdx).get(node)) continue;
+            if (scattered && recordAnnounceAhead > 0 && i + recordAnnounceAhead < bs.end) {
+                int ahead = bs.nodes[i + recordAnnounceAhead];
+                if (liveNodes.get(bs.sourceIdx).get(ahead)) sources.get(bs.sourceIdx).announceL0Record(ahead);
+            }
+            out.add(processBaseNode(node, bs.sourceIdx, scratch, writer, params));
+        }
+
+        return out;
+    }
+
+
+
+
+
+    /**
+     * Processes a batch of upper layer nodes from one source index. Similar to base layer
+     * processing but returns only ordinal, neighbors, and optional PQ code (no inline vectors).
+     */
+    /** One merged upper-layer node in source ids. */
+    private static final class RawUpper {
+        final int src, node; final int[] nbrSrc, nbrNode;
+        RawUpper(int src, int node, SelectedVecCache c) {
+            this.src = src; this.node = node;
+            this.nbrSrc = Arrays.copyOf(c.sourceIdx, c.size); this.nbrNode = Arrays.copyOf(c.nodes, c.size);
+        }
+    }
+
+    private ThreadLocal<Scratch> newScratchLocal(ProductQuantization pq) {
+        int maxCandidateSize = maxCandidateSize(), scratchDegree = scratchDegree();
+        return ThreadLocal.withInitial(() -> new Scratch(maxCandidateSize, scratchDegree, dimension, sources, pq));
+    }
+
+    private int maxUpperDegree() {
+        int maxUpperDegree = 0;
+        for (int level = 1; level < maxDegrees.size(); level++) maxUpperDegree = Math.max(maxUpperDegree, maxDegrees.get(level));
+        return maxUpperDegree;
+    }
+
+    /** The search's top-K per source for a level of the given degree. */
+    private int searchTopK(int degree) {
+        return Math.max(MIN_SEARCH_TOP_K, ((degree + sources.size() - 1) / sources.size()) * SEARCH_TOP_K_MULTIPLIER);
+    }
+
+    /**
+     * The most candidates a node gathers at any level: every other source can contribute a search's
+     * worth, the node's own too when a source is joined with itself (a sparse source of a shard), on
+     * top of the edges it retained and, at level 0, the reverse candidates.
+     */
+    private int maxCandidateSize() {
+        int maxUpperDegree = maxUpperDegree();
+        int level0Targets = anySparseSource() ? sources.size() : sources.size() - 1;
+        int base = searchTopK(maxDegrees.get(0)) * level0Targets + maxDegrees.get(0) + REVERSE_CANDIDATE_SLOTS;
+        int upper = maxUpperDegree == 0 ? 0 : searchTopK(maxUpperDegree) * sources.size() + maxUpperDegree;
+        return Math.max(base, upper);
+    }
+
+    private int scratchDegree() {
+        return Math.max(maxDegrees.get(0), Math.max(1, maxUpperDegree()));
+    }
+
+    /**
+     * Merges the upper layers (levels 1 and above): every live node keeps its retained same-source
+     * edges, gains candidates from a greedy descent and a beam search in each other source, and
+     * keeps a diversity-selected set. This runs before the ordinals exist because the merged
+     * level 1 defines the cells; results stay in source ids, {@link #buildMergedHubMap} turns them
+     * into the cell hierarchy and {@link #writeMergedUpperLayer} writes them after level 0.
+     */
+    private void mergeUpperLayers(ProductQuantization pq, boolean fusedPQEnabled)
+            throws IOException, ExecutionException, InterruptedException {
+        long t0 = System.nanoTime();
+        int maxLevel = maxDegrees.size() - 1;
+        mergedSrc = new int[maxLevel + 1][]; mergedNode = new int[maxLevel + 1][];
+        mergedNbrSrc = new int[maxLevel + 1][]; mergedNbrNode = new int[maxLevel + 1][];
+        ThreadLocal<Scratch> local = newScratchLocal(pq);
+        List<Scratch> opened = Collections.synchronizedList(new ArrayList<>());
+        for (int level = 1; level <= maxLevel; level++) {
+            final int lvl = level;
+            int searchTopK = searchTopK(maxDegrees.get(level));
+            CompactionParams params = new CompactionParams(fusedPQEnabled, fusedPQEnabled, searchTopK, pq);
+            List<RawUpper> all = Collections.synchronizedList(new ArrayList<>());
+            ExecutorCompletionService<List<RawUpper>> ecs = new ExecutorCompletionService<>(executor);
+            runBatchesWithBackpressure(buildBatches(level), ecs, bs -> ecs.submit(() -> {
+                Scratch scratch = local.get();
+                if (!opened.contains(scratch)) opened.add(scratch);
+                List<RawUpper> out = new ArrayList<>(bs.end - bs.start);
+                for (int i = bs.start; i < bs.end; i++) {
+                    int node = bs.nodes[i];
+                    if (!liveNodes.get(bs.sourceIdx).get(node)) continue;
+                    var sourceView = (OnDiskGraphIndex.View) scratch.gs[bs.sourceIdx].getView();
+                    sourceView.getVectorInto(node, scratch.baseVec, 0);
+                    int candSize = gatherCandidates(node, lvl, bs.sourceIdx, scratch, scratch.baseVec, params);
+                    int[] order = IntStream.range(0, candSize).toArray();
+                    sortOrderByScoreDesc(order, scratch.candScore, candSize);
+                    var selected = scratch.selectedCache;
+                    new CompactVamanaDiversityProvider(similarityFunction, DIVERSITY_ALPHA).retainDiverse(
+                            scratch.candSrc, scratch.candNode, scratch.candScore, order, candSize,
+                            maxDegrees.get(lvl), selected, scratch.tmpVec, scratch.gs);
+                    out.add(new RawUpper(bs.sourceIdx, node, selected));
+                }
+                return out;
+            }), all::addAll);
+            // ascending (source, node): the hub map resolves ids by binary search over this order, and the
+            // order fixes the level-1 positions, so the cells and region ordinals no longer depend on which
+            // batch finished first
+            all.sort(Comparator.comparingInt((RawUpper r) -> r.src).thenComparingInt(r -> r.node));
+            int n = all.size(), degree = maxDegrees.get(level);
+            int[] ms = new int[n], mn = new int[n], ns = new int[n * degree], nn = new int[n * degree];
+            Arrays.fill(ns, -1); Arrays.fill(nn, -1);
+            for (int i = 0; i < n; i++) {
+                RawUpper r = all.get(i);
+                ms[i] = r.src; mn[i] = r.node;
+                for (int j = 0; j < r.nbrSrc.length && j < degree; j++) { ns[i * degree + j] = r.nbrSrc[j]; nn[i * degree + j] = r.nbrNode[j]; }
+            }
+            mergedSrc[level] = ms; mergedNode[level] = mn; mergedNbrSrc[level] = ns; mergedNbrNode[level] = nn;
+            log.info("Merged upper layer {}: {} nodes", level, n);
+        }
+        for (Scratch sc : opened) sc.close();
+        log.info("Upper layers merged in {} ms", (System.nanoTime() - t0) / 1_000_000);
+        // A sharded merge keeps a slice of the sources' nodes, and the slice may hold none of the
+        // nodes of the top levels: drop every merged level that came out empty, so the output's
+        // hierarchy ends at the highest level that still has a live node.
+        int top = maxLevel;
+        while (top > 0 && mergedSrc[top].length == 0) top--;
+        if (top < maxLevel) {
+            log.info("Levels {}..{} have no live node; the merged graph tops out at level {}", top + 1, maxLevel, top);
+            maxDegrees = new ArrayList<>(maxDegrees.subList(0, top + 1));
+            mergedSrc = Arrays.copyOf(mergedSrc, top + 1);
+            mergedNode = Arrays.copyOf(mergedNode, top + 1);
+            mergedNbrSrc = Arrays.copyOf(mergedNbrSrc, top + 1);
+            mergedNbrNode = Arrays.copyOf(mergedNbrNode, top + 1);
+        }
+    }
+
+    /**
+     * The merged upper layers as a {@link HubMap}. Node ids are per-source offsets
+     * ({@code idOffset[src] + node}) so every source's nodes share one id space. The level-1 vectors
+     * go to a file beside the output and are mapped read-only; the levels above stay on the heap.
+     */
+    private HubMap buildMergedHubMap() throws IOException {
+        long t0 = System.nanoTime();
+        int numSources = sources.size();
+        int[] idOffset = new int[numSources + 1];
+        for (int s = 0; s < numSources; s++) idOffset[s + 1] = idOffset[s] + sources.get(s).getIdUpperBound();
+        int topLevel = maxDegrees.size() - 1;
+        HubMap h = new HubMap(topLevel, similarityFunction, dimension);
+        int[] entry = resolveEntryNodeSource();
+        h.entryNode = idOffset[entry[0]] + entry[1];
+        for (int level = 1; level <= topLevel; level++) {
+            int[] ms = mergedSrc[level], mn = mergedNode[level];
+            int n = ms.length, degree = maxDegrees.get(level);
+            int[] nodes = new int[n];
+            for (int i = 0; i < n; i++) nodes[i] = idOffset[ms[i]] + mn[i];
+            for (int i = 1; i < n; i++) if (nodes[i] <= nodes[i - 1]) throw new IllegalStateException("merged level " + level + " is not in ascending id order");
+            h.nodes[level] = nodes;
+            h.degree[level] = degree;
+            // adjacency as positions in the level: a neighbour absent from the level (-1) ends the row, as
+            // the merged rows are written; resolved once here, in parallel, so the beams walk positions
+            final int[] adj = new int[n * degree];
+            final int[] ns = mergedNbrSrc[level], nn = mergedNbrNode[level];
+            {
+                int rows = Math.max(1024, n / (4 * taskWindowSize) + 1);
+                List<Callable<Void>> resolve = new ArrayList<>();
+                for (int from = 0; from < n; from += rows) {
+                    final int lo = from, hi = Math.min(n, from + rows);
+                    resolve.add(() -> {
+                        for (int i = lo; i < hi; i++) {
+                            int w = i * degree;
+                            for (int j = 0; j < degree; j++) {
+                                int e = i * degree + j;
+                                if (ns[e] < 0) break;
+                                int at = Arrays.binarySearch(nodes, idOffset[ns[e]] + nn[e]);
+                                if (at >= 0) adj[w++] = at;
+                            }
+                            for (; w < (i + 1) * degree; w++) adj[w] = -1;
+                        }
+                        return null;
+                    });
+                }
+                joinAll(resolve);
+            }
+            final boolean mapped = level == 1;   // level 1: vectors to a file instead of the heap
+            if (!mapped && (long) n * dimension > Integer.MAX_VALUE - 8) throw new IllegalStateException("merged hub map: level " + level + " too large");
+            final VectorFloat<?> levelVectors = mapped ? null : vectorTypeSupport.createFloatVector(n * dimension);
+            final float[] levelNorms = h.cosine ? new float[n] : null;
+            final Path file = mapped ? Files.createTempFile(spillParent, "hub-level1-", ".vec") : null;
+            final FileChannel fc = mapped ? FileChannel.open(file, StandardOpenOption.WRITE) : null;
+            final int rowBytes = 4 * dimension;
+            int chunk = Math.max(1024, n / (4 * taskWindowSize) + 1);
+            List<Callable<Void>> tasks = new ArrayList<>();
+            for (int from = 0; from < n; from += chunk) {
+                final int lo = from, hi = Math.min(n, from + chunk);
+                tasks.add(() -> {
+                    OnDiskGraphIndex.View[] views = new OnDiskGraphIndex.View[numSources];
+                    VectorFloat<?> vec = vectorTypeSupport.createFloatVector(dimension);
+                    ByteBuffer buf = mapped ? ByteBuffer.allocateDirect((hi - lo) * rowBytes).order(ByteOrder.nativeOrder()) : null;
+                    FloatBuffer rows = mapped ? buf.asFloatBuffer() : null;
+                    try {
+                        for (int i = lo; i < hi; i++) {
+                            int src = ms[i];
+                            if (views[src] == null) views[src] = sources.get(src).getView();
+                            views[src].getVectorInto(mn[i], vec, 0);
+                            if (levelNorms != null) levelNorms[i] = (float) Math.sqrt(VectorUtil.dotProduct(vec, vec));
+                            if (!mapped) {
+                                levelVectors.copyFrom(vec, 0, i * dimension, dimension);
+                                continue;
+                            }
+                            for (int d = 0; d < dimension; d++) rows.put(vec.get(d));
+                        }
+                        if (mapped) {
+                            long at = (long) lo * rowBytes;
+                            while (buf.hasRemaining()) at += fc.write(buf, at);
+                        }
+                    } finally {
+                        for (var v : views) if (v != null) v.close();
+                    }
+                    return null;
+                });
+            }
+            joinAll(tasks);
+            h.adjacency[level] = adj;
+            h.vectors[level] = levelVectors;
+            h.norms[level] = levelNorms;
+            if (mapped) {
+                fc.close();
+                h.mapLevel1(file);
+            }
+        }
+        log.info("Merged cells: hub map from the merged upper layers (levels 1..{}, {} level-1 nodes, {} MB of level-1 vectors mapped) in {} ms",
+                 topLevel, h.nodes[1].length, ((long) h.nodes[1].length * 4 * dimension) >> 20, (System.nanoTime() - t0) / 1_000_000);
+        return h;
+    }
+
+    /** Writes a merged upper layer, remapping source ids to output ordinals. */
+    private void writeMergedUpperLayer(CompactWriter writer, int level, CompactionParams params, ThreadLocal<Scratch> local)
+            throws IOException, ExecutionException, InterruptedException {
+        int[] ms = mergedSrc[level], mn = mergedNode[level], ns = mergedNbrSrc[level], nn = mergedNbrNode[level];
+        int n = ms.length, degree = maxDegrees.get(level);
+        int[] idx = IntStream.range(0, n).toArray();
+        List<BatchSpec> batches = new ArrayList<>();
+        int chunk = Math.max(256, n / (4 * taskWindowSize) + 1);
+        for (int from = 0; from < n; from += chunk) batches.add(new BatchSpec(-1, idx, from, Math.min(n, from + chunk)));
+        ExecutorCompletionService<List<UpperLayerWriteResult>> ecs = new ExecutorCompletionService<>(executor);
+        runBatchesWithBackpressure(batches, ecs, bs -> ecs.submit(() -> {
+            Scratch scratch = local.get();
+            List<UpperLayerWriteResult> out = new ArrayList<>(bs.end - bs.start);
+            for (int i = bs.start; i < bs.end; i++) {
+                var selected = scratch.selectedCache;
+                selected.reset();
+                for (int j = 0; j < degree && ns[i * degree + j] >= 0; j++) {
+                    selected.sourceIdx[selected.size] = ns[i * degree + j];
+                    selected.nodes[selected.size] = remappers.get(ns[i * degree + j]).oldToNew(nn[i * degree + j]);
+                    selected.size++;
+                }
+                ByteSequence<?> pqCode = null;
+                if (params.fusedPQEnabled && level == 1) {
+                    ((OnDiskGraphIndex.View) scratch.gs[ms[i]].getView()).getVectorInto(mn[i], scratch.baseVec, 0);
+                    pqCode = maybeEncodePQ(level, scratch, params);
+                }
+                out.add(new UpperLayerWriteResult(remappers.get(ms[i]).oldToNew(mn[i]), selected, pqCode));
+            }
+            return out;
+        }), results -> {
+            try {
+                for (UpperLayerWriteResult r : results) writer.writeUpperLayerNode(level, r.ordinal, r.neighbors, r.pqCode);
+            } catch (IOException e) { throw new RuntimeException(e); }
+        });
+    }
+
+    /**
+     * Processes a single base layer node: retrieves its vector, gathers diverse candidates from
+     * all sources, selects best neighbors using diversity criteria, remaps ordinals, and returns
+     * the complete write result for this node.
+     */
+    private WriteResult processBaseNode(
+            int node,
+            int sourceIdx,
+            Scratch scratch,
+            CompactWriter writer,
+            CompactionParams params
+    ) throws IOException {
+
+        // Retained-only fast path: a node of the largest source runs no forward searches, so if
+        // it also received no reverse candidates its candidate set is exactly its retained
+        // same-source edges — and re-running diversity over an already-diversity-selected edge
+        // set is a fixed point. Skip selection entirely: filter dead neighbors, remap, write.
+        // A sparse source is exempt: its retained edges are a remnant, and it gathers same-source
+        // candidates of its own.
+        if (reverseCandidates != null && sizeRank[sourceIdx] == sources.size() - 1 && !sparseSource(sourceIdx)) {
+            int newOrdinal = remappers.get(sourceIdx).oldToNew(node);
+            if (reverseCandidates.countAt(sourceIdx, newOrdinal) == 0) {
+                return writeRetainedOnlyRecord(node, sourceIdx, newOrdinal, scratch, writer);
+            }
+        }
+
+        var sourceView = (OnDiskGraphIndex.View) scratch.gs[sourceIdx].getView();
+        sourceView.getVectorInto(node, scratch.baseVec, 0);
+        if (candidateStore != null && scratch.wide == null) {
+            scratch.wide = new WideDecoder(candidateStore, exactMode, pqWide, dimension);
+        }
+        // Guarded separately from `wide`: the cell walk creates `wide` on its own threads, so a
+        // shared guard would leave those threads without a diversity decoder.
+        if (scratch.wide != null && scratch.div == null) {
+            // candidate vectors for the diversity test come from the compact code,
+            // never from the vector store; every score the merge uses is still exact.
+            scratch.div = diversityCache != null ? new WideDecoder(diversityCache, false, pqWide, dimension) : scratch.wide;
+        }
+
+        int candSize = gatherCandidates(node, 0, sourceIdx, scratch, scratch.baseVec, params);
+
+        int[] order = IntStream.range(0, candSize).toArray();
+        sortOrderByScoreDesc(order, scratch.candScore, candSize);
+
+        var selected = scratch.selectedCache;
+
+        var provider = new CompactVamanaDiversityProvider(similarityFunction, DIVERSITY_ALPHA);
+        if (candidateStore != null) {
+            provider.withCandidateVectors(scratch.candVec, scratch.candHasVec);
+            if (diversityCache != null) {
+                provider.withCodedCandidateVectors(scratch.baseVec);
+            }
+        }
+        provider.retainDiverse(
+                scratch.candSrc,
+                scratch.candNode,
+                scratch.candScore,
+                order,
+                candSize,
+                maxDegrees.get(0),
+                selected,
+                scratch.tmpVec,
+                scratch.gs
+        );
+
+        // Reverse-edge propagation (as in single-graph Vamana insertion): this node offers
+        // itself only to the cross-source neighbors its own selection KEPT, not to everything
+        // its searches surfaced. Each target folds its accumulated reverse edges into its one
+        // diversity pass when its group runs; scores are exact and similarity is symmetric, so
+        // the offer carries the score the target's own search would have computed.
+        if (reverseCandidates != null) {
+            for (int k = 0; k < selected.size; k++) {
+                int ssrc = selected.sourceIdx[k];
+                if (ssrc != sourceIdx && sizeRank[ssrc] > sizeRank[sourceIdx]) {
+                    int targetNew = remappers.get(ssrc).oldToNew(selected.nodes[k]);
+                    reverseCandidates.offer(ssrc, targetNew, sourceIdx, node, selected.scores[k]);
+                }
+            }
+        }
+
+        // remap
+        for (int k = 0; k < selected.size; k++) {
+            selected.nodes[k] =
+                    remappers.get(selected.sourceIdx[k])
+                            .oldToNew(selected.nodes[k]);
+        }
+
+        int newOrdinal = remappers.get(sourceIdx).oldToNew(node);
+
+        return writer.writeInlineNodeRecord(
+                newOrdinal,
+                scratch.baseVec,
+                selected,
+                scratch.pqCode
+        );
+    }
+
+    /**
+     * Writes a record whose neighbors are the node's live retained same-source edges, unchanged
+     * and in their original order — used by the retained-only fast path. Neighbor vectors are
+     * read only when the writer must encode per-neighbor codes from them (fused output without
+     * the pre-encoded code cache); otherwise the only read is the node's own record.
+     */
+    private WriteResult writeRetainedOnlyRecord(int node, int sourceIdx, int newOrdinal,
+                                                Scratch scratch, CompactWriter writer) throws IOException {
+        var view = (OnDiskGraphIndex.View) scratch.gs[sourceIdx].getView();
+        view.getVectorInto(node, scratch.baseVec, 0);
+        FixedBitSet alive = liveNodes.get(sourceIdx);
+        OrdinalMapper mapper = remappers.get(sourceIdx);
+        var selected = scratch.selectedCache;
+        selected.reset();
+        boolean needVecs = writer.needsNeighborVectors();
+
+        var it = view.getNeighborsIterator(0, node);
+        while (it.hasNext()) {
+            int nb = it.nextInt();
+            if (!alive.get(nb)) continue;
+            if (needVecs) {
+                view.getVectorInto(nb, scratch.tmpVec, 0);
+                selected.add(sourceIdx, view, nb, 0f, scratch.tmpVec);
+            } else {
+                selected.sourceIdx[selected.size] = sourceIdx;
+                selected.views[selected.size] = view;
+                selected.nodes[selected.size] = nb;
+                selected.scores[selected.size] = 0f;
+                selected.size++;
+            }
+        }
+        for (int k = 0; k < selected.size; k++) {
+            selected.nodes[k] = mapper.oldToNew(selected.nodes[k]);
+        }
+        retainedOnlyNodes.incrementAndGet();
+        return writer.writeInlineNodeRecord(newOrdinal, scratch.baseVec, selected, scratch.pqCode);
+    }
+
+    /**
+     * Encodes a vector using Product Quantization if enabled and the level is 1.
+     * Returns null otherwise.
+     */
+    private ByteSequence<?> maybeEncodePQ(int level, Scratch scratch, CompactionParams params) {
+        if (!params.fusedPQEnabled || level != 1) {
+            return null;
+        }
+
+        scratch.pqCode.zero();
+        params.pq.encodeTo(scratch.baseVec, scratch.pqCode);
+        return scratch.pqCode.copy();
+    }
+
+    /**
+     * Collects neighbor candidates for a node from all source indexes. For the source containing
+     * the node, uses existing neighbors; for other sources, performs graph search. Returns the
+     * total number of candidates gathered.
+     */
+    private int gatherCandidates(
+            int node,
+            int level,
+            int sourceIdx,
+            Scratch scratch,
+            VectorFloat<?> baseVec,
+            CompactionParams params
+    ) {
+        int candSize = 0;
+        Arrays.fill(scratch.candHasVec, false);
+
+        for (int ss = 0; ss < sources.size(); ss++) {
+            var searchView = (OnDiskGraphIndex.View) scratch.gs[ss].getView();
+            var indexAlive = liveNodes.get(ss);
+
+            if (ss == sourceIdx) {
+                int retainedStart = candSize;
+                candSize = gatherFromSameSource(node, level, ss, searchView, indexAlive,
+                                                 baseVec, scratch, candSize);
+                if (sparseSource(ss)) {
+                    candSize = gatherSameSourceReplacements(node, level, ss, searchView, indexAlive,
+                                                            baseVec, scratch, retainedStart, candSize, params);
+                }
+            } else {
+                // Cross-link: at L0 only search LARGER sources; candidates from smaller sources
+                // arrive via reverse propagation (consumed below), offered when those sources'
+                // nodes searched this one in an earlier group.
+                if (level == 0 && reverseCandidates != null && sizeRank[ss] < sizeRank[sourceIdx]) {
+                    continue;
+                }
+                candSize = gatherFromOtherSource(node, sourceIdx, level, ss, searchView, indexAlive,
+                                                  baseVec, scratch, candSize, params);
+            }
+        }
+
+        if (level == 0 && reverseCandidates != null) {
+            int offersStart = candSize;
+            candSize = reverseCandidates.appendTo(sourceIdx, remappers.get(sourceIdx).oldToNew(node),
+                    scratch.candSrc, scratch.candNode, scratch.candScore, candSize);
+            // Offers carry the exact score their offerer computed; their pairwise diversity checks
+            // run on codes, so their vectors are never read here.
+            if (exactMode && candidateStore != null) {
+                // full-precision merge: the offerer's vector comes from the vector store
+                for (int i = offersStart; i < candSize; i++) {
+                    scratch.div.decode(remappers.get(scratch.candSrc[i]).oldToNew(scratch.candNode[i]), scratch.candVec[i]);
+                    scratch.candHasVec[i] = true;
+                }
+            }
+        }
+
+        return candSize;
+    }
+
+    /**
+     * Gathers candidates from the same source index that contains the node.
+     * Simply iterates through existing neighbors.
+     */
+    private int gatherFromSameSource(int node, int level, int sourceIdx,
+                                     OnDiskGraphIndex.View searchView, FixedBitSet indexAlive,
+                                     VectorFloat<?> baseVec, Scratch scratch, int candSize) {
+        var it = searchView.getNeighborsIterator(level, node);
+        final boolean wide = level == 0 && candidateStore != null;
+        final OrdinalMapper mapper = wide ? remappers.get(sourceIdx) : null;
+        while (it.hasNext()) {
+            int nb = it.nextInt();
+            if (!indexAlive.get(nb)) continue;
+
+            if (wide) {
+                VectorFloat<?> v = scratch.candVec[candSize];
+                scratch.div.decode(mapper.oldToNew(nb), v);
+                scratch.candHasVec[candSize] = true;
+                scratch.candScore[candSize] = similarityFunction.compare(baseVec, v);
+                l0WideScores.increment();
+            } else {
+                searchView.getVectorInto(nb, scratch.tmpVec, 0);
+                scratch.candScore[candSize] = similarityFunction.compare(baseVec, scratch.tmpVec);
+            }
+            scratch.candSrc[candSize] = sourceIdx;
+            scratch.candNode[candSize] = nb;
+            candSize++;
+        }
+        return candSize;
+    }
+
+
+    /**
+     * Same-source candidates beyond the retained edges, for a source whose live nodes are a
+     * minority (see {@link #sparseSource}): most of the node's own edges point at dead nodes, so its
+     * source is searched like any other one - the cell walk's results for the source as its own
+     * target at level 0, a graph search elsewhere. The node itself and the neighbours it already
+     * retained are dropped from what the search returns.
+     */
+    private int gatherSameSourceReplacements(int node, int level, int sourceIdx,
+                                             OnDiskGraphIndex.View searchView, FixedBitSet indexAlive,
+                                             VectorFloat<?> baseVec, Scratch scratch,
+                                             int retainedStart, int candSize, CompactionParams params) {
+        final int from = candSize;
+        if (level == 0 && cellMap != null) {
+            ExactJoin j = exactJoin;
+            if (j == null || j.targetIndex[sourceIdx] < 0) {
+                return candSize;
+            }
+            candSize = gatherFromCellWalk(node, sourceIdx, sourceIdx, scratch, candSize);
+        } else {
+            candSize = gatherFromOtherSource(node, sourceIdx, level, sourceIdx, searchView, indexAlive,
+                                             baseVec, scratch, candSize, params);
+        }
+        int kept = from;
+        for (int i = from; i < candSize; i++) {
+            int cand = scratch.candNode[i];
+            boolean drop = cand == node;
+            for (int r = retainedStart; r < from && !drop; r++) {
+                drop = scratch.candNode[r] == cand;
+            }
+            if (drop) continue;
+            if (kept != i) {
+                scratch.candSrc[kept] = scratch.candSrc[i];
+                scratch.candNode[kept] = cand;
+                scratch.candScore[kept] = scratch.candScore[i];
+                // the decoded vectors are per-slot buffers: swap them, never alias two slots
+                VectorFloat<?> v = scratch.candVec[kept];
+                scratch.candVec[kept] = scratch.candVec[i];
+                scratch.candVec[i] = v;
+                scratch.candHasVec[kept] = scratch.candHasVec[i];
+            }
+            kept++;
+        }
+        for (int i = kept; i < candSize; i++) {
+            scratch.candHasVec[i] = false;   // the slots past the kept candidates are free again
+        }
+        return kept;
+    }
+
+    /**
+     * Level 0: hands a node the cell walk's results for one target - the best {@code searchTopK}
+     * ordinals with their exact scores - decoding each candidate's diversity representation as it
+     * goes. A node without a cell has no walk results and simply gets no candidates from this target.
+     */
+    private int gatherFromCellWalk(int node, int nodeSourceIdx, int targetIdx, Scratch scratch, int candSize) {
+            // full-precision merge: the survivors were computed for this node's range by the cell walk
+            ExactJoin j = exactJoin;
+            int slot = j.slot(targetIdx, remappers.get(nodeSourceIdx).oldToNew(node));
+            OrdinalMapper mapper = remappers.get(targetIdx);
+            int base = slot * j.k, size = j.sizes[slot];
+            for (int e = 0; e < size; e++) {
+                long key = j.heaps[base + e];
+                int newOrd = (int) key;
+                scratch.candSrc[candSize] = targetIdx;
+                scratch.candNode[candSize] = mapper.newToOld(newOrd);
+                scratch.div.decode(newOrd, scratch.candVec[candSize]);
+                scratch.candHasVec[candSize] = true;
+                scratch.candScore[candSize] = Float.intBitsToFloat((int) (key >>> 32));
+                l0WideScores.increment();
+                candSize++;
+            }
+        return candSize;
+    }
+
+    /**
+     * Gathers candidates from a different source index via graph search.
+     */
+    private int gatherFromOtherSource(int node, int nodeSourceIdx, int level, int sourceIdx,
+                                      OnDiskGraphIndex.View searchView, FixedBitSet indexAlive,
+                                      VectorFloat<?> baseVec, Scratch scratch, int candSize,
+                                      CompactionParams params) {
+        if (level == 0 && cellMap != null) {
+            return gatherFromCellWalk(node, nodeSourceIdx, sourceIdx, scratch, candSize);
+        }
+
+        SearchScoreProvider ssp = buildCrossSourceScoreProvider(
+                params.compressedPrecision,
+                sources.get(sourceIdx),
+                sourceIdx,
+                searchView,
+                baseVec,
+                scratch.tmpVec,
+                similarityFunction,
+                params.pq
+        );
+
+        if (level == 0) {
+            // rerankK = searchTopK: a wider beam's extra candidates are largely pruned by
+            // diversity selection, so the doubled approximate-phase cost buys almost no recall.
+            SearchResult results = scratch.gs[sourceIdx].search(
+                    ssp, params.searchTopK, params.searchTopK, 0f, 0f, indexAlive
+            );
+            for (var r : results.getNodes()) {
+                scratch.candSrc[candSize] = sourceIdx;
+                scratch.candNode[candSize] = r.node;
+                scratch.candScore[candSize] =
+                        params.compressedPrecision
+                                ? rescore(searchView, r.node, baseVec, scratch.tmpVec)
+                                : r.score;
+                candSize++;
+            }
+        } else {
+            var entry = searchView.entryNode();
+            if (level > entry.level) return candSize;
+            scratch.gs[sourceIdx].initializeInternal(ssp, entry, Bits.ALL);
+
+            // Descend greedily through levels above the target level, so the search at
+            // `level` starts from the best-known region rather than the global entry node.
+            // This mirrors how GraphSearcher.searchInternal navigates the hierarchy.
+            for (int l = entry.level; l > level; l--) {
+                scratch.gs[sourceIdx].searchOneLayer(ssp, 1, 0f, l, Bits.ALL);
+                scratch.gs[sourceIdx].setEntryPointsFromPreviousLayer();
+            }
+
+            scratch.gs[sourceIdx].searchOneLayer(
+                    ssp, params.searchTopK, 0f, level, indexAlive
+            );
+
+            int prev_candSize = candSize;
+            candSize = appendApproximateResults(
+                    scratch.gs[sourceIdx].approximateResults(),
+                    sourceIdx,
+                    scratch,
+                    candSize
+            );
+
+            if (params.compressedPrecision) {
+                for (int i = prev_candSize; i < candSize; i++) {
+                    scratch.candScore[i] = rescore(
+                            searchView,
+                            scratch.candNode[i],
+                            baseVec,
+                            scratch.tmpVec
+                    );
+                }
+            }
+        }
+
+        return candSize;
+    }
+
+
+    /** Cell (walk position) whose ordinal range of {@code source} contains {@code newOrdinal}; -1 if none. */
+    private int cellOf(int source, int newOrdinal) {
+        int[] starts = cellStart[source];
+        int lo = 0, hi = cellCount;   // cells [0, cellCount) plus the no-cell bucket at cellCount
+        while (lo < hi) {
+            int mid = (lo + hi) >>> 1;
+            if (starts[mid + 1] <= newOrdinal) lo = mid + 1; else hi = mid;
+        }
+        return lo < cellCount && starts[lo] <= newOrdinal && newOrdinal < starts[lo + 1] ? lo : -1;
+    }
+
+    /**
+     * Probe cells for the current node: a beam from {@code startPos} over the level-1 graph; every
+     * level-1 node it scores becomes a probe cell, best first. The scan takes cells in that order
+     * until {@link #CELL_BUDGET} codes, so the number of cells probed adapts to their size.
+     */
+    private void selectCellsByBeam(Scratch scratch, HubMap.Scorer scorer, int startPos) {
+        final int stride = cellMap.degree[1];
+        if (scratch.l1Visited == null) {
+            scratch.l1Visited = new IntHashSet(2 * beamScoredCapacity(CELL_PROBE_EF, stride));
+            scratch.scoredKeys = new long[beamScoredCapacity(CELL_PROBE_EF, stride)];
+            scratch.beamState = new BeamState(CELL_PROBE_EF, stride);
+        }
+        long[] scored = scratch.scoredKeys;
+        int scoredCount = beam(cellMap, scorer, 1, startPos, CELL_PROBE_EF, scratch.l1Visited, scored, scratch.beamState);
+        Arrays.sort(scored, 0, scoredCount);
+        int n = 0;
+        for (int i = scoredCount - 1; i >= 0; i--) {   // best first
+            int cell = cellWalkPosition[(int) scored[i]];
+            if (cell >= 0 && cell < cellCount) scratch.probeCells[n++] = cell;
+        }
+        scratch.probeCount = n;
+    }
+
+    /** The best-scoring level-1 position a beam of width {@code ef} from {@code startPos} scores. */
+    private static int bestLevel1ByBeam(HubMap map, HubMap.Scorer scorer, int startPos, int ef, IntHashSet visited, long[] scored, BeamState state) {
+        int count = beam(map, scorer, 1, startPos, ef, visited, scored, state);
+        long best = scored[0];
+        for (int i = 1; i < count; i++) if (scored[i] > best) best = scored[i];
+        return (int) best;
+    }
+
+    /**
+     * Best-first search over {@code level} of the hub map by code score, width {@code ef}. Every
+     * scored position is appended to {@code scored} as a sortable key (score in the high bits,
+     * position in the low 32); returns how many. Replaced beam entries re-enter as unexpanded, so
+     * expansions are capped at {@code 2 * ef} (the beam has converged long before) and the caller
+     * sizes {@code scored} for that bound ({@link #beamScoredCapacity}).
+     */
+    /** A beam's working arrays, allocated once per thread and reused across calls. */
+    static final class BeamState {
+        final int[] pos;
+        final float[] sc;
+        final boolean[] expanded;
+        final int[] nbPos;
+
+        BeamState(int ef, int stride) {
+            pos = new int[ef];
+            sc = new float[ef];
+            expanded = new boolean[ef];
+            nbPos = new int[stride];
+        }
+    }
+
+    private static int beam(HubMap map, HubMap.Scorer scorer, int level, int startPos, int ef, IntHashSet visited, long[] scored, BeamState state) {
+        final int stride = map.degree[level];
+        final int[] adj = map.adjacency[level];   // positions in the level
+        final int[] pos = state.pos;
+        final float[] sc = state.sc;
+        final boolean[] expanded = state.expanded;
+        final int[] nbPos = state.nbPos;
+        visited.clear();
+        int size = 0, scoredCount = 0;
+        int worst = -1;                      // index of the beam's worst entry once the beam is full; -1 = unknown
+        float s0 = scorer.score(level, startPos);
+        pos[0] = startPos; sc[0] = s0; expanded[0] = false; size = 1;
+        visited.add(startPos);
+        scored[scoredCount++] = packScored(s0, startPos);
+        for (int expansions = 0; expansions < 2 * ef; expansions++) {
+            int bi = -1;
+            for (int i = 0; i < size; i++) {
+                if (!expanded[i] && (bi < 0 || sc[i] > sc[bi])) bi = i;
+            }
+            if (bi < 0) break;
+            expanded[bi] = true;
+            int p = pos[bi];
+            // score the unvisited neighbours in one tight loop first (their cache misses overlap)
+            int cnt = 0;
+            for (int j = 0; j < stride; j++) {
+                int np = adj[p * stride + j];
+                if (np < 0) break;
+                if (visited.add(np)) nbPos[cnt++] = np;
+            }
+            for (int j = 0; j < cnt; j++) {
+                scored[scoredCount + j] = packScored(scorer.score(level, nbPos[j]), nbPos[j]);
+            }
+            for (int j = 0; j < cnt; j++) {
+                long key = scored[scoredCount + j];
+                int np = nbPos[j];
+                float score = unpackScore(key);
+                if (size < ef) {
+                    pos[size] = np; sc[size] = score; expanded[size] = false; size++;
+                    worst = -1;
+                } else {
+                    if (worst < 0) {   // the worst slot is cached and only rescanned after it was replaced
+                        worst = 0;
+                        for (int i = 1; i < size; i++) if (sc[i] < sc[worst]) worst = i;
+                    }
+                    if (score > sc[worst]) {
+                        pos[worst] = np; sc[worst] = score; expanded[worst] = false;
+                        worst = -1;
+                    }
+                }
+            }
+            scoredCount += cnt;
+        }
+        return scoredCount;
+    }
+
+    /** Packs a float score into a sortable long key with the position in the low 32 bits. */
+    private static long packScored(float score, int position) {
+        return ((long) NumericUtils.floatToSortableInt(score) << 32) | (position & 0xFFFFFFFFL);
+    }
+
+    private static float unpackScore(long key) {
+        return NumericUtils.sortableIntToFloat((int) (key >>> 32));
+    }
+
+    /** Most positions a beam of width {@code ef} can score: {@code 2 * ef} expansions of {@code stride} plus the seed. */
+    private static int beamScoredCapacity(int ef, int stride) {
+        return 2 * ef * stride + 1;
+    }
+
+    /**
+     * Recomputes the exact similarity between the base vector and a node's vector, used to
+     * rerank approximate PQ-scored search results.
+     */
+    private float rescore(OnDiskGraphIndex.View view,
+                         int node,
+                         VectorFloat<?> base,
+                         VectorFloat<?> tmp) {
+        view.getVectorInto(node, tmp, 0);
+        return similarityFunction.compare(base, tmp);
+    }
+
+    private static void writeFully(FileChannel fc, ByteBuffer b, long pos) throws IOException {
+        while (b.hasRemaining()) {
+            pos += fc.write(b, pos);
+        }
+    }
+
+    /// Executes batches with controlled concurrency using a sliding window approach. Prevents
+    /// overwhelming memory by limiting the number of in-flight tasks while maintaining high
+    /// throughput via the completion service.
+    ///
+    /// Never returns while a submitted batch is still running, including when a batch fails,
+    /// `onComplete` throws, or the caller is interrupted: the caller's cleanup then unmaps the
+    /// hub and code-cache mappings those batches read, and truncates the file under them. After a
+    /// failure the batches already in flight are awaited (their results discarded) and no new
+    /// ones are submitted; an interrupt during that wait is re-asserted once it ends.
+    private <T> void runBatchesWithBackpressure(
+            List<BatchSpec> batches,
+            ExecutorCompletionService<List<T>> ecs,
+            java.util.function.Consumer<BatchSpec> submitOne,
+            java.util.function.Consumer<List<T>> onComplete
+    ) throws InterruptedException, ExecutionException {
+
+        final int total = batches.size();
+        int nextToSubmit = 0;
+        int inFlight = 0;
+
+        // initial window
+        while (inFlight < taskWindowSize && nextToSubmit < total) {
+            submitOne.accept(batches.get(nextToSubmit++));
+            inFlight++;
+        }
+
+        int completed = 0;
+        try {
+            while (completed < total) {
+                Future<List<T>> done = ecs.take();
+                inFlight--;
+                onComplete.accept(done.get());
+
+                completed++;
+
+                if (nextToSubmit < total) {
+                    submitOne.accept(batches.get(nextToSubmit++));
+                    inFlight++;
+                }
+                if (completed % 10 == 0) {
+                    log.debug("Compaction I/O progress: {}/{} batches written to disk", completed, total);
+                }
+            }
+        } finally {
+            boolean interrupted = false;
+            while (inFlight > 0) {
+                try {
+                    Future<List<T>> done = ecs.take();
+                    inFlight--;
+                    done.get();
+                } catch (InterruptedException e) {
+                    interrupted = true;
+                } catch (ExecutionException e) {
+                    // the first failure is already propagating; later ones are dropped
+                }
+            }
+            if (interrupted) {
+                Thread.currentThread().interrupt();
+            }
+        }
+    }
+
+    /**
+     * Appends search results from a NodeQueue to the candidate arrays, returning the updated
+     * candidate count.
+     */
+    private int appendApproximateResults(NodeQueue queue,
+                                         int sourceIdx,
+                                         Scratch scratch,
+                                         int candSize) {
+        final int ss = sourceIdx;
+        final int[] idx = new int[] { candSize };
+
+        queue.foreach((nb, score) -> {
+            scratch.candSrc[idx[0]] = ss;
+            scratch.candNode[idx[0]] = nb;
+            scratch.candScore[idx[0]] = score;
+            idx[0]++;
+        });
+
+        return idx[0];
+    }
+
+    /**
+     * Computes layer metadata for the compacted graph by counting live nodes at each level
+     * across all source indexes.
+     */
+    private List<CommonHeader.LayerInfo> computeLayerInfoFromSources() {
+        int maxLevel = maxDegrees.size() - 1;
+        List<CommonHeader.LayerInfo> layerInfo = new ArrayList<>(maxLevel + 1);
+        for (int level = 0; level <= maxLevel; level++) {
+            int count = 0;
+            for (int s = 0; s < sources.size(); s++) {
+                if (level > sources.get(s).getMaxLevel()) continue;
+                if (level == 0) {
+                    // Every live node is present at level 0 (HNSW base layer invariant),
+                    // so count directly from the in-memory bitset instead of scanning node
+                    // records on disk (which touches gigabytes of source data on a cold cache).
+                    count += liveNodes.get(s).cardinality();
+                } else {
+                    NodesIterator it = sources.get(s).getNodes(level);
+                    FixedBitSet alive = liveNodes.get(s);
+                    while (it.hasNext()) {
+                        int node = it.next();
+                        if (alive.get(node)) count++;
+                    }
+                }
+            }
+            layerInfo.add(new CommonHeader.LayerInfo(count, maxDegrees.get(level)));
+        }
+        return layerInfo;
+    }
+
+    /**
+     * Creates a score provider for searching across different source indexes. Uses approximate
+     * PQ-based scoring if compressedPrecision is enabled, otherwise uses exact scoring.
+     */
+    private SearchScoreProvider buildCrossSourceScoreProvider(boolean compressedPrecision,
+                                                              OnDiskGraphIndex searchSource,
+                                                              int searchSourceIdx,
+                                                              OnDiskGraphIndex.View searchView,
+                                                              VectorFloat<?> baseVec,
+                                                              VectorFloat<?> tmpVec,
+                                                              VectorSimilarityFunction similarityFunction,
+                                                              ProductQuantization mergedPq) {
+        if (compressedPrecision && searchSource.getFeatures().containsKey(FeatureId.FUSED_PQ)) {
+            ScoreFunction.ExactScoreFunction reranker =
+                node2 -> {
+                    searchView.getVectorInto(node2, tmpVec, 0);
+                    return similarityFunction.compare(baseVec, tmpVec);
+                };
+            var asf = ((FusedPQ) searchSource.getFeatures().get(FeatureId.FUSED_PQ)).approximateScoreFunctionFor(baseVec, similarityFunction, searchView, reranker);
+
+            return new DefaultSearchScoreProvider(asf);
+        }
+        // Sidecar parity: no fused feature, but the merged code cache exists (built by the
+        // sidecar strategy's pre-encode pass). Score approximately from the cache via a per-query
+        // PQ lookup table, rerank exactly from inline vectors — same economics as fused mode
+        // without touching the fused code path.
+        PreEncodedCodeCache sidecarCache = activeSidecarStrategy.getCodeCache();
+        if (compressedPrecision && sidecarCache != null && mergedPq != null
+                && lutSupported(similarityFunction)) {
+            // Single-arg provider, mirroring the fused branch: candidates are exact-rescored
+            // downstream (compressedPrecision gates), and an in-search reranker would consume
+            // the approximate-results queue those collection paths read.
+            var asf = cacheLutScoreFunction(baseVec, similarityFunction, mergedPq, sidecarCache,
+                    remappers.get(searchSourceIdx), liveNodes.get(searchSourceIdx));
+            return new DefaultSearchScoreProvider(asf);
+        }
+
+        var sf = new ScoreFunction.ExactScoreFunction() {
+            @Override
+            public float similarityTo(int node2) {
+                searchView.getVectorInto(node2, tmpVec, 0);
+                return similarityFunction.compare(baseVec, tmpVec);
+            }
+        };
+        return new DefaultSearchScoreProvider(sf);
+    }
+
+    private static boolean lutSupported(VectorSimilarityFunction f) {
+        return f == VectorSimilarityFunction.DOT_PRODUCT || f == VectorSimilarityFunction.EUCLIDEAN;
+    }
+
+    /**
+     * Per-query PQ lookup-table scorer over the merged pre-encode cache: the query's partial sums
+     * over the codebooks ({@link VectorUtil#calculatePartialSums}), assembled per source-graph
+     * node from its cached code. Similarity conversion mirrors {@link VectorSimilarityFunction}:
+     * DOT_PRODUCT (1+dot)/2, EUCLIDEAN 1/(1+d^2).
+     */
+    private ScoreFunction.ApproximateScoreFunction cacheLutScoreFunction(VectorFloat<?> query,
+                                                                         VectorSimilarityFunction f,
+                                                                         ProductQuantization pq,
+                                                                         PreEncodedCodeCache cache,
+                                                                         OrdinalMapper mapper,
+                                                                         FixedBitSet alive) {
+        final int msub = pq.getSubspaceCount();
+        final int clusters = pq.getClusterCount();
+        // Center-adjusted PQ encodes (v - globalCentroid). For EUCLIDEAN, center the query so
+        // per-subspace distances compose; for DOT, score subspaces against the raw query and add
+        // the constant dot(query, centroid) term.
+        final VectorFloat<?> center = pq.getGlobalCentroid();
+        final boolean dot = f == VectorSimilarityFunction.DOT_PRODUCT;
+        VectorFloat<?> q = query;
+        float dotConstant = 0;
+        if (center != null) {
+            if (dot) {
+                dotConstant = VectorUtil.dotProduct(query, center);
+            } else {
+                q = VectorUtil.sub(query, center);
+            }
+        }
+        final VectorFloat<?> partialSums = vectorTypeSupport.createFloatVector(msub * clusters);
+        int queryOffset = 0;
+        for (int m = 0; m < msub; m++) {
+            int sz = pq.getSubvectorSize(m);
+            VectorUtil.calculatePartialSums(pq.getCodebookVector(m), m, sz, clusters, q, queryOffset, f, partialSums);
+            queryOffset += sz;
+        }
+        final ByteSequence<?> code = vectorTypeSupport.createByteSequence(cache.codeSize());
+        final byte[] codeBytes = code.get() instanceof byte[] ? (byte[]) code.get() : new byte[cache.codeSize()];
+        final float constant = dotConstant;
+        return node -> {
+            // Dead nodes have no merged ordinal (and no cached code); the search may still
+            // traverse them. Score them at the floor: they are excluded from results by the
+            // alive filter, and candidates are exact-rescored before diversity regardless.
+            if (!alive.get(node)) {
+                return 0f;
+            }
+            cache.get(mapper.oldToNew(node), codeBytes);
+            if (codeBytes != code.get()) {
+                for (int m = 0; m < msub; m++) code.set(m, codeBytes[m]);
+            }
+            float sum = VectorUtil.assembleAndSum(partialSums, clusters, code, 0, msub);
+            return dot ? (1 + sum + constant) / 2 : 1 / (1 + sum);
+        };
+    }
+
+    /**
+     * Estimates the RAM usage of this compactor instance.
+     * Accounts for data structures used during compaction including bitsets, remappers,
+     * executor overhead, and per-thread scratch space.
+     */
+    @Override
+    public long ramBytesUsed() {
+        int OH = RamUsageEstimator.NUM_BYTES_OBJECT_HEADER;
+        int REF = RamUsageEstimator.NUM_BYTES_OBJECT_REF;
+
+        // Shallow size of this object (header + fields)
+        // Current fields: sources, liveNodes, numLiveNodesPerSource, remappers, maxDegrees,
+        //                dimension(int), maxOrdinal(int), numTotalNodes(int),
+        //                executor, taskWindowSize(int), similarityFunction
+        long size = OH + 8L * REF + Integer.BYTES * 4;
+
+        // liveNodes: FixedBitSet per source
+        if (liveNodes != null) {
+            for (var entry : liveNodes) {
+                size += entry.ramBytesUsed();
+            }
+        }
+
+        // numLiveNodesPerSource: ArrayList of Integers
+        size += OH + REF + (long) numLiveNodesPerSource.size() * (OH + Integer.BYTES);
+
+        // remappers: one oldToNew array per source plus the shared newToOld / newToSrc arrays
+        if (remappers != null) {
+            for (var source : sources) {
+                size += OH + REF + (long) source.getIdUpperBound() * Integer.BYTES;
+            }
+            size += 2 * (OH + REF + (long) (maxOrdinal + 1) * Integer.BYTES);
+        }
+
+        // maxDegrees: small list of integers
+        size += OH + REF + (long) maxDegrees.size() * (OH + Integer.BYTES);
+
+        // Cross-link reverse-candidate buffer (present only while L0 is being compacted)
+        if (reverseCandidates != null) {
+            size += reverseCandidates.ramBytesUsed();
+        }
+
+        // executor: a shared pool (default) or caller-injected — not owned by the compactor, so it
+        // contributes no pool allocation here. Scratch space still scales with its parallelism.
+        int numThreads = taskWindowSize;
+
+        // Scratch space: ThreadLocal instances (one per active thread)
+        // Each Scratch contains:
+        //   - candSrc, candNode, candScore arrays
+        //   - SelectedVecCache (with its own arrays and vector copies)
+        //   - tmpVec, baseVec (VectorFloat instances)
+        //   - GraphSearcher array (one per source)
+        //   - pqCode ByteSequence
+        size += estimateScratchSpacePerThread() * numThreads;
+
+        return size;
+    }
+
+    /**
+     * Estimates the RAM usage of a single Scratch instance.
+     */
+    private long estimateScratchSpacePerThread() {
+        int OH = RamUsageEstimator.NUM_BYTES_OBJECT_HEADER;
+        int REF = RamUsageEstimator.NUM_BYTES_OBJECT_REF;
+
+        int maxCandidateSize = maxCandidateSize();
+        int scratchDegree = scratchDegree();
+
+        long scratchSize = OH + 6L * REF;
+
+        // candSrc, candNode, candScore arrays
+        scratchSize += (long) maxCandidateSize * Integer.BYTES; // candSrc
+        scratchSize += (long) maxCandidateSize * Integer.BYTES; // candNode
+        scratchSize += (long) maxCandidateSize * Float.BYTES;   // candScore
+
+        // SelectedVecCache
+        scratchSize += OH + 5L * REF + Integer.BYTES; // SelectedVecCache object
+        scratchSize += (long) scratchDegree * Integer.BYTES;  // sourceIdx array
+        scratchSize += (long) scratchDegree * REF;            // views array
+        scratchSize += (long) scratchDegree * Integer.BYTES;  // nodes array
+        scratchSize += (long) scratchDegree * Float.BYTES;    // scores array
+        scratchSize += (long) scratchDegree * REF;            // vecs array
+        scratchSize += (long) scratchDegree * (OH + dimension * Float.BYTES); // VectorFloat instances
+
+        // tmpVec and baseVec
+        scratchSize += 2L * (OH + dimension * Float.BYTES);
+
+        // GraphSearcher array (one per source)
+        scratchSize += (long) sources.size() * REF;
+        // Each GraphSearcher has internal state - rough estimate
+        scratchSize += (long) sources.size() * (OH + 10L * REF);
+
+        // Per-thread scratch ByteSequence holding one code's worth of bytes, for each fused
+        // feature carried by the graph. Generalized over fused types so new quantizations
+        // (e.g. FUSED_ASH) don't need an edit here.
+        for (var feature : sources.get(0).getFeatures().values()) {
+            if (feature instanceof FusedFeature) {
+                scratchSize += OH + ((FusedFeature) feature).codeSize();
+            }
+        }
+
+        return scratchSize;
+    }
+
+    /**
+     * Encapsulates common parameters used throughout the compaction process.
+     */
+    private static final class CompactionParams {
+        final boolean fusedPQEnabled;
+        final boolean compressedPrecision;
+        final int searchTopK;
+        final ProductQuantization pq;
+
+        CompactionParams(boolean fusedPQEnabled, boolean compressedPrecision, int searchTopK, ProductQuantization pq) {
+            this.fusedPQEnabled = fusedPQEnabled;
+            this.compressedPrecision = compressedPrecision;
+            this.searchTopK = searchTopK;
+            this.pq = pq;
+        }
+    }
+
+    /**
+     * Sorts an index array by descending score values using quicksort.
+     */
+    private static void sortOrderByScoreDesc(int[] order, float[] score, int size) {
+        quicksort(order, score, 0, size - 1);
+    }
+
+    /**
+     * Tail-recursive quicksort implementation for sorting by score in descending order.
+     */
+    private static void quicksort(int[] order, float[] score, int lo, int hi) {
+        while (lo < hi) {
+            int p = partition(order, score, lo, hi);
+            // recurse smaller side first (limits stack)
+            if (p - lo < hi - p) {
+                quicksort(order, score, lo, p - 1);
+                lo = p + 1;
+            } else {
+                quicksort(order, score, p + 1, hi);
+                hi = p - 1;
+            }
+        }
+    }
+
+    /**
+     * Partitions the order array for quicksort using descending score comparison.
+     */
+    private static int partition(int[] order, float[] score, int lo, int hi) {
+        float pivot = score[order[hi]];
+        int i = lo;
+        for (int j = lo; j < hi; j++) {
+            if (score[order[j]] > pivot) { // DESC
+                int t = order[i];
+                order[i] = order[j];
+                order[j] = t;
+                i++;
+            }
+        }
+        int t = order[i];
+        order[i] = order[hi];
+        order[hi] = t;
+        return i;
+    }
+
+    static final class WriteResult {
+        final int newOrdinal;
+        final long fileOffset;
+        final ByteBuffer data;
+
+        WriteResult(int newOrdinal, long fileOffset, ByteBuffer data) {
+            this.newOrdinal = newOrdinal;
+            this.fileOffset = fileOffset;
+            this.data = data;
+        }
+    };
+
+    private static final class UpperLayerWriteResult {
+        final int ordinal;
+        final int[] neighbors;
+        final ByteSequence<?> pqCode;
+
+        UpperLayerWriteResult(int ordinal, SelectedVecCache cache, ByteSequence<?> pqCode) {
+            this.ordinal = ordinal;
+            this.neighbors = Arrays.copyOf(cache.nodes, cache.size);
+            this.pqCode = pqCode == null ? null : pqCode.copy();
+        }
+    };
+
+    /** Array-backed OrdinalMapper for one source of the compactor-assigned similarity mapping. */
+    private static final class ArrayOrdinalMapper implements OrdinalMapper {
+        private final int src;
+        private final int[] oldToNew;      // per-source, indexed by old ordinal
+        private final int[] newToOldAll;   // global, indexed by new ordinal
+        private final int[] newToSrcAll;   // global, indexed by new ordinal
+        private final int maxOrdinal;
+
+        ArrayOrdinalMapper(int src, int[] oldToNew, int[] newToOldAll, int[] newToSrcAll, int maxOrdinal) {
+            this.src = src;
+            this.oldToNew = oldToNew;
+            this.newToOldAll = newToOldAll;
+            this.newToSrcAll = newToSrcAll;
+            this.maxOrdinal = maxOrdinal;
+        }
+
+        @Override
+        public int maxOrdinal() {
+            return maxOrdinal;
+        }
+
+        @Override
+        public int oldToNew(int oldOrdinal) {
+            return oldToNew[oldOrdinal];
+        }
+
+        @Override
+        public int newToOld(int newOrdinal) {
+            if (newOrdinal < 0 || newOrdinal >= newToSrcAll.length || newToSrcAll[newOrdinal] != src) {
+                return OMITTED;
+            }
+            return newToOldAll[newOrdinal];
+        }
+    }
+
+    /**
+     * Builds the compactor-assigned ordinal mapping. Live nodes are numbered source by source in
+     * ascending-size processing order, and within a source by a locality key: the walk position
+     * (breadth-first over the merged level-1 graph) of the merged level-1 node a greedy descent
+     * lands on, or the node's PQ-code prefix when no source has an upper layer. Batches processed
+     * in the same order therefore write records sequentially, and consecutive nodes of every source
+     * explore the same region of every target. Deleted nodes receive no ordinal.
+     */
+    /** The similarity functions the cell walk's scoring handles: dot product, Euclidean and cosine. */
+    private static boolean cellsSupport(VectorSimilarityFunction f) {
+        return f == VectorSimilarityFunction.DOT_PRODUCT || f == VectorSimilarityFunction.EUCLIDEAN
+                || f == VectorSimilarityFunction.COSINE;
+    }
+
+    /// Subspace count of the wide code: [#WIDE_DIMS_PER_SUBSPACE] dimensions each, never fewer
+    /// than 8, and never more than the dimension, since product quantization needs at least one
+    /// dimension per subspace. Below 8 dimensions every subspace is one dimension wide.
+    private int wideSubspaces() {
+        return Math.min(dimension, Math.max(8, dimension / WIDE_DIMS_PER_SUBSPACE));
+    }
+
+    private List<OrdinalMapper> buildRegionOrdinalMappers(ProductQuantization pq) {
+        long t0 = System.nanoTime();
+        int numSources = sources.size();
+        // The output ordinal space is dense over LIVE nodes: a deleted node gets no ordinal, so no
+        // record, code slot or sidecar entry is spent on it. Every ordinal-indexed structure the
+        // writer and strategies size from maxOrdinal shrinks with deletions accordingly.
+        long totalOrdinals = 0;
+        for (int n : numLiveNodesPerSource) {
+            totalOrdinals += n;
+        }
+        if (totalOrdinals > Integer.MAX_VALUE) {
+            throw new IllegalStateException("merged ordinal space exceeds int range: " + totalOrdinals);
+        }
+
+        // ascending-size processing order, matching setupCrossLink
+        Integer[] order = new Integer[numSources];
+        for (int i = 0; i < numSources; i++) order[i] = i;
+        Arrays.sort(order, Comparator
+                .comparingInt((Integer i) -> numLiveNodesPerSource.get(i))
+                .thenComparingInt(i -> i));
+
+        int[] newToOldAll = new int[(int) totalOrdinals];
+        int[] newToSrcAll = new int[(int) totalOrdinals];
+        int[][] oldToNewPerSource = new int[numSources][];
+        int next = 0;
+        // region mode: the merged upper layers are the hub; every live node's key is the walk
+        // position of the merged level-1 node a greedy descent (refined by a small beam) lands on
+        boolean regionMode = mergedSrc != null && mergedSrc.length > 1 && mergedSrc[1].length > 0;
+        HubMap hubMap = null;
+        int[] walkPosition = null;
+        if (regionMode) {
+            try {
+                hubMap = buildMergedHubMap();
+            } catch (IOException e) {
+                throw new UncheckedIOException(e);
+            }
+            walkPosition = hubMap.walkPositions();
+            log.info("Region ordinals: merged hierarchy (levels 1..{}), {} level-1 nodes walked",
+                     hubMap.topLevel, hubMap.nodes[1].length);
+        } else {
+            log.info("Region ordinals: no source has an upper layer; falling back to PQ-prefix ordinals");
+        }
+        HubMap hubMapRef = hubMap;
+        int[] walkPositionRef = walkPosition;
+        int prefixBytes = pq == null ? 0 : Math.min(4, pq.getSubspaceCount());
+        if (regionMode && cellsSupport(similarityFunction)) {
+            // dot product, Euclidean and cosine (cosine adds a second additive pass over decoded norms)
+            cellMap = hubMap;
+            cellWalkPosition = walkPosition;
+            cellCount = hubMap.nodes[1].length;
+            cellStart = new int[numSources][];
+            cellToPosition = new int[cellCount];
+            for (int pos = 0; pos < cellCount; pos++) {
+                int w = walkPosition[pos];
+                if (w >= 0 && w < cellCount) cellToPosition[w] = pos;
+            }
+        }
+        for (int oi = 0; oi < numSources; oi++) {
+            int s = order[oi];
+            OnDiskGraphIndex source = sources.get(s);
+            // the source's ordinal range: a source written with holes has live nodes above size(0)
+            int size = source.getIdUpperBound();
+            FixedBitSet alive = liveNodes.get(s);
+            int[] oldToNew = new int[size];
+            Arrays.fill(oldToNew, OrdinalMapper.OMITTED);   // dead nodes and holes: no ordinal
+            oldToNewPerSource[s] = oldToNew;
+
+            // one streaming pass: locality key per live node, packed with the ordinal
+            int liveCount = numLiveNodesPerSource.get(s);
+            long[] keyed = new long[liveCount];
+            AtomicInteger fill = new AtomicInteger();
+            // enough windows to keep every worker busy on small sources, at most 256K nodes each
+            int window = Math.max(4096, Math.min(1 << 18, size / (4 * taskWindowSize) + 1));
+            // Streaming a whole window into the page cache pays when most of it is read. A shard of a
+            // sharded compaction reads 1/M of every source, and prefetching each window for it would
+            // read the whole source once per shard.
+            final boolean streamWindows = liveCount >= size / 8;
+            List<Callable<Void>> tasks = new ArrayList<>();
+            for (int from = 0; from < size; from += window) {
+                final int lo = from;
+                final int hi = Math.min(size, from + window);
+                tasks.add(() -> {
+                    if (streamWindows) source.prefetchL0Records(lo, hi - 1);
+                    VectorFloat<?> vec = vectorTypeSupport.createFloatVector(dimension);
+                    ByteSequence<?> code = pq == null ? null : vectorTypeSupport.createByteSequence(pq.getSubspaceCount());
+                    HubMap.Scorer scorer = regionMode ? hubMapRef.scorer() : null;
+                    IntHashSet beamVisited = regionMode ? new IntHashSet(2 * beamScoredCapacity(CELL_ASSIGN_EF, hubMapRef.degree[1])) : null;
+                    long[] beamScored = regionMode ? new long[beamScoredCapacity(CELL_ASSIGN_EF, hubMapRef.degree[1])] : null;
+                    BeamState beamState = regionMode ? new BeamState(CELL_ASSIGN_EF, hubMapRef.degree[1]) : null;
+                    try (var view = (OnDiskGraphIndex.View) source.getView()) {
+                        // the live nodes of [lo, hi): a window of holes or deletions costs its bitset words, not its ordinals
+                        for (int node = alive.nextSetBit(lo); node != DocIdSetIterator.NO_MORE_DOCS && node < hi;
+                             node = node + 1 < size ? alive.nextSetBit(node + 1) : DocIdSetIterator.NO_MORE_DOCS) {
+                            view.getVectorInto(node, vec, 0);
+                            long key;
+                            if (regionMode) {
+                                scorer.setQuery(vec);
+                                // cell = best level-1 node found by a small beam from the descent's landing
+                                int landing = hubMapRef.descend(scorer);
+                                int lp = hubMapRef.position(1, landing);
+                                if (lp >= 0) {
+                                    lp = bestLevel1ByBeam(hubMapRef, scorer, lp, CELL_ASSIGN_EF, beamVisited, beamScored, beamState);
+                                }
+                                int pos = lp >= 0 ? walkPositionRef[lp] : Integer.MAX_VALUE;
+                                key = pos & 0xFFFFFFFFL;
+                            } else {
+                                key = 0;
+                                if (pq != null) {
+                                    pq.encodeTo(vec, code);
+                                    for (int b = 0; b < prefixBytes; b++) {
+                                        key = (key << 8) | (code.get(b) & 0xFFL);
+                                    }
+                                }
+                            }
+                            keyed[fill.getAndIncrement()] = (key << 32) | (node & 0xFFFFFFFFL);
+                        }
+                    }
+                    return null;
+                });
+            }
+            joinAll(tasks);
+            Arrays.parallelSort(keyed, 0, fill.get());
+
+            int[] starts = cellStart != null ? new int[cellCount + 2] : null;
+            int cell = 0;
+            for (int k = 0; k < fill.get(); k++) {
+                if (starts != null) {
+                    long key = keyed[k] >>> 32;
+                    int c = key >= cellCount ? cellCount : (int) key;
+                    while (cell <= c) {
+                        starts[cell++] = next;
+                    }
+                }
+                int old = (int) keyed[k];
+                oldToNew[old] = next;
+                newToOldAll[next] = old;
+                newToSrcAll[next] = s;
+                next++;
+            }
+            if (starts != null) {
+                while (cell < starts.length) {
+                    starts[cell++] = next;
+                }
+                cellStart[s] = starts;
+            }
+        }
+        assert next == totalOrdinals : next + " ordinals assigned for " + totalOrdinals + " live nodes";
+        if (hubMap != null && cellMap == null) {
+            hubMap.close();   // ordered the ordinals only; level-0 candidates come from the graph search
+        }
+
+        this.maxOrdinal = next - 1;
+        List<OrdinalMapper> mappers = new ArrayList<>(numSources);
+        for (int s = 0; s < numSources; s++) {
+            mappers.add(new ArrayOrdinalMapper(s, oldToNewPerSource[s], newToOldAll, newToSrcAll, maxOrdinal));
+        }
+        log.info("Region ordinals assigned ({}): {} ordinals across {} sources in {} ms", regionMode ? "region order" : "PQ-prefix order",
+                next, numSources, (System.nanoTime() - t0) / 1_000_000);
+        return mappers;
+    }
+
+    private void joinAll(List<Callable<Void>> tasks) {
+        try {
+            for (var f : executor.invokeAll(tasks)) {
+                f.get();
+            }
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new RuntimeException(e);
+        } catch (ExecutionException e) {
+            throw new RuntimeException(e.getCause());
+        }
+    }
+
+    /**
+     * Full-precision merge: touches every vector-store row this batch will read during its per-node
+     * finalize — the cell walk's survivors and each node's retained same-source edges — in ordinal
+     * order, once per distinct row. The finalize's own reads then hit warm pages, and rows shared by
+     * several nodes of the batch (common, since a batch's nodes are ordinal neighbours probing the
+     * same cells) are fetched once instead of once per node.
+     */
+    private void prefetchFinalizeRows(BatchSpec bs, Scratch scratch) {
+        final ExactJoin j = exactJoin;
+        final int src = bs.sourceIdx;
+        final FixedBitSet alive = liveNodes.get(src);
+        final OrdinalMapper mapper = remappers.get(src);
+        final int perNode = j.targets * j.k + maxDegrees.get(0) + 8;
+        final int need = (bs.end - bs.start) * perNode;
+        if (scratch.finalizeOrds == null || scratch.finalizeOrds.length < need) {
+            scratch.finalizeOrds = new int[need];
+        }
+        final int[] ords = scratch.finalizeOrds;
+        int count = 0;
+        var view = (OnDiskGraphIndex.View) scratch.gs[src].getView();
+        for (int i = bs.start; i < bs.end; i++) {
+            int node = bs.nodes[i];
+            if (!alive.get(node)) continue;
+            int newOrd = mapper.oldToNew(node);
+            for (int t = 0; t < sources.size(); t++) {
+                if (j.targetIndex[t] < 0) continue;
+                int slot = j.slot(t, newOrd);
+                int base = slot * j.k, size = j.sizes[slot];
+                for (int e = 0; e < size && count < ords.length; e++) {
+                    ords[count++] = (int) j.heaps[base + e];
+                }
+            }
+            var it = view.getNeighborsIterator(0, node);
+            while (it.hasNext() && count < ords.length) {
+                int nb = it.nextInt();
+                if (alive.get(nb)) {
+                    ords[count++] = mapper.oldToNew(nb);
+                }
+            }
+        }
+        if (count == 0) {
+            return;
+        }
+        Arrays.sort(ords, 0, count);
+        // The finalize reads the diversity representation: the compact code when there is one,
+        // else the vector store itself.
+        final PreEncodedCodeCache warmTarget = diversityCache != null ? diversityCache : candidateStore;
+        int distinct = 0, prev = -1;
+        for (int i = 0; i < count; i++) {
+            if (ords[i] != prev) {
+                warmTarget.warm(ords[i]);
+                prev = ords[i];
+                distinct++;
+            }
+        }
+        finalizeRowsTouched.add(distinct);
+        finalizeRowsRequested.add(count);
+    }
+
+    /**
+     * Node range size of the cell walk for source {@code src}: at most {@link #EXACT_JOIN_MAX_RANGE}
+     * nodes, query vectors within a sixteenth of the heap (at least {@link #EXACT_JOIN_QUERY_BYTES_MIN}),
+     * and (cell, node) pairs within an eighth of the heap, so pairs with their growth slack, the
+     * per-target sort copy and the queries stay around a third. Every range streams the targets'
+     * store once, so the range is as large as the heap allows: a store larger than RAM is read
+     * from the device once per range.
+     *
+     * <p>Before the first range of a source the pairs per node are bounded from the cell sizes: a
+     * node records one pair per cell it probes, and it probes cells until {@link #CELL_BUDGET}
+     * members per larger target, which overstates the count several times. After the first range
+     * the measured counts take over ({@code measuredPairs} over {@code measuredNodes}, with
+     * {@code measuredMaxTarget} the busiest target's pairs), and a target's pair array is kept
+     * under half the array limit even if the next range doubles them.
+     */
+    private int exactJoinRange(int src, long measuredNodes, long measuredPairs, long measuredMaxTarget) {
+        long heap = Runtime.getRuntime().maxMemory();
+        long queryBudget = walkQueryBytes > 0 ? walkQueryBytes : Math.max(EXACT_JOIN_QUERY_BYTES_MIN, heap / 16);
+        long byQueries = queryBudget / (4L * dimension);
+        long pairBudget = walkPairBytes > 0 ? walkPairBytes : Math.max(EXACT_JOIN_PAIR_BYTES_MIN, Math.min(EXACT_JOIN_PAIR_BYTES_MAX, heap / 8));
+        long pairsPerNode, maxTargetPerNode;
+        if (measuredNodes > 0) {
+            pairsPerNode = (measuredPairs + measuredNodes - 1) / measuredNodes;
+            maxTargetPerNode = (measuredMaxTarget + measuredNodes - 1) / measuredNodes;
+        } else {
+            pairsPerNode = 0;
+            maxTargetPerNode = 0;
+            int maxProbes = beamScoredCapacity(CELL_PROBE_EF, cellMap.degree[1]);
+            for (int t = 0; t < sources.size(); t++) {
+                // only larger sources are scanned, and a sparse source itself
+                if (t == src ? !sparseSource(src) : sizeRank[t] <= sizeRank[src]) continue;
+                long membersPerCell = Math.max(1, numLiveNodesPerSource.get(t) / Math.max(1, cellCount));
+                long perTarget = Math.min(maxProbes, (CELL_BUDGET + membersPerCell - 1) / membersPerCell);
+                pairsPerNode += perTarget;
+                maxTargetPerNode = Math.max(maxTargetPerNode, perTarget);
+            }
+        }
+        long byPairs = pairsPerNode == 0 ? Long.MAX_VALUE : pairBudget / (Long.BYTES * pairsPerNode);
+        long byTarget = maxTargetPerNode == 0 ? Long.MAX_VALUE : (Integer.MAX_VALUE / 2L) / maxTargetPerNode;
+        long range = Math.min(Math.min(EXACT_JOIN_MAX_RANGE, byQueries), Math.min(byPairs, byTarget));
+        return (int) Math.max(1 << 16, range);
+    }
+
+    /**
+     * The cell scan of a full-precision merge as a join: for the nodes {@code [lo, hi)} of source
+     * invert them into per-cell prober lists, then walk each larger target's cells in ordinal order
+     * once, streaming each cell's vectors from the store and scoring them against all the nodes that
+     * probe the cell. Every store vector is read once per range; the per-node top-k are those of a
+     * per-node scan.
+     */
+    private ExactJoin cellWalk(int src, int lo, int hi, int k) {
+        final long t0 = System.nanoTime();
+        final ExactJoin j = new ExactJoin(src, lo, hi, k, sources.size(), sizeRank, sparseSource(src));
+        final int n = j.n;
+        final boolean needNorms = similarityFunction != VectorSimilarityFunction.DOT_PRODUCT;
+        final VectorFloat<?>[] queries = new VectorFloat<?>[n];
+        final float[] queryNorm2 = new float[n];
+        final boolean direct = walkReadsDirect(candidateStore);
+        final int readRowBytes = candidateStore.codeSize();
+        final int readRows = Math.max(1, EXACT_JOIN_READ_BYTES / readRowBytes);   // rows per direct read
+        final int readGapRows = Math.max(1, EXACT_JOIN_READ_GAP_BYTES / readRowBytes);
+        final int readBufBytes = candidateStore.directBufferBytes(readRows);
+        final LongAdder directBytes = new LongAdder();
+        // phase 1: query vectors and probe cells; (cell << 32 | node index) pairs per target, per task
+        final int tasks1 = Math.max(1, Math.min(taskWindowSize * 4, n / 256));
+        final int chunk = (n + tasks1 - 1) / tasks1;
+        final long[][][] pairsByTask = new long[tasks1][j.targets][];
+        final int[][] countByTask = new int[tasks1][j.targets];
+        List<Callable<Void>> phase1 = new ArrayList<>();
+        for (int c = 0; c < tasks1; c++) {
+            final int task = c, from = c * chunk, to = Math.min(n, from + chunk);
+            if (from >= to) continue;
+            phase1.add(() -> {
+                Scratch sc = scratchLocal.get();
+                if (sc.cellScorer == null) {
+                    sc.cellScorer = cellMap.scorer();
+                    sc.probeCells = new int[beamScoredCapacity(CELL_PROBE_EF, cellMap.degree[1])];
+                }
+                if (sc.wide == null) sc.wide = new WideDecoder(candidateStore, exactMode, pqWide, dimension);
+                long[][] pairs = pairsByTask[task];
+                int[] count = countByTask[task];
+                for (int t = 0; t < j.targets; t++) pairs[t] = new long[Math.max(64, (to - from) * 6)];
+                final ByteBuffer buf = direct ? sc.directBuffer(candidateStore, readBufBytes) : null;
+                int bufLo = 0, bufHi = 0, bufBase = 0;   // rows [bufLo, bufHi) are in buf, row bufLo at bufBase
+                for (int i = from; i < to; i++) {
+                    int newOrd = lo + i;
+                    VectorFloat<?> q = vectorTypeSupport.createFloatVector(dimension);
+                    if (direct) {
+                        if (newOrd >= bufHi) {
+                            int rows = Math.min(readRows, to - i);
+                            bufBase = readRowsDirect(candidateStore, newOrd, rows, buf);
+                            bufLo = newOrd;
+                            bufHi = newOrd + rows;
+                            directBytes.add((long) rows * readRowBytes);
+                        }
+                        sc.wide.decode(buf, bufBase + (newOrd - bufLo) * readRowBytes, q);
+                    } else {
+                        sc.wide.decode(newOrd, q);
+                    }
+                    queries[i] = q;
+                    queryNorm2[i] = needNorms ? VectorUtil.dotProduct(q, q) : 0f;
+                    int ownCell = cellOf(src, newOrd);
+                    if (ownCell < 0) continue;
+                    sc.cellScorer.setQuery(q);
+                    sc.probeCount = 0;
+                    selectCellsByBeam(sc, sc.cellScorer, cellToPosition[ownCell]);
+                    sc.probeNode = -1;
+                    for (int target = 0; target < sources.size(); target++) {
+                        int ti = j.targetIndex[target];
+                        if (ti < 0) continue;
+                        int[] starts = cellStart[target];
+                        long scanned = 0;
+                        for (int p = 0; p < sc.probeCount; p++) {
+                            int cell = sc.probeCells[p];
+                            int cn = starts[cell + 1] - starts[cell];
+                            if (cn <= 0) continue;
+                            if (scanned > 0 && scanned + cn > CELL_BUDGET) break;
+                            scanned += cn;
+                            if (count[ti] == pairs[ti].length) pairs[ti] = Arrays.copyOf(pairs[ti], pairs[ti].length * 2);
+                            pairs[ti][count[ti]++] = ((long) cell << 32) | i;
+                        }
+                        cellCodesScanned.add(scanned);
+                        cellScans.increment();
+                    }
+                }
+                return null;
+            });
+        }
+        joinAll(phase1);
+        final long t1 = System.nanoTime();
+        // phase 2: per target, sort the pairs by cell and walk the cells in ordinal order
+        long pairTotal = 0, maxTargetPairs = 0;
+        for (int target = 0; target < sources.size(); target++) {
+            final int ti = j.targetIndex[target];
+            if (ti < 0) continue;
+            int total = 0;
+            for (int c = 0; c < tasks1; c++) total += countByTask[c][ti];
+            final long[] pairs = new long[total];
+            int at = 0;
+            for (int c = 0; c < tasks1; c++) {
+                int cnt = countByTask[c][ti];
+                if (cnt > 0) System.arraycopy(pairsByTask[c][ti], 0, pairs, at, cnt);
+                at += cnt;
+                pairsByTask[c][ti] = null;
+            }
+            if (total == 0) continue;
+            Arrays.parallelSort(pairs);
+            pairTotal += total;
+            maxTargetPairs = Math.max(maxTargetPairs, total);
+            final int[] starts = cellStart[target];
+            final int rowBytes = candidateStore.codeSize();
+            final boolean self = target == src;   // the source as its own target: a node is not its own candidate
+            // split the sorted pairs into contiguous cell ranges for the workers
+            int tasks2 = Math.max(1, Math.min(taskWindowSize * 8, total / 4096));
+            List<Callable<Void>> phase2 = new ArrayList<>();
+            int p = 0;
+            for (int c = 0; c < tasks2 && p < total; c++) {
+                int q = Math.min(total, (int) ((long) total * (c + 1) / tasks2));
+                if (q <= p) continue;
+                while (q < total && (pairs[q] >>> 32) == (pairs[q - 1] >>> 32)) q++;   // do not split a cell
+                final int from = p, to = q;
+                p = q;
+                phase2.add(() -> {
+                    Scratch sc = scratchLocal.get();
+                    if (sc.wide == null) sc.wide = new WideDecoder(candidateStore, exactMode, pqWide, dimension);
+                    final VectorFloat<?> tmp = sc.tmpVec;
+                    final VectorFloat<?>[] chunkQueries = new VectorFloat<?>[EXACT_QUERY_CHUNK];
+                    final float[] chunkScores = new float[EXACT_QUERY_CHUNK];
+                    int[] probers = new int[256];
+                    // Direct mode reads the task's cells, which are sorted so their store rows form ascending
+                    // runs, a piece at a time into the thread's buffer: a run is planned from the current cell
+                    // while the gaps stay small and the run short (planHi), and nothing touches the page cache.
+                    // Mapped mode decodes straight from the mapping, as a store that fits in RAM wants.
+                    int qAhead = from;
+                    long read = 0;
+                    final ByteBuffer buf = direct ? sc.directBuffer(candidateStore, readBufBytes) : null;
+                    int bufLo = 0, bufHi = 0, bufBase = 0;   // rows [bufLo, bufHi) are in buf, row bufLo at bufBase
+                    int planHi = 0;
+                    int a = from;
+                    while (a < to) {
+                        int cell = (int) (pairs[a] >>> 32);
+                        int b = a;
+                        while (b < to && (int) (pairs[b] >>> 32) == cell) b++;
+                        int count = b - a;
+                        if (probers.length < count) probers = new int[count * 2];
+                        for (int r = a; r < b; r++) probers[r - a] = (int) pairs[r];
+                        final int cLo = starts[cell], cHi = starts[cell + 1];
+                        for (int c0 = 0; c0 < count; c0 += EXACT_QUERY_CHUNK) {
+                            final int cn = Math.min(EXACT_QUERY_CHUNK, count - c0);
+                            for (int r = 0; r < cn; r++) chunkQueries[r] = queries[probers[c0 + r]];
+                            for (int newOrd = cLo; newOrd < cHi; newOrd++) {
+                                if (direct) {
+                                    if (newOrd >= bufHi || newOrd < bufLo) {
+                                        if (newOrd >= planHi) {
+                                            int runHi = cHi;
+                                            if (qAhead < b) qAhead = b;
+                                            while (qAhead < to && runHi - newOrd < readRows) {
+                                                int mc = (int) (pairs[qAhead] >>> 32);
+                                                int mLo = starts[mc], mHi = starts[mc + 1];
+                                                if (mLo - runHi > readGapRows) break;
+                                                if (mHi > runHi) runHi = mHi;
+                                                while (qAhead < to && (int) (pairs[qAhead] >>> 32) == mc) qAhead++;
+                                            }
+                                            planHi = runHi;
+                                        }
+                                        int rows = Math.min(readRows, planHi - newOrd);
+                                        bufBase = readRowsDirect(candidateStore, newOrd, rows, buf);
+                                        bufLo = newOrd;
+                                        bufHi = newOrd + rows;
+                                        read += (long) rows * readRowBytes;
+                                    }
+                                    sc.wide.decode(buf, bufBase + (newOrd - bufLo) * readRowBytes, tmp);
+                                } else {
+                                    sc.wide.decode(newOrd, tmp);
+                                }
+                                VectorUtil.dotProductMulti(tmp, chunkQueries, cn, chunkScores);
+                                float vNorm2 = needNorms ? VectorUtil.dotProduct(tmp, tmp) : 0f;
+                                for (int r = 0; r < cn; r++) {
+                                    int i = probers[c0 + r];
+                                    if (self && lo + i == newOrd) continue;
+                                    float dot = chunkScores[r];
+                                    float score;
+                                    if (!needNorms) {
+                                        score = (1 + dot) / 2;
+                                    } else if (similarityFunction == VectorSimilarityFunction.EUCLIDEAN) {
+                                        score = 1 / (1 + Math.max(0f, queryNorm2[i] + vNorm2 - 2 * dot));
+                                    } else {
+                                        score = (1 + dot / (float) Math.sqrt(Math.max(1e-12, (double) queryNorm2[i] * vNorm2))) / 2;
+                                    }
+                                    int slot = ti * n + i;
+                                    if (score > j.thresholds[slot]) {
+                                        j.offer(slot, newOrd, score);
+                                    }
+                                }
+                            }
+                        }
+                        a = b;
+                    }
+                    directBytes.add(read);
+                    return null;
+                });
+            }
+            joinAll(phase2);
+        }
+        j.pairsWalked = pairTotal;
+        j.maxTargetPairs = maxTargetPairs;
+        log.info("Cell walk: source {} ordinals [{}, {}): probes {} ms, {} (cell, node) pairs over {} targets, walk {} ms{}",
+                 src, lo, hi, (t1 - t0) / 1_000_000, pairTotal, j.targets, (System.nanoTime() - t1) / 1_000_000,
+                 direct ? ", " + (directBytes.sum() >> 20) + " MB of store read directly" : "");
+        return j;
+    }
+
+    private static final int EXACT_QUERY_CHUNK = 32;   // queries scored together against each vector; 32 x 1.5 KB stays in L1
+    private static final int EXACT_JOIN_READ_BYTES = 2 << 20;              // store bytes per direct read (direct walk)
+    private static final int EXACT_JOIN_READ_GAP_BYTES = 64 << 10;         // unwanted bytes a direct read may span
+
+    private static int readRowsDirect(PreEncodedCodeCache store, int first, int rows, ByteBuffer buf) {
+        try {
+            return store.readRowsDirect(first, rows, buf);
+        } catch (IOException e) {
+            throw new UncheckedIOException("reading the merge store", e);
+        }
+    }
+
+    private static final class Scratch implements AutoCloseable {
+        final int[] candSrc, candNode;
+        final float[] candScore;
+        final SelectedVecCache selectedCache;
+        final VectorFloat<?> tmpVec, baseVec;
+        final GraphSearcher[] gs;
+        final ByteSequence<?> pqCode;
+        WideDecoder wide;               // decodes the scan store (raw vectors in exact mode) for the walk
+        WideDecoder div;                // decodes the diversity representation into candVec slots
+        final VectorFloat<?>[] candVec; // per-candidate decoded vector (wide code), used for scoring and diversity
+        final boolean[] candHasVec;
+        // cell join state (allocated on first use)
+        HubMap.Scorer cellScorer;
+        int[] probeCells;
+        int probeCount;
+        long[] scoredKeys;      // positions scored by the current probe beam, packed with their scores
+        IntHashSet l1Visited;   // visited set for the probe beam
+        BeamState beamState;    // the probe beam's working arrays
+        int probeNode = -1, probeSrc = -1;
+        int[] finalizeOrds;     // full-precision merge: the batch's candidate rows, for the ordered prefetch
+
+        /**
+         * Constructs scratch space with buffers sized for the maximum expected candidates and degree.
+         */
+        Scratch(int maxCandidateSize, int maxDegree, int dimension, List<OnDiskGraphIndex> sources, ProductQuantization pq) {
+            this.candSrc = new int[maxCandidateSize];
+            this.candNode = new int[maxCandidateSize];
+            this.candScore = new float[maxCandidateSize];
+            this.candVec = new VectorFloat<?>[maxCandidateSize];
+            for (int i = 0; i < maxCandidateSize; i++) {
+                candVec[i] = vectorTypeSupport.createFloatVector(dimension);
+            }
+            this.candHasVec = new boolean[maxCandidateSize];
+            this.selectedCache = new SelectedVecCache(maxDegree, dimension);
+            this.tmpVec = vectorTypeSupport.createFloatVector(dimension);
+            this.baseVec = vectorTypeSupport.createFloatVector(dimension);
+            this.pqCode = (pq == null) ? null : vectorTypeSupport.createByteSequence(pq.getSubspaceCount());
+
+            this.gs = new GraphSearcher[sources.size()];
+            for (int i = 0; i < sources.size(); i++) {
+                gs[i] = new GraphSearcher.Builder(sources.get(i).getView()).build();
+                gs[i].usePruning(false);
+            }
+        }
+
+        /**
+         * Closes all graph searchers and resets the cache.
+         */
+        @Override
+        public void close() throws IOException {
+            for (var s : gs) s.close();
+            selectedCache.reset();
+        }
+
+        ByteBuffer directBuf;   // cell walk in direct mode: the thread's aligned read buffer
+
+        ByteBuffer directBuffer(PreEncodedCodeCache store, int bytes) {
+            if (directBuf == null || directBuf.capacity() < bytes) {
+                directBuf = store.allocateAligned(bytes);
+            }
+            return directBuf;
+        }
+    }
+
+    /**
+     * Specification for a batch of nodes to be processed from one source index.
+     */
+    private static final class BatchSpec {
+        final int sourceIdx;
+        final int[] nodes;              // materialized node ids for this source
+        final int start;
+        final int end;
+
+        BatchSpec(int sourceIdx, int[] nodes, int start, int end) {
+            this.sourceIdx = sourceIdx;
+            this.nodes = nodes;
+            this.start = start;
+            this.end = end;
+        }
+    }
+
+}
+

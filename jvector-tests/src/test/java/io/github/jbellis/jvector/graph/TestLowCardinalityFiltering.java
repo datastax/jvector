@@ -51,8 +51,8 @@ public class TestLowCardinalityFiltering extends LuceneTestCase {
      */
     @Test
     public void testLowCardinalityFiltering() throws IOException {
-            testLowCardinalityFiltering(32, 0.044f, 0.91f, false);
-            testLowCardinalityFiltering(32, 0.048f, 0.93f, true);
+            testLowCardinalityFiltering(32, 0.055f, 0.95f, false);
+            testLowCardinalityFiltering(32, 0.055f, 0.95f, true);
     }
     public void testLowCardinalityFiltering(int maxDegree, float visitedRatioThreshold, float recallThreshold, boolean addHierarchy) throws IOException {
         var R = getRandom();

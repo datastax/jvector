@@ -62,8 +62,8 @@ public class MemorySegmentVectorProvider implements VectorTypeSupport
     @Override
     public void writeFloatVector(IndexWriter out, VectorFloat<?> vector) throws IOException
     {
-        for (int i = 0; i < vector.length(); i++)
-            out.writeFloat(vector.get(i));
+        float[] data = (float[]) ((MemorySegmentVectorFloat) vector).get().heapBase().get();
+        out.writeFloats(data, 0, vector.length());
     }
 
     @Override
@@ -84,21 +84,29 @@ public class MemorySegmentVectorProvider implements VectorTypeSupport
     @Override
     public ByteSequence<?> readByteSequence(RandomAccessReader r, int size) throws IOException
     {
-        var vector = new MemorySegmentByteSequence(size);
-        r.readFully(vector.get().asByteBuffer());
-        return vector;
+        byte[] data = new byte[size];
+        r.readFully(data);
+        return new MemorySegmentByteSequence(data);
     }
 
     @Override
     public void readByteSequence(RandomAccessReader r, ByteSequence<?> sequence) throws IOException {
-        r.readFully(((MemorySegmentByteSequence) sequence).get().asByteBuffer());
+        var segment = ((MemorySegmentByteSequence) sequence).get();
+        // Whole-array reads use the reader's direct array-copy path. A segment slice
+        // may cover only part of its backing array, so preserve its bounded read.
+        if (segment.heapBase().orElse(null) instanceof byte[] data
+                && segment.address() == 0 && segment.byteSize() == data.length) {
+            r.readFully(data);
+        } else {
+            r.readFully(segment.asByteBuffer());
+        }
     }
 
 
     @Override
     public void writeByteSequence(IndexWriter out, ByteSequence<?> sequence) throws IOException
     {
-        for (int i = 0; i < sequence.length(); i++)
-            out.writeByte(sequence.get(i));
+        java.nio.ByteBuffer bb = ((MemorySegmentByteSequence) sequence).get().asByteBuffer();
+        out.write(bb.array(), bb.arrayOffset(), bb.remaining());
     }
 }

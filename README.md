@@ -1,337 +1,361 @@
-## Introduction to approximate nearest neighbor search
+# JVector
 
-Exact nearest neighbor search (k-nearest-neighbor or KNN) is prohibitively expensive at higher dimensions, because approaches to segment the search space that work in 2D or 3D like quadtree or k-d tree devolve to linear scans at higher dimensions.  This is one aspect of what is called “[the curse of dimensionality](https://en.wikipedia.org/wiki/Curse_of_dimensionality).”
+JVector is a Java library for approximate nearest neighbor (ANN) vector search. It builds graph
+indexes that combine an HNSW-style hierarchy with Vamana (the algorithm behind DiskANN) in every
+layer, can be built concurrently and incrementally, and can be searched from disk with compressed
+vectors. [Product quantization (PQ)](https://doi.org/10.1109/TPAMI.2010.57) is the stable, widely deployed way to compress them. The
+experimental [Asymmetric Scalar Hashing (ASH)](https://dl.acm.org/doi/10.1145/3799682.3841072) quantizer is more accurate at the same code size and
+builds indexes faster. JVector targets newer JVMs, using native SIMD kernels on Java 22 and later,
+and also supports Java 11.
 
-With larger datasets, it is almost always more useful to get an approximate answer in logarithmic time, than the exact answer in linear time.  This is abbreviated as ANN (approximate nearest neighbor) search.
+- [Why graph indexes](#why-graph-indexes)
+- [How JVector searches](#how-jvector-searches)
+- [Getting started](#getting-started)
+- [Choosing a quantizer](#choosing-a-quantizer)
+- [Benchmarking with BenchYAML](#benchmarking-with-benchyaml)
+- [SIMD and native acceleration](#simd-and-native-acceleration)
+- [Research](#research)
+- [Building and testing](#building-and-testing)
 
-There are two broad categories of ANN index:
-* Partition-based indexes, like [LSH or IVF](https://www.datastax.com/guides/what-is-a-vector-index) or [SCANN](https://github.com/google-research/google-research/tree/master/scann)
-* Graph indexes, like [HNSW](https://arxiv.org/abs/1603.09320) or [DiskANN](https://www.microsoft.com/en-us/research/project/project-akupara-approximate-nearest-neighbor-search-for-large-scale-semantic-search/)
+## Why graph indexes
 
-Graph-based indexes tend to be simpler to implement and faster, but more importantly they can be constructed and updated incrementally.  This makes them a much better fit for a general-purpose index than partitioning approaches that only work on static datasets that are completely specified up front.  That is why all the major commercial vector indexes use graph approaches.
+Exact nearest neighbor search is prohibitively expensive at high dimension: methods that partition
+space well in two or three dimensions, such as k-d trees, degrade to linear scans as dimension
+grows ("[the curse of dimensionality](https://en.wikipedia.org/wiki/Curse_of_dimensionality)"). For
+large datasets, an approximate answer in logarithmic time is usually more useful than an exact
+answer in linear time.
 
-JVector is a graph index that merges the DiskANN and HNSW family trees.
-JVector borrows the hierarchical structure from HNSW, and uses Vamana (the algorithm behind DiskANN) within each layer.
+[ANN indexes](https://www.ibm.com/think/topics/vector-search) are either partition-based, like
+[LSH](https://en.wikipedia.org/wiki/Locality-sensitive_hashing) or [IVF](https://doi.org/10.1109/TPAMI.2010.57)
+and [ScaNN](https://github.com/google-research/google-research/tree/master/scann), or graph-based,
+like [HNSW](https://arxiv.org/abs/1603.09320) and
+[DiskANN](https://www.microsoft.com/en-us/research/project/project-akupara-approximate-nearest-neighbor-search-for-large-scale-semantic-search/).
+Graph indexes tend to be faster and, more importantly, can be built and updated incrementally, which
+makes them a better fit for a general-purpose index than partitioning schemes that need the whole
+dataset up front.
 
+## How JVector searches
 
-## JVector Architecture
+JVector's graph has an in-memory hierarchy of upper layers for fast navigation and a base layer that
+can live on disk. Construction uses nonblocking concurrency control, so it scales with cores.
 
-JVector is a graph-based index that builds on the HNSW and DiskANN designs with composable extensions.
+Graph indexes need their vectors close at hand, and full-precision vectors soon outgrow memory:
+10 million 1,024-dimension vectors take about 41 GB. JVector compresses them with vector
+quantization, here 32× to about 1.3 GB, and the quantizer also sets much of the build time. On that
+dataset, Cohere English v3 10M, JVector's new ASH quantizer builds the index 2.3 to 2.6 times faster
+than product quantization (PQ) with the same code size; see [Choosing a quantizer](#choosing-a-quantizer).
 
-JVector implements a multi-layer graph with nonblocking concurrency control, allowing construction to scale linearly with the number of cores:
-![JVector scales linearly as thread count increases](https://github.com/jbellis/jvector/assets/42158/f0127bfc-6c45-48b9-96ea-95b2120da0d9)
+![Build time vs cores for fused ASH and fused PQ](./docs/images/ash-pq-build-time-vs-cores.png)
 
-The upper layers of the hierarchy are represented by an in-memory adjacency list per node. This allows for quick navigation with no IOs.
-The bottom layer of the graph is represented by an on-disk adjacency list per node. JVector uses additional data stored inline to support two-pass searches, with the first pass powered by lossily compressed representations of the vectors kept in memory, and the second by a more accurate representation read from disk.  The first pass can be performed with
-* Product quantization (PQ), optionally with [anisotropic weighting](https://arxiv.org/abs/1908.10396)
-* [Binary quantization](https://huggingface.co/blog/embedding-quantization) (BQ)
-* Fused PQ, where PQ codebooks are written inline with the graph adjacency list
+Searches run in two passes. The first pass traverses the graph using compact, approximate scores
+from a quantizer; the second reranks the best candidates with a more accurate representation stored
+in the index:
 
-The second pass can be performed with
-* Full resolution float32 vectors
-* NVQ, which uses a non-uniform technique to quantize vectors with high-accuracy
+| Pass | Options |
+| --- | --- |
+| Traversal | Product quantization (PQ), optionally with anisotropic weighting; binary quantization (BQ); Asymmetric Scalar Hashing (ASH, experimental); or full-precision vectors |
+| Fused traversal | Fused PQ or fused ASH: each node's adjacency list carries its neighbors' codes, so the codes are read with the graph instead of held in memory |
+| Reranking | Full-precision (FP32) vectors or [NVQ](https://arxiv.org/abs/2509.18471), a high-accuracy non-uniform quantization |
 
-[This two-pass design reduces memory usage and reduces latency while preserving accuracy](https://thenewstack.io/why-vector-size-matters/).  
+The compact codes only steer the traversal; the final ranking comes from the more accurate vectors,
+so [this two-pass design cuts memory use and latency while preserving accuracy](https://thenewstack.io/why-vector-size-matters/).
+JVector builds indexes the same way, so both building and serving need only the codes in memory,
+and one index can hold far more vectors than would fit uncompressed:
 
-Additionally, JVector is unique in offering the ability to construct the index itself using two-pass searches, allowing larger-than-memory indexes to be built:
-![Much larger indexes](https://github.com/jbellis/jvector/assets/42158/34cb8094-68fa-4dc3-b3ce-4582fdbd77e1)
+![Vectors that fit in 32 GB of memory, uncompressed and 32× compressed](./docs/images/vectors-in-32gb.png)
 
-This is important because it allows you to take advantage of logarithmic search within a single index, instead of spilling over to linear-time merging of results from multiple indexes.
+## Getting started
 
+### Prerequisites
 
-## JVector step-by-step
+- **JDK 22 or newer** to build. The library itself runs on Java 11 and newer.
+- **Maven 3.8 or newer** and **Git**.
+- **Linux x86-64 or AArch64** for the native library, which needs GCC 12 or newer (11 or newer on
+  AArch64), [Meson](https://mesonbuild.com/) and [Ninja](https://ninja-build.org/); the
+  `-Dnative.onednn=true` option below also needs CMake 3.13 or newer. On Ubuntu,
+  `bash build_native_lib.sh --auto-install-deps` (in `jvector-native/src/main/native/src`) installs them.
+- **macOS and other platforms** build without the native library and use the Panama Vector API on
+  Java 20 and newer. Everything below runs there except HelloASHWorldInt8 and HelloASHWorldFp16.
 
-All code samples are from [SiftSmall](https://github.com/jbellis/jvector/blob/main/jvector-examples/src/main/java/io/github/jbellis/jvector/example/SiftSmall.java) in the JVector source repo, which includes the siftsmall dataset as well.  Just import the project in your IDE and click Run to try it out!
+### Using JVector in your project
 
+JVector is published to Maven Central as `io.github.jbellis:jvector`:
 
-#### Step 1: Build and query an index in memory
-
-First the code:
-```java
-    public static void siftInMemory(ArrayList<VectorFloat<?>> baseVectors) throws IOException {
-        // infer the dimensionality from the first vector
-        int originalDimension = baseVectors.get(0).length();
-        // wrap the raw vectors in a RandomAccessVectorValues
-        RandomAccessVectorValues ravv = new ListRandomAccessVectorValues(baseVectors, originalDimension);
-        
-        // score provider using the raw, in-memory vectors
-        BuildScoreProvider bsp = BuildScoreProvider.randomAccessScoreProvider(ravv, VectorSimilarityFunction.EUCLIDEAN);
-        try (GraphIndexBuilder builder = new GraphIndexBuilder(bsp,
-                                                               ravv.dimension(),
-                                                               16, // graph degree
-                                                               100, // construction search depth
-                                                               1.2f, // allow degree overflow during construction by this factor
-                                                               1.2f, // relax neighbor diversity requirement by this factor (alpha)
-                                                               true)) // use a hierarchical index
-        {
-            // build the index (in memory)
-            OnHeapGraphIndex index = builder.build(ravv);
-
-            // search for a random vector
-            VectorFloat<?> q = randomVector(originalDimension);
-            SearchResult sr = GraphSearcher.search(q,
-                                                   10, // number of results
-                                                   ravv, // vectors we're searching, used for scoring
-                                                   VectorSimilarityFunction.EUCLIDEAN, // how to score
-                                                   index,
-                                                   Bits.ALL); // valid ordinals to consider
-            for (SearchResult.NodeScore ns : sr.getNodes()) {
-                System.out.println(ns);
-            }
-        }
-    }
+```xml
+<dependency>
+  <groupId>io.github.jbellis</groupId>
+  <artifactId>jvector</artifactId>
+  <version>4.1.0</version>
+</dependency>
 ```
 
-Commentary:
-* All indexes assume that you have a source of vectors that has a consistent, fixed dimension (number of float32 components).
-* Vector sources are usually represented as a subclass of [RandomAccessVectorValues](https://javadoc.io/doc/io.github.jbellis/jvector/latest/io/github/jbellis/jvector/graph/RandomAccessVectorValues.html), which offers a simple API around getVector / getVectorInto.  Do be aware of isValueShared() in a multithreaded context; as a rule of thumb, in-memory RAVV will not use shared values and from-disk RAVV will (as an optimization to avoid allocating a new on-heap vector for every call).
-* You do NOT have to provide all the vectors to the index at once, but since this is a common scenario when prototyping, a convenience method is provided to do so.  We will cover how to build an index incrementally later.
-* For the overflow Builder parameter, the sweet spot is about 1.2 for in-memory construction and 1.5 for on-disk.  (The more overflow is allowed, the fewer recomputations of best edges are required, but the more neighbors will be consulted in every search.)
-* The alpha parameter controls the tradeoff between edge distance and diversity; usually 1.2 is sufficient for high-dimensional vectors; 2.0 is recommended for 2D or 3D datasets.  See [the DiskANN paper](https://suhasjs.github.io/files/diskann_neurips19.pdf) for more details.
-* The Bits parameter to GraphSearcher is intended for controlling your resultset based on external predicates and won’t be used in this tutorial.
-* Setting the addHierarchy parameter to true, build a multi-layer index. This approach has proven more robust in highly challenging scenarios.
+or with Gradle, `implementation("io.github.jbellis:jvector:4.1.0")`. ASH requires 4.1.0 or later.
+[Building and installing JVector](./docs/building-and-installing.md) explains what the jar contains,
+the JVM options for each Java version, and how to build JVector from source for each platform.
 
+Run with these JVM options to enable SIMD acceleration (see
+[SIMD and native acceleration](#simd-and-native-acceleration)):
 
-#### Step 2: more control over GraphSearcher
-
-Keeping the Builder the same, the updated search code looks like this:
-```java
-            // search for a random vector using a GraphSearcher and SearchScoreProvider
-            VectorFloat<?> q = randomVector(originalDimension);
-            try (GraphSearcher searcher = new GraphSearcher(index)) {
-                SearchScoreProvider ssp = SearchScoreProvider.exact(q, VectorSimilarityFunction.EUCLIDEAN, ravv);
-                SearchResult sr = searcher.search(ssp, 10, Bits.ALL);
-                for (SearchResult.NodeScore ns : sr.getNodes()) {
-                    System.out.println(ns);
-                }
-            }
+```text
+--add-modules jdk.incubator.vector
+--enable-native-access=ALL-UNNAMED
 ```
 
-Commentary:
-* Searcher allocation is modestly expensive since there is a bunch of internal state to initialize at construction time.  Therefore, JVector supports pooling searchers (e.g. with [ExplicitThreadLocal](https://javadoc.io/doc/io.github.jbellis/jvector/latest/io/github/jbellis/jvector/util/ExplicitThreadLocal.html), covered below).
-* When managing GraphSearcher instances, you’re also responsible for constructing a SearchScoreProvider, which you can think of as: given a query vector, tell JVector how to compute scores for other nodes in the index.  SearchScoreProvider can be exact, as shown here, or a combination of an ApproximateScoreFunction and a Reranker, covered below.
+### Hello world programs
 
+The fastest way in is the hello-world programs in [jvector-examples](./jvector-examples). They download
+small public datasets on first use. Build them once from the repository root:
 
-#### Step 3: Measuring recall
-
-A blisteringly-fast vector index isn’t very useful if it doesn’t return accurate results.  As a sanity check, SiftSmall includes a helper method _testRecall_.  Wiring up that to our code mostly involves turning the SearchScoreProvider into a factory lambda:
-```java
-            Function<VectorFloat<?>, SearchScoreProvider> sspFactory = q -> SearchScoreProvider.exact(q, VectorSimilarityFunction.EUCLIDEAN, ravv);
-            testRecall(index, queryVectors, groundTruth, sspFactory);
+```bash
+mvn -pl jvector-examples -am -DskipTests package -Dnative.onednn=true
+JAR=$(ls jvector-examples/target/jvector-examples-*-jar-with-dependencies.jar)
 ```
-If you run the code, you will see slight differences in recall every time (printed by `testRecall`):
+
+`-Dnative.onednn=true` builds the oneDNN add-on from source and packages it in the jar; ASH uses it
+for FP16 query projection and, on some processors, INT8 (see the
+[native build guide](./jvector-native/src/main/native/README.md#recommended-onednn-build-and-package)).
+It needs CMake and adds a few minutes to the first build. Without it, the library falls back to
+slower ASH query projection on those paths, and HelloASHWorldFp16 cannot run.
+
+| Program | What it shows |
+| --- | --- |
+| [HelloVectorWorld](./jvector-examples/src/main/java/io/github/jbellis/jvector/example/HelloVectorWorld.java) | Build an in-memory graph and search it, in about twenty lines |
+| [HelloASHWorld](./jvector-examples/src/main/java/io/github/jbellis/jvector/example/HelloASHWorld.java) | Train ASH, build a graph, write a fused ASH index with NVQ reranking, reopen it, and search synchronously and through the queued API; runs on any processor, with the fastest query projection it supports |
+| [HelloASHWorldInt8](./jvector-examples/src/main/java/io/github/jbellis/jvector/example/HelloASHWorldInt8.java) | The same with INT8 query projection required; needs x86-64 with AVX-512 VNNI or AVX-VNNI |
+| [HelloASHWorldFp16](./jvector-examples/src/main/java/io/github/jbellis/jvector/example/HelloASHWorldFp16.java) | The same with FP16 query projection required; needs x86-64 with AVX-512 FP16 (Intel Sapphire Rapids or newer) and the oneDNN add-on |
+| [HelloBatchedVectors](./jvector-examples/src/main/java/io/github/jbellis/jvector/example/HelloBatchedVectors.java) and [HelloBatchedQuantization](./jvector-examples/src/main/java/io/github/jbellis/jvector/example/HelloBatchedQuantization.java) | Batched access to file-backed vectors, and encoding them with PQ and NVQ |
+
+```bash
+java --add-modules jdk.incubator.vector --enable-native-access=ALL-UNNAMED \
+  -cp "$JAR" io.github.jbellis.jvector.example.HelloVectorWorld
 ```
-(OnHeapGraphIndex) Recall: 0.9898
+
+The first run downloads `ada002-100k` (about 650 MB); then it builds the graph and prints the ten
+nearest neighbors of one query, in under a minute on an 8-core machine:
+
+```text
+Nearest neighbors to the first query in ada002-100k (99287 indexed vectors)
+vector 68115  score 0.980714
+vector 48543  score 0.980705
 ...
-(OnHeapGraphIndex) Recall: 0.9890
-```
-This is expected given the approximate nature of the index being created and the perturbations introduced by the multithreaded concurrency of the `build` call.
-
-
-#### Step 4: write and load index to and from disk
-
-The code:
-```java
-        Path indexPath = Files.createTempFile("siftsmall", ".inline");
-        try (GraphIndexBuilder builder = new GraphIndexBuilder(bsp, ravv.dimension(), 16, 100, 1.2f, 1.2f, true)) {
-            // build the index (in memory)
-            OnHeapGraphIndex index = builder.build(ravv);
-            // write the index to disk with default options
-            OnDiskGraphIndex.write(index, ravv, indexPath);
-        }
-
-        // on-disk indexes require a ReaderSupplier (not just a Reader) because we will want it to
-        // open additional readers for searching
-        ReaderSupplier rs = ReaderSupplierFactor.open(indexPath);
-        OnDiskGraphIndex index = OnDiskGraphIndex.load(rs);
-        // measure our recall against the (exactly computed) ground truth
-        Function<VectorFloat<?>, SearchScoreProvider> sspFactory = q -> SearchScoreProvider.exact(q, VectorSimilarityFunction.EUCLIDEAN, index.getView());
-        testRecall(index, queryVectors, groundTruth, sspFactory);
 ```
 
-Commentary:
-* We can write indexes that are constructed in-memory, like this one, to disk with a single method call.
-* Loading and searching against on-disk indexes require a ReaderSupplier, which supplies RandomAccessReader objects.  The RandomAccessReader interface is intended to be extended by the consuming project.  For instance, [DataStax Astra](https://www.datastax.com/products/datastax-astra) implements a RandomAccessReader backed by the Cassandra chunk cache.  JVector provides two implementations out of the box.
-    * SimpleMappedReader: implemented using FileChannel.map, which means it is compatible with all Java versions that can run JVector, but also means it is limited to 2GB file sizes.  SimpleMappedReader is primarily intended for example code.
-    * MemorySegmentReader: implemented using the newer MemorySegment API, with no file size limit, but is limited to Java 22+.  (The actual MemorySegmentReader code is compatible with Java 20+, but [we left it in the 22+ module for convenience](https://github.com/jbellis/jvector/pull/296).  The motivated reader is welcome to refactor the build to improve this.)  If you have no specialized requirements then MemorySegmentReader is recommended for production.
+Run the others the same way, changing the class name. On Linux,
+`grep -o -m1 -w 'avx512_fp16\|avx512_vnni\|avx_vnni' /proc/cpuinfo` shows whether your processor
+supports HelloASHWorldInt8 or HelloASHWorldFp16. Each ASH program writes its index (`ash.graph`,
+`ash-int8.graph` or `ash-fp16.graph`) to the current directory and never overwrites one; delete it
+or pass a new path as the argument to run again. The programs and tutorials download about 1.3 GB
+of datasets into `dataset_cache/`, and the BenchYAML example below writes a 510 MB index while it
+runs; set `DATASET_CACHE_DIR` to keep the downloads elsewhere.
 
-  
-#### Step 5: use compressed vectors in the search
+The [examples README](./jvector-examples/README.md) covers each program, and the
+[tutorials](./docs/tutorials/) walk through the API step by step, starting with
+[the introduction](./docs/tutorials/1-intro-tutorial.md).
 
-Compressing the vectors with product quantization is done as follows:
-```java
-        // compute and write compressed vectors to disk
-        Path pqPath = Files.createTempFile("siftsmall", ".pq");
-        try (DataOutputStream out = new DataOutputStream(new BufferedOutputStream(Files.newOutputStream(pqPath)))) {
-            // Compress the original vectors using PQ. this represents a compression ratio of 128 * 4 / 16 = 32x
-            ProductQuantization pq = ProductQuantization.compute(ravv,
-                                                                 16, // number of subspaces
-                                                                 256, // number of centroids per subspace
-                                                                 true); // center the dataset
-            // Note: before jvector 3.1.0, encodeAll returned an array of ByteSequence.
-            PQVectors pqv = pq.encodeAll(ravv);
-            // write the compressed vectors to disk
-            pqv.write(out);
-        }
+Integrators should also read:
+
+- [Batched input vector access](./docs/batched-vector-access.md) for file-backed input datasets.
+- [Deferred batch serialization](./docs/deferred-batch-writer.md) for writing completed graphs.
+- [UPGRADING.md](./UPGRADING.md) for API and on-disk format changes between releases.
+
+## Choosing a quantizer
+
+A quantizer compresses each vector to a short code. Scoring a query against a code is much cheaper
+than against a full vector, and the codes for a large index fit in memory or in a small part of
+each disk read. Building a graph is a long series of searches: each new vector searches the graph
+for its neighbors. JVector can score these searches with the codes, so a quantizer's training,
+encoding and scoring speeds set much of an index's build time.
+
+A *fused* index stores each node's neighbors' codes in that node's on-disk record, next to its
+adjacency list. A search then reads the codes it needs along with the graph, instead of holding every
+code in memory; see [Building and serving larger-than-memory indexes](./docs/larger-than-memory-indexes.md).
+
+[Product quantization (PQ)](https://doi.org/10.1109/TPAMI.2010.57) splits each vector into
+subvectors and replaces each with the nearest entry of a codebook learned for it (see
+[the PQ tutorial](./docs/tutorials/3-larger-than-memory-tutorial.md)).
+[Asymmetric Scalar Hashing (ASH)](https://dl.acm.org/doi/10.1145/3799682.3841072), new and
+experimental, reduces each vector's dimension with a learned projection and quantizes each projected
+dimension to a few bits (see [ASH](#ash)). The build-time plot above compares fused ASH and fused PQ
+with the same 133-byte codes, from training through writing the index.
+
+| Quantizer | Use it for | Notes |
+| --- | --- | --- |
+| **PQ** | Graph traversal; the stable default | Fused or in memory; any similarity; optional anisotropic weighting |
+| **ASH** (experimental) | Graph traversal, especially at high compression | Most accurate at a given code size; fast training and encoding; fused or in memory; any similarity |
+| **BQ** | Very fast, coarse traversal | One bit per dimension |
+| **NVQ** | Reranking | Stored in the graph; high accuracy at about a quarter of FP32's size |
+
+### ASH
+
+ASH is experimental: its public types are marked `@Experimental`, and their API may change between
+releases. PQ remains the recommended choice when stability matters most.
+
+ASH (Asymmetric Scalar Hashing; [paper](https://dl.acm.org/doi/10.1145/3799682.3841072)) reduces the dimension of database
+vectors with a learned orthonormal projection, then scalar-quantizes each projected dimension to a
+few bits, while keeping queries in their original form. At the same code size it is more accurate than additive and scalar quantizers,
+trains and encodes quickly, and scores with SIMD lookups. JVector is the first graph index to support
+it. On large datasets at matched code sizes, fused ASH builds faster than fused PQ, is more
+accurate, and searches faster in nearly every case; see [ASH performance](./docs/ash-performance.md).
+
+At the same code size, ASH reaches higher recall at a given throughput on each of these datasets:
+
+<img src="./docs/images/ash-pq-qps-recall-mpnet.png" alt="QPS vs recall@10 for fused ASH and fused PQ on MPNet 10M" width="600">
+<img src="./docs/images/ash-pq-qps-recall-cohere.png" alt="QPS vs recall@10 for fused ASH and fused PQ on Cohere English v3 10M" width="600">
+<img src="./docs/images/ash-pq-qps-recall-cap.png" alt="QPS vs recall@10 for fused ASH and fused PQ on CAP 6M" width="600">
+
+<sub>Fused ASH and fused PQ with the same code size (32× compression), on a Google Cloud
+n2-standard-64: each index was built once on 32 cores and queried on 32 cores, with the index in
+memory and queries it had not seen. Points are rerank depths up to 640, from recall 0.7 up; the
+deepest is the mean of three runs. ASH used queued execution and adaptive termination, PQ direct
+execution. Each index is one segment with NVQ reranking vectors.</sub>
+
+Start with the HelloASHWorld programs above, then:
+
+- [ASH configuration and defaults](./docs/ash-configuration.md): model parameters, construction
+  scoring, precision and JVM settings.
+- [Integrating ASH queries into a database](./docs/ash-query-integration.md): concurrency, bounded
+  admission and batched query projection.
+- [Choosing ASH query-projection precision](./docs/ash-projection-precision.md): FP16, FP32 or INT8
+  by processor.
+- [Building and serving larger-than-memory indexes](./docs/larger-than-memory-indexes.md): sizing,
+  streamed construction, page-aligned records and query settings for indexes served from disk.
+
+An ASH model is trained for one similarity, `DOT_PRODUCT`, `EUCLIDEAN` or `COSINE`, chosen when it is
+created and saved with it; every scorer of its codes uses it. ASH does not require normalized vectors. See
+[Similarity](./docs/ash-configuration.md#similarity).
+Training uses the system BLAS and LAPACK (MKL or OpenBLAS) when installed, with a slower Java
+fallback; see [BLAS threads](./docs/ash-configuration.md#blas-threads).
+
+ASH also brings:
+
+- **Streaming construction.** `StreamingASHIndex` builds and searches a graph while vectors arrive,
+  holding only the graph and ASH codes. It can start cold, train its first model from a sample, and
+  move to newer models without rebuilding the graph or stalling inserts
+  ([StreamingBuild](./jvector-examples/src/main/java/io/github/jbellis/jvector/example/StreamingBuild.java)).
+- **Native query projection** in FP32, FP16 or INT8, chosen by processor; see
+  [Choosing ASH query-projection precision](./docs/ash-projection-precision.md).
+- **Queued, batched queries.** `QueryPreparer` and `BatchingExecutor` project many queries at once
+  and bound the work admitted, for database integrations; see
+  [Integrating ASH queries](./docs/ash-query-integration.md).
+
+### On-disk format version 7
+
+JVector now writes on-disk format version 7 by default, for every index, including PQ indexes. Fused
+ASH, separate ASH codes and page-aligned records require it. JVector 4.0.x cannot read version 7
+files; to keep a rollback possible, write version 6 until every reader is upgraded. Page-aligned
+records (`withPageAlignment`, for any index) keep each node's record from crossing a device page, so
+a larger-than-memory index reads one page per node it expands instead of sometimes two; see [Building and serving larger-than-memory indexes](./docs/larger-than-memory-indexes.md).
+[UPGRADING.md](./UPGRADING.md) gives the details.
+
+## Benchmarking with BenchYAML
+
+BenchYAML builds and measures indexes from YAML descriptions of datasets, index parameters and
+measurements. For a first run, benchmark one small public dataset from the repository root. It downloads
+on first use (about 430 MB), then builds and searches 100,000 vectors in about a minute and prints recall and throughput tables:
+
+```bash
+mvn compile exec:exec@bench -pl jvector-examples -am -DbenchArgs=cohere-english-v3-100k
 ```
-* JVector also supports Binary Quantization, but [BQ is generally less useful than PQ since it takes such a large toll on search accuracy](https://thenewstack.io/why-vector-size-matters/).
 
-Then we can wire up the compressed vectors to a two-phase search by getting the fast ApproximateScoreFunction from PQVectors, and the Reranker from the index View:
-```java
-        ReaderSupplier rs = ReaderSupplierFactory.open(indexPath);
-        OnDiskGraphIndex index = OnDiskGraphIndex.load(rs);
-        // load the PQVectors that we just wrote to disk
-        try (ReaderSupplier pqSupplier = ReaderSupplierFactory.open(pqPath);
-             RandomAccessReader in = pqSupplier.get())
-        {
-            PQVectors pqv = PQVectors.load(in);
-            // SearchScoreProvider that does a first pass with the loaded-in-memory PQVectors,
-            // then reranks with the exact vectors that are stored on disk in the index
-            Function<VectorFloat<?>, SearchScoreProvider> sspFactory = q -> {
-                ApproximateScoreFunction asf = pqv.precomputedScoreFunctionFor(q, VectorSimilarityFunction.EUCLIDEAN);
-                Reranker reranker = index.getView().rerankerFor(q, VectorSimilarityFunction.EUCLIDEAN);
-                return new SearchScoreProvider(asf, reranker);
-            };
-            // measure our recall against the (exactly computed) ground truth
-            testRecall(index, queryVectors, groundTruth, sspFactory);
-        }
+Without `-DbenchArgs`, the same command runs the default set of small public datasets.
+
+Select datasets by name with `-DbenchArgs="cohere ada002"`, or run one index configuration by path,
+such as an [example pipeline](./jvector-examples/yaml-configs/index-parameters/README.md). Compressed
+datasets use fused ASH by default.
+
+- [How to run benchmarks](./docs/benchmarking.md): datasets, parameters, and output.
+- [BenchYAML Guide](./docs/benchyaml-guide.md): every construction and search field, and every console and CSV result field.
+- [Benchmark launcher](./jvector-examples/bench-profiles/README.md): rebuild and run one experiment
+  in one JVM from the command line or IntelliJ.
+- [Reproducing ASH versus PQ](./docs/ash-pq-benchmark.md): run the ASH and PQ comparison on public datasets.
+
+## SIMD and native acceleration
+
+On Java 22 and later, JVector prefers its native provider, built on
+[Google Highway](https://github.com/google/highway), when the native library is available. Native
+libraries are bundled for Linux x86-64 (SSE4.2 or newer) and Linux AArch64. Java 20 and 21 use the
+Panama Vector API, and older runtimes use a scalar Java implementation.
+
+Highway lets each kernel be written once and compiled for every instruction-set tier; at startup
+the library picks the best tier the processor supports. One source gives native performance from
+SSE4.2 to AVX-512 with VNNI and FP16 on x86-64, and from NEON to SVE2 on AArch64. A new kernel
+is written once for all tiers, with a hand-tuned override only where one tier needs it, and new
+processor tiers follow a short documented recipe (see
+[adding a kernel](./jvector-native/src/main/native/README.md#adding-a-new-simd-kernel)). Distance
+functions, PQ and ASH scoring, and ASH query projection all run on these kernels.
+
+| JVM property | Effect |
+| --- | --- |
+| None | Prefer native on Java 22+, else Panama, else scalar |
+| `-Djvector.enable_native_vectorization=false` | Disable automatic native selection |
+| `-Djvector.vectorization_provider=panama` | Select Panama |
+| `-Djvector.vectorization_provider=native` | Require native; fail if it cannot load |
+| `-Djvector.vectorization_provider=default` | Select the scalar provider |
+
+If native access is denied, automatic selection falls back to Panama. For named-module deployments,
+enable native access for the module containing JVector's native code. Native ISA selection is
+automatic and can be capped with `JVECTOR_MAX_ISA`. The x86-64 tiers are SSE4.2, AVX2, AVX-512,
+AVX-512 with VNNI, AVX-512 with VNNI and VBMI2, and AVX-512 with FP16; the AArch64 tiers are
+NEON, SVE and SVE2. See the
+[native library README](./jvector-native/src/main/native/README.md) for the values.
+
+The native provider stores vectors as `MemorySegmentVectorFloat`. Use the `VectorFloat` interface
+rather than casting to `ArrayVectorFloat`; `FloatArray.array()` gives array access, and native
+operations need vectors created by the selected provider.
+
+ASH uses native kernels for query projection (including INT8 on AVX-512 VNNI CPUs) and scoring,
+and an optional add-on built on [oneDNN](https://github.com/uxlfoundation/oneDNN) for FP16 query
+projection, INT8 on other VNNI CPUs, and batch encoding. Each falls back to a portable implementation when unavailable.
+
+## Research
+
+- Foundations: the [HNSW](https://ieeexplore.ieee.org/abstract/document/8594636) and
+  [DiskANN](https://suhasjs.github.io/files/diskann_neurips19.pdf) papers, and
+  [a higher-level explainer](https://en.wikipedia.org/wiki/Hierarchical_navigable_small_world)
+- [ASH: Asymmetric Scalar Hashing With Learned Dimensionality Reduction for High-Fidelity Vector Quantization](https://dl.acm.org/doi/10.1145/3799682.3841072), Tepper and Willke (CIKM 2026)
+- [Product quantization](https://doi.org/10.1109/TPAMI.2010.57), Jégou, Douze and Schmid (TPAMI 2011)
+- [NVQ](https://arxiv.org/abs/2509.18471)
+- [Anisotropic PQ](https://arxiv.org/abs/1908.10396)
+- [Quicker ADC](https://arxiv.org/abs/1812.09162)
+
+## Building and testing
+
+[Building and installing JVector](./docs/building-and-installing.md) covers builds for each platform
+and backend; this section summarizes them.
+
+JVector is a [multimodule Maven build](https://maven.apache.org/guides/mini/guide-multiple-modules.html)
+that produces a multirelease JAR usable from Java 11:
+
+| Module | Contents |
+| --- | --- |
+| [jvector-base](./jvector-base) | Core library, compiled for Java 11 |
+| [jvector-twenty](./jvector-twenty) | Panama Vector API provider, compiled for Java 20 |
+| [jvector-native](./jvector-native) | Native provider and libraries, Java 22 |
+| [jvector-multirelease](./jvector-multirelease) | Packages the three modules above as the published `jvector` JAR |
+| [jvector-examples](./jvector-examples) | Examples, BenchYAML and benchmarks |
+| [jvector-tests](./jvector-tests) | Tests, runnable on Java 11 and newer |
+
+Build with JDK 22 or newer. The native library is built with [Meson](https://mesonbuild.com/) and
+[Ninja](https://ninja-build.org/) and needs GCC 12 or newer on x86-64 (11 or newer on AArch64); Meson fetches the pinned Google Highway
+source on first build. The optional oneDNN add-on for ASH query projection is a separate Meson
+project; it also needs CMake 3.13 or newer and takes a few minutes to build, so Maven builds it only
+with `-Dnative.onednn=true` (the `release` profile and CI turn it on). The [native library README](./jvector-native/src/main/native/README.md) covers build
+options, ISA dispatch, adding kernels and
+[ABI compatibility](./jvector-native/src/main/native/README.md#native-abi-compatibility).
+On Ubuntu, `bash build_native_lib.sh --auto-install-deps` (in `jvector-native/src/main/native/src`)
+installs the toolchain and builds the library.
+
+Run the tests with:
+
+```bash
+mvn test                                       # all modules, with the SIMD providers on JDK 20+
+mvn -DskipScalar=false test                    # also run the scalar provider tests
+mvn -pl jvector-tests -am -Pjdk11 -DskipSIMD=true \
+  -Djvm=/path/to/jdk-11/bin/java test           # scalar tests on a Java 11 runtime
+mvn -Dsurefire.failIfNoSpecifiedTests=false -Dtest=TestNeighborArray test   # one class
 ```
-* PQVectors offers both precomputedScoreFunctionFor and scoreFunctionFor factories.  As the name implies, the first precalculates the fragments of distance needed from the PQ codebook for assembly by ADC (asymmetric distance computation).  This is faster for searching all but the smallest of indexes, but if you do have a tiny index or you need to perform ADC in another context, the scoreFunctionFor version with no precomputation will come in handy.
 
-This set of functionality is the classic DiskANN design.
+`-Dtest` also accepts methods and patterns, such as `TestNeighborArray#testRetain*`.
+`failIfNoSpecifiedTests=false` is needed because Surefire otherwise requires a match in every module.
 
-
-#### Step 6: building a larger-than-memory index
-
-JVector can also apply PQ compression to allow indexing a larger than memory dataset: only the compressed vectors are kept in memory.
-
-First we need to set up a PQVectors instance that we can add new vectors to, and a BuildScoreProvider using it:
-```java
-        // compute the codebook, but don't encode any vectors yet
-        ProductQuantization pq = ProductQuantization.compute(ravv, 16, 256, true);
-
-        // as we build the index we'll compress the new vectors and add them to this List backing a PQVectors;
-        // this is used to score the construction searches
-        List<ByteSequence<?>> incrementallyCompressedVectors = new ArrayList<>();
-        PQVectors pqv = new PQVectors(pq, incrementallyCompressedVectors);
-        BuildScoreProvider bsp = BuildScoreProvider.pqBuildScoreProvider(VectorSimilarityFunction.EUCLIDEAN, pqv);
-```
-
-Then we need to set up an OnDiskGraphIndexWriter with full control over the construction process.
-```java
-        Path indexPath = Files.createTempFile("siftsmall", ".inline");
-        Path pqPath = Files.createTempFile("siftsmall", ".pq");
-        // Builder creation looks mostly the same
-        try (GraphIndexBuilder builder = new GraphIndexBuilder(bsp, ravv.dimension(), 16, 100, 1.2f, 1.2f, true);
-             // explicit Writer for the first time, this is what's behind OnDiskGraphIndex.write
-             OnDiskGraphIndexWriter writer = new OnDiskGraphIndexWriter.Builder(builder.getGraph(), indexPath)
-                     .with(new InlineVectors(ravv.dimension()))
-                     .withMapper(new OnDiskGraphIndexWriter.IdentityMapper())
-                     .build();
-             // output for the compressed vectors
-             DataOutputStream pqOut = new DataOutputStream(new BufferedOutputStream(Files.newOutputStream(pqPath))))
-```
-
-Once that’s done, we can index vectors one at a time:
-```java
-            // build the index vector-at-a-time (on disk)
-            for (VectorFloat<?> v : baseVectors) {
-                // compress the new vector and add it to the PQVectors (via incrementallyCompressedVectors)
-                int ordinal = incrementallyCompressedVectors.size();
-                incrementallyCompressedVectors.add(pq.encode(v));
-                // write the full vector to disk
-                writer.writeInline(ordinal, Feature.singleState(FeatureId.INLINE_VECTORS, new InlineVectors.State(v)));
-                // now add it to the graph -- the previous steps must be completed first since the PQVectors
-                // and InlineVectorValues are both used during the search that runs as part of addGraphNode construction
-                builder.addGraphNode(ordinal, v);
-            }
-```
-Finally, we need to run cleanup() and write the index and the PQVectors to disk:
-```java
-            // cleanup does a final enforcement of maxDegree and handles other scenarios like deleted nodes
-            // that we don't need to worry about here
-            builder.cleanup();
-
-            // finish writing the index (by filling in the edge lists) and write our completed PQVectors
-            writer.write(Map.of());
-            pqv.write(pqOut);
-````
-Commentary:
-* The search code doesn’t change when switching to incremental index construction – it’s the same index structure on disk, just (potentially) much larger.
-* OnDiskGraphIndexWriter::writeInline is threadsafe via synchronization, but care must be taken that the support structures are threadsafe as well if you plan to use them in a multithreaded scenario (which this example is not).  Alternatively, you can serialize the updates to PQVectors and leave only the call to GraphIndexBuilder::addGraphNode concurrent.  This represents the lion’s share of construction time so you will see good performance with that approach.
-
-
-### Less-obvious points
-
-* Embeddings models produce output from a consistent distribution of vectors. This means that you can save and re-use ProductQuantization codebooks, even for a different set of vectors, as long as you had a sufficiently large training set to build it the first time around. ProductQuantization.MAX_PQ_TRAINING_SET_SIZE (128,000 vectors) has proven to be sufficiently large.
-* JDK ThreadLocal objects cannot be referenced except from the thread that created them.  This is a difficult design into which to fit caching of Closeable objects like GraphSearcher.  JVector provides the ExplicitThreadLocal class to solve this.
-* Fused PQ is only compatible with Product Quantization, not Binary Quantization.  This is no great loss since [very few models generate embeddings that are best suited for BQ](https://thenewstack.io/why-vector-size-matters/).  That said, BQ continues to be supported with non-Fused indexes.
-* JVector heavily utilizes the Panama Vector API(SIMD) for ANN indexing and search.  We have seen cases where the memory bandwidth is saturated during indexing and product quantization and can cause the process to slow down. To avoid this, the batch methods for index and PQ builds use a [PhysicalCoreExecutor](https://javadoc.io/doc/io.github.jbellis/jvector/latest/io/github/jbellis/jvector/util/PhysicalCoreExecutor.html) to limit the amount of operations to the physical core count. The default value is 1/2 the processor count seen by Java. This may not be correct in all setups (e.g. no hyperthreading or hybrid architectures) so if you wish to override the default use the `-Djvector.physical_core_count` property, or pass in your own ForkJoinPool instance.
-
-
-### Advanced features
-
-* Fused PQ is represented as a Feature that is supported during incremental index construction, like InlineVectors above.  [See the Grid class for sample code](https://github.com/jbellis/jvector/blob/main/jvector-examples/src/main/java/io/github/jbellis/jvector/example/Grid.java).
-* Anisotropic PQ is built into the ProductQuantization class and can improve recall, but nobody knows how to tune it (with the T/threshold parameter) except experimentally on a per-model basis, and choosing the wrong setting can make things worse.  From Figure 3 in the paper: 
-![APQ performnce on Glove first improves and then degrades as T increases](https://github.com/jbellis/jvector/assets/42158/fd459222-6929-43ca-a405-ac34dbaf6646)
-
-* JVector supports in-place deletes via GraphIndexBuilder::markNodeDeleted.  Deleted nodes are removed and connections replaced during GraphIndexBuilder::cleanup, with runtime proportional to the number of deleted nodes.
-* To checkpoint a graph and reload it for continued editing, use OnHeapGraphIndex::save and GraphIndexBuilder.load.
-
-
-## The research behind the algorithms
-
-* Foundational work: [HNSW](https://ieeexplore.ieee.org/abstract/document/8594636) and [DiskANN](https://suhasjs.github.io/files/diskann_neurips19.pdf) papers, and [a higher level explainer](https://www.datastax.com/guides/hierarchical-navigable-small-worlds)
-* [Anisotropic PQ paper](https://arxiv.org/abs/1908.10396)
-* [Quicker ADC paper](https://arxiv.org/abs/1812.09162)
-* [NVQ paper](https://arxiv.org/abs/2509.18471)
-
-## Developing and Testing
-This project is organized as a [multimodule Maven build](https://maven.apache.org/guides/mini/guide-multiple-modules.html). The intent is to produce a multirelease jar suitable for use as
-a dependency from any Java 11 code. When run on a Java 20+ JVM with the Vector module enabled, optimized vector
-providers will be used. In general, the project is structured to be built with JDK 20+, but when `JAVA_HOME` is set to
-Java 11 -> Java 19, certain build features will still be available.
-
-Base code is in [jvector-base](./jvector-base) and will be built for Java 11 releases, restricting language features and APIs
-appropriately. Code in [jvector-twenty](./jvector-twenty) will be compiled for Java 20 language features/APIs and included in the final
-multirelease jar targeting supported JVMs. [jvector-multirelease](./jvector-multirelease) packages [jvector-base](./jvector-base) and [jvector-twenty](./jvector-twenty) as a
-multirelease jar for release. [jvector-examples](./jvector-examples) is an additional sibling module that uses the reactor-representation of
-jvector-base/jvector-twenty to run example code. [jvector-tests](./jvector-tests) contains tests for the project, capable of running against
-both Java 11 and Java 20+ JVMs.
-
-To run tests, use `mvn test`. To run tests against Java 20+, use `mvn test`. To run tests against Java 11, use `mvn -Pjdk11 test`.
-To run a single test class, use the Maven Surefire test filtering capability, e.g.,
-`mvn -Dsurefire.failIfNoSpecifiedTests=false -Dtest=TestNeighborArray test`.
-You may also use method-level filtering and patterns, e.g.,
-`mvn -Dsurefire.failIfNoSpecifiedTests=false -Dtest=TestNeighborArray#testRetain* test`.
-(The `failIfNoSpecifiedTests` option works around a quirk of surefire: it is happy to run `test` with submodules with empty test sets,
-but as soon as you supply a filter, it wants at least one match in every submodule.)
-
-You can run `SiftSmall` and `Bench` directly to get an idea of what all is going on here. `Bench` will automatically download required datasets to the `fvec` and `hdf5` directories.
-The files used by `SiftSmall` can be found in the [siftsmall directory](./siftsmall) in the project root.
-
-To run either class, you can use the Maven exec-plugin via the following incantations:
-
-> `mvn compile exec:exec@bench`
-
-or for Sift:
-
-> `mvn compile exec:exec@sift`
-
-`Bench` takes an optional `benchArgs` argument that can be set to a list of whitespace-separated regexes. If any of the
-provided regexes match within a dataset name, that dataset will be included in the benchmark. For example, to run only the glove
-and nytimes datasets, you could use:
-
-> `mvn compile exec:exec@bench -DbenchArgs="glove nytimes"`
-
-To run Sift/Bench without the JVM vector module available, you can use the following invocations:
-
-> `mvn -Pjdk11 compile exec:exec@bench`
-
-> `mvn -Pjdk11 compile exec:exec@sift`
-
-The `... -Pjdk11` invocations will also work with `JAVA_HOME` pointing at a Java 11 installation.
-
-To release, configure `~/.m2/settings.xml` to point to OSSRH and run `mvn -Prelease clean deploy`.
-
----
+To release, configure `~/.m2/settings.xml` for OSSRH and run `mvn -Prelease clean deploy`.

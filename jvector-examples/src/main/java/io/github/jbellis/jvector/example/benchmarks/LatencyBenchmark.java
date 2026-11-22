@@ -18,17 +18,27 @@ package io.github.jbellis.jvector.example.benchmarks;
 
 import java.util.List;
 import java.util.ArrayList;
-import java.util.Collections;
+import java.util.Arrays;
+import java.util.Objects;
+import java.util.concurrent.ThreadLocalRandom;
+import java.util.concurrent.TimeUnit;
+import java.util.function.Function;
+import java.util.function.LongSupplier;
 
 import io.github.jbellis.jvector.example.Grid.ConfiguredSystem;
 import io.github.jbellis.jvector.graph.SearchResult;
+import io.github.jbellis.jvector.vector.VectorUtil;
+import io.github.jbellis.jvector.vector.VectorizationProvider;
+import io.github.jbellis.jvector.vector.types.VectorFloat;
 
 /**
- * Measures per‐query latency (mean and standard deviation) over N runs,
- * and counts correct top‐K results.
+ * Measures unloaded per-query latency after random-query warmup through the
+ * same execution policy used by the timed requests.
  */
 public class LatencyBenchmark extends AbstractQueryBenchmark {
     private static final String DEFAULT_FORMAT = ".3f";
+    private static final int WARMUP_PASSES = 3;
+    private static final long MIN_WARMUP_NANOS = TimeUnit.SECONDS.toNanos(3);
 
     private boolean computeAvgLatency;
     private boolean computeLatencySTD;
@@ -87,6 +97,90 @@ public class LatencyBenchmark extends AbstractQueryBenchmark {
         return this;
     }
 
+    /**
+     * The same pass and search-function instance serve warmup and measurement.
+     * Separate dispatch sites can leave the measured call cold after the JVM
+     * inlines the warmup site. Random query buffers are allocated once and
+     * refilled between warmup sweeps, without touching measured query contents.
+     */
+    static long[] measure(VectorFloat<?>[] queries, int queryRuns, int warmupPasses,
+                          long minimumNanos, Function<VectorFloat<?>, SearchResult> search,
+                          LongSupplier clock) {
+        Objects.requireNonNull(queries, "queries");
+        Objects.requireNonNull(search, "search");
+        Objects.requireNonNull(clock, "clock");
+        if (queries.length == 0 || queryRuns <= 0 || warmupPasses <= 0 || minimumNanos < 0)
+            throw new IllegalArgumentException("Require queries, positive run counts, and nonnegative warmup duration");
+        int dimension = Objects.requireNonNull(queries[0], "query").length();
+        if (dimension <= 0) throw new IllegalArgumentException("Query dimension must be positive");
+        long[] times = new long[Math.multiplyExact(queries.length, queryRuns)];
+        var vectors = VectorizationProvider.getInstance().getVectorTypeSupport();
+        VectorFloat<?>[] randomInputs = new VectorFloat<?>[queries.length];
+        for (int i = 0; i < randomInputs.length; i++) randomInputs[i] = vectors.createFloatVector(dimension);
+
+        for (int phase = 0; phase <= warmupPasses; phase++) {
+            boolean warming = phase < warmupPasses;
+            VectorFloat<?>[] inputs = warming ? randomInputs : queries;
+            int repeats = warming ? 1 : queryRuns;
+            int offset = 0;
+            long started = clock.getAsLong();
+            do {
+                if (warming) { randomize(randomInputs, dimension); offset = 0; }
+                for (int run = 0; run < repeats; run++)
+                    offset = runPass(inputs, search, times, offset);
+            } while (warming && clock.getAsLong() - started < minimumNanos);
+        }
+        return times;
+    }
+
+    private static void randomize(VectorFloat<?>[] inputs, int dimension) {
+        var random = ThreadLocalRandom.current();
+        for (var query : inputs) {
+            boolean nonZero = false;
+            for (int d = 0; d < dimension; d++) {
+                float value = random.nextFloat();
+                query.set(d, value);
+                nonZero |= value != 0;
+            }
+            if (!nonZero) query.set(0, 1);
+            VectorUtil.l2normalize(query);
+        }
+    }
+
+    /** No warmup/measurement branch or allocation at the timed call site. */
+    private static int runPass(VectorFloat<?>[] queries, Function<VectorFloat<?>, SearchResult> search,
+                               long[] times, int offset) {
+        Objects.checkFromIndexSize(offset, queries.length, times.length);
+        for (int i = 0; i < queries.length; i++) {
+            long start = System.nanoTime();
+            SearchResult result = search.apply(queries[i]);
+            long duration = System.nanoTime() - start;
+            times[offset++] = duration;
+            SINK += result.getVisitedCount();
+        }
+        return offset;
+    }
+
+    /** Summarize only the completed measured samples; warmup overwrites no input data. */
+    List<Metric> metrics(long[] latencies) {
+        double mean = 0, m2 = 0;
+        int count = 0;
+        for (long duration : latencies) {
+            count++;
+            double delta = duration - mean;
+            mean += delta / count;
+            m2 += delta * (duration - mean);
+        }
+        double standardDeviation = count > 0 ? Math.sqrt(m2 / count) / 1e6 : 0;
+        Arrays.sort(latencies);
+        int index = Math.max(0, Math.min(latencies.length - 1, (int) Math.ceil(0.999 * latencies.length) - 1));
+        var result = new ArrayList<Metric>();
+        if (computeAvgLatency) result.add(Metric.of("search.latency.mean_ms", "Mean Latency (ms)", formatAvgLatency, mean / 1e6));
+        if (computeLatencySTD) result.add(Metric.of("search.latency.std_ms", "STD Latency (ms)", formatLatencySTD, standardDeviation));
+        if (computeP999Latency) result.add(Metric.of("search.latency.p999_ms", "p999 Latency (ms)", formatP999Latency, latencies[index] / 1e6));
+        return result;
+    }
+
     @Override
     public String getBenchmarkName() {
         return "LatencyBenchmark";
@@ -104,54 +198,14 @@ public class LatencyBenchmark extends AbstractQueryBenchmark {
             throw new IllegalArgumentException("At least one parameter must be set to true");
         }
 
-        int totalQueries = cs.getDataSet().getQueryVectors().size();
-        double mean = 0.0;
-        double m2 = 0.0;
-        int count = 0;
-
-        // Collect every query latency
-        List<Long> latencies = new ArrayList<>(totalQueries * queryRuns);
-
-        // Run the full set of queries queryRuns times
-        for (int run = 0; run < queryRuns; run++) {
-            for (int i = 0; i < totalQueries; i++) {
-                long start = System.nanoTime();
-                SearchResult sr = QueryExecutor.executeQuery(
-                        cs, topK, rerankK, usePruning, i);
-                long duration = System.nanoTime() - start;
-                // record latency for percentile computation
-                latencies.add(duration);
-                SINK += sr.getVisitedCount();
-
-                // Welford’s online algorithm for variance
-                count++;
-                double delta = duration - mean;
-                mean += delta / count;
-                m2 += delta * (duration - mean);
-            }
+        VectorFloat<?>[] queries = cs.getDataSet().getQueryVectors().toArray(new VectorFloat<?>[0]);
+        try (QueuedQueryExecution queued = cs.usesQueuedExecution()
+                ? new QueuedQueryExecution(cs, topK, rerankK, usePruning) : null) {
+            Function<VectorFloat<?>, SearchResult> search = query -> queued == null
+                    ? QueryExecutor.executeQuery(cs, topK, rerankK, usePruning, query)
+                    : queued.executeSingle(query);
+            long[] times = measure(queries, queryRuns, WARMUP_PASSES, MIN_WARMUP_NANOS, search, System::nanoTime);
+            return metrics(times);
         }
-
-        mean /= 1e6;
-        double standardDeviation = (count > 0) ? Math.sqrt(m2 / count) / 1e6: 0.0;
-
-        // Compute 99.9th percentile
-        Collections.sort(latencies);
-        int idx = (int)Math.ceil(0.999 * latencies.size()) - 1;
-        if (idx < 0) idx = 0;
-        if (idx >= latencies.size()) idx = latencies.size() - 1;
-        double p999Latency = latencies.get(idx) / 1e6;
-
-        var list = new ArrayList<Metric>();
-        if (computeAvgLatency) {
-            list.add(Metric.of("search.latency.mean_ms", "Mean Latency (ms)", formatAvgLatency, mean));
-        }
-        if (computeLatencySTD) {
-            list.add(Metric.of("search.latency.std_ms", "STD Latency (ms)", formatLatencySTD, standardDeviation));
-        }
-        if (computeP999Latency) {
-            list.add(Metric.of("search.latency.p999_ms", "p999 Latency (ms)", formatP999Latency, p999Latency));
-        }
-        return list;
-
     }
 }

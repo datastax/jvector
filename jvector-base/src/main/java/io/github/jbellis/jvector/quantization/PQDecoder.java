@@ -59,8 +59,22 @@ abstract class PQDecoder implements ScoreFunction.ApproximateScoreFunction {
     }
 
     static class DotProductDecoder extends CachingDecoder {
+        private final VectorFloat<?> query;
+
         public DotProductDecoder(PQVectors cv, VectorFloat<?> query) {
             super(cv, query, VectorSimilarityFunction.DOT_PRODUCT);
+            this.query = query;
+        }
+
+        /** PQ scores the centered query against centered reconstructions, so their lengths bound the score. */
+        @Override
+        public float dotProductBound() {
+            var center = cv.pq.globalCentroid;
+            double squared = VectorUtil.dotProduct(query, query);
+            if (center != null) {
+                squared += VectorUtil.dotProduct(center, center) - 2.0 * VectorUtil.dotProduct(query, center);
+            }
+            return (float) Math.sqrt(Math.max(0.0, squared)) * cv.maxReconstructedNorm();
         }
 
         @Override
@@ -99,9 +113,7 @@ abstract class PQDecoder implements ScoreFunction.ApproximateScoreFunction {
                 for (int m = 0; m < pq.getSubspaceCount(); ++m) {
                     int size = pq.subvectorSizesAndOffsets[m][0];
                     var codebook = pq.codebooks[m];
-                    for (int j = 0; j < pq.getClusterCount(); ++j) {
-                        partialMagnitudes.set((m * pq.getClusterCount()) + j, VectorUtil.dotProduct(codebook, j * size, codebook, j * size, size));
-                    }
+                    VectorUtil.calculatePartialSelfMagnitudes(codebook, m, size, pq.getClusterCount(), partialMagnitudes);
                 }
                 return partialMagnitudes;
             });
@@ -117,9 +129,7 @@ abstract class PQDecoder implements ScoreFunction.ApproximateScoreFunction {
                 int offset = pq.subvectorSizesAndOffsets[m][1];
                 int size = pq.subvectorSizesAndOffsets[m][0];
                 var codebook = pq.codebooks[m];
-                for (int j = 0; j < pq.getClusterCount(); ++j) {
-                    partialSums.set((m * pq.getClusterCount()) + j, VectorUtil.dotProduct(codebook, j * size, centeredQuery, offset, size));
-                }
+                VectorUtil.calculatePartialSums(codebook, m, size, pq.getClusterCount(), centeredQuery, offset, VectorSimilarityFunction.DOT_PRODUCT, partialSums);
             }
 
             this.bMagnitude = VectorUtil.dotProduct(centeredQuery, centeredQuery);

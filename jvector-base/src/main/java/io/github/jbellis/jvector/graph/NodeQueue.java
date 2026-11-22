@@ -206,7 +206,7 @@ public class NodeQueue {
             // we examine that manually
             if (reranked.size() < topK) {
                 reranked.push(ids[i], exactScores[i]);
-            } else if (exactScores[i] > reranked.topScore()) {
+            } else if (topK > 0 && exactScores[i] > reranked.topScore()) {
                 int evictedNode = reranked.topNode();
                 unused.add(evictedNode, approximateScoresById.get(evictedNode));
                 reranked.push(ids[i], exactScores[i]);

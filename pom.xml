@@ -41,7 +41,8 @@
     <properties>
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
         <maven.install.skip>true</maven.install.skip>
-        <revision>4.0.0-rc.9-SNAPSHOT</revision>
+        <revision>4.1.0-SNAPSHOT</revision>
+        <ludovic.netlib.version>3.0.3</ludovic.netlib.version>
     </properties>
     <modules>
         <module>jvector-base</module>
@@ -109,7 +110,17 @@
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-javadoc-plugin</artifactId>
-                <version>3.5.0</version>
+                <version>3.12.0</version>
+                <configuration>
+                    <tags>
+                        <tag>
+                            <!-- Apply to standalone Javadoc goals as well as aggregate packaging. -->
+                            <name>apiNote</name>
+                            <placement>a</placement>
+                            <head>API Note:</head>
+                        </tag>
+                    </tags>
+                </configuration>
                 <executions>
                     <execution>
                         <id>attach-javadocs</id>
@@ -195,6 +206,17 @@
             <groupId>org.yaml</groupId>
             <artifactId>snakeyaml</artifactId>
             <version>2.4</version>
+        </dependency>
+        <!-- BLAS and LAPACK for ASH training; netlib uses the system library when installed. -->
+        <dependency>
+            <groupId>dev.ludovic.netlib</groupId>
+            <artifactId>blas</artifactId>
+            <version>${ludovic.netlib.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>dev.ludovic.netlib</groupId>
+            <artifactId>lapack</artifactId>
+            <version>${ludovic.netlib.version}</version>
         </dependency>
     </dependencies>
     <dependencyManagement>

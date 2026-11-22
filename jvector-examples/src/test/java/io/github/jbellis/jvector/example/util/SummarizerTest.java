@@ -121,16 +121,20 @@ public class SummarizerTest {
         System.out.println("\nTest: SummaryStats toString method");
         
         // Create a SummaryStats instance
-        SummaryStats stats = new SummaryStats(0.85, 1200.0, 5.2, 1000000, 4, 0.2, 100);
-        
+        SummaryStats stats = new SummaryStats(0.85, 1200.0, 5.2, 1000000, 4, 0.2, 100, 0, 0, 0, 0);
+
         // Verify toString output
         String expected = String.format(
             "Benchmark Summary (across %d configurations):%n" +
             "  Average Recall@k: %.4f%n" +
             "  Average QPS: %.2f (± %.2f)%n" +
-            "  Average Latency: %.2f ms",
-            4, 0.85, 1200.0, 0.0, 5.2);
-        
+            "  Average Latency: %.2f ms%n" +
+            "  Index Construction Time: %.2f%n" +
+            "  Average Nodes Visited: %.2f%n" +
+            "  Build Heap Used: %.1f MB  Build Off-Heap: %.1f MB%n" +
+            "  Search Heap Used: %.1f MB  Search Off-Heap: %.1f MB",
+            4, 0.85, 1200.0, 0.2, 5.2, 1000000.00, 100.00, 0.0, 0.0, 0.0, 0.0);
+
         assertEquals("toString output", expected, stats.toString());
     }
     
