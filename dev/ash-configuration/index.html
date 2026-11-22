@@ -1,0 +1,2483 @@
+
+<!doctype html>
+<html lang="en" class="no-js">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+        <meta name="description" content="Java library for approximate nearest neighbor vector search with graph indexes.">
+      
+      
+      
+        <link rel="canonical" href="https://datastax.github.io/jvector/dev/ash-configuration/">
+      
+      
+        <link rel="prev" href="../pq/">
+      
+      
+        <link rel="next" href="../ash-projection-precision/">
+      
+      
+      <link rel="icon" href="../assets/images/favicon.png">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.6.14">
+    
+    
+      
+        <title>Configuration and defaults - JVector</title>
+      
+    
+    
+      <link rel="stylesheet" href="../assets/stylesheets/main.342714a4.min.css">
+      
+        
+        <link rel="stylesheet" href="../assets/stylesheets/palette.06af60db.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+        
+        
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Roboto:300,300i,400,400i,700,700i%7CRoboto+Mono:400,400i,700,700i&display=fallback">
+        <style>:root{--md-text-font:"Roboto";--md-code-font:"Roboto Mono"}</style>
+      
+    
+    
+    <script>__md_scope=new URL("..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+
+    
+    
+    
+  </head>
+  
+  
+    
+    
+      
+    
+    
+    
+    
+    <body dir="ltr" data-md-color-scheme="default" data-md-color-primary="indigo" data-md-color-accent="indigo">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#ash-configuration-and-defaults" class="md-skip">
+          Skip to content
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+    </div>
+    
+      <div data-md-color-scheme="default" data-md-component="outdated" hidden>
+        
+      </div>
+    
+    
+      
+
+  
+
+<header class="md-header md-header--shadow" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="Header">
+    <a href=".." title="JVector" class="md-header__button md-logo" aria-label="JVector" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            JVector
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              Configuration and defaults
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+      
+        <form class="md-header__option" data-md-component="palette">
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="(prefers-color-scheme: light)" data-md-color-scheme="default" data-md-color-primary="indigo" data-md-color-accent="indigo"  aria-label="Switch to dark mode"  type="radio" name="__palette" id="__palette_0">
+    
+      <label class="md-header__button md-icon" title="Switch to dark mode" for="__palette_1" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a4 4 0 0 0-4 4 4 4 0 0 0 4 4 4 4 0 0 0 4-4 4 4 0 0 0-4-4m0 10a6 6 0 0 1-6-6 6 6 0 0 1 6-6 6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="(prefers-color-scheme: dark)" data-md-color-scheme="slate" data-md-color-primary="indigo" data-md-color-accent="indigo"  aria-label="Switch to light mode"  type="radio" name="__palette" id="__palette_1">
+    
+      <label class="md-header__button md-icon" title="Switch to light mode" for="__palette_0" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 18c-.89 0-1.74-.2-2.5-.55C11.56 16.5 13 14.42 13 12s-1.44-4.5-3.5-5.45C10.26 6.2 11.11 6 12 6a6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+</form>
+      
+    
+    
+      <script>var palette=__md_get("__palette");if(palette&&palette.color){if("(prefers-color-scheme)"===palette.color.media){var media=matchMedia("(prefers-color-scheme: light)"),input=document.querySelector(media.matches?"[data-md-color-media='(prefers-color-scheme: light)']":"[data-md-color-media='(prefers-color-scheme: dark)']");palette.color.media=input.getAttribute("data-md-color-media"),palette.color.scheme=input.getAttribute("data-md-color-scheme"),palette.color.primary=input.getAttribute("data-md-color-primary"),palette.color.accent=input.getAttribute("data-md-color-accent")}for(var[key,value]of Object.entries(palette.color))document.body.setAttribute("data-md-color-"+key,value)}</script>
+    
+    
+    
+      
+      
+        <label class="md-header__button md-icon" for="__search">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        </label>
+        <div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" aria-label="Search" placeholder="Search" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <label class="md-search__icon md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+      </label>
+      <nav class="md-search__options" aria-label="Search">
+        
+        <button type="reset" class="md-search__icon md-icon" title="Clear" aria-label="Clear" tabindex="-1">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      </nav>
+      
+        <div class="md-search__suggest" data-md-component="search-suggest"></div>
+      
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix>
+        <div class="md-search-result" data-md-component="search-result">
+          <div class="md-search-result__meta">
+            Initializing search
+          </div>
+          <ol class="md-search-result__list" role="presentation"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+      
+    
+    
+      <div class="md-header__source">
+        <a href="https://github.com/datastax/jvector" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 6.7.2 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2024 Fonticons, Inc.--><path d="M439.55 236.05 244 40.45a28.87 28.87 0 0 0-40.81 0l-40.66 40.63 51.52 51.52c27.06-9.14 52.68 16.77 43.39 43.68l49.66 49.66c34.23-11.8 61.18 31 35.47 56.69-26.49 26.49-70.21-2.87-56-37.34L240.22 199v121.85c25.3 12.54 22.26 41.85 9.08 55a34.34 34.34 0 0 1-48.55 0c-17.57-17.6-11.07-46.91 11.25-56v-123c-20.8-8.51-24.6-30.74-18.64-45L142.57 101 8.45 235.14a28.86 28.86 0 0 0 0 40.81l195.61 195.6a28.86 28.86 0 0 0 40.8 0l194.69-194.69a28.86 28.86 0 0 0 0-40.81"/></svg>
+  </div>
+  <div class="md-source__repository">
+    datastax/jvector
+  </div>
+</a>
+      </div>
+    
+  </nav>
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+          
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+
+<nav class="md-nav md-nav--primary" aria-label="Navigation" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href=".." title="JVector" class="md-nav__button md-logo" aria-label="JVector" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    JVector
+  </label>
+  
+    <div class="md-nav__source">
+      <a href="https://github.com/datastax/jvector" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 6.7.2 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2024 Fonticons, Inc.--><path d="M439.55 236.05 244 40.45a28.87 28.87 0 0 0-40.81 0l-40.66 40.63 51.52 51.52c27.06-9.14 52.68 16.77 43.39 43.68l49.66 49.66c34.23-11.8 61.18 31 35.47 56.69-26.49 26.49-70.21-2.87-56-37.34L240.22 199v121.85c25.3 12.54 22.26 41.85 9.08 55a34.34 34.34 0 0 1-48.55 0c-17.57-17.6-11.07-46.91 11.25-56v-123c-20.8-8.51-24.6-30.74-18.64-45L142.57 101 8.45 235.14a28.86 28.86 0 0 0 0 40.81l195.61 195.6a28.86 28.86 0 0 0 40.8 0l194.69-194.69a28.86 28.86 0 0 0 0-40.81"/></svg>
+  </div>
+  <div class="md-source__repository">
+    datastax/jvector
+  </div>
+</a>
+    </div>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href=".." class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Home
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_2" >
+        
+          
+          <label class="md-nav__link" for="__nav_2" id="__nav_2_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    Getting started
+    
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_2_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_2">
+            <span class="md-nav__icon md-icon"></span>
+            Getting started
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../getting-started/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Quick start
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../building-and-installing/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Building and installing
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../tutorials/1-intro-tutorial/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Tutorial 1: Introduction
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../tutorials/2-disk-tutorial/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Tutorial 2: On-disk indexes
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../tutorials/3-larger-than-memory-tutorial/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Tutorial 3: Larger than memory
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3" >
+        
+          
+          <label class="md-nav__link" for="__nav_3" id="__nav_3_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    Guides
+    
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_3_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_3">
+            <span class="md-nav__icon md-icon"></span>
+            Guides
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../choosing-an-index/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Choosing an index
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../graph-construction/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Graph construction
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../fused-and-separated/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Fused and separated layouts
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../tuning/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Tuning construction and search
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../sizing/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Memory and disk sizing
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../larger-than-memory-indexes/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Larger-than-memory indexes
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../compaction/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Compaction
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../batched-vector-access/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Batched input vector access
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../deferred-batch-writer/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Deferred batch serialization
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+    
+  
+  
+  
+    
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--active md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4" checked>
+        
+          
+          <label class="md-nav__link" for="__nav_4" id="__nav_4_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    Quantizers
+    
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_4_label" aria-expanded="true">
+          <label class="md-nav__title" for="__nav_4">
+            <span class="md-nav__icon md-icon"></span>
+            Quantizers
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../pq/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Product quantization (PQ)
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+    
+  
+  
+  
+    
+    
+    
+    
+      
+    
+    
+    <li class="md-nav__item md-nav__item--active md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4_2" checked>
+        
+          
+          <label class="md-nav__link" for="__nav_4_2" id="__nav_4_2_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    ASH (experimental)
+    
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_4_2_label" aria-expanded="true">
+          <label class="md-nav__title" for="__nav_4_2">
+            <span class="md-nav__icon md-icon"></span>
+            ASH (experimental)
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+    
+  
+  
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  
+  <span class="md-ellipsis">
+    Configuration and defaults
+    
+  </span>
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="./" class="md-nav__link md-nav__link--active">
+        
+  
+  
+  <span class="md-ellipsis">
+    Configuration and defaults
+    
+  </span>
+  
+
+      </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#similarity" class="md-nav__link">
+    <span class="md-ellipsis">
+      Similarity
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#stored-codes-and-training" class="md-nav__link">
+    <span class="md-ellipsis">
+      Stored codes and training
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Stored codes and training">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#choosing-the-projected-dimension-for-speed" class="md-nav__link">
+    <span class="md-ellipsis">
+      Choosing the projected dimension for speed
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#graph-construction" class="md-nav__link">
+    <span class="md-ellipsis">
+      Graph construction
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Graph construction">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#encoding-while-vectors-arrive" class="md-nav__link">
+    <span class="md-ellipsis">
+      Encoding while vectors arrive
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#in-memory-code-layout" class="md-nav__link">
+    <span class="md-ellipsis">
+      In-memory code layout
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#query-projection-and-scoring" class="md-nav__link">
+    <span class="md-ellipsis">
+      Query projection and scoring
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Query projection and scoring">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#benchyaml-precision-selection" class="md-nav__link">
+    <span class="md-ellipsis">
+      BenchYAML precision selection
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#providers-cpu-budgets-and-serialization" class="md-nav__link">
+    <span class="md-ellipsis">
+      Providers, CPU budgets and serialization
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Providers, CPU budgets and serialization">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#thread-budgets" class="md-nav__link">
+    <span class="md-ellipsis">
+      Thread budgets
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#blas-threads" class="md-nav__link">
+    <span class="md-ellipsis">
+      BLAS threads
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#graph-and-search-parameters-in-benchyaml" class="md-nav__link">
+    <span class="md-ellipsis">
+      Graph and search parameters in BenchYAML
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#query-delivery-and-measurement-controls" class="md-nav__link">
+    <span class="md-ellipsis">
+      Query delivery and measurement controls
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../ash-projection-precision/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Query-projection precision
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../ash-query-integration/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Integrating ASH queries
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../ash-performance/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Performance
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../nvq/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    NVQ (reranking)
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../bq/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Binary quantization (BQ)
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_5" >
+        
+          
+          <label class="md-nav__link" for="__nav_5" id="__nav_5_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    Benchmarking
+    
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_5_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_5">
+            <span class="md-nav__icon md-icon"></span>
+            Benchmarking
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../benchmarking/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Running benchmarks
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../benchyaml-guide/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    BenchYAML guide
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../ash-pq-benchmark/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Reproducing ASH versus PQ
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../vector-prefetch-benchmark/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Vector prefetching benchmark
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_6" >
+        
+          
+          <label class="md-nav__link" for="__nav_6" id="__nav_6_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    Design notes
+    
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_6_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_6">
+            <span class="md-nav__icon md-icon"></span>
+            Design notes
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../ash-query-batching-design/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    ASH query batching
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../native-ash-preparation/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Native ASH projection
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../ash-pca-native-svd/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    ASH PCA correctness
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../legacy/jvector-step-by-step/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    JVector step by step (legacy)
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_7" >
+        
+          
+          <label class="md-nav__link" for="__nav_7" id="__nav_7_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    Reference
+    
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_7_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_7">
+            <span class="md-nav__icon md-icon"></span>
+            Reference
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="https://javadoc.io/doc/io.github.jbellis/jvector" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    API reference (Javadoc)
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="https://github.com/datastax/jvector/blob/main/UPGRADING.md" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Upgrading
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="https://github.com/datastax/jvector/blob/main/CHANGELOG.md" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Changelog
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    
+    
+    
+    
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_7_4" >
+        
+          
+          <label class="md-nav__link" for="__nav_7_4" id="__nav_7_4_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    Release notes
+    
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_7_4_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_7_4">
+            <span class="md-nav__icon md-icon"></span>
+            Release notes
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../release%20notes/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    About release notes
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../release%20notes/4.0.2/4.0.2/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    4.0.2
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../release%20notes/4.0.1/4.0.1/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    4.0.1
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../release%20notes/4.0.0-RC.9/4.0.0-RC.9/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    4.0.0-RC.9
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../release%20notes/4.0.0-RC.8/4.0.0-RC.8/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    4.0.0-RC.8
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+              
+              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#similarity" class="md-nav__link">
+    <span class="md-ellipsis">
+      Similarity
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#stored-codes-and-training" class="md-nav__link">
+    <span class="md-ellipsis">
+      Stored codes and training
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Stored codes and training">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#choosing-the-projected-dimension-for-speed" class="md-nav__link">
+    <span class="md-ellipsis">
+      Choosing the projected dimension for speed
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#graph-construction" class="md-nav__link">
+    <span class="md-ellipsis">
+      Graph construction
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Graph construction">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#encoding-while-vectors-arrive" class="md-nav__link">
+    <span class="md-ellipsis">
+      Encoding while vectors arrive
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#in-memory-code-layout" class="md-nav__link">
+    <span class="md-ellipsis">
+      In-memory code layout
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#query-projection-and-scoring" class="md-nav__link">
+    <span class="md-ellipsis">
+      Query projection and scoring
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Query projection and scoring">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#benchyaml-precision-selection" class="md-nav__link">
+    <span class="md-ellipsis">
+      BenchYAML precision selection
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#providers-cpu-budgets-and-serialization" class="md-nav__link">
+    <span class="md-ellipsis">
+      Providers, CPU budgets and serialization
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Providers, CPU budgets and serialization">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#thread-budgets" class="md-nav__link">
+    <span class="md-ellipsis">
+      Thread budgets
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#blas-threads" class="md-nav__link">
+    <span class="md-ellipsis">
+      BLAS threads
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#graph-and-search-parameters-in-benchyaml" class="md-nav__link">
+    <span class="md-ellipsis">
+      Graph and search parameters in BenchYAML
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#query-delivery-and-measurement-controls" class="md-nav__link">
+    <span class="md-ellipsis">
+      Query delivery and measurement controls
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              <article class="md-content__inner md-typeset">
+                
+                  
+
+
+  
+    <a href="https://github.com/datastax/jvector/edit/main/docs/ash-configuration.md" title="Edit this page" class="md-content__button md-icon">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M10 20H6V4h7v5h5v3.1l2-2V8l-6-6H6c-1.1 0-2 .9-2 2v16c0 1.1.9 2 2 2h4zm10.2-7c.1 0 .3.1.4.2l1.3 1.3c.2.2.2.6 0 .8l-1 1-2.1-2.1 1-1c.1-.1.2-.2.4-.2m0 3.9L14.1 23H12v-2.1l6.1-6.1z"/></svg>
+    </a>
+  
+  
+
+
+<h1 id="ash-configuration-and-defaults">ASH configuration and defaults<a class="headerlink" href="#ash-configuration-and-defaults" title="Permanent link">&para;</a></h1>
+<p>ASH has independent settings for stored codes, construction, query projection,
+and query execution. This reference covers library parameters and BenchYAML
+controls. The <a href="../benchyaml-guide/">BenchYAML Guide</a> defines the index YAML
+fields. Recipes specify their own graph and compression values.</p>
+<p>Set JVM properties before the affected model, provider or executor is initialized.
+Query views and pools are cached; changing a property later does not reconfigure
+existing objects. CPU-count properties do not pin threads.</p>
+<h2 id="similarity">Similarity<a class="headerlink" href="#similarity" title="Permanent link">&para;</a></h2>
+<p>An ASH model is trained for one similarity, <code>DOT_PRODUCT</code>, <code>EUCLIDEAN</code> or
+<code>COSINE</code>, which <code>AsymmetricHashing.initialize</code> requires as its second argument,
+as <code>GraphIndexBuilder</code> does; an ASH index cannot be built without one. The model
+saves it, and its codes and every scorer of them use it; asking a scorer for
+another similarity throws <code>IllegalArgumentException</code>, and every ASH score
+function reports it in <code>similarityFunction()</code>, which adaptive stopping reads.
+You name the similarity only where a model or index is created
+(<code>AsymmetricHashing.initialize</code>, <code>StreamingASHIndex.coldStart</code>); the ASH build
+score provider, block scorers, query preparers and <code>StreamingASHIndex.withModel</code>
+take it from the model, and an ASH index's reranker rejects any other similarity.
+PQ and BQ keep choosing the similarity per call.
+<code>CompressedVectors.similarityFunction()</code> returns the fixed similarity, or null
+when each call chooses it. BenchYAML takes the similarity from the dataset's
+metadata (<code>similarity_function</code> in <code>dataset-metadata.yml</code>).</p>
+<p>ASH does not require normalized vectors for any similarity. Training and
+encoding center each vector on its landmark and use the unit residual
+<code>(x - mu) / ||x - mu||</code>, so vector lengths are kept. Scores use the exact
+scale of <code>VectorSimilarityFunction</code>: <code>(1 + dot) / 2</code> for <code>DOT_PRODUCT</code> and
+<code>1 / (1 + d^2)</code> for <code>EUCLIDEAN</code> and <code>(1 + cos) / 2</code> for <code>COSINE</code>.</p>
+<p><code>EUCLIDEAN</code> uses the same codes, kernels and speed as <code>DOT_PRODUCT</code> (ASH paper,
+Appendix A). Its header stores <code>-||x - mu||^2 / 2</code> where a <code>DOT_PRODUCT</code> header
+stores <code>&lt;x, mu&gt; - ||mu||^2</code>, and its query term is <code>-||q - mu||^2 / 2</code> in place of
+<code>&lt;q, mu&gt;</code>, so the kernels estimate <code>-||q - x||^2 / 2</code>. A <code>EUCLIDEAN</code> model also
+stores a power-of-two unit that scales vectors to about unit length, so the
+half-precision header holds squared distances of vectors of any length.</p>
+<p><code>COSINE</code> normalizes vectors as <code>VectorUtil.l2normalize</code> does when it trains and
+encodes, and normalizes each query in FP32 before projection and before any
+FP16 or INT8 conversion; it then uses the <code>DOT_PRODUCT</code> path, so it has the same
+speed and, for vectors already of unit length, the same codes and scores.
+Reranking with stored full-precision vectors gives exact cosine similarity.
+Cosine is undefined for a zero vector: a <code>COSINE</code> model or index throws
+<code>IllegalArgumentException</code> for a zero vector when it trains, encodes, inserts
+or searches, as <code>l2normalize</code> does, so callers must reject zero vectors first.</p>
+<p>Indexing:</p>
+<div class="highlight"><pre><span></span><code><span class="c1">// The similarity is fixed here and saved with the model.</span>
+<span class="n">AsymmetricHashing</span><span class="w"> </span><span class="n">ash</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">AsymmetricHashing</span><span class="p">.</span><span class="na">initialize</span><span class="p">(</span><span class="n">vectors</span><span class="p">,</span><span class="w"> </span><span class="n">VectorSimilarityFunction</span><span class="p">.</span><span class="na">EUCLIDEAN</span><span class="p">,</span>
+<span class="w">        </span><span class="n">AsymmetricHashing</span><span class="p">.</span><span class="na">ITQ</span><span class="p">,</span><span class="w"> </span><span class="n">encodedBits</span><span class="p">,</span><span class="w"> </span><span class="mi">1</span><span class="p">,</span><span class="w"> </span><span class="n">bitsPerDimension</span><span class="p">,</span><span class="w"> </span><span class="n">executor</span><span class="p">);</span>
+<span class="n">ASHVectors</span><span class="w"> </span><span class="n">codes</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">ash</span><span class="p">.</span><span class="na">encodeAll</span><span class="p">(</span><span class="n">vectors</span><span class="p">,</span><span class="w"> </span><span class="n">executor</span><span class="p">);</span>
+<span class="c1">// Graph construction scores by the model's similarity; another one is rejected.</span>
+<span class="kd">var</span><span class="w"> </span><span class="n">builder</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="k">new</span><span class="w"> </span><span class="n">GraphIndexBuilder</span><span class="p">(</span><span class="n">BuildScoreProvider</span><span class="p">.</span><span class="na">ashBuildScoreProvider</span><span class="p">(</span><span class="n">codes</span><span class="p">),</span>
+<span class="w">        </span><span class="n">vectors</span><span class="p">.</span><span class="na">dimension</span><span class="p">(),</span><span class="w"> </span><span class="mi">32</span><span class="p">,</span><span class="w"> </span><span class="mi">100</span><span class="p">,</span><span class="w"> </span><span class="mf">1.2f</span><span class="p">,</span><span class="w"> </span><span class="mf">1.2f</span><span class="p">,</span><span class="w"> </span><span class="kc">true</span><span class="p">);</span>
+<span class="kd">var</span><span class="w"> </span><span class="n">graph</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">builder</span><span class="p">.</span><span class="na">build</span><span class="p">(</span><span class="n">vectors</span><span class="p">);</span>
+</code></pre></div>
+<p>Scoring:</p>
+<div class="highlight"><pre><span></span><code><span class="n">VectorSimilarityFunction</span><span class="w"> </span><span class="n">similarity</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">codes</span><span class="p">.</span><span class="na">similarityFunction</span><span class="p">();</span><span class="w"> </span><span class="c1">// EUCLIDEAN</span>
+<span class="kd">var</span><span class="w"> </span><span class="n">approximate</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">codes</span><span class="p">.</span><span class="na">scoreFunctionFor</span><span class="p">(</span><span class="n">query</span><span class="p">,</span><span class="w"> </span><span class="n">similarity</span><span class="p">);</span>
+<span class="kd">var</span><span class="w"> </span><span class="n">reranker</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">vectors</span><span class="p">.</span><span class="na">rerankerFor</span><span class="p">(</span><span class="n">query</span><span class="p">,</span><span class="w"> </span><span class="n">similarity</span><span class="p">);</span>
+<span class="k">try</span><span class="w"> </span><span class="p">(</span><span class="kd">var</span><span class="w"> </span><span class="n">searcher</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="k">new</span><span class="w"> </span><span class="n">GraphSearcher</span><span class="p">(</span><span class="n">graph</span><span class="p">))</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="kd">var</span><span class="w"> </span><span class="n">result</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">searcher</span><span class="p">.</span><span class="na">search</span><span class="p">(</span><span class="k">new</span><span class="w"> </span><span class="n">DefaultSearchScoreProvider</span><span class="p">(</span><span class="n">approximate</span><span class="p">,</span><span class="w"> </span><span class="n">reranker</span><span class="p">),</span><span class="w"> </span><span class="mi">10</span><span class="p">,</span><span class="w"> </span><span class="mi">50</span><span class="p">,</span><span class="w"> </span><span class="mf">0f</span><span class="p">,</span><span class="w"> </span><span class="mf">0f</span><span class="p">,</span><span class="w"> </span><span class="n">Bits</span><span class="p">.</span><span class="na">ALL</span><span class="p">);</span>
+<span class="p">}</span>
+</code></pre></div>
+<p>A fused index reads the similarity from its saved model:
+<code>view.approximateScoreFunctionFor(query, similarity)</code> must be given the same
+one. <code>StreamingASHIndex</code> takes the similarity when it is created and trains
+every model for it.</p>
+<h2 id="stored-codes-and-training">Stored codes and training<a class="headerlink" href="#stored-codes-and-training" title="Permanent link">&para;</a></h2>
+<p>BenchYAML puts these under <code>compression[].parameters</code> with <code>type: ASH</code>.
+Construction compression controls graph scoring. Search compression selects
+the codes stored with a fused ASH graph.</p>
+<table>
+<thead>
+<tr>
+<th>Parameter</th>
+<th>Default / requirement</th>
+<th>Optional values and definition</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>optimizer</code></td>
+<td>Required</td>
+<td><code>ITQ</code> (<code>1</code>): iterative-quantization transform. <code>RANDOM</code> (<code>2</code>): random transform.</td>
+</tr>
+<tr>
+<td><code>encodedBits</code></td>
+<td>Exactly one of this and <code>compressionRatio</code></td>
+<td>Total stored bits including the 40-bit / five-byte header. The positive payload <code>encodedBits - 40</code> must be divisible by <code>bitsPerDimension</code>.</td>
+</tr>
+<tr>
+<td><code>compressionRatio</code></td>
+<td>Alternative to <code>encodedBits</code></td>
+<td>BenchYAML accepts <code>8</code>, <code>16</code>, <code>32</code>, <code>64</code>, <code>128</code>, <code>256</code>. Resolves a payload near the requested FP32-to-code ratio, with a minimum 64-bit payload and whole projected dimensions; inspect the printed resolved size.</td>
+</tr>
+<tr>
+<td><code>bitsPerDimension</code> (<code>b</code>)</td>
+<td><code>1</code></td>
+<td>Integer <code>1</code> through <code>9</code>, all supported by fused ASH. <code>1</code>, <code>2</code> and <code>4</code> have the most optimized kernels (see below). Stored-code precision is independent of query-projection arithmetic.</td>
+</tr>
+<tr>
+<td><code>landmarkCount</code> (<code>C</code>)</td>
+<td><code>1</code></td>
+<td>Integer <code>1</code> through <code>256</code> for the quantizer. Symmetric graph-construction scoring currently requires <code>C=1</code>.</td>
+</tr>
+<tr>
+<td>Projected dimension (<code>d</code>)</td>
+<td>Derived, not a separate YAML field</td>
+<td><code>d = (encodedBits - 40) / b</code>, with <code>1 &lt;= d &lt;= D</code> for input dimension <code>D</code>. Increasing <code>d</code> or <code>b</code> increases code size.</td>
+</tr>
+</tbody>
+</table>
+<p>For an exact payload, use <code>encodedBits = 40 + d*b</code>. For example, a 256-D
+input projected to 128 dimensions at four bits uses <code>encodedBits: 552</code>.
+Include the header when comparing memory budgets with other quantizers.</p>
+<h3 id="choosing-the-projected-dimension-for-speed">Choosing the projected dimension for speed<a class="headerlink" href="#choosing-the-projected-dimension-for-speed" title="Permanent link">&para;</a></h3>
+<p>For the fastest construction and search, use <code>b</code> = 1, 2 or 4 and make <code>d</code> a
+multiple of 64. The native kernels then process whole 64-bit words and whole
+SIMD vectors, with no leftover dimensions:</p>
+<ul>
+<li>Construction compares stored codes with each other. At 1 bit, the kernel
+  works in words of 64 dimensions. At 2 bits, it works in words of 32
+  dimensions. At 4 bits, it works in vectors of up to 128 dimensions.</li>
+<li>Search builds per-query lookup tables in 16-byte chunks of code and projects
+  queries 32 output dimensions at a time.</li>
+</ul>
+<p>Other values of <code>d</code> are correct and handled in one extra masked step, so the
+penalty is small. In the measurements below, a 2-bit code at <code>d = 380</code> costs
+about 20-30% more per construction comparison than at <code>d = 384</code>, and search
+QPS differs by about 1.5%. When a byte budget lands just short of an aligned
+<code>d</code>, prefer the aligned value. For example, with a 384-D input and a
+100-byte budget, <code>d = 384</code> at 2 bits (101 bytes, no dimension reduction) is a
+better choice than <code>d = 380</code> (100 bytes).</p>
+<p>The other widths, <code>b</code> = 3 and 5 through 9, store each dimension as an unsigned
+<code>b</code>-bit field. Search scores their graph neighborhoods with the projected query
+rounded to INT8 and integer dot products (VNNI on x86 processors that have it),
+so make <code>d</code> a multiple of 8. Their other asymmetric scoring uses the same
+4-bit query tables as 2 and 4 bits. Construction still compares their codes
+with a portable per-dimension path, so building is slower than at 1, 2 or 4
+bits; native code-to-code kernels for these widths are left for future work.</p>
+<p>Construction comparison cost, in ns per code pair, on one pinned core with
+the native provider, on an Intel Xeon 6985P-C and on an AWS m6id.4xlarge
+(Ice Lake).</p>
+<table>
+<thead>
+<tr>
+<th><code>b</code></th>
+<th><code>d</code></th>
+<th>Xeon 6985P-C</th>
+<th>m6id.4xlarge</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>2</td>
+<td>192</td>
+<td>9.3</td>
+<td>16.7</td>
+</tr>
+<tr>
+<td>2</td>
+<td>380</td>
+<td>16.6</td>
+<td>30.0</td>
+</tr>
+<tr>
+<td>2</td>
+<td>384</td>
+<td>13.8</td>
+<td>22.5</td>
+</tr>
+<tr>
+<td>4</td>
+<td>190</td>
+<td>15.2</td>
+<td>24.0</td>
+</tr>
+<tr>
+<td>4</td>
+<td>192</td>
+<td>14.5</td>
+<td>24.1</td>
+</tr>
+<tr>
+<td>4</td>
+<td>384</td>
+<td>18.4</td>
+<td>28.5</td>
+</tr>
+</tbody>
+</table>
+<p>Training and base encoding retain their FP32 projection path; some training
+statistics and factorizations use FP64 internally. Query precision does not
+change the trained model, base encoding, stored-code layout or index format.</p>
+<h2 id="graph-construction">Graph construction<a class="headerlink" href="#graph-construction" title="Permanent link">&para;</a></h2>
+<p>BenchYAML selects construction scoring through <code>compression[].scoring</code> on
+an ASH construction entry. Omission uses the JVM policy, which defaults to
+<code>symmetric-all</code>. For example, this JVM property selects mixed scoring:</p>
+<div class="highlight"><pre><span></span><code>-Djvector.bench.ashConstruction=symmetric
+</code></pre></div>
+<table>
+<thead>
+<tr>
+<th>Property value</th>
+<th>Insertion search</th>
+<th>Existing-node / diversity scoring</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>symmetric-all</code> <strong>(default)</strong></td>
+<td>Encoded vector against encoded vectors; no dense insertion-query projection</td>
+<td>Symmetric encoded scoring</td>
+</tr>
+<tr>
+<td><code>symmetric</code></td>
+<td>Original vector used as an asymmetric query</td>
+<td>Symmetric encoded scoring</td>
+</tr>
+<tr>
+<td><code>symmetric-scalar</code></td>
+<td>Original vector used as an asymmetric query</td>
+<td>Scalar symmetric scoring; diagnostic control</td>
+</tr>
+<tr>
+<td><code>asymmetric</code></td>
+<td>Original vector used as an asymmetric query</td>
+<td>Original vector used as an asymmetric query; diagnostic control</td>
+</tr>
+<tr>
+<td><code>asymmetric-cached</code></td>
+<td>Original vector used as an asymmetric query</td>
+<td>Cached asymmetric query state per node; diagnostic control with extra memory use</td>
+</tr>
+</tbody>
+</table>
+<p><code>jvector.bench.ashConstruction</code> controls <strong>BenchYAML/Grid</strong>, not every library
+builder. For library integration, obtain a provider using
+<code>BuildScoreProvider.ashBuildScoreProvider(encoded)</code>. Use
+<code>builder.addGraphNode(node, provider.searchProviderFor(node))</code> for fully symmetric
+insertion. The overload taking an original vector retains asymmetric query
+preparation. Both policies use the same stored ASH vectors; application queries
+continue to use asymmetric scoring.</p>
+<p>Construction policy can change the graph, recall and QPS. Use fresh indexes
+when comparing modes: the graph cache key does not include this JVM property,
+so changing it does not invalidate an existing cached graph.</p>
+<h3 id="encoding-while-vectors-arrive">Encoding while vectors arrive<a class="headerlink" href="#encoding-while-vectors-arrive" title="Permanent link">&para;</a></h3>
+<p>To build a graph while its vectors stream in with a fixed model,
+<code>ash.vectorsBuilder(capacity)</code> encodes batches from any number of threads into
+distinct ordinals. Its <code>live()</code> view scores codes while they fill in, so a graph
+can be built over them at the same time; score a code only after its batch is
+encoded. <code>build(size)</code> returns the finished, immutable <code>ASHVectors</code>. Ordinals
+never encoded keep the all-zero code. For an index whose model changes while it
+grows, <code>StreamingASHIndex</code> uses <code>MutableASHVectors</code>, which re-encodes its pages
+for a new model one at a time.</p>
+<h3 id="in-memory-code-layout">In-memory code layout<a class="headerlink" href="#in-memory-code-layout" title="Permanent link">&para;</a></h3>
+<p><code>ASHVectors</code> keeps one copy of the codes, in compact pages. Each vector's code
+body sits back to back with the others: sign words at 1 bit, sign-magnitude
+projection codes at 2 and 4 bits, and offset-binary fields at the other widths
+(dimension <code>j</code> is the unsigned field at bits <code>[j*b, (j+1)*b)</code>, with value
+<code>field - (2^b - 1)/2</code>). Every stored offset includes the landmark term
+<code>-scale * &lt;A mu_c, code&gt;</code>, so asymmetric scoring needs only <code>Aq</code>. Bodies have
+no per-vector object, array or padding. Scale, offset and landmark are decoded
+once into three parallel arrays. Every scorer, symmetric and
+asymmetric, reads the codes in place, and the encoder writes straight into the
+pages.</p>
+<p>Retained memory per vector is the serialized size plus 4 bytes, because the two
+binary16 header fields are held as floats: for example 101 bytes on disk and
+105 bytes in memory for 768-D at 32x. Pages hold up to 256 KiB, which keeps
+them below G1's smallest humongous-object threshold so the collector never
+rounds them up to whole regions. <code>ASHVectors.get(i)</code> returns an allocated copy;
+<code>copyTo(i, dest)</code> fills reusable storage. Optional caches built for block
+scoring (<code>blockScorerFor</code> with a block size) hold a second, interleaved copy and
+are charged in <code>ramBytesUsed()</code> when created; graph construction and search do
+not build them.</p>
+<h2 id="query-projection-and-scoring">Query projection and scoring<a class="headerlink" href="#query-projection-and-scoring" title="Permanent link">&para;</a></h2>
+<table>
+<thead>
+<tr>
+<th>JVM property</th>
+<th>Default</th>
+<th>Optional values and definition</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>jvector.ash.queryProjection</code></td>
+<td><code>auto</code></td>
+<td><code>auto</code>: INT8 where an integer dot-product backend exists, then optimized FP16, falling back to FP32. <code>fp32</code>: FP32. <code>fp16</code>: require optimized FP16 with FP32 accumulation/output. <code>int8</code>: require INT8 projection with integer accumulation and FP32 output. Explicit unsupported precisions fail. Default for models without query options set in code.</td>
+</tr>
+<tr>
+<td><code>jvector.ash.singleKernel</code></td>
+<td><code>auto</code></td>
+<td><code>auto</code>, <code>scalar</code>, <code>simd</code>; single-vector ASH scoring kernels, subject to provider/format support.</td>
+</tr>
+<tr>
+<td><code>jvector.ash.blockKernel</code></td>
+<td><code>auto</code></td>
+<td><code>auto</code>, <code>scalar</code>, <code>simd</code>; blocked/fused ASH scoring kernels, subject to provider/format support.</td>
+</tr>
+<tr>
+<td><code>jvector.ash.queryBatchSize</code></td>
+<td><code>8</code></td>
+<td>Positive integer below <code>Integer.MAX_VALUE</code>; maximum opportunistic batch for model-owned synchronous query preparation; <code>1</code> disables combining. Separate from the queued batch limit below. Default for models without query options set in code.</td>
+</tr>
+<tr>
+<td><code>jvector.ash.gatheredScoring</code></td>
+<td><code>false</code></td>
+<td>Experimental. <code>true</code> scores a node's neighbors from in-memory 2- or 4-bit codes as one gathered block, as fused ASH scores its stored neighborhoods (one landmark, backend support required). It lowers single-query latency, but with every core busy it has measured 1–6% lower throughput.</td>
+</tr>
+</tbody>
+</table>
+<p>Single-vector scoring (separated codes, streaming indexes and fused upper layers)
+depends on the bit width. 1-bit codes use a SIMD masked add over their sign bits.
+2- and 4-bit codes use a projection dot that decodes codes in registers: native
+Highway kernels, or with Panama a contiguous-query kernel on JDK 25+ and a
+query-gather kernel on earlier JDKs. The other widths use the native nibble-LUT
+dot; with Panama they are decoded in scalar Java, so prefer 1, 2 or 4 bits there.
+Fused graphs score base-layer neighborhoods with whole-block kernels at every width.</p>
+<p>To choose these per model in code, call <code>setQueryOptions</code> before the model
+projects its first query, for example right after opening an index. Later calls
+throw <code>IllegalStateException</code>, because the prepared projection is fixed for the
+model's lifetime.</p>
+<div class="highlight"><pre><span></span><code><span class="kd">var</span><span class="w"> </span><span class="n">ash</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">((</span><span class="n">FusedASH</span><span class="p">)</span><span class="w"> </span><span class="n">index</span><span class="p">.</span><span class="na">getFeatures</span><span class="p">().</span><span class="na">get</span><span class="p">(</span><span class="n">FeatureId</span><span class="p">.</span><span class="na">FUSED_ASH</span><span class="p">)).</span><span class="na">getASH</span><span class="p">();</span>
+<span class="n">ash</span><span class="p">.</span><span class="na">setQueryOptions</span><span class="p">(</span><span class="n">ASHQueryProjection</span><span class="p">.</span><span class="na">AUTO</span><span class="p">,</span><span class="w"> </span><span class="mi">1</span><span class="p">);</span><span class="w">  </span><span class="c1">// precision, maximum batch</span>
+</code></pre></div>
+<p>See <a href="../ash-projection-precision/">Choosing ASH query-projection precision</a> for
+processor guidance and FP16/INT8 requirements. Under <code>symmetric-all</code>, query
+precision affects application queries, not insertion search. Under mixed or
+asymmetric construction, it can affect insertion too.</p>
+<h3 id="benchyaml-precision-selection">BenchYAML precision selection<a class="headerlink" href="#benchyaml-precision-selection" title="Permanent link">&para;</a></h3>
+<p>Set <code>queryProjection</code> in the <code>parameters</code> map of an ASH compression entry.
+See <a href="../benchyaml-guide/#ash-query-parameters">ASH query parameters</a> for values
+and JVM precedence.
+ASH CSV rows record <code>ash_query_projection_requested</code> and
+<code>ash_query_projection_effective</code>; the latter is read from the prepared view,
+with <code>fp16+fp32</code> indicating observed automatic FP32 range fallback. Non-ASH
+rows have blank precision columns; an unused projection has blank effective
+precision. See the <a href="../ash-projection-precision/#benchyaml-runs">precision guide</a>.</p>
+<h2 id="providers-cpu-budgets-and-serialization">Providers, CPU budgets and serialization<a class="headerlink" href="#providers-cpu-budgets-and-serialization" title="Permanent link">&para;</a></h2>
+<table>
+<thead>
+<tr>
+<th>Setting</th>
+<th>Default</th>
+<th>Optional values and definition</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>jvector.vectorization_provider</code></td>
+<td>Automatic selection</td>
+<td><code>native</code>, <code>panama</code>, <code>default</code> (scalar). Supported Java 22+ runtimes prefer native, with existing fallbacks. Explicit <code>native</code> requires successful loading.</td>
+</tr>
+<tr>
+<td><code>jvector.enable_native_vectorization</code></td>
+<td><code>true</code></td>
+<td><code>true</code> / <code>false</code>; automatic native selection. Explicit provider selection overrides it. Deprecated <code>jvector.experimental.enable_native_vectorization</code> is a lower-precedence alias.</td>
+</tr>
+<tr>
+<td><code>jvector.physical_core_count</code></td>
+<td>OS topology detection bounded by available processors; fallback heuristic</td>
+<td>Positive thread budget for JVector's bounded pool and queued workers. Construction and queries can use separate budgets/processes; see <a href="#thread-budgets">Thread budgets</a>.</td>
+</tr>
+<tr>
+<td><code>-XX:ActiveProcessorCount</code></td>
+<td>JVM/container detection</td>
+<td>Positive processor count exposed to the JVM; coordinate with allocated physical cores. Does not set affinity.</td>
+</tr>
+<tr>
+<td><code>--add-modules=jdk.incubator.vector</code></td>
+<td>Not added by the application</td>
+<td>Enables the Vector API module needed by SIMD providers on supported runtimes.</td>
+</tr>
+<tr>
+<td><code>--enable-native-access=ALL-UNNAMED</code></td>
+<td>JVM native-access policy</td>
+<td>Native access for classpath deployments. Named-module deployments should enable the relevant module.</td>
+</tr>
+<tr>
+<td><code>-Xms</code>, <code>-Xmx</code></td>
+<td>JVM ergonomics</td>
+<td>Initial / maximum heap; account for resident input, model and construction memory.</td>
+</tr>
+<tr>
+<td><code>-ea</code>, <code>-da</code></td>
+<td>Assertions normally disabled</td>
+<td>Enable / disable Java assertions; independent of numerical precision.</td>
+</tr>
+</tbody>
+</table>
+<h3 id="thread-budgets">Thread budgets<a class="headerlink" href="#thread-budgets" title="Permanent link">&para;</a></h3>
+<p>Graph insertion mostly waits on memory, so a second hardware thread per core
+fills those stalls: give construction every hardware thread, for example
+<code>-Djvector.physical_core_count=16 -XX:ActiveProcessorCount=16</code> on 8 cores with
+two threads each, or pass a pool of that size to the builder. Builds of millions
+of vectors gain the most; recall and the built graph's search speed do not
+change. Compute-bound search runs best with one worker per physical core. Search
+that waits on storage needs more queries in flight than cores; see
+<a href="../larger-than-memory-indexes/#serving-queries">Building and serving larger-than-memory indexes</a>.</p>
+<h3 id="blas-threads">BLAS threads<a class="headerlink" href="#blas-threads" title="Permanent link">&para;</a></h3>
+<p>ASH training is the only BLAS and LAPACK user. JVector sets the native BLAS
+thread count for its own calls, so a host does not need to configure MKL or
+OpenBLAS: training uses one BLAS thread, or as many as the executor passed to
+<code>AsymmetricHashing.initialize(..., ForkJoinPool executor)</code>. Queries never call
+BLAS. With the native provider, MKL applies the count per calling thread
+(<code>MKL_Set_Num_Threads_Local</code>). OpenBLAS has only a process-wide count
+(<code>openblas_set_num_threads</code>; its <code>openblas_set_num_threads_local</code> also sets the
+process-wide count), so JVector sets it for the duration of training, and
+trainings running at the same time on other threads share the first one's
+count until the last finishes. Other providers leave BLAS threading to
+<code>MKL_NUM_THREADS</code>, <code>OMP_NUM_THREADS</code> and <code>OPENBLAS_NUM_THREADS</code>.
+<code>io.github.jbellis.jvector.util.BlasThreads</code> applies the same limit to a host's
+own BLAS work.</p>
+<p>BenchYAML trains in its construction pool, so BLAS uses <code>construction.workers</code>
+threads (all physical cores by default). Set <code>MKL_DYNAMIC=FALSE</code> so MKL uses the
+count it is given. The ASH versus PQ study scripts also set the thread variables,
+to one for queries and the core budget for construction, as in the published
+runs. OS affinity (<code>numactl --physcpubind</code>) and memory placement (<code>--membind</code>,
+<code>--interleave</code>) are deployment choices.</p>
+<h2 id="graph-and-search-parameters-in-benchyaml">Graph and search parameters in BenchYAML<a class="headerlink" href="#graph-and-search-parameters-in-benchyaml" title="Permanent link">&para;</a></h2>
+<p>Use the <a href="../benchyaml-guide/">BenchYAML Guide</a> for index type, graph parameters,
+writer selection, compression, and reranking.</p>
+<h2 id="query-delivery-and-measurement-controls">Query delivery and measurement controls<a class="headerlink" href="#query-delivery-and-measurement-controls" title="Permanent link">&para;</a></h2>
+<p>Set BenchYAML query delivery in the <a href="../benchyaml-guide/#search">search section</a>
+(<code>queryExecution</code>, <code>requestsPerWorker</code>) and the ASH batch limit in the
+<a href="../benchyaml-guide/#ash-query-parameters">ASH search parameters</a>. Database
+integrations select their own admission policy and executors. See
+<a href="../ash-query-integration/">Integrating ASH queries into a database</a>.</p>
+<table>
+<thead>
+<tr>
+<th>Setting</th>
+<th>Default</th>
+<th>Optional values / definition</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>jvector.bench.queryThreads</code></td>
+<td><code>0</code></td>
+<td>Direct caller count: <code>0</code> uses common pool, <code>1</code> is serial, larger positive values use a dedicated caller pool. Does not set queued worker count.</td>
+</tr>
+<tr>
+<td><code>jvector.bench.verifyConcurrentResults</code></td>
+<td><code>false</code></td>
+<td><code>true</code> / <code>false</code>; validate concurrent results against reference results.</td>
+</tr>
+<tr>
+<td><code>jvector.bench.runConfig</code></td>
+<td><code>jvector-examples/yaml-configs/run-config.yml</code></td>
+<td>Run YAML path for measured benchmarks, console and CSV fields.</td>
+</tr>
+<tr>
+<td><code>jvector.bench.sourceRef</code></td>
+<td>Unset</td>
+<td>Source identity for provenance; no numerical effect.</td>
+</tr>
+</tbody>
+</table>
+<p>Run YAML <code>benchmarks</code>, <code>console</code> and <code>logging</code> select computed/reported throughput,
+recall, latency and visit counts, and <code>measurement</code> sets warmup, timed passes and
+the page cache state; see <a href="../benchyaml-guide/#run-configuration">Run configuration</a>.
+Construction separately reports quantizer training, encoding, NVQ training and
+graph/write. The throughput benchmark can also report per-query response times,
+page reads per query and, for queued execution, mean batch size. Unloaded latency and loaded
+response time describe different measurements. Independent build/query JVM
+repetitions are launch choices, not model defaults; preserve individual CSVs.</p>
+<p>The ASH versus PQ case script (<code>run-ash-pq-benchmark.sh</code>) accepts <code>JVECTOR_BENCH_DATA_DIR</code>
+(required: where datasets are downloaded and reused), <code>JVECTOR_BENCH_BUILD_SMT</code>,
+<code>JVECTOR_BENCH_ADAPTIVE</code>, <code>JVECTOR_BENCH_OVERQUERY</code>, <code>JVECTOR_BENCH_HEAP</code> (<code>128g</code>) and
+<code>JVECTOR_BENCH_NUMA_POLICY</code> (<code>bind:0</code>; alternatively <code>interleave:&lt;nodes&gt;</code>).
+These defaults belong to the script, not the library. See
+<a href="../ash-pq-benchmark/">Reproducing ASH versus PQ</a> for launch and artifact details.</p>
+<p>Implementation references: <a href="https://github.com/datastax/jvector/blob/main/jvector-examples/src/main/java/io/github/jbellis/jvector/example/yaml/Compression.java">YAML compression parsing</a>,
+<a href="https://github.com/datastax/jvector/blob/main/jvector-base/src/main/java/io/github/jbellis/jvector/quantization/AsymmetricHashing.java">ASH model</a>,
+<a href="https://github.com/datastax/jvector/blob/main/jvector-examples/src/main/java/io/github/jbellis/jvector/example/ASHConstructionScoring.java">construction modes</a>,
+and <a href="https://github.com/datastax/jvector/blob/main/jvector-examples/src/main/java/io/github/jbellis/jvector/example/yaml/RunConfig.java">run configuration</a>.</p>
+
+
+
+
+
+
+
+
+
+
+
+
+                
+              </article>
+            </div>
+          
+          
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+          <button type="button" class="md-top md-icon" data-md-component="top" hidden>
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M13 20h-2V8l-5.5 5.5-1.42-1.42L12 4.16l7.92 7.92-1.42 1.42L13 8z"/></svg>
+  Back to top
+</button>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+    
+      
+      <nav class="md-footer__inner md-grid" aria-label="Footer" >
+        
+          
+          <a href="../pq/" class="md-footer__link md-footer__link--prev" aria-label="Previous: Product quantization (PQ)">
+            <div class="md-footer__button md-icon">
+              
+              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+            </div>
+            <div class="md-footer__title">
+              <span class="md-footer__direction">
+                Previous
+              </span>
+              <div class="md-ellipsis">
+                Product quantization (PQ)
+              </div>
+            </div>
+          </a>
+        
+        
+          
+          <a href="../ash-projection-precision/" class="md-footer__link md-footer__link--next" aria-label="Next: Query-projection precision">
+            <div class="md-footer__title">
+              <span class="md-footer__direction">
+                Next
+              </span>
+              <div class="md-ellipsis">
+                Query-projection precision
+              </div>
+            </div>
+            <div class="md-footer__button md-icon">
+              
+              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M4 11v2h12l-5.5 5.5 1.42 1.42L19.84 12l-7.92-7.92L10.5 5.5 16 11z"/></svg>
+            </div>
+          </a>
+        
+      </nav>
+    
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+  
+    Made with
+    <a href="https://squidfunk.github.io/mkdocs-material/" target="_blank" rel="noopener">
+      Material for MkDocs
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+    
+    
+      
+      <script id="__config" type="application/json">{"base": "..", "features": ["navigation.sections", "navigation.top", "navigation.footer", "search.suggest", "search.highlight", "content.code.copy", "content.action.edit"], "search": "../assets/javascripts/workers/search.d50fe291.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": {"default": ["latest", "dev"], "provider": "mike"}}</script>
+    
+    
+      <script src="../assets/javascripts/bundle.13a4f30d.min.js"></script>
+      
+    
+  </body>
+</html>

@@ -1,0 +1,2126 @@
+
+<!doctype html>
+<html lang="en" class="no-js">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+        <meta name="description" content="Java library for approximate nearest neighbor vector search with graph indexes.">
+      
+      
+      
+        <link rel="canonical" href="https://datastax.github.io/jvector/dev/batched-vector-access/">
+      
+      
+        <link rel="prev" href="../compaction/">
+      
+      
+        <link rel="next" href="../deferred-batch-writer/">
+      
+      
+      <link rel="icon" href="../assets/images/favicon.png">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.6.14">
+    
+    
+      
+        <title>Batched input vector access - JVector</title>
+      
+    
+    
+      <link rel="stylesheet" href="../assets/stylesheets/main.342714a4.min.css">
+      
+        
+        <link rel="stylesheet" href="../assets/stylesheets/palette.06af60db.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+        
+        
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Roboto:300,300i,400,400i,700,700i%7CRoboto+Mono:400,400i,700,700i&display=fallback">
+        <style>:root{--md-text-font:"Roboto";--md-code-font:"Roboto Mono"}</style>
+      
+    
+    
+    <script>__md_scope=new URL("..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+
+    
+    
+    
+  </head>
+  
+  
+    
+    
+      
+    
+    
+    
+    
+    <body dir="ltr" data-md-color-scheme="default" data-md-color-primary="indigo" data-md-color-accent="indigo">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#batched-input-vector-access" class="md-skip">
+          Skip to content
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+    </div>
+    
+      <div data-md-color-scheme="default" data-md-component="outdated" hidden>
+        
+      </div>
+    
+    
+      
+
+  
+
+<header class="md-header md-header--shadow" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="Header">
+    <a href=".." title="JVector" class="md-header__button md-logo" aria-label="JVector" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            JVector
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              Batched input vector access
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+      
+        <form class="md-header__option" data-md-component="palette">
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="(prefers-color-scheme: light)" data-md-color-scheme="default" data-md-color-primary="indigo" data-md-color-accent="indigo"  aria-label="Switch to dark mode"  type="radio" name="__palette" id="__palette_0">
+    
+      <label class="md-header__button md-icon" title="Switch to dark mode" for="__palette_1" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a4 4 0 0 0-4 4 4 4 0 0 0 4 4 4 4 0 0 0 4-4 4 4 0 0 0-4-4m0 10a6 6 0 0 1-6-6 6 6 0 0 1 6-6 6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="(prefers-color-scheme: dark)" data-md-color-scheme="slate" data-md-color-primary="indigo" data-md-color-accent="indigo"  aria-label="Switch to light mode"  type="radio" name="__palette" id="__palette_1">
+    
+      <label class="md-header__button md-icon" title="Switch to light mode" for="__palette_0" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 18c-.89 0-1.74-.2-2.5-.55C11.56 16.5 13 14.42 13 12s-1.44-4.5-3.5-5.45C10.26 6.2 11.11 6 12 6a6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+</form>
+      
+    
+    
+      <script>var palette=__md_get("__palette");if(palette&&palette.color){if("(prefers-color-scheme)"===palette.color.media){var media=matchMedia("(prefers-color-scheme: light)"),input=document.querySelector(media.matches?"[data-md-color-media='(prefers-color-scheme: light)']":"[data-md-color-media='(prefers-color-scheme: dark)']");palette.color.media=input.getAttribute("data-md-color-media"),palette.color.scheme=input.getAttribute("data-md-color-scheme"),palette.color.primary=input.getAttribute("data-md-color-primary"),palette.color.accent=input.getAttribute("data-md-color-accent")}for(var[key,value]of Object.entries(palette.color))document.body.setAttribute("data-md-color-"+key,value)}</script>
+    
+    
+    
+      
+      
+        <label class="md-header__button md-icon" for="__search">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        </label>
+        <div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" aria-label="Search" placeholder="Search" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <label class="md-search__icon md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+      </label>
+      <nav class="md-search__options" aria-label="Search">
+        
+        <button type="reset" class="md-search__icon md-icon" title="Clear" aria-label="Clear" tabindex="-1">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      </nav>
+      
+        <div class="md-search__suggest" data-md-component="search-suggest"></div>
+      
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix>
+        <div class="md-search-result" data-md-component="search-result">
+          <div class="md-search-result__meta">
+            Initializing search
+          </div>
+          <ol class="md-search-result__list" role="presentation"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+      
+    
+    
+      <div class="md-header__source">
+        <a href="https://github.com/datastax/jvector" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 6.7.2 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2024 Fonticons, Inc.--><path d="M439.55 236.05 244 40.45a28.87 28.87 0 0 0-40.81 0l-40.66 40.63 51.52 51.52c27.06-9.14 52.68 16.77 43.39 43.68l49.66 49.66c34.23-11.8 61.18 31 35.47 56.69-26.49 26.49-70.21-2.87-56-37.34L240.22 199v121.85c25.3 12.54 22.26 41.85 9.08 55a34.34 34.34 0 0 1-48.55 0c-17.57-17.6-11.07-46.91 11.25-56v-123c-20.8-8.51-24.6-30.74-18.64-45L142.57 101 8.45 235.14a28.86 28.86 0 0 0 0 40.81l195.61 195.6a28.86 28.86 0 0 0 40.8 0l194.69-194.69a28.86 28.86 0 0 0 0-40.81"/></svg>
+  </div>
+  <div class="md-source__repository">
+    datastax/jvector
+  </div>
+</a>
+      </div>
+    
+  </nav>
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+          
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+
+<nav class="md-nav md-nav--primary" aria-label="Navigation" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href=".." title="JVector" class="md-nav__button md-logo" aria-label="JVector" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    JVector
+  </label>
+  
+    <div class="md-nav__source">
+      <a href="https://github.com/datastax/jvector" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 6.7.2 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2024 Fonticons, Inc.--><path d="M439.55 236.05 244 40.45a28.87 28.87 0 0 0-40.81 0l-40.66 40.63 51.52 51.52c27.06-9.14 52.68 16.77 43.39 43.68l49.66 49.66c34.23-11.8 61.18 31 35.47 56.69-26.49 26.49-70.21-2.87-56-37.34L240.22 199v121.85c25.3 12.54 22.26 41.85 9.08 55a34.34 34.34 0 0 1-48.55 0c-17.57-17.6-11.07-46.91 11.25-56v-123c-20.8-8.51-24.6-30.74-18.64-45L142.57 101 8.45 235.14a28.86 28.86 0 0 0 0 40.81l195.61 195.6a28.86 28.86 0 0 0 40.8 0l194.69-194.69a28.86 28.86 0 0 0 0-40.81"/></svg>
+  </div>
+  <div class="md-source__repository">
+    datastax/jvector
+  </div>
+</a>
+    </div>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href=".." class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Home
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_2" >
+        
+          
+          <label class="md-nav__link" for="__nav_2" id="__nav_2_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    Getting started
+    
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_2_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_2">
+            <span class="md-nav__icon md-icon"></span>
+            Getting started
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../getting-started/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Quick start
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../building-and-installing/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Building and installing
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../tutorials/1-intro-tutorial/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Tutorial 1: Introduction
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../tutorials/2-disk-tutorial/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Tutorial 2: On-disk indexes
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../tutorials/3-larger-than-memory-tutorial/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Tutorial 3: Larger than memory
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+    
+  
+  
+  
+    
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--active md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3" checked>
+        
+          
+          <label class="md-nav__link" for="__nav_3" id="__nav_3_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    Guides
+    
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_3_label" aria-expanded="true">
+          <label class="md-nav__title" for="__nav_3">
+            <span class="md-nav__icon md-icon"></span>
+            Guides
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../choosing-an-index/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Choosing an index
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../graph-construction/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Graph construction
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../fused-and-separated/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Fused and separated layouts
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../tuning/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Tuning construction and search
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../sizing/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Memory and disk sizing
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../larger-than-memory-indexes/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Larger-than-memory indexes
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../compaction/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Compaction
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+    
+  
+  
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  
+  <span class="md-ellipsis">
+    Batched input vector access
+    
+  </span>
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="./" class="md-nav__link md-nav__link--active">
+        
+  
+  
+  <span class="md-ellipsis">
+    Batched input vector access
+    
+  </span>
+  
+
+      </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#runnable-hello-world-examples" class="md-nav__link">
+    <span class="md-ellipsis">
+      Runnable hello-world examples
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#open-a-file" class="md-nav__link">
+    <span class="md-ellipsis">
+      Open a file
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#dataset-streaming-and-caches" class="md-nav__link">
+    <span class="md-ellipsis">
+      Dataset streaming and caches
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#purpose-and-benchmark-opt-in" class="md-nav__link">
+    <span class="md-ellipsis">
+      Purpose and benchmark opt-in
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#random-ordinals-fetch-an-arbitrary-selection" class="md-nav__link">
+    <span class="md-ellipsis">
+      Random ordinals: fetch an arbitrary selection
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#scan-ordinals-process-the-file-in-order" class="md-nav__link">
+    <span class="md-ellipsis">
+      Scan ordinals: process the file in order
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#use-with-quantization-and-indexes" class="md-nav__link">
+    <span class="md-ellipsis">
+      Use with quantization and indexes
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#configure-bounded-read-ahead" class="md-nav__link">
+    <span class="md-ellipsis">
+      Configure bounded read-ahead
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#ownership-and-closure" class="md-nav__link">
+    <span class="md-ellipsis">
+      Ownership and closure
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#measure-input-loading" class="md-nav__link">
+    <span class="md-ellipsis">
+      Measure input loading
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../deferred-batch-writer/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Deferred batch serialization
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4" >
+        
+          
+          <label class="md-nav__link" for="__nav_4" id="__nav_4_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    Quantizers
+    
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_4_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_4">
+            <span class="md-nav__icon md-icon"></span>
+            Quantizers
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../pq/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Product quantization (PQ)
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    
+    
+    
+    
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4_2" >
+        
+          
+          <label class="md-nav__link" for="__nav_4_2" id="__nav_4_2_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    ASH (experimental)
+    
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_4_2_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_4_2">
+            <span class="md-nav__icon md-icon"></span>
+            ASH (experimental)
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../ash-configuration/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Configuration and defaults
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../ash-projection-precision/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Query-projection precision
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../ash-query-integration/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Integrating ASH queries
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../ash-performance/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Performance
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../nvq/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    NVQ (reranking)
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../bq/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Binary quantization (BQ)
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_5" >
+        
+          
+          <label class="md-nav__link" for="__nav_5" id="__nav_5_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    Benchmarking
+    
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_5_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_5">
+            <span class="md-nav__icon md-icon"></span>
+            Benchmarking
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../benchmarking/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Running benchmarks
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../benchyaml-guide/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    BenchYAML guide
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../ash-pq-benchmark/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Reproducing ASH versus PQ
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../vector-prefetch-benchmark/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Vector prefetching benchmark
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_6" >
+        
+          
+          <label class="md-nav__link" for="__nav_6" id="__nav_6_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    Design notes
+    
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_6_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_6">
+            <span class="md-nav__icon md-icon"></span>
+            Design notes
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../ash-query-batching-design/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    ASH query batching
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../native-ash-preparation/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Native ASH projection
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../ash-pca-native-svd/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    ASH PCA correctness
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../legacy/jvector-step-by-step/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    JVector step by step (legacy)
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_7" >
+        
+          
+          <label class="md-nav__link" for="__nav_7" id="__nav_7_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    Reference
+    
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_7_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_7">
+            <span class="md-nav__icon md-icon"></span>
+            Reference
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="https://javadoc.io/doc/io.github.jbellis/jvector" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    API reference (Javadoc)
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="https://github.com/datastax/jvector/blob/main/UPGRADING.md" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Upgrading
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="https://github.com/datastax/jvector/blob/main/CHANGELOG.md" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Changelog
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    
+    
+    
+    
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_7_4" >
+        
+          
+          <label class="md-nav__link" for="__nav_7_4" id="__nav_7_4_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    Release notes
+    
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_7_4_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_7_4">
+            <span class="md-nav__icon md-icon"></span>
+            Release notes
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../release%20notes/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    About release notes
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../release%20notes/4.0.2/4.0.2/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    4.0.2
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../release%20notes/4.0.1/4.0.1/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    4.0.1
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../release%20notes/4.0.0-RC.9/4.0.0-RC.9/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    4.0.0-RC.9
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../release%20notes/4.0.0-RC.8/4.0.0-RC.8/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    4.0.0-RC.8
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+              
+              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#runnable-hello-world-examples" class="md-nav__link">
+    <span class="md-ellipsis">
+      Runnable hello-world examples
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#open-a-file" class="md-nav__link">
+    <span class="md-ellipsis">
+      Open a file
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#dataset-streaming-and-caches" class="md-nav__link">
+    <span class="md-ellipsis">
+      Dataset streaming and caches
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#purpose-and-benchmark-opt-in" class="md-nav__link">
+    <span class="md-ellipsis">
+      Purpose and benchmark opt-in
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#random-ordinals-fetch-an-arbitrary-selection" class="md-nav__link">
+    <span class="md-ellipsis">
+      Random ordinals: fetch an arbitrary selection
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#scan-ordinals-process-the-file-in-order" class="md-nav__link">
+    <span class="md-ellipsis">
+      Scan ordinals: process the file in order
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#use-with-quantization-and-indexes" class="md-nav__link">
+    <span class="md-ellipsis">
+      Use with quantization and indexes
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#configure-bounded-read-ahead" class="md-nav__link">
+    <span class="md-ellipsis">
+      Configure bounded read-ahead
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#ownership-and-closure" class="md-nav__link">
+    <span class="md-ellipsis">
+      Ownership and closure
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#measure-input-loading" class="md-nav__link">
+    <span class="md-ellipsis">
+      Measure input loading
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              <article class="md-content__inner md-typeset">
+                
+                  
+
+
+  
+    <a href="https://github.com/datastax/jvector/edit/main/docs/batched-vector-access.md" title="Edit this page" class="md-content__button md-icon">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M10 20H6V4h7v5h5v3.1l2-2V8l-6-6H6c-1.1 0-2 .9-2 2v16c0 1.1.9 2 2 2h4zm10.2-7c.1 0 .3.1.4.2l1.3 1.3c.2.2.2.6 0 .8l-1 1-2.1-2.1 1-1c.1-.1.2-.2.4-.2m0 3.9L14.1 23H12v-2.1l6.1-6.1z"/></svg>
+    </a>
+  
+  
+
+
+<h1 id="batched-input-vector-access">Batched input vector access<a class="headerlink" href="#batched-input-vector-access" title="Permanent link">&para;</a></h1>
+<p>File-backed input vectors can be supplied without loading the entire dataset into
+Java heap. <code>RandomAccessVectorValues</code> remains the basic contract. Its optional
+<code>BatchedVectorValues</code> extension lets algorithms request ranges or arbitrary
+selections while the source schedules bounded asynchronous I/O.</p>
+<p>This API concerns the <strong>input vector source</strong>. It does not select the stored graph's
+reader, writer, layout, or direct-I/O backend.</p>
+<h2 id="runnable-hello-world-examples">Runnable hello-world examples<a class="headerlink" href="#runnable-hello-world-examples" title="Permanent link">&para;</a></h2>
+<p>From the repository root, using the JDK required by the examples module (currently
+JDK 23), run. The <code>jdk20</code> profile enables the Java vector provider and avoids
+requiring a native-library build for these examples:</p>
+<div class="highlight"><pre><span></span><code>mvn<span class="w"> </span>-Pjdk20<span class="w"> </span>-pl<span class="w"> </span>jvector-examples<span class="w"> </span>-am<span class="w"> </span>compile<span class="w"> </span>exec:exec@hello-batched-vectors
+mvn<span class="w"> </span>-Pjdk20<span class="w"> </span>-pl<span class="w"> </span>jvector-examples<span class="w"> </span>-am<span class="w"> </span>compile<span class="w"> </span>exec:exec@hello-batched-quantization
+</code></pre></div>
+<p>By default, both examples use <strong>e5-small-v2-100k</strong> from JVector's existing
+<a href="https://jvector-datasets-public.s3.us-east-1.amazonaws.com/datasets-clean/catalog_entries.yaml">public dataset catalog</a>.
+This is a real embedding dataset; its cleaned base contains <strong>99,443 vectors with
+384 dimensions</strong>. The catalog loader downloads only the base file on first use and
+reuses its cache thereafter. It honors catalog cache settings, including
+<code>DATASET_CACHE_DIR</code>; there is no eager heap preload and no synthetic data generation.
+The first invocation needs network access to the catalog and uncached base file.</p>
+<ul>
+<li><a href="https://github.com/datastax/jvector/blob/main/jvector-examples/src/main/java/io/github/jbellis/jvector/example/HelloBatchedVectors.java">HelloBatchedVectors</a>
+  shows a full range scan, arbitrary selection with duplicates, and copying a borrowed vector.</li>
+<li><a href="https://github.com/datastax/jvector/blob/main/jvector-examples/src/main/java/io/github/jbellis/jvector/example/HelloBatchedQuantization.java">HelloBatchedQuantization</a>
+  trains a PQ codebook and encodes the full base file with PQ and NVQ through their usual APIs.</li>
+</ul>
+<p>Pass your own fixed-dimension <code>.fvecs</code> file using <code>-DvectorFile</code>:</p>
+<div class="highlight"><pre><span></span><code>mvn<span class="w"> </span>-Pjdk20<span class="w"> </span>-pl<span class="w"> </span>jvector-examples<span class="w"> </span>-am<span class="w"> </span>compile<span class="w"> </span>exec:exec@hello-batched-vectors<span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>-DvectorFile<span class="o">=</span>/path/to/ada_002_100k_base.fvecs
+mvn<span class="w"> </span>-Pjdk20<span class="w"> </span>-pl<span class="w"> </span>jvector-examples<span class="w"> </span>-am<span class="w"> </span>compile<span class="w"> </span>exec:exec@hello-batched-quantization<span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>-DvectorFile<span class="o">=</span>/path/to/ada_002_100k_base.fvecs
+</code></pre></div>
+<p>Alternatively, run either class's <code>main</code> in your IDE with the file path as its single
+argument. The quantization example needs at least 256 vectors. Caller-supplied files
+and downloaded catalog files are never deleted or rewritten by these examples.
+Values are read as stored; the source does not
+normalize, deduplicate, or scrub them.</p>
+<h2 id="open-a-file">Open a file<a class="headerlink" href="#open-a-file" title="Permanent link">&para;</a></h2>
+<p><code>FvecFileVectorValues</code> associates a file with the capability interface:</p>
+<div class="highlight"><pre><span></span><code><span class="k">try</span><span class="w"> </span><span class="p">(</span><span class="kd">var</span><span class="w"> </span><span class="n">source</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">FvecFileVectorValues</span><span class="p">.</span><span class="na">open</span><span class="p">(</span><span class="n">Path</span><span class="p">.</span><span class="na">of</span><span class="p">(</span><span class="s">"vectors.fvecs"</span><span class="p">)))</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="n">System</span><span class="p">.</span><span class="na">out</span><span class="p">.</span><span class="na">println</span><span class="p">(</span><span class="n">source</span><span class="p">.</span><span class="na">size</span><span class="p">());</span>
+<span class="w">    </span><span class="n">System</span><span class="p">.</span><span class="na">out</span><span class="p">.</span><span class="na">println</span><span class="p">(</span><span class="n">source</span><span class="p">.</span><span class="na">dimension</span><span class="p">());</span>
+<span class="p">}</span>
+</code></pre></div>
+<p>The file must remain immutable while open. The source uses positional channel reads,
+not memory mapping, and uses the OS page cache. Each fvecs record contains a
+little-endian dimension integer followed by that many float32 coordinates; every
+record must have the same dimension. I/O failures during consumption propagate as
+<code>UncheckedIOException</code>.</p>
+<h2 id="dataset-streaming-and-caches">Dataset streaming and caches<a class="headerlink" href="#dataset-streaming-and-caches" title="Permanent link">&para;</a></h2>
+<p>Prepare the input through the existing dataset catalog/download cache, then open
+its local <code>.fvecs</code> path with <code>FvecFileVectorValues</code>. The examples use
+<code>loadBaseVectorFile</code>, which honors catalog cache settings and <code>DATASET_CACHE_DIR</code>
+without materializing the base vectors. Downloads must finish before the source
+is opened; cursors stream a stable local file, not an in-progress remote download.</p>
+<h2 id="purpose-and-benchmark-opt-in">Purpose and benchmark opt-in<a class="headerlink" href="#purpose-and-benchmark-opt-in" title="Permanent link">&para;</a></h2>
+<p>The input file need not be fully preloaded for quantizer training (samples or full
+scans for statistics), batch encoding, or streaming FP/NVQ serialization. Training
+samples are temporary working memory; returned models do not retain those samples.
+Encoded vectors and graph structures keep their existing memory requirements.</p>
+<p>BenchYAML and AutoBenchYAML preserve resident loading by default. To opt in, set this
+root field in the index-parameter YAML used by either runner:</p>
+<div class="highlight"><pre><span></span><code><span class="nt">useDatasetPrefetching</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">true</span>
+</code></pre></div>
+<p>Omitted or <code>false</code> preserves the resident path. The existing VM option
+<code>-Djvector.dataset_loader=buffered</code> explicitly overrides the YAML flag; <code>preload</code>
+overrides the flag in the other direction. Neither runner changes a user's YAML files.</p>
+<p>The harness uses file input for bulk consumption in quantized construction and
+existing disk storage. Uncompressed construction, or a search configuration that
+requires raw input rather than stored vectors/codes, still uses resident input.
+The VM option does not bypass this resident-input routing. If an explicit
+<code>buffered</code> request requires resident input, the harness logs the reason for using preload.
+A mixed configuration requiring resident input remains resident; split those cases
+into separate configurations to measure dataset prefetching independently. This is
+source routing, not a restriction on the vector-access API.</p>
+<p>Grid consumes each input batch through training/encoding and inline serialization;
+the original insertion vector is supplied from that batch, while peer scoring uses
+resident quantized codes. Query scoring is unchanged from main. Raw-input exact-query configurations retain
+resident input; quantized query paths continue to use their existing codes and
+stored reranking vectors. Compaction algorithms and query scoring are unchanged. AutoBenchYAML's separate
+legacy compaction-query validation still uses resident original vectors; that pass
+retains its existing memory requirement. The current compactor processes saved
+partition indexes, not the original input file. Any future original-input training,
+encoding or serialization step can use the same bulk hooks.</p>
+<p>The source retains bounded reusable read buffers during consumption. It does not
+change persistent dataset, index or quantizer caches. File preparation remains
+outside construction timing; input consumption is included in the corresponding
+library calls. Queries and ground truth remain resident. Files must be complete and
+immutable, and buffered loading requires <code>NO_SCRUB</code> metadata. Existing direct calls
+to <code>DataSets.loadDataSet(name)</code> still preload. Application-provided RAVVs need no
+changes; future quantizers opt into <code>VectorAccess</code> for their bulk input needs.</p>
+<p>Use a distinct AutoBenchYAML output/checkpoint file for each loading mode so earlier
+completed results are not reused as a different mode. The harness closes its input
+source after the configuration finishes.</p>
+<h2 id="random-ordinals-fetch-an-arbitrary-selection">Random ordinals: fetch an arbitrary selection<a class="headerlink" href="#random-ordinals-fetch-an-arbitrary-selection" title="Permanent link">&para;</a></h2>
+<p>Use a selection when the algorithm knows several requested ordinals ahead of time,
+for example a random training sample. The ordinal list can be unsorted and can
+contain duplicates. In this small example, every ordinal exists in the default
+100k dataset:</p>
+<div class="highlight"><pre><span></span><code><span class="kt">int</span><span class="o">[]</span><span class="w"> </span><span class="n">ordinals</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">{</span><span class="mi">42</span><span class="p">,</span><span class="w"> </span><span class="mi">7</span><span class="p">,</span><span class="w"> </span><span class="mi">90_000</span><span class="p">,</span><span class="w"> </span><span class="mi">42</span><span class="p">};</span>
+<span class="n">List</span><span class="o">&lt;</span><span class="n">VectorFloat</span><span class="o">&lt;?&gt;&gt;</span><span class="w"> </span><span class="n">retained</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="k">new</span><span class="w"> </span><span class="n">ArrayList</span><span class="o">&lt;&gt;</span><span class="p">();</span>
+<span class="k">try</span><span class="w"> </span><span class="p">(</span><span class="kd">var</span><span class="w"> </span><span class="n">cursor</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">VectorAccess</span><span class="p">.</span><span class="na">openSelection</span><span class="p">(</span><span class="n">source</span><span class="p">,</span><span class="w"> </span><span class="n">ordinals</span><span class="p">,</span><span class="w"> </span><span class="mi">0</span><span class="p">,</span><span class="w"> </span><span class="n">ordinals</span><span class="p">.</span><span class="na">length</span><span class="p">))</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="k">while</span><span class="w"> </span><span class="p">(</span><span class="n">cursor</span><span class="p">.</span><span class="na">next</span><span class="p">())</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="c1">// File cursor storage is reused: copy vectors kept for later computation.</span>
+<span class="w">        </span><span class="n">retained</span><span class="p">.</span><span class="na">add</span><span class="p">(</span><span class="n">cursor</span><span class="p">.</span><span class="na">vector</span><span class="p">().</span><span class="na">copy</span><span class="p">());</span>
+<span class="w">        </span><span class="n">System</span><span class="p">.</span><span class="na">out</span><span class="p">.</span><span class="na">println</span><span class="p">(</span><span class="s">"Loaded ordinal "</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="n">cursor</span><span class="p">.</span><span class="na">ordinal</span><span class="p">());</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="p">}</span>
+<span class="c1">// retained is in order 42, 7, 90000, 42 and remains valid after cursor closure.</span>
+</code></pre></div>
+<p>For a training sample, <code>VectorAccess.copySelected(source, ordinals, executor)</code>
+performs this materialization in parallel, with source-aware scheduling and the
+same order/duplicate guarantees. The algorithm selects the ordinals; the source
+only retrieves them. For a single unpredictable point request, the existing
+<code>getVector(ordinal)</code> API remains available; copy a shared result before retaining it.</p>
+<h2 id="scan-ordinals-process-the-file-in-order">Scan ordinals: process the file in order<a class="headerlink" href="#scan-ordinals-process-the-file-in-order" title="Permanent link">&para;</a></h2>
+<p>Use a range for a full pass, such as computing statistics or encoding vectors.
+Consume each borrowed vector before advancing; no copy is needed in this example:</p>
+<div class="highlight"><pre><span></span><code><span class="kt">int</span><span class="w"> </span><span class="n">scanned</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">0</span><span class="p">;</span>
+<span class="kt">double</span><span class="w"> </span><span class="n">firstCoordinateSum</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">0</span><span class="p">;</span>
+<span class="k">try</span><span class="w"> </span><span class="p">(</span><span class="kd">var</span><span class="w"> </span><span class="n">cursor</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">VectorAccess</span><span class="p">.</span><span class="na">openRange</span><span class="p">(</span><span class="n">source</span><span class="p">,</span><span class="w"> </span><span class="mi">0</span><span class="p">,</span><span class="w"> </span><span class="n">source</span><span class="p">.</span><span class="na">size</span><span class="p">()))</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="k">while</span><span class="w"> </span><span class="p">(</span><span class="n">cursor</span><span class="p">.</span><span class="na">next</span><span class="p">())</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="n">firstCoordinateSum</span><span class="w"> </span><span class="o">+=</span><span class="w"> </span><span class="n">cursor</span><span class="p">.</span><span class="na">vector</span><span class="p">().</span><span class="na">get</span><span class="p">(</span><span class="mi">0</span><span class="p">);</span>
+<span class="w">        </span><span class="n">scanned</span><span class="o">++</span><span class="p">;</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="p">}</span>
+<span class="n">System</span><span class="p">.</span><span class="na">out</span><span class="p">.</span><span class="na">printf</span><span class="p">(</span><span class="s">"Scanned %d vectors; sum = %f%n"</span><span class="p">,</span><span class="w"> </span><span class="n">scanned</span><span class="p">,</span><span class="w"> </span><span class="n">firstCoordinateSum</span><span class="p">);</span>
+</code></pre></div>
+<p>For a partition, <code>openRange(source, 10, 20)</code> reads ordinals 10 through 19.
+<code>openRange(startInclusive, endExclusive)</code> uses an exclusive end; equal endpoints
+are an empty range, including <code>openRange(size, size)</code>. Selection arguments instead
+use an array slice: <code>openSelection(ordinals, offset, count)</code>. Keep the selection
+array unchanged until its cursor closes.</p>
+<p><code>VectorAccess</code> selects the optional batching capability or falls back to ordinary
+point access. Algorithms should normally use these utilities rather than inspecting
+the concrete file-source type. The runnable <code>HelloBatchedVectors</code> example demonstrates
+both patterns, including a full scan of the real catalog dataset.</p>
+<h2 id="use-with-quantization-and-indexes">Use with quantization and indexes<a class="headerlink" href="#use-with-quantization-and-indexes" title="Permanent link">&para;</a></h2>
+<p>The algorithm chooses its vectors and performs computation. <code>VectorAccess</code> handles
+capability selection and fallback. The source owns file format, scheduling, I/O
+workers, buffering, and read-ahead.</p>
+<p>PQ chooses its training sample as before and materializes it with:</p>
+<div class="highlight"><pre><span></span><code><span class="n">List</span><span class="o">&lt;</span><span class="n">VectorFloat</span><span class="o">&lt;?&gt;&gt;</span><span class="w"> </span><span class="n">training</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">VectorAccess</span><span class="p">.</span><span class="na">copySelected</span><span class="p">(</span><span class="n">source</span><span class="p">,</span><span class="w"> </span><span class="n">ordinals</span><span class="p">,</span><span class="w"> </span><span class="n">executor</span><span class="p">);</span>
+</code></pre></div>
+<p>For capable sources, the utility schedules selected reads in storage order, then
+restores the original sample order and duplicates. PQ's sample policy and centroid
+learning are unchanged. The point-access fallback retains the existing parallel
+path and avoids copying non-shared resident vectors.</p>
+<p>PQ, NVQ, and binary quantization bulk encoding use <code>VectorAccess.forEach</code>; NVQ's mean computation uses a
+range cursor and preserves its accumulation order. Existing calls to
+<code>ProductQuantization.compute</code>, <code>encodeAll</code>, and <code>NVQuantization.compute</code> accept the
+file source directly, as shown in the runnable quantization example.</p>
+<p>For a new quantizer, use the full-scan overload without generating all ordinals:</p>
+<div class="highlight"><pre><span></span><code><span class="n">VectorAccess</span><span class="p">.</span><span class="na">forEach</span><span class="p">(</span><span class="n">source</span><span class="p">,</span><span class="w"> </span><span class="n">executor</span><span class="p">,</span><span class="w"> </span><span class="p">(</span><span class="n">ordinal</span><span class="p">,</span><span class="w"> </span><span class="n">vector</span><span class="p">)</span><span class="w"> </span><span class="o">-&gt;</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="c1">// Encode or consume the borrowed vector here; copy it only if retaining it.</span>
+<span class="w">    </span><span class="n">encoded</span><span class="o">[</span><span class="n">ordinal</span><span class="o">]</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">compressor</span><span class="p">.</span><span class="na">encode</span><span class="p">(</span><span class="n">vector</span><span class="p">);</span>
+<span class="p">});</span>
+</code></pre></div>
+<p>Use <code>copySelected</code> for retained training samples, <code>openRange</code> for an ordered
+sequential reduction, and the mapped <code>forEach</code> overload when output positions
+refer to different input ordinals. These utilities work with existing sources
+without buffered hooks. Full-precision graph construction retains its existing
+resident source in the harness. The optional bulk hooks are not a substitute for
+resident raw vectors in comparison-heavy construction. A caller can still use the
+ordinary point-access API; no library-wide policy is imposed.
+The source does not change distance metrics, quantizer parameters, graph pruning,
+or hierarchy. Algorithm restrictions still apply, such as FusedPQ requiring
+256 clusters and anisotropic PQ requiring normalized training vectors.</p>
+<p>Other quantizers and indexes can adopt the same utilities independently. Existing
+integrations can continue supplying ordinary <code>RandomAccessVectorValues</code>; they do
+not have to implement batching. No algorithm-specific policy belongs in the file
+source, and alternative sources can implement the same interface.</p>
+<h2 id="configure-bounded-read-ahead">Configure bounded read-ahead<a class="headerlink" href="#configure-bounded-read-ahead" title="Permanent link">&para;</a></h2>
+<p>Most callers use <code>open(path)</code>. Immutable named options customize individual limits:</p>
+<div class="highlight"><pre><span></span><code><span class="kd">var</span><span class="w"> </span><span class="n">options</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">FvecFileVectorValues</span><span class="p">.</span><span class="na">Options</span><span class="p">.</span><span class="na">defaults</span><span class="p">()</span>
+<span class="w">        </span><span class="p">.</span><span class="na">withMaxBufferBytes</span><span class="p">(</span><span class="mi">32L</span><span class="w"> </span><span class="o">&lt;&lt;</span><span class="w"> </span><span class="mi">20</span><span class="p">)</span>
+<span class="w">        </span><span class="p">.</span><span class="na">withBatchVectors</span><span class="p">(</span><span class="mi">64</span><span class="p">)</span>
+<span class="w">        </span><span class="p">.</span><span class="na">withReadAhead</span><span class="p">(</span><span class="mi">3</span><span class="p">);</span>
+<span class="k">try</span><span class="w"> </span><span class="p">(</span><span class="kd">var</span><span class="w"> </span><span class="n">source</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">FvecFileVectorValues</span><span class="p">.</span><span class="na">open</span><span class="p">(</span><span class="n">path</span><span class="p">,</span><span class="w"> </span><span class="n">options</span><span class="p">))</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="c1">// Use VectorAccess or ordinary point access.</span>
+<span class="p">}</span>
+</code></pre></div>
+<p>The default I/O worker count follows <code>PhysicalCoreExecutor</code>, the compute sizing
+used by Grid and BenchYAML. It adapts to the machine and honors
+<code>-Djvector.physical_core_count</code>; there is no fixed core count. Blocking file reads
+for range and selection cursors run on a separate source-owned pool. Unpredictable
+point reads execute on the requesting thread using exclusively leased channels;
+point and asynchronous reads share the I/O concurrency limit. <code>withIoThreads(count)</code> remains available for explicit benchmark tuning. The
+quantization example uses the shared compute pool and does not shut it down.</p>
+<p>Other defaults are at most 64 vectors per batch and three batches of
+read-ahead. Payload capacity is capped at <code>min(1% of file bytes, 64 MiB)</code>, with one
+record as the minimum. A configured maximum is also capped at 1% of the file.
+Copies and cursors share the budget, including queued, in-flight and ready payloads,
+point-read buffers.
+Read-ahead zero disables speculative batches. Selected reads fetch requested records
+without reading the gaps between sparse samples.</p>
+<p>This is an <strong>I/O payload budget</strong>, not a total-process memory limit. Retained training
+vectors, encoded outputs, graph data, scratch vectors, JVM/channel internals and the
+OS page cache consume additional memory. <code>statistics()</code> reports logical source
+reads and payload allocation, not physical device I/O.</p>
+<h2 id="ownership-and-closure">Ownership and closure<a class="headerlink" href="#ownership-and-closure" title="Permanent link">&para;</a></h2>
+<ul>
+<li>A cursor has one consumer. Independent cursors can run concurrently.</li>
+<li>A failed advance invalidates the cursor. Its value and ordinal are unavailable;
+  open a new cursor to retry. Other views remain usable if the source is still open.</li>
+<li>A shared cursor vector is borrowed until the next advance or close. Call <code>.copy()</code>
+  before retaining it. Non-shared resident sources allow retention without copying.</li>
+<li>Point-access views have their own scratch vector and are single-consumer. Use
+  <code>copy()</code> or <code>threadLocalSupplier()</code> for concurrent point access.</li>
+<li>Close cursors with try-with-resources, stop consumers, then close the root source.</li>
+<li>Copies share the root's storage and I/O executor. Closing a copy affects that view
+  only; closing the root invalidates all copies and releases the shared resources.</li>
+<li>If point reads are still running when the root closes, close waits for each read
+  in progress to finish; later point reads fail with <code>IllegalStateException</code>.</li>
+<li>Direct payload buffers become eligible for JVM reclamation after references are
+  released; closure does not promise immediate native-memory reclamation.</li>
+</ul>
+<h2 id="measure-input-loading">Measure input loading<a class="headerlink" href="#measure-input-loading" title="Permanent link">&para;</a></h2>
+<p>The <a href="../vector-prefetch-benchmark/">vector prefetching benchmark</a> compares the exact
+buffered source with full preload and demand-only reads, timing sample retrieval,
+training and full-set encoding separately. It runs from the command line or IntelliJ.</p>
+
+
+
+
+
+
+
+
+
+
+
+
+                
+              </article>
+            </div>
+          
+          
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+          <button type="button" class="md-top md-icon" data-md-component="top" hidden>
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M13 20h-2V8l-5.5 5.5-1.42-1.42L12 4.16l7.92 7.92-1.42 1.42L13 8z"/></svg>
+  Back to top
+</button>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+    
+      
+      <nav class="md-footer__inner md-grid" aria-label="Footer" >
+        
+          
+          <a href="../compaction/" class="md-footer__link md-footer__link--prev" aria-label="Previous: Compaction">
+            <div class="md-footer__button md-icon">
+              
+              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+            </div>
+            <div class="md-footer__title">
+              <span class="md-footer__direction">
+                Previous
+              </span>
+              <div class="md-ellipsis">
+                Compaction
+              </div>
+            </div>
+          </a>
+        
+        
+          
+          <a href="../deferred-batch-writer/" class="md-footer__link md-footer__link--next" aria-label="Next: Deferred batch serialization">
+            <div class="md-footer__title">
+              <span class="md-footer__direction">
+                Next
+              </span>
+              <div class="md-ellipsis">
+                Deferred batch serialization
+              </div>
+            </div>
+            <div class="md-footer__button md-icon">
+              
+              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M4 11v2h12l-5.5 5.5 1.42 1.42L19.84 12l-7.92-7.92L10.5 5.5 16 11z"/></svg>
+            </div>
+          </a>
+        
+      </nav>
+    
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+  
+    Made with
+    <a href="https://squidfunk.github.io/mkdocs-material/" target="_blank" rel="noopener">
+      Material for MkDocs
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+    
+    
+      
+      <script id="__config" type="application/json">{"base": "..", "features": ["navigation.sections", "navigation.top", "navigation.footer", "search.suggest", "search.highlight", "content.code.copy", "content.action.edit"], "search": "../assets/javascripts/workers/search.d50fe291.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": {"default": ["latest", "dev"], "provider": "mike"}}</script>
+    
+    
+      <script src="../assets/javascripts/bundle.13a4f30d.min.js"></script>
+      
+    
+  </body>
+</html>

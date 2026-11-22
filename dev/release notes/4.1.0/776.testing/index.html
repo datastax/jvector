@@ -1,0 +1,1874 @@
+
+<!doctype html>
+<html lang="en" class="no-js">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+        <meta name="description" content="Java library for approximate nearest neighbor vector search with graph indexes.">
+      
+      
+      
+        <link rel="canonical" href="https://datastax.github.io/jvector/dev/release%20notes/4.1.0/776.testing/">
+      
+      
+      
+      
+      <link rel="icon" href="../../../assets/images/favicon.png">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.6.14">
+    
+    
+      
+        <title>776.testing - JVector</title>
+      
+    
+    
+      <link rel="stylesheet" href="../../../assets/stylesheets/main.342714a4.min.css">
+      
+        
+        <link rel="stylesheet" href="../../../assets/stylesheets/palette.06af60db.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+        
+        
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Roboto:300,300i,400,400i,700,700i%7CRoboto+Mono:400,400i,700,700i&display=fallback">
+        <style>:root{--md-text-font:"Roboto";--md-code-font:"Roboto Mono"}</style>
+      
+    
+    
+    <script>__md_scope=new URL("../../..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+
+    
+    
+    
+  </head>
+  
+  
+    
+    
+      
+    
+    
+    
+    
+    <body dir="ltr" data-md-color-scheme="default" data-md-color-primary="indigo" data-md-color-accent="indigo">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#modular-benchmark-harness-grid-refactor-for-benchyaml-and-autobenchyaml" class="md-skip">
+          Skip to content
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+    </div>
+    
+      <div data-md-color-scheme="default" data-md-component="outdated" hidden>
+        
+      </div>
+    
+    
+      
+
+  
+
+<header class="md-header md-header--shadow" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="Header">
+    <a href="../../.." title="JVector" class="md-header__button md-logo" aria-label="JVector" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            JVector
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              776.testing
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+      
+        <form class="md-header__option" data-md-component="palette">
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="(prefers-color-scheme: light)" data-md-color-scheme="default" data-md-color-primary="indigo" data-md-color-accent="indigo"  aria-label="Switch to dark mode"  type="radio" name="__palette" id="__palette_0">
+    
+      <label class="md-header__button md-icon" title="Switch to dark mode" for="__palette_1" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a4 4 0 0 0-4 4 4 4 0 0 0 4 4 4 4 0 0 0 4-4 4 4 0 0 0-4-4m0 10a6 6 0 0 1-6-6 6 6 0 0 1 6-6 6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="(prefers-color-scheme: dark)" data-md-color-scheme="slate" data-md-color-primary="indigo" data-md-color-accent="indigo"  aria-label="Switch to light mode"  type="radio" name="__palette" id="__palette_1">
+    
+      <label class="md-header__button md-icon" title="Switch to light mode" for="__palette_0" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 18c-.89 0-1.74-.2-2.5-.55C11.56 16.5 13 14.42 13 12s-1.44-4.5-3.5-5.45C10.26 6.2 11.11 6 12 6a6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+</form>
+      
+    
+    
+      <script>var palette=__md_get("__palette");if(palette&&palette.color){if("(prefers-color-scheme)"===palette.color.media){var media=matchMedia("(prefers-color-scheme: light)"),input=document.querySelector(media.matches?"[data-md-color-media='(prefers-color-scheme: light)']":"[data-md-color-media='(prefers-color-scheme: dark)']");palette.color.media=input.getAttribute("data-md-color-media"),palette.color.scheme=input.getAttribute("data-md-color-scheme"),palette.color.primary=input.getAttribute("data-md-color-primary"),palette.color.accent=input.getAttribute("data-md-color-accent")}for(var[key,value]of Object.entries(palette.color))document.body.setAttribute("data-md-color-"+key,value)}</script>
+    
+    
+    
+      
+      
+        <label class="md-header__button md-icon" for="__search">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        </label>
+        <div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" aria-label="Search" placeholder="Search" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <label class="md-search__icon md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+      </label>
+      <nav class="md-search__options" aria-label="Search">
+        
+        <button type="reset" class="md-search__icon md-icon" title="Clear" aria-label="Clear" tabindex="-1">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      </nav>
+      
+        <div class="md-search__suggest" data-md-component="search-suggest"></div>
+      
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix>
+        <div class="md-search-result" data-md-component="search-result">
+          <div class="md-search-result__meta">
+            Initializing search
+          </div>
+          <ol class="md-search-result__list" role="presentation"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+      
+    
+    
+      <div class="md-header__source">
+        <a href="https://github.com/datastax/jvector" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 6.7.2 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2024 Fonticons, Inc.--><path d="M439.55 236.05 244 40.45a28.87 28.87 0 0 0-40.81 0l-40.66 40.63 51.52 51.52c27.06-9.14 52.68 16.77 43.39 43.68l49.66 49.66c34.23-11.8 61.18 31 35.47 56.69-26.49 26.49-70.21-2.87-56-37.34L240.22 199v121.85c25.3 12.54 22.26 41.85 9.08 55a34.34 34.34 0 0 1-48.55 0c-17.57-17.6-11.07-46.91 11.25-56v-123c-20.8-8.51-24.6-30.74-18.64-45L142.57 101 8.45 235.14a28.86 28.86 0 0 0 0 40.81l195.61 195.6a28.86 28.86 0 0 0 40.8 0l194.69-194.69a28.86 28.86 0 0 0 0-40.81"/></svg>
+  </div>
+  <div class="md-source__repository">
+    datastax/jvector
+  </div>
+</a>
+      </div>
+    
+  </nav>
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+          
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+
+<nav class="md-nav md-nav--primary" aria-label="Navigation" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href="../../.." title="JVector" class="md-nav__button md-logo" aria-label="JVector" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    JVector
+  </label>
+  
+    <div class="md-nav__source">
+      <a href="https://github.com/datastax/jvector" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 6.7.2 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2024 Fonticons, Inc.--><path d="M439.55 236.05 244 40.45a28.87 28.87 0 0 0-40.81 0l-40.66 40.63 51.52 51.52c27.06-9.14 52.68 16.77 43.39 43.68l49.66 49.66c34.23-11.8 61.18 31 35.47 56.69-26.49 26.49-70.21-2.87-56-37.34L240.22 199v121.85c25.3 12.54 22.26 41.85 9.08 55a34.34 34.34 0 0 1-48.55 0c-17.57-17.6-11.07-46.91 11.25-56v-123c-20.8-8.51-24.6-30.74-18.64-45L142.57 101 8.45 235.14a28.86 28.86 0 0 0 0 40.81l195.61 195.6a28.86 28.86 0 0 0 40.8 0l194.69-194.69a28.86 28.86 0 0 0 0-40.81"/></svg>
+  </div>
+  <div class="md-source__repository">
+    datastax/jvector
+  </div>
+</a>
+    </div>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../.." class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Home
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_2" >
+        
+          
+          <label class="md-nav__link" for="__nav_2" id="__nav_2_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    Getting started
+    
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_2_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_2">
+            <span class="md-nav__icon md-icon"></span>
+            Getting started
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../getting-started/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Quick start
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../building-and-installing/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Building and installing
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../tutorials/1-intro-tutorial/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Tutorial 1: Introduction
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../tutorials/2-disk-tutorial/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Tutorial 2: On-disk indexes
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../tutorials/3-larger-than-memory-tutorial/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Tutorial 3: Larger than memory
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3" >
+        
+          
+          <label class="md-nav__link" for="__nav_3" id="__nav_3_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    Guides
+    
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_3_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_3">
+            <span class="md-nav__icon md-icon"></span>
+            Guides
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../choosing-an-index/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Choosing an index
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../graph-construction/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Graph construction
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../fused-and-separated/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Fused and separated layouts
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../tuning/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Tuning construction and search
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../sizing/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Memory and disk sizing
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../larger-than-memory-indexes/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Larger-than-memory indexes
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../compaction/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Compaction
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../batched-vector-access/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Batched input vector access
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../deferred-batch-writer/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Deferred batch serialization
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4" >
+        
+          
+          <label class="md-nav__link" for="__nav_4" id="__nav_4_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    Quantizers
+    
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_4_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_4">
+            <span class="md-nav__icon md-icon"></span>
+            Quantizers
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../pq/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Product quantization (PQ)
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    
+    
+    
+    
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4_2" >
+        
+          
+          <label class="md-nav__link" for="__nav_4_2" id="__nav_4_2_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    ASH (experimental)
+    
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_4_2_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_4_2">
+            <span class="md-nav__icon md-icon"></span>
+            ASH (experimental)
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../ash-configuration/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Configuration and defaults
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../ash-projection-precision/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Query-projection precision
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../ash-query-integration/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Integrating ASH queries
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../ash-performance/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Performance
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../nvq/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    NVQ (reranking)
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../bq/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Binary quantization (BQ)
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_5" >
+        
+          
+          <label class="md-nav__link" for="__nav_5" id="__nav_5_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    Benchmarking
+    
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_5_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_5">
+            <span class="md-nav__icon md-icon"></span>
+            Benchmarking
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../benchmarking/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Running benchmarks
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../benchyaml-guide/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    BenchYAML guide
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../ash-pq-benchmark/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Reproducing ASH versus PQ
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../vector-prefetch-benchmark/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Vector prefetching benchmark
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_6" >
+        
+          
+          <label class="md-nav__link" for="__nav_6" id="__nav_6_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    Design notes
+    
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_6_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_6">
+            <span class="md-nav__icon md-icon"></span>
+            Design notes
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../ash-query-batching-design/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    ASH query batching
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../native-ash-preparation/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Native ASH projection
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../ash-pca-native-svd/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    ASH PCA correctness
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../legacy/jvector-step-by-step/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    JVector step by step (legacy)
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_7" >
+        
+          
+          <label class="md-nav__link" for="__nav_7" id="__nav_7_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    Reference
+    
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_7_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_7">
+            <span class="md-nav__icon md-icon"></span>
+            Reference
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="https://javadoc.io/doc/io.github.jbellis/jvector" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    API reference (Javadoc)
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="https://github.com/datastax/jvector/blob/main/UPGRADING.md" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Upgrading
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="https://github.com/datastax/jvector/blob/main/CHANGELOG.md" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Changelog
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    
+    
+    
+    
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_7_4" >
+        
+          
+          <label class="md-nav__link" for="__nav_7_4" id="__nav_7_4_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    Release notes
+    
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_7_4_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_7_4">
+            <span class="md-nav__icon md-icon"></span>
+            Release notes
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    About release notes
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../4.0.2/4.0.2/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    4.0.2
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../4.0.1/4.0.1/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    4.0.1
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../4.0.0-RC.9/4.0.0-RC.9/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    4.0.0-RC.9
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../4.0.0-RC.8/4.0.0-RC.8/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    4.0.0-RC.8
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+              
+              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#modular-benchmark-harness-grid-refactor-for-benchyaml-and-autobenchyaml" class="md-nav__link">
+    <span class="md-ellipsis">
+      Modular Benchmark Harness: Grid Refactor for BenchYAML and AutoBenchYAML
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              <article class="md-content__inner md-typeset">
+                
+                  
+
+
+  
+    <a href="https://github.com/datastax/jvector/edit/main/docs/release notes/4.1.0/776.testing.md" title="Edit this page" class="md-content__button md-icon">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M10 20H6V4h7v5h5v3.1l2-2V8l-6-6H6c-1.1 0-2 .9-2 2v16c0 1.1.9 2 2 2h4zm10.2-7c.1 0 .3.1.4.2l1.3 1.3c.2.2.2.6 0 .8l-1 1-2.1-2.1 1-1c.1-.1.2-.2.4-.2m0 3.9L14.1 23H12v-2.1l6.1-6.1z"/></svg>
+    </a>
+  
+  
+
+
+  <h1>776.testing</h1>
+
+<h3 id="modular-benchmark-harness-grid-refactor-for-benchyaml-and-autobenchyaml">Modular Benchmark Harness: Grid Refactor for BenchYAML and AutoBenchYAML<a class="headerlink" href="#modular-benchmark-harness-grid-refactor-for-benchyaml-and-autobenchyaml" title="Permanent link">&para;</a></h3>
+<p><strong>Description</strong>
+<code>Grid</code>, the engine behind <code>BenchYAML</code> and <code>AutoBenchYAML</code>, was refactored so that each benchmarking initiative can put its changes in its own files. Almost every core change also changed <code>Grid.java</code>, and with several initiatives in flight at once it had merge conflicts at nearly every release. The class is now a small orchestrator (692 lines, down from 1,395). Its extension points live in separate files in <code>io.github.jbellis.jvector.example</code>:</p>
+<table>
+<thead>
+<tr>
+<th>Concern</th>
+<th>Before</th>
+<th>Now</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Two pipelines</td>
+<td><code>runAll</code> and <code>runAllAndCollectResults</code> were near-copies</td>
+<td>One pipeline; AutoBenchYAML adds a result collector</td>
+</tr>
+<tr>
+<td>Build parameters</td>
+<td>5–7 positional arguments threaded through every method</td>
+<td><code>BuildConfig</code> (one build point) and <code>SearchConfig</code> (the search sweep)</td>
+</tr>
+<tr>
+<td>Construction sweep</td>
+<td>Six hand-nested <code>for</code> loops</td>
+<td><code>GridSpec</code> with ordered <code>SweepDimension</code>s; <code>GridSpec.fromGrids(...)</code> sets the order, and <code>GridSpec.fromConfig(MultiConfig)</code> maps the YAML onto it</td>
+</tr>
+<tr>
+<td>Graph construction</td>
+<td>Inline <code>buildInMemory</code> / <code>buildOnDisk</code></td>
+<td><code>IndexBuildStrategy</code>: <code>InMemoryBuild</code>, <code>CompressedOnDiskBuild</code> (includes the index cache)</td>
+</tr>
+<tr>
+<td>Core builder/writer calls</td>
+<td>Spread through Grid</td>
+<td><code>GraphBuilderFactory</code> only</td>
+</tr>
+<tr>
+<td>On-disk features</td>
+<td>A <code>switch</code> on <code>FeatureId</code> plus <code>FUSED_PQ</code> checks in five other places</td>
+<td><code>FeatureProvider</code> per feature (<code>InlineVectorsProvider</code>, <code>NVQProvider</code>, <code>FusedPQProvider</code>), registered in <code>FeatureProviders</code></td>
+</tr>
+<tr>
+<td>Console, experiments.csv, AutoBench results</td>
+<td>Inline in <code>testConfiguration</code></td>
+<td><code>GridListener</code>s: <code>ConsoleReportListener</code>, <code>ExperimentsLogListener</code>, <code>BenchResultCollector</code></td>
+</tr>
+<tr>
+<td>Reported build parameters</td>
+<td>Listed separately by each output</td>
+<td><code>BuildConfig.reportedParameters()</code></td>
+</tr>
+</tbody>
+</table>
+<p>Each step was checked against the previous code on <code>lastfm-64-dot</code> by comparing <code>experiments.csv</code> rows, AutoBench <code>BenchResult</code> output, console tables, and the builds, cache hits and skip messages logged. Output matched except for the changes listed below.</p>
+<p><strong>How to Enable</strong>
+No configuration is required. Command lines, dataset YAML files (<code>yaml-configs/index-parameters/</code>), <code>run-config.yml</code>, and the experiments.csv schema (v1) are unchanged.</p>
+<p><strong>Running BenchYAML: what changes</strong></p>
+<ul>
+<li><strong>Unchanged:</strong> command line, YAML configs, <code>run-config.yml</code> selections, experiments.csv columns and values, console table columns.</li>
+<li><strong>Feature-set order is stable.</strong> Indexes are searched in the configured order. That is the <code>reranking</code> list order, with each <code>fusedGraph</code> value producing a full pass over it, e.g. <code>reranking: [NVQ, FP]</code> gives NVQ then FP. Previously the order of console blocks and experiments.csv rows changed between runs, because <code>EnumSet</code> hash codes come from identity hashes.</li>
+<li><strong>No stale search timings on fused rows.</strong> Fused-PQ indexes skip search compression, but they could report the previous index's <code>Search PQ encoding (s)</code>. They no longer do.</li>
+<li><strong>PQ codebooks are reused within a run.</strong> The in-memory compressor cache never hit, so every lookup reloaded the codebooks from <code>pq_cache</code> (one <code>codebooks loaded from</code> line each). Results are unchanged; repeat loads are gone.</li>
+<li><strong>NVQ compressors can be cached.</strong> <code>NVQParameters.idStringFor</code> no longer throws (same fix as #780), and cached compressors are now read back by the <code>CompressorParameters</code> that saved them (<code>loadCompressor</code>) instead of always as PQ, which would have returned a corrupt PQ or failed on the second run. Files still go in <code>pq_cache</code>; the load message is now <code>&lt;compressor&gt; loaded from &lt;file&gt;</code>.</li>
+<li><strong>Clearer errors for incomplete configs.</strong> A missing construction sweep field fails with its name, e.g. <code>No values to sweep for outDegree</code> or <code>construction.useSavedIndexIfExists must be set</code>, instead of a bare <code>NullPointerException</code>. The whole sweep is validated before the first build.</li>
+<li><strong>Features without a provider are rejected.</strong> A feature set containing a feature Grid cannot write (e.g. <code>SEPARATED_VECTORS</code>) fails when the <code>GridSpec</code> is built, with <code>Grid has no FeatureProvider for &lt;id&gt;</code>. Previously the index was built without that feature and the results were still labeled with it. YAML configs cannot produce such a feature set (<code>reranking</code> accepts only <code>FP</code> and <code>NVQ</code>), so this affects only harnesses that build feature sets in code.</li>
+<li><strong>Feature checks run before any file is written.</strong> "Bench looks for either NVQ_VECTORS or INLINE_VECTORS feature set for scoring compressed builds" and "FusedPQ requires PQ build compression with 256 clusters" now fail before any index writer is opened, so a failed run no longer leaves partial index files.</li>
+<li><strong>Console messages.</strong> In-memory builds now print <code>Skipping [INLINE_VECTORS, FUSED_PQ] when building in memory: it needs a compressed build</code>.</li>
+</ul>
+<p><strong>Running AutoBenchYAML: what changes</strong></p>
+<p>AutoBenchYAML now runs through the same pipeline as BenchYAML. Its command line (<code>--output</code>, <code>--config</code>, <code>--diag</code>, dataset patterns), output files (<code>&lt;output&gt;.csv</code>, <code>&lt;output&gt;.json</code>, checkpoint), and fixed regression benchmark set are unchanged.</p>
+<ul>
+<li><strong>One graph per build configuration.</strong> Each feature set is still written to, and searched in, its own index file. The difference is that the old path rebuilt the graph and rewrote every feature set's file for each feature set and each search compressor, then searched only one of them. With F feature sets and S search compressors (index cache off), it did F × S graph builds and F × F × S file writes; it now does 1 and F. The graph does not depend on the feature set (compressed builds score with the PQ/BQ build vectors), and search compression is not stored in the index, so the repeats only produced more random graphs with the same parameters.</li>
+<li><strong>Results to expect when comparing against an earlier run:</strong></li>
+<li><strong>CSV columns unchanged; Build Heap / Build Off-Heap values shift.</strong> The build memory snapshot is now taken right after the build, before search vectors are encoded. Expect one comparison cycle where these move.</li>
+<li><strong>Index Build Time.</strong> On earlier code this was the last of the redundant builds, each doing the same work as the single build now, so values are comparable with less run-to-run noise. When every index for a build config is loaded from the index cache, no build time is reported for it; earlier code reported the previous build config's time.</li>
+<li><strong>Within a build config, INLINE and NVQ rows search the same graph.</strong> Comparisons between feature sets then differ only in stored features and reranking, and <code>Avg Visited</code> matches between them.</li>
+<li><strong>Total run time drops</strong>, and off-heap memory stays flat because indexes are now closed after use, including when a search fails.</li>
+<li><strong>JSON (<code>&lt;output&gt;.json</code>):</strong></li>
+<li><strong>Parameter keys are unchanged.</strong> <code>buildCompressor</code> / <code>searchCompressor</code> remain lambda <code>toString()</code> values, which differ between runs; exclude them when diffing.</li>
+<li><strong>Existing metric keys are unchanged.</strong> Construction metrics are added when measured: <code>Index build time (s)</code>, <code>Index file size (MB)</code>, <code>Idx PQ compute (s)</code>, <code>Idx PQ encoding (s)</code>, <code>Idx NVQ compute (s)</code>, <code>Search PQ compute (s)</code>, <code>Search PQ encoding (s)</code>. <code>BenchmarkSummarizer</code> does not read these, so the CSV is unaffected.</li>
+<li><strong>Rows follow the configured feature-set order.</strong></li>
+<li><strong>Rows follow BenchYAML's sweep order.</strong> Construction parameters now vary as addHierarchy → refineFinalGraph → outDegree → neighborOverflow → efConstruction → build compression (first slowest), where AutoBench previously used M → efConstruction → neighborOverflow → addHierarchy → refineFinalGraph. Within each index, usePruning now varies slower than topK (previously the reverse). Parameter values per row are unchanged, so match rows by their <code>params</code> rather than position. The CSV is unaffected: <code>BenchmarkSummarizer</code> averages over rows, and the last row, whose Index Build Time it reports, is the same build config in both orders.</li>
+<li><strong>Console.</strong> AutoBenchYAML now prints the same per-configuration tables as BenchYAML.</li>
+<li><strong>Checkpoints.</strong> The <code>BenchResult</code> format is unchanged, so a checkpoint from an earlier build can be resumed. Datasets completed before the upgrade keep their earlier metrics (no construction metrics, earlier memory snapshot timing).</li>
+</ul>
+<p><strong>Updating the harnesses</strong></p>
+<p>Entry points (all callers in the repository have been migrated):</p>
+<div class="highlight"><pre><span></span><code><span class="c1">// BenchYAML, HelloVectorWorld</span>
+<span class="n">Grid</span><span class="p">.</span><span class="na">run</span><span class="p">(</span><span class="n">ds</span><span class="p">,</span><span class="w"> </span><span class="n">GridSpec</span><span class="p">.</span><span class="na">fromConfig</span><span class="p">(</span><span class="n">config</span><span class="p">),</span><span class="w"> </span><span class="n">artifacts</span><span class="p">);</span>
+
+<span class="c1">// AutoBenchYAML</span>
+<span class="n">List</span><span class="o">&lt;</span><span class="n">BenchResult</span><span class="o">&gt;</span><span class="w"> </span><span class="n">results</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">Grid</span><span class="p">.</span><span class="na">runAndCollectResults</span><span class="p">(</span><span class="n">ds</span><span class="p">,</span><span class="w"> </span><span class="n">GridSpec</span><span class="p">.</span><span class="na">fromConfig</span><span class="p">(</span><span class="n">config</span><span class="p">));</span>
+</code></pre></div>
+<table>
+<thead>
+<tr>
+<th>To add</th>
+<th>Change</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>A construction parameter</td>
+<td>A field and builder setter <strong>with a default</strong> in <code>BuildConfig</code>; its use, usually in <code>GraphBuilderFactory</code>; its field in <code>ConstructionParameters</code>. If swept, a parameter and one <code>sweep(...)</code> line in <code>GridSpec.fromGrids</code>, and the argument at its callers (<code>fromConfig</code>, <code>Bench</code>, and a single default value in the deprecated <code>runAllAndCollectResults</code>). To report it, one line in <code>BuildConfig.reportedParameters()</code> (it then appears in the console config block and AutoBench JSON params).</td>
+</tr>
+<tr>
+<td>An experiments.csv column for it</td>
+<td>Its name in <code>ExperimentsSchemaV1.BUILD_PARAMETER_COLUMNS</code>. This changes the versioned CSV schema, so it is deliberate, not automatic.</td>
+</tr>
+<tr>
+<td>A search parameter</td>
+<td>A field and builder setter in <code>SearchConfig</code>, and its loop in <code>Grid.testConfiguration</code>.</td>
+</tr>
+<tr>
+<td>An on-disk feature</td>
+<td>A new <code>FeatureProvider</code> file and one <code>register(...)</code> line in <code>FeatureProviders</code>.</td>
+</tr>
+<tr>
+<td>A report or output format</td>
+<td>A new <code>GridListener</code> file and one line where the entry point builds its listener list (<code>Grid.reportingListeners</code> or <code>Grid.runAndCollectResults</code>).</td>
+</tr>
+<tr>
+<td>Data for listeners</td>
+<td>A field on <code>SearchContext</code>, set where <code>Grid.runOneGraph</code> creates it.</td>
+</tr>
+</tbody>
+</table>
+<p>Example: a new swept construction parameter <code>myKnob</code>:</p>
+<div class="highlight"><pre><span></span><code><span class="c1">// BuildConfig: field, constructor assignment, and a builder setter with a default</span>
+<span class="kd">public</span><span class="w"> </span><span class="kd">final</span><span class="w"> </span><span class="kt">int</span><span class="w"> </span><span class="n">myKnob</span><span class="p">;</span>
+<span class="kd">private</span><span class="w"> </span><span class="kt">int</span><span class="w"> </span><span class="n">myKnob</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">4</span><span class="p">;</span>
+<span class="kd">public</span><span class="w"> </span><span class="n">Builder</span><span class="w"> </span><span class="nf">myKnob</span><span class="p">(</span><span class="kt">int</span><span class="w"> </span><span class="n">myKnob</span><span class="p">)</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="k">this</span><span class="p">.</span><span class="na">myKnob</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">myKnob</span><span class="p">;</span><span class="w"> </span><span class="k">return</span><span class="w"> </span><span class="k">this</span><span class="p">;</span><span class="w"> </span><span class="p">}</span>
+
+<span class="c1">// ConstructionParameters: the YAML field</span>
+<span class="kd">public</span><span class="w"> </span><span class="n">List</span><span class="o">&lt;</span><span class="n">Integer</span><span class="o">&gt;</span><span class="w"> </span><span class="n">myKnob</span><span class="p">;</span>
+
+<span class="c1">// GridSpec.fromGrids: a List&lt;Integer&gt; myKnobGrid parameter and its sweep. The position in the chain</span>
+<span class="c1">// sets its place in the output order; SweepDimension rejects a null list, so default it if the YAML</span>
+<span class="c1">// field is optional. Then pass construction.myKnob from fromConfig, and a grid from Bench.</span>
+<span class="p">.</span><span class="na">sweep</span><span class="p">(</span><span class="s">"myKnob"</span><span class="p">,</span><span class="w"> </span><span class="n">myKnobGrid</span><span class="p">,</span><span class="w"> </span><span class="n">BuildConfig</span><span class="p">.</span><span class="na">Builder</span><span class="p">::</span><span class="n">myKnob</span><span class="p">)</span>
+
+<span class="c1">// BuildConfig.reportedParameters(): show it in console and JSON results</span>
+<span class="n">params</span><span class="p">.</span><span class="na">put</span><span class="p">(</span><span class="s">"myKnob"</span><span class="p">,</span><span class="w"> </span><span class="n">myKnob</span><span class="p">);</span>
+
+<span class="c1">// GraphBuilderFactory: pass build.myKnob to the core builder</span>
+</code></pre></div>
+<p>Example: a new on-disk feature:</p>
+<div class="highlight"><pre><span></span><code><span class="kd">final</span><span class="w"> </span><span class="kd">class</span> <span class="nc">MyFeatureProvider</span><span class="w"> </span><span class="kd">implements</span><span class="w"> </span><span class="n">FeatureProvider</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="kd">public</span><span class="w"> </span><span class="n">FeatureId</span><span class="w"> </span><span class="nf">id</span><span class="p">()</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="k">return</span><span class="w"> </span><span class="n">FeatureId</span><span class="p">.</span><span class="na">MY_FEATURE</span><span class="p">;</span><span class="w"> </span><span class="p">}</span>
+<span class="w">    </span><span class="kd">public</span><span class="w"> </span><span class="kt">void</span><span class="w"> </span><span class="nf">configure</span><span class="p">(</span><span class="n">FeatureWriteContext</span><span class="w"> </span><span class="n">ctx</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="n">ctx</span><span class="p">.</span><span class="na">add</span><span class="p">(</span><span class="k">new</span><span class="w"> </span><span class="n">MyFeature</span><span class="p">(</span><span class="n">ctx</span><span class="p">.</span><span class="na">vectors</span><span class="p">().</span><span class="na">dimension</span><span class="p">()));</span>
+<span class="w">        </span><span class="n">ctx</span><span class="p">.</span><span class="na">supplyFromVector</span><span class="p">(</span><span class="n">FeatureId</span><span class="p">.</span><span class="na">MY_FEATURE</span><span class="p">,</span><span class="w"> </span><span class="n">vector</span><span class="w"> </span><span class="o">-&gt;</span><span class="w"> </span><span class="k">new</span><span class="w"> </span><span class="n">MyFeature</span><span class="p">.</span><span class="na">State</span><span class="p">(</span><span class="n">vector</span><span class="p">));</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="w">    </span><span class="c1">// Override supportsInMemoryBuild, providesRerankVectors, providesApproximateScoring or</span>
+<span class="w">    </span><span class="c1">// checkCompressedBuild if the defaults do not fit.</span>
+<span class="p">}</span>
+<span class="c1">// FeatureProviders: register(new MyFeatureProvider());</span>
+</code></pre></div>
+<p><strong>Porting in-flight branches that changed Grid</strong></p>
+<table>
+<thead>
+<tr>
+<th>Old location in <code>Grid.java</code></th>
+<th>New location</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>runAll(...)</code> overloads</td>
+<td>Removed (package-private); use <code>Grid.run(ds, spec, artifacts)</code></td>
+</tr>
+<tr>
+<td>Sweep loops in <code>runAll</code> / <code>runAllAndCollectResults</code></td>
+<td><code>GridSpec.fromGrids</code> and <code>GridSpec.buildPoints()</code></td>
+</tr>
+<tr>
+<td><code>runAllAndCollectResults</code> body</td>
+<td><code>Grid.runAndCollectResults</code>; the old method is a <code>@Deprecated</code> adapter</td>
+</tr>
+<tr>
+<td><code>buildInMemory</code></td>
+<td><code>InMemoryBuild</code></td>
+</tr>
+<tr>
+<td><code>buildOnDisk</code>, <code>writeInlineStates</code>, index-cache lookup in <code>runOneGraph</code></td>
+<td><code>CompressedOnDiskBuild</code></td>
+</tr>
+<tr>
+<td><code>new GraphIndexBuilder(...)</code>, <code>BuildScoreProvider.*</code>, writer builder setup</td>
+<td><code>GraphBuilderFactory</code></td>
+</tr>
+<tr>
+<td><code>builderWithSuppliers</code> <code>switch</code> cases</td>
+<td><code>InlineVectorsProvider</code>, <code>NVQProvider</code>, <code>FusedPQProvider</code></td>
+</tr>
+<tr>
+<td><code>FUSED_PQ</code> / <code>INLINE_VECTORS</code> / <code>NVQ_VECTORS</code> checks</td>
+<td><code>FeatureProvider</code> hooks</td>
+</tr>
+<tr>
+<td>Console table code in <code>testConfiguration</code></td>
+<td><code>ConsoleReportListener</code></td>
+</tr>
+<tr>
+<td><code>artifacts.logRow(...)</code> in <code>testConfiguration</code></td>
+<td><code>ExperimentsLogListener</code></td>
+</tr>
+<tr>
+<td><code>BenchResult</code> construction for AutoBench</td>
+<td><code>BenchResultCollector</code></td>
+</tr>
+<tr>
+<td><code>ConstructionMetrics</code>, <code>FinalWriteVectors</code> (nested classes)</td>
+<td>Their own files, unchanged</td>
+</tr>
+<tr>
+<td>AutoBench benchmark list</td>
+<td><code>Grid.regressionBenchmarks()</code></td>
+</tr>
+</tbody>
+</table>
+<p>Deprecated, still working: <code>Grid.runAllAndCollectResults(...)</code>, the positional <code>RunArtifacts.logRow(...)</code>, and the positional <code>ExperimentsSchemaV1.fixedValues(...)</code>. Use <code>Grid.runAndCollectResults</code>, and the overloads that take the build parameters as a map. <code>Grid.runOneGraph(...)</code> keeps its signature for the tests that call it.</p>
+<p><strong>Notes</strong>
+- Used internally by JVector benchmarking, no client impact. No core library code changed.
+- <code>TestBufferedGraphCompatibility</code> now compares search scores within <code>1e-6</code>. Panama's float reductions round differently before and after C2 compiles them, which made the test fail intermittently on machines without the native vector library (all macOS machines). CI builds the native library, so it was not affected.
+- New tests: <code>TestGridSpec</code> (sweep order against the old loop nest, empty and missing dimensions, YAML mapping) and <code>TestReportedParameters</code> (reported parameter names and order, experiments.csv columns).</p>
+
+
+
+
+
+
+
+
+
+
+
+
+                
+              </article>
+            </div>
+          
+          
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+          <button type="button" class="md-top md-icon" data-md-component="top" hidden>
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M13 20h-2V8l-5.5 5.5-1.42-1.42L12 4.16l7.92 7.92-1.42 1.42L13 8z"/></svg>
+  Back to top
+</button>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+    
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+  
+    Made with
+    <a href="https://squidfunk.github.io/mkdocs-material/" target="_blank" rel="noopener">
+      Material for MkDocs
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+    
+    
+      
+      <script id="__config" type="application/json">{"base": "../../..", "features": ["navigation.sections", "navigation.top", "navigation.footer", "search.suggest", "search.highlight", "content.code.copy", "content.action.edit"], "search": "../../../assets/javascripts/workers/search.d50fe291.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": {"default": ["latest", "dev"], "provider": "mike"}}</script>
+    
+    
+      <script src="../../../assets/javascripts/bundle.13a4f30d.min.js"></script>
+      
+    
+  </body>
+</html>

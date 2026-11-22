@@ -1,0 +1,2479 @@
+
+<!doctype html>
+<html lang="en" class="no-js">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+        <meta name="description" content="Java library for approximate nearest neighbor vector search with graph indexes.">
+      
+      
+      
+        <link rel="canonical" href="https://datastax.github.io/jvector/dev/release%20notes/4.0.2/4.0.2/">
+      
+      
+        <link rel="prev" href="../../">
+      
+      
+        <link rel="next" href="../../4.0.1/4.0.1/">
+      
+      
+      <link rel="icon" href="../../../assets/images/favicon.png">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.6.14">
+    
+    
+      
+        <title>4.0.2 - JVector</title>
+      
+    
+    
+      <link rel="stylesheet" href="../../../assets/stylesheets/main.342714a4.min.css">
+      
+        
+        <link rel="stylesheet" href="../../../assets/stylesheets/palette.06af60db.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+        
+        
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Roboto:300,300i,400,400i,700,700i%7CRoboto+Mono:400,400i,700,700i&display=fallback">
+        <style>:root{--md-text-font:"Roboto";--md-code-font:"Roboto Mono"}</style>
+      
+    
+    
+    <script>__md_scope=new URL("../../..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+
+    
+    
+    
+  </head>
+  
+  
+    
+    
+      
+    
+    
+    
+    
+    <body dir="ltr" data-md-color-scheme="default" data-md-color-primary="indigo" data-md-color-accent="indigo">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#jvector-release-notes" class="md-skip">
+          Skip to content
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+    </div>
+    
+      <div data-md-color-scheme="default" data-md-component="outdated" hidden>
+        
+      </div>
+    
+    
+      
+
+  
+
+<header class="md-header md-header--shadow" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="Header">
+    <a href="../../.." title="JVector" class="md-header__button md-logo" aria-label="JVector" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            JVector
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              4.0.2
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+      
+        <form class="md-header__option" data-md-component="palette">
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="(prefers-color-scheme: light)" data-md-color-scheme="default" data-md-color-primary="indigo" data-md-color-accent="indigo"  aria-label="Switch to dark mode"  type="radio" name="__palette" id="__palette_0">
+    
+      <label class="md-header__button md-icon" title="Switch to dark mode" for="__palette_1" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a4 4 0 0 0-4 4 4 4 0 0 0 4 4 4 4 0 0 0 4-4 4 4 0 0 0-4-4m0 10a6 6 0 0 1-6-6 6 6 0 0 1 6-6 6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="(prefers-color-scheme: dark)" data-md-color-scheme="slate" data-md-color-primary="indigo" data-md-color-accent="indigo"  aria-label="Switch to light mode"  type="radio" name="__palette" id="__palette_1">
+    
+      <label class="md-header__button md-icon" title="Switch to light mode" for="__palette_0" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 18c-.89 0-1.74-.2-2.5-.55C11.56 16.5 13 14.42 13 12s-1.44-4.5-3.5-5.45C10.26 6.2 11.11 6 12 6a6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+</form>
+      
+    
+    
+      <script>var palette=__md_get("__palette");if(palette&&palette.color){if("(prefers-color-scheme)"===palette.color.media){var media=matchMedia("(prefers-color-scheme: light)"),input=document.querySelector(media.matches?"[data-md-color-media='(prefers-color-scheme: light)']":"[data-md-color-media='(prefers-color-scheme: dark)']");palette.color.media=input.getAttribute("data-md-color-media"),palette.color.scheme=input.getAttribute("data-md-color-scheme"),palette.color.primary=input.getAttribute("data-md-color-primary"),palette.color.accent=input.getAttribute("data-md-color-accent")}for(var[key,value]of Object.entries(palette.color))document.body.setAttribute("data-md-color-"+key,value)}</script>
+    
+    
+    
+      
+      
+        <label class="md-header__button md-icon" for="__search">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        </label>
+        <div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" aria-label="Search" placeholder="Search" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <label class="md-search__icon md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+      </label>
+      <nav class="md-search__options" aria-label="Search">
+        
+        <button type="reset" class="md-search__icon md-icon" title="Clear" aria-label="Clear" tabindex="-1">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      </nav>
+      
+        <div class="md-search__suggest" data-md-component="search-suggest"></div>
+      
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix>
+        <div class="md-search-result" data-md-component="search-result">
+          <div class="md-search-result__meta">
+            Initializing search
+          </div>
+          <ol class="md-search-result__list" role="presentation"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+      
+    
+    
+      <div class="md-header__source">
+        <a href="https://github.com/datastax/jvector" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 6.7.2 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2024 Fonticons, Inc.--><path d="M439.55 236.05 244 40.45a28.87 28.87 0 0 0-40.81 0l-40.66 40.63 51.52 51.52c27.06-9.14 52.68 16.77 43.39 43.68l49.66 49.66c34.23-11.8 61.18 31 35.47 56.69-26.49 26.49-70.21-2.87-56-37.34L240.22 199v121.85c25.3 12.54 22.26 41.85 9.08 55a34.34 34.34 0 0 1-48.55 0c-17.57-17.6-11.07-46.91 11.25-56v-123c-20.8-8.51-24.6-30.74-18.64-45L142.57 101 8.45 235.14a28.86 28.86 0 0 0 0 40.81l195.61 195.6a28.86 28.86 0 0 0 40.8 0l194.69-194.69a28.86 28.86 0 0 0 0-40.81"/></svg>
+  </div>
+  <div class="md-source__repository">
+    datastax/jvector
+  </div>
+</a>
+      </div>
+    
+  </nav>
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+          
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+
+<nav class="md-nav md-nav--primary" aria-label="Navigation" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href="../../.." title="JVector" class="md-nav__button md-logo" aria-label="JVector" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    JVector
+  </label>
+  
+    <div class="md-nav__source">
+      <a href="https://github.com/datastax/jvector" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 6.7.2 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2024 Fonticons, Inc.--><path d="M439.55 236.05 244 40.45a28.87 28.87 0 0 0-40.81 0l-40.66 40.63 51.52 51.52c27.06-9.14 52.68 16.77 43.39 43.68l49.66 49.66c34.23-11.8 61.18 31 35.47 56.69-26.49 26.49-70.21-2.87-56-37.34L240.22 199v121.85c25.3 12.54 22.26 41.85 9.08 55a34.34 34.34 0 0 1-48.55 0c-17.57-17.6-11.07-46.91 11.25-56v-123c-20.8-8.51-24.6-30.74-18.64-45L142.57 101 8.45 235.14a28.86 28.86 0 0 0 0 40.81l195.61 195.6a28.86 28.86 0 0 0 40.8 0l194.69-194.69a28.86 28.86 0 0 0 0-40.81"/></svg>
+  </div>
+  <div class="md-source__repository">
+    datastax/jvector
+  </div>
+</a>
+    </div>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../.." class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Home
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_2" >
+        
+          
+          <label class="md-nav__link" for="__nav_2" id="__nav_2_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    Getting started
+    
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_2_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_2">
+            <span class="md-nav__icon md-icon"></span>
+            Getting started
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../getting-started/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Quick start
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../building-and-installing/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Building and installing
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../tutorials/1-intro-tutorial/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Tutorial 1: Introduction
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../tutorials/2-disk-tutorial/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Tutorial 2: On-disk indexes
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../tutorials/3-larger-than-memory-tutorial/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Tutorial 3: Larger than memory
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3" >
+        
+          
+          <label class="md-nav__link" for="__nav_3" id="__nav_3_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    Guides
+    
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_3_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_3">
+            <span class="md-nav__icon md-icon"></span>
+            Guides
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../choosing-an-index/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Choosing an index
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../graph-construction/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Graph construction
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../fused-and-separated/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Fused and separated layouts
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../tuning/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Tuning construction and search
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../sizing/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Memory and disk sizing
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../larger-than-memory-indexes/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Larger-than-memory indexes
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../compaction/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Compaction
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../batched-vector-access/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Batched input vector access
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../deferred-batch-writer/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Deferred batch serialization
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4" >
+        
+          
+          <label class="md-nav__link" for="__nav_4" id="__nav_4_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    Quantizers
+    
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_4_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_4">
+            <span class="md-nav__icon md-icon"></span>
+            Quantizers
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../pq/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Product quantization (PQ)
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    
+    
+    
+    
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4_2" >
+        
+          
+          <label class="md-nav__link" for="__nav_4_2" id="__nav_4_2_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    ASH (experimental)
+    
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_4_2_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_4_2">
+            <span class="md-nav__icon md-icon"></span>
+            ASH (experimental)
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../ash-configuration/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Configuration and defaults
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../ash-projection-precision/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Query-projection precision
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../ash-query-integration/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Integrating ASH queries
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../ash-performance/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Performance
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../nvq/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    NVQ (reranking)
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../bq/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Binary quantization (BQ)
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_5" >
+        
+          
+          <label class="md-nav__link" for="__nav_5" id="__nav_5_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    Benchmarking
+    
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_5_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_5">
+            <span class="md-nav__icon md-icon"></span>
+            Benchmarking
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../benchmarking/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Running benchmarks
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../benchyaml-guide/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    BenchYAML guide
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../ash-pq-benchmark/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Reproducing ASH versus PQ
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../vector-prefetch-benchmark/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Vector prefetching benchmark
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_6" >
+        
+          
+          <label class="md-nav__link" for="__nav_6" id="__nav_6_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    Design notes
+    
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_6_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_6">
+            <span class="md-nav__icon md-icon"></span>
+            Design notes
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../ash-query-batching-design/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    ASH query batching
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../native-ash-preparation/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Native ASH projection
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../ash-pca-native-svd/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    ASH PCA correctness
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../legacy/jvector-step-by-step/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    JVector step by step (legacy)
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+    
+  
+  
+  
+    
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--active md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_7" checked>
+        
+          
+          <label class="md-nav__link" for="__nav_7" id="__nav_7_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    Reference
+    
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_7_label" aria-expanded="true">
+          <label class="md-nav__title" for="__nav_7">
+            <span class="md-nav__icon md-icon"></span>
+            Reference
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="https://javadoc.io/doc/io.github.jbellis/jvector" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    API reference (Javadoc)
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="https://github.com/datastax/jvector/blob/main/UPGRADING.md" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Upgrading
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="https://github.com/datastax/jvector/blob/main/CHANGELOG.md" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Changelog
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+    
+  
+  
+  
+    
+    
+    
+    
+      
+    
+    
+    <li class="md-nav__item md-nav__item--active md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_7_4" checked>
+        
+          
+          <label class="md-nav__link" for="__nav_7_4" id="__nav_7_4_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    Release notes
+    
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_7_4_label" aria-expanded="true">
+          <label class="md-nav__title" for="__nav_7_4">
+            <span class="md-nav__icon md-icon"></span>
+            Release notes
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    About release notes
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+    
+  
+  
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  
+  <span class="md-ellipsis">
+    4.0.2
+    
+  </span>
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="./" class="md-nav__link md-nav__link--active">
+        
+  
+  
+  <span class="md-ellipsis">
+    4.0.2
+    
+  </span>
+  
+
+      </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#version-401-402" class="md-nav__link">
+    <span class="md-ellipsis">
+      Version: 4.0.1 - 4.0.2
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#new-features" class="md-nav__link">
+    <span class="md-ellipsis">
+      New Features
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#performance-improvements" class="md-nav__link">
+    <span class="md-ellipsis">
+      Performance Improvements
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Performance Improvements">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#native-simd-acceleration-on-aarch64-neon-sve-sve2" class="md-nav__link">
+    <span class="md-ellipsis">
+      Native SIMD Acceleration on AArch64 (NEON, SVE, SVE2)
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#compaction-level-0-candidates-found-by-scanning-cells-instead-of-searching" class="md-nav__link">
+    <span class="md-ellipsis">
+      Compaction: level-0 candidates found by scanning cells instead of searching
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#deferred-batch-graph-serialization" class="md-nav__link">
+    <span class="md-ellipsis">
+      Deferred batch graph serialization
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#extend-native-simd-coverage-for-vector-operations" class="md-nav__link">
+    <span class="md-ellipsis">
+      Extend Native SIMD Coverage for Vector Operations
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#batch-native-highway-operations" class="md-nav__link">
+    <span class="md-ellipsis">
+      Batch Native Highway Operations
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#bug-fixes-and-issue-resolutions" class="md-nav__link">
+    <span class="md-ellipsis">
+      Bug Fixes and Issue Resolutions
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Bug Fixes and Issue Resolutions">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#enforce-neighbor-id-uniqueness" class="md-nav__link">
+    <span class="md-ellipsis">
+      Enforce Neighbor-ID Uniqueness
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#publish-s3-dataset-downloads-only-after-completion" class="md-nav__link">
+    <span class="md-ellipsis">
+      Publish S3 Dataset Downloads Only After Completion
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#fix-hierarchical-search-failure-with-non-normalized-dot-product-vectors" class="md-nav__link">
+    <span class="md-ellipsis">
+      Fix Hierarchical Search Failure with Non-Normalized Dot Product Vectors
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#testing-enhancements" class="md-nav__link">
+    <span class="md-ellipsis">
+      Testing Enhancements
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Testing Enhancements">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#optional-compaction-benchmark-and-dedicated-runner-for-regression-benchmarks" class="md-nav__link">
+    <span class="md-ellipsis">
+      Optional Compaction Benchmark and Dedicated Runner for Regression Benchmarks
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../4.0.1/4.0.1/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    4.0.1
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../4.0.0-RC.9/4.0.0-RC.9/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    4.0.0-RC.9
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../4.0.0-RC.8/4.0.0-RC.8/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    4.0.0-RC.8
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+              
+              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#version-401-402" class="md-nav__link">
+    <span class="md-ellipsis">
+      Version: 4.0.1 - 4.0.2
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#new-features" class="md-nav__link">
+    <span class="md-ellipsis">
+      New Features
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#performance-improvements" class="md-nav__link">
+    <span class="md-ellipsis">
+      Performance Improvements
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Performance Improvements">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#native-simd-acceleration-on-aarch64-neon-sve-sve2" class="md-nav__link">
+    <span class="md-ellipsis">
+      Native SIMD Acceleration on AArch64 (NEON, SVE, SVE2)
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#compaction-level-0-candidates-found-by-scanning-cells-instead-of-searching" class="md-nav__link">
+    <span class="md-ellipsis">
+      Compaction: level-0 candidates found by scanning cells instead of searching
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#deferred-batch-graph-serialization" class="md-nav__link">
+    <span class="md-ellipsis">
+      Deferred batch graph serialization
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#extend-native-simd-coverage-for-vector-operations" class="md-nav__link">
+    <span class="md-ellipsis">
+      Extend Native SIMD Coverage for Vector Operations
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#batch-native-highway-operations" class="md-nav__link">
+    <span class="md-ellipsis">
+      Batch Native Highway Operations
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#bug-fixes-and-issue-resolutions" class="md-nav__link">
+    <span class="md-ellipsis">
+      Bug Fixes and Issue Resolutions
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Bug Fixes and Issue Resolutions">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#enforce-neighbor-id-uniqueness" class="md-nav__link">
+    <span class="md-ellipsis">
+      Enforce Neighbor-ID Uniqueness
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#publish-s3-dataset-downloads-only-after-completion" class="md-nav__link">
+    <span class="md-ellipsis">
+      Publish S3 Dataset Downloads Only After Completion
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#fix-hierarchical-search-failure-with-non-normalized-dot-product-vectors" class="md-nav__link">
+    <span class="md-ellipsis">
+      Fix Hierarchical Search Failure with Non-Normalized Dot Product Vectors
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#testing-enhancements" class="md-nav__link">
+    <span class="md-ellipsis">
+      Testing Enhancements
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Testing Enhancements">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#optional-compaction-benchmark-and-dedicated-runner-for-regression-benchmarks" class="md-nav__link">
+    <span class="md-ellipsis">
+      Optional Compaction Benchmark and Dedicated Runner for Regression Benchmarks
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              <article class="md-content__inner md-typeset">
+                
+                  
+
+
+  
+    <a href="https://github.com/datastax/jvector/edit/main/docs/release notes/4.0.2/4.0.2.md" title="Edit this page" class="md-content__button md-icon">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M10 20H6V4h7v5h5v3.1l2-2V8l-6-6H6c-1.1 0-2 .9-2 2v16c0 1.1.9 2 2 2h4zm10.2-7c.1 0 .3.1.4.2l1.3 1.3c.2.2.2.6 0 .8l-1 1-2.1-2.1 1-1c.1-.1.2-.2.4-.2m0 3.9L14.1 23H12v-2.1l6.1-6.1z"/></svg>
+    </a>
+  
+  
+
+
+<h1 id="jvector-release-notes">JVector Release Notes<a class="headerlink" href="#jvector-release-notes" title="Permanent link">&para;</a></h1>
+<h2 id="version-401-402">Version: 4.0.1 - 4.0.2<a class="headerlink" href="#version-401-402" title="Permanent link">&para;</a></h2>
+<hr />
+<h2 id="new-features">New Features<a class="headerlink" href="#new-features" title="Permanent link">&para;</a></h2>
+<p>Added optional batched vector access and a bounded file source for quantizer
+training, encoding and existing full-precision/NVQ disk serialization. Capable
+algorithms can consume samples or full scans without requiring an upfront preload
+of the original base dataset; existing vector sources remain supported.</p>
+<p>BenchYAML and AutoBenchYAML support <code>useDatasetPrefetching: true</code> in their index
+configuration. The flag defaults to false, preserving resident loading and scoring.
+Comparison-heavy uncompressed configurations retain resident input. The existing
+<code>jvector.dataset_loader</code> VM option overrides the flag, while configurations
+requiring resident raw vectors still preload; an explicit buffered request logs
+the reason for that fallback.</p>
+<p>See <a href="../../../batched-vector-access/">batched vector access</a> for ownership,
+resource limits, examples and the benchmark opt-in. Encoded vectors, training
+working memory and graph structures retain their existing memory requirements.</p>
+<hr />
+<p>Google Highway native SIMD is no longer experimental and is preferred by default
+on supported Java 22+ runtimes. <code>jvector.enable_native_vectorization</code> is the supported
+flag; the former name remains a deprecated compatibility alias.</p>
+<p>Successful native selection uses <code>MemorySegmentVectorFloat</code> instead of
+<code>ArrayVectorFloat</code>. Consumers should use <code>VectorFloat</code>, or <code>FloatArray.array()</code>
+when array access is needed; direct casts and assumptions about <code>get()</code>'s backing
+storage must be updated. <code>copyFrom</code> supports both built-in float vector types.
+Disable automatic native selection with <code>-Djvector.enable_native_vectorization=false</code>
+to retain the previous provider choice. Native operations require provider-created
+vectors; copying between storage types does not make mixed-storage arithmetic valid.</p>
+<p>Pass <code>--add-modules jdk.incubator.vector --enable-native-access=ALL-UNNAMED</code>
+for classpath deployments. Missing native access can produce JVM warnings; denied
+native access, an unsupported ABI, a missing ABI query, or missing required library
+symbols cause automatic selection to fall
+back to the Java provider. Explicitly forcing native fails during initialization.</p>
+<p>Java requires ABI 1 and checks the native library's explicit supported set before
+calling kernels. Compatible native releases keep the same ABI ID. Libraries that
+predate the ABI query are rejected; the bundled library supports ABI 1.</p>
+<hr />
+<h2 id="performance-improvements">Performance Improvements<a class="headerlink" href="#performance-improvements" title="Permanent link">&para;</a></h2>
+<h3 id="native-simd-acceleration-on-aarch64-neon-sve-sve2">Native SIMD Acceleration on AArch64 (NEON, SVE, SVE2)<a class="headerlink" href="#native-simd-acceleration-on-aarch64-neon-sve-sve2" title="Permanent link">&para;</a></h3>
+<p><strong>PR:</strong> <a href="https://github.com/datastax/jvector/pull/723">#723</a></p>
+<p><strong>Description</strong></p>
+<p>This PR extends JVector's native Highway SIMD backend to <strong>AArch64 (64-bit ARM)</strong>, bringing
+the same native acceleration that x86-64 users already have to ARM-based servers and
+development machines (e.g. AWS Graviton, Apple Silicon under Linux, Ampere Altra).</p>
+<p>AArch64 support was previously absent from the native layer — ARM hosts silently fell back to
+the Panama Vector API path. The native binary now ships three AArch64 ISA tiers, all compiled
+as vector-length-agnostic (scalable) code:</p>
+<table>
+<thead>
+<tr>
+<th>Tier</th>
+<th>Highway target</th>
+<th>Notes</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>NEON</td>
+<td><code>HWY_NEON</code></td>
+<td>Baseline; all AArch64 CPUs</td>
+</tr>
+<tr>
+<td>SVE</td>
+<td><code>HWY_SVE</code></td>
+<td>Scalable Vector Extension</td>
+</tr>
+<tr>
+<td>SVE2</td>
+<td><code>HWY_SVE2</code></td>
+<td>SVE2 + <code>i8mm</code> + <code>bf16</code></td>
+</tr>
+</tbody>
+</table>
+<p>SVE and SVE2 are compiled as VL-agnostic (scalable) code, so the same binary runs correctly
+on any SVE/SVE2-capable CPU regardless of its physical vector length. NEON operates on fixed
+128-bit vectors. At JVM startup, the best available tier is selected automatically via CPU
+feature detection — identical to the existing CPUID-based dispatch on x86-64.</p>
+<p>The following changes were made:</p>
+<ul>
+<li><strong><code>NativeVectorizationProvider</code></strong> — the hard-coded <code>x86_64</code> architecture check is extended
+  to include <code>aarch64</code>, so the provider is offered on ARM Linux hosts.</li>
+<li><strong><code>jvector_arch.h</code></strong> — new header introducing <code>JV_ARCH_X86_64</code> / <code>JV_ARCH_AARCH64</code>
+  preprocessor macros; all arch-specific code is guarded with <code>#if</code>/<code>#elif</code>/<code>#endif</code>.</li>
+<li><strong><code>jvector_cpu_features.h</code></strong> — AArch64 feature probing (NEON, SVE, SVE2 presence and
+  vector-length queries) added alongside the existing x86 CPUID path.</li>
+<li><strong>Meson build</strong> — three AArch64 ISA variant targets added; SVE/SVE2 targets skip gracefully
+  on Clang &lt; 22 or non-Linux hosts where SVE is unavailable.</li>
+<li><strong>Cross-compilation</strong> — Meson cross-files and updated READMEs provided for building the
+  AArch64 native library from an x86-64 host.</li>
+<li><strong>CI</strong> — a dedicated AArch64 GitHub Actions runner added to the matrix so native builds and
+  kernel correctness are verified on real ARM hardware on every PR.</li>
+</ul>
+<p><strong>Purpose / Impact</strong></p>
+<p>Benchmarked on 1M-scale datasets on both AWS Graviton 3 and Graviton 4, Native SIMD (Highway)
+consistently outperforms Panama SIMD on AArch64:</p>
+<ul>
+<li>Up to <strong>40% lower search latency</strong> at the same recall level</li>
+<li>
+<p>Up to <strong>29% faster index construction</strong></p>
+</li>
+<li>
+<p>All kernels already ported to Highway for x86-64 (FP32 similarity, PQ, NVQ, element-wise
+  arithmetic) benefit immediately on AArch64 — no separate ARM implementation was required.</p>
+</li>
+<li>On AArch64 Linux with native vectorization enabled, the Highway backend is used exclusively
+  for all similarity and quantization operations; the Panama Vector API path is bypassed.</li>
+<li>On platforms where the native library cannot be loaded, JVector falls back to the Panama or
+  pure-Java provider transparently, as before.</li>
+</ul>
+<p><strong>How to Enable</strong></p>
+<p>Both <code>libjvector.so</code> variants — x86-64 and AArch64 — are built and bundled into the release
+JAR. At JVM startup, <code>NativeVectorizationProvider</code> detects the current architecture and loads
+the matching native library automatically. The same flags work on both architectures:</p>
+<div class="highlight"><pre><span></span><code>java<span class="w"> </span>--enable-native-access<span class="o">=</span>ALL-UNNAMED<span class="w"> </span><span class="se">\</span>
+<span class="w">     </span>-Djvector.experimental.enable_native_vectorization<span class="o">=</span><span class="nb">true</span><span class="w"> </span><span class="se">\</span>
+<span class="w">     </span>-jar<span class="w"> </span>your-app.jar
+</code></pre></div>
+<p>To cap the ISA tier for debugging or benchmarking:</p>
+<div class="highlight"><pre><span></span><code><span class="nv">JVECTOR_MAX_ISA</span><span class="o">=</span>neon<span class="w"> </span>java<span class="w"> </span>--enable-native-access<span class="o">=</span>ALL-UNNAMED<span class="w"> </span><span class="se">\</span>
+<span class="w">     </span>-Djvector.experimental.enable_native_vectorization<span class="o">=</span><span class="nb">true</span><span class="w"> </span><span class="se">\</span>
+<span class="w">     </span>-jar<span class="w"> </span>your-app.jar
+</code></pre></div>
+<p><strong>Building releases:</strong></p>
+<p>To produce a release JAR with native libraries for all supported
+architectures (x86-64 and AArch64), the build must be run with the <code>-Dnative.crossarch</code>
+Maven property. Without this flag, only the native library for the current host architecture
+is built and bundled.</p>
+<p>The <code>release</code> Maven profile (in <code>jvector-native</code>) automatically sets <code>-Dnative.crossarch</code>,
+so no extra flag is needed on the command line:</p>
+<div class="highlight"><pre><span></span><code><span class="c1"># verify (run before the verification script)</span>
+mvn<span class="w"> </span>verify<span class="w"> </span>-Prelease
+
+<span class="c1"># publish</span>
+mvn<span class="w"> </span>-Prelease<span class="w"> </span>clean<span class="w"> </span>deploy
+</code></pre></div>
+<p><strong>Notes</strong></p>
+<ul>
+<li>SVE/SVE2 compilation requires Clang ≥ 22; older compilers silently skip those targets and
+  fall back to NEON.</li>
+<li>There is no change to the on-disk index format; AArch64 and x86-64 indexes are fully
+  interchangeable.</li>
+</ul>
+<hr />
+<h3 id="compaction-level-0-candidates-found-by-scanning-cells-instead-of-searching">Compaction: level-0 candidates found by scanning cells instead of searching<a class="headerlink" href="#compaction-level-0-candidates-found-by-scanning-cells-instead-of-searching" title="Permanent link">&para;</a></h3>
+<p><strong>PR:</strong> <a href="https://github.com/datastax/jvector/pull/740">#740</a></p>
+<p><strong>Description</strong></p>
+<p>Compaction merges several pre-built partition indexes into one. At level 0 it must give every node
+its nearest neighbours in each of the <em>other</em> partitions, and until now it found them with one
+graph search per node per other partition — a walk whose every hop reads a different record from a
+different place on disk. Cost scales with nodes times hops, and the reads are scattered, so once the
+inputs stop fitting in page cache the merge becomes bound by major faults rather than by
+computation.</p>
+<p>This change computes the same thing by scanning. Three pieces make it work:</p>
+<ol>
+<li><strong>Cells.</strong> The compactor's own upper-layer merge now runs first, and its merged level-1 nodes
+   become <em>cells</em>. Every live node is assigned to the cell its vector descends to.</li>
+<li><strong>Ordinals in cell order.</strong> Output ordinals are assigned cell by cell, so one partition's members
+   of one cell occupy consecutive rows of the output, and reading a cell is one sequential read.</li>
+<li><strong>A shared scan.</strong> Each node names the cells it wants, ranked by a width-64 beam over the merged
+   top layer and cut off after a fixed budget of 4,096 vectors per larger partition. Those requests
+   are then inverted, so a cell is read <strong>once</strong> per group and scored against <strong>every</strong> node that
+   asked for it, rather than once per node.</li>
+</ol>
+<p>Partitions are processed smallest first: a node scans only the partitions larger than its own, and
+the reverse direction arrives as a bounded set of offers, so the largest partition scans nothing.</p>
+<p>The merge remains exact. Every score that orders a candidate is computed on the vectors themselves.
+Approximation appears in exactly two places: which cells a node asks for, and the pairwise
+comparisons inside diversity selection, which run on vectors decoded from a wide PQ code. The wide
+code measures slightly <em>better</em> there than exact comparisons, because coarse codes collide
+near-duplicates and near-duplicate detection is what the diversity test exists to do.</p>
+<p><strong>Breaking API change</strong></p>
+<p><code>OnDiskGraphIndexCompactor</code> now assigns its own output ordinals, because locality in the output
+ordinal space is what makes a cell's members contiguous and therefore readable in one pass. A
+caller-supplied mapping cannot provide that. Both constructors lose their <code>remappers</code> parameter and
+the mapping is published afterwards:</p>
+<div class="highlight"><pre><span></span><code><span class="c1">// before</span>
+<span class="k">new</span><span class="w"> </span><span class="n">OnDiskGraphIndexCompactor</span><span class="p">(</span><span class="n">sources</span><span class="p">,</span><span class="w"> </span><span class="n">liveNodes</span><span class="p">,</span><span class="w"> </span><span class="n">remappers</span><span class="p">,</span><span class="w"> </span><span class="n">similarityFunction</span><span class="p">,</span><span class="w"> </span><span class="n">executor</span><span class="p">);</span>
+<span class="k">new</span><span class="w"> </span><span class="n">OnDiskGraphIndexCompactor</span><span class="p">(</span><span class="n">sources</span><span class="p">,</span><span class="w"> </span><span class="n">sourceCompressed</span><span class="p">,</span><span class="w"> </span><span class="n">liveNodes</span><span class="p">,</span><span class="w"> </span><span class="n">remappers</span><span class="p">,</span><span class="w"> </span><span class="n">similarityFunction</span><span class="p">,</span><span class="w"> </span><span class="n">executor</span><span class="p">);</span>
+
+<span class="c1">// after</span>
+<span class="k">new</span><span class="w"> </span><span class="n">OnDiskGraphIndexCompactor</span><span class="p">(</span><span class="n">sources</span><span class="p">,</span><span class="w"> </span><span class="n">liveNodes</span><span class="p">,</span><span class="w"> </span><span class="n">similarityFunction</span><span class="p">,</span><span class="w"> </span><span class="n">executor</span><span class="p">);</span>
+<span class="k">new</span><span class="w"> </span><span class="n">OnDiskGraphIndexCompactor</span><span class="p">(</span><span class="n">sources</span><span class="p">,</span><span class="w"> </span><span class="n">sourceCompressed</span><span class="p">,</span><span class="w"> </span><span class="n">liveNodes</span><span class="p">,</span><span class="w"> </span><span class="n">similarityFunction</span><span class="p">,</span><span class="w"> </span><span class="n">executor</span><span class="p">);</span>
+
+<span class="c1">// then, once compact() has run:</span>
+<span class="n">List</span><span class="o">&lt;</span><span class="n">OrdinalMapper</span><span class="o">&gt;</span><span class="w"> </span><span class="n">mappers</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">compactor</span><span class="p">.</span><span class="na">ordinalMappers</span><span class="p">();</span>
+</code></pre></div>
+<p>Callers that previously passed <code>OrdinalMapper.OffsetMapper</code> simply drop the argument and read
+<code>ordinalMappers()</code> afterwards to learn where each source node landed. <code>oldToNew</code> of a deleted node
+is <code>OrdinalMapper.OMITTED</code>; live ordinals are dense.</p>
+<p>Also removed: <code>setRefineAfterCompaction</code> and the optional refinement pass it gated.</p>
+<p>Both <code>compact(Path)</code> and <code>compact(Path, Path)</code> are unchanged, as is the requirement that every
+source carries the <code>INLINE_VECTORS</code> feature. Full-precision, fused-PQ and PQ-sidecar sources are all
+still supported, through the same entry points as before.</p>
+<p><strong>How to Enable</strong></p>
+<p>No configuration required, and no system properties are introduced. The behaviour is fixed at the
+measured operating point: merged cells, probe beam width 64, scan budget 4,096 vectors per larger
+partition.</p>
+<p>The cell join engages when the merged upper layers yield level-1 nodes and the similarity function
+is dot product, Euclidean or cosine. If either does not hold — for example merging flat indexes with
+no hierarchy — level 0 falls back to the existing per-node graph search and output ordinals fall
+back to a PQ-code prefix. The merge is correct either way; only the level-0 strategy changes, and
+the compactor logs which path it took.</p>
+<p><strong>Results</strong></p>
+<p>Three datasets of 6M to 10M vectors, four partitions each, graph degree 32, 64 threads, cold page
+cache before every run, no swap, one run at a time on a 32-physical-core host with 495 GB RAM and
+NVMe RAID 0. Memory is a cgroup v2 <code>MemoryMax</code> set as a fraction of the on-disk input index size S.
+<strong>Ratio is S divided by that limit</strong>, so ratio above 1 means the index does not fit in the memory the
+process may use.</p>
+<p>Speedup is the previous implementation's compaction time divided by the new one's.</p>
+<table>
+<thead>
+<tr>
+<th>Dataset</th>
+<th>dim</th>
+<th>unconstrained</th>
+<th>ratio 1.00</th>
+<th>ratio 1.33</th>
+<th>ratio 1.97</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>CAP-6M</td>
+<td>1536</td>
+<td>2.10×</td>
+<td>2.54×</td>
+<td>est. 16×</td>
+<td>est. 47×</td>
+</tr>
+<tr>
+<td>DPR-10M</td>
+<td>768</td>
+<td>2.58×</td>
+<td>3.05×</td>
+<td>est. 28×</td>
+<td>est. 76×</td>
+</tr>
+<tr>
+<td>Cohere-10M</td>
+<td>1024</td>
+<td>2.63×</td>
+<td>2.50×</td>
+<td><strong>9.72×</strong></td>
+<td>est. 40×</td>
+</tr>
+</tbody>
+</table>
+<p>Values marked <code>est.</code> are runs where the old implementation was stopped once it had taken ten times
+the new one's wall clock; their throughput is measured over the nodes actually completed, so those
+figures are lower bounds on the gap. 9.72× is the one above-RAM figure where both implementations
+ran to completion.</p>
+<p>The mechanism is visible in the fault counts. The old implementation services major faults at a
+near-constant rate, so its wall clock is essentially its fault count divided by a constant, and
+memory pressure multiplies that count:</p>
+<table>
+<thead>
+<tr>
+<th>Dataset</th>
+<th>major faults/node, ratio 1.00</th>
+<th>ratio 1.33</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>CAP-6M</td>
+<td>43.1</td>
+<td>472</td>
+</tr>
+<tr>
+<td>DPR-10M</td>
+<td>40.9</td>
+<td>582</td>
+</tr>
+</tbody>
+</table>
+<p>The cell join moves from 4.07 to 4.26 and from 2.64 to 2.86 over the same step. On CAP-6M at ratio
+1.97 both implementations spend almost identical <em>user</em> CPU, 44,764 s against 46,816 s, so they
+compute comparable distances; the old one then adds 349,979 s of kernel time servicing page faults
+and spends 80% of its wall clock stalled on I/O at 17% CPU utilisation, against 76% for the cell
+join.</p>
+<p>Throughput, nodes per second, shows the same thing from the other side: the cell join varies by only
+1.24× to 1.39× across the entire memory range and tracks vector width rather than available memory,
+while the old implementation falls by 20× to 41×.</p>
+<p><strong>Quantized inputs</strong></p>
+<p>At ratio 1.33, by input layout:</p>
+<table>
+<thead>
+<tr>
+<th>Layout</th>
+<th>Speedup</th>
+<th>Recall change</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>fused PQ</td>
+<td>2.34× – 4.58×</td>
+<td>−0.23 to +1.54 pt</td>
+</tr>
+<tr>
+<td>full precision</td>
+<td>est. 16× – 28×</td>
+<td>see below</td>
+</tr>
+<tr>
+<td>PQ sidecar</td>
+<td>est. 20× – 47×</td>
+<td>not measured</td>
+</tr>
+</tbody>
+</table>
+<p>The ordering is explained entirely by whether the old implementation can navigate on codes. Fused
+codes are inline and it uses them, so its faults fall to 43–75 per node and the gap narrows.
+Full-precision sources have no codes. A PQ sidecar is the worst case for it: codes exist but are
+only consulted when written inline, so a sidecar's codes are retrained and rewritten yet never
+navigated on, and its faults rise to 474–962 per node.</p>
+<p><strong>Notes and trade-offs</strong></p>
+<p><em>Recall.</em> On full-precision inputs the cell join gives up <strong>0.3 to 1.0 points of recall@10</strong>. The old
+implementation's recall is identical to five decimal places at every memory setting, so it is
+deterministic; the cell join varies about 0.4 points run to run, from thread scheduling and a
+per-run wide-code retrain, which puts the smallest deficits inside its own noise. On fused inputs
+the deficit disappears.</p>
+<p><em>Attribution.</em> The figures above compare against <code>main</code>, which is what users have today, so they
+credit this change with everything in the PR rather than the cell join alone. Measured against the
+same branch with the cell join switched off and its other changes kept, the cell join is <strong>1.4× to
+1.6× slower in RAM</strong>: most of the in-RAM gain comes from processing partitions smallest-first with
+bounded reverse offers, which halves the number of searches. The cell join's own contribution is the
+above-RAM columns, where it converts scattered reads into sequential ones.</p>
+<p><em>Scope.</em> Every behavioural change is confined to the compaction path. Outside it, four files are
+touched and all four are additions only: a <code>dotProductMulti</code> kernel added to <code>VectorUtilSupport</code> as
+a <strong>default method</strong>, so existing implementors are unaffected, its Panama override, a static entry
+point on <code>VectorUtil</code>, and three read-only getters on <code>ProductQuantization</code>. Eighty-four lines added,
+none removed, and no existing non-compaction code path is modified or re-routed.</p>
+<p><em>Measurement scope.</em> All figures are a single run per configuration; repeats were not taken. Where
+the old implementation was stopped the effect sizes are above 10×, far outside the run-to-run
+variation observed elsewhere, but the completed in-RAM and ratio-1.00 comparisons should not be read
+to two decimal places.</p>
+<p>See <code>docs/compaction.md</code> for the pipeline description.</p>
+<hr />
+<h3 id="deferred-batch-graph-serialization">Deferred batch graph serialization<a class="headerlink" href="#deferred-batch-graph-serialization" title="Permanent link">&para;</a></h3>
+<p><strong>PR:</strong> <a href="https://github.com/datastax/jvector/pull/747">#747</a></p>
+<p>Parallel graph serialization can now write complete layer-zero records in bounded
+batches of 64, with an optional positive batch-size override. When the parallel writer
+is selected, Grid supplies inline NVQ or full-precision features during final
+serialization, after graph cleanup, and uses buffered vector ranges when the input
+source supports them. With the sequential writer selected, Grid keeps encoding those
+features during insertion.</p>
+<p>The core writer accepts application-supplied feature states independently of the
+benchmark harness or dataset prefetching. Complete-record batching applies equally
+to fully preloaded inputs; the source does not have to preload the whole dataset.</p>
+<p>Integrators should use the parallel writer when deferring NVQ/FP encoding to
+final serialization. A sequential final writer performs that encoding on one
+thread and can regress construction time. Sequential callers should retain
+encoding during insertion and <code>writeFeaturesInline</code>.</p>
+<p>The existing V6 layout, readers, ordinary vector sources, and incremental
+<code>writeFeaturesInline</code> API remain supported. Prewritten features are preserved.
+Concurrent feature suppliers must keep their input source available until writing
+finishes. BenchYAML and AutoBenchYAML default to parallel writing, with
+<code>-Djvector.parallel_writer=false</code> selecting the sequential path. The library
+writer default remains unchanged.</p>
+<p>Recorded construction studies with dataset prefetching reduced ample-memory final
+write time from 136.10 to 50.69 seconds on MPNet 10M, 148.50 to 64.02 seconds on
+Cohere 10M, and 162.64 to 51.76 seconds on CAP 6M.[^machine] These are separate fresh runs,
+not a universal throughput or memory guarantee. See
+<a href="../../../deferred-batch-writer/">Deferred batch serialization</a> for usage.</p>
+<p>Construction tutorials and examples now demonstrate final feature suppliers for
+deferred FP/NVQ writing, with per-worker source views and an explicit source-lifetime
+requirement. The query algorithms and quantization settings are unchanged.</p>
+<p>[^machine]: GCE VM, 48-core Intel Xeon 6985P-C (96 threads), local SSD RAID10, JDK 23, 128 GiB heap; native Highway, 48 workers.</p>
+<hr />
+<h3 id="extend-native-simd-coverage-for-vector-operations">Extend Native SIMD Coverage for Vector Operations<a class="headerlink" href="#extend-native-simd-coverage-for-vector-operations" title="Permanent link">&para;</a></h3>
+<p><strong>PR:</strong> <a href="https://github.com/datastax/jvector/pull/753">#753</a></p>
+<p><strong>Description</strong></p>
+<p>Move minimum and sum reductions, in-place scaling, and vector and scalar
+subtraction from Panama Vector API fallbacks to native Google Highway kernels,
+using the existing x86-64 and AArch64 ISA dispatch.</p>
+<p>Subtraction ranges and input lengths are validated before processing.
+Minimum reduction preserves Java’s NaN propagation and signed-zero behavior.</p>
+<p><strong>How to Enable</strong></p>
+<p>These operations use the existing experimental native-vectorization setting.
+No new configuration is required.</p>
+<p><strong>Notes</strong></p>
+<p>Hamming distance continues to use the Panama Vector API implementation.
+No public API or index-format changes.</p>
+<hr />
+<h3 id="batch-native-highway-operations">Batch Native Highway Operations<a class="headerlink" href="#batch-native-highway-operations" title="Permanent link">&para;</a></h3>
+<p><strong>PR:</strong> <a href="https://github.com/datastax/jvector/pull/761">#761</a></p>
+<p><strong>Description</strong></p>
+<p>Reduce Java/native calls and temporary allocation during PQ training, PQ encoding,
+and NVQ processing. Batch closest-centroid scans and KMeans updates, use lazy
+array-backed native views, batch NVQ growth-rate search, and keep cosine results
+packed.</p>
+<p><strong>How to Enable</strong></p>
+<p>No new configuration is required. These optimizations apply when the native
+provider is selected, which is the default on supported Java 22+ runtimes.</p>
+<p><strong>Notes</strong></p>
+<p>Existing native function signatures and ABI 1 are unchanged. Four additional
+native kernels are included in the bundled library; deployments supplying their
+own native library must include these kernels. No index-format changes.</p>
+<hr />
+<h2 id="bug-fixes-and-issue-resolutions">Bug Fixes and Issue Resolutions<a class="headerlink" href="#bug-fixes-and-issue-resolutions" title="Permanent link">&para;</a></h2>
+<h3 id="enforce-neighbor-id-uniqueness">Enforce Neighbor-ID Uniqueness<a class="headerlink" href="#enforce-neighbor-id-uniqueness" title="Permanent link">&para;</a></h3>
+<p><strong>PR:</strong> <a href="https://github.com/datastax/jvector/pull/738">#738</a></p>
+<p><strong>Description</strong></p>
+<p>Asymmetric scoring, such as <code>A · quant(B) ≠ B · quant(A)</code>, can assign different scores to the same neighbor, defeating score-local duplicate checks and reducing effective graph degree.</p>
+<p><code>NodeArray</code> now checks IDs independently of scores and deduplicates complete candidate merges, retaining existing scores and score ordering. <code>ConcurrentNeighborMap</code> also deduplicates initial candidate batches and rejects duplicate offers before copying or changing pruning state.</p>
+<p>For an existing neighbor, subsequent backlink offers are rejected regardless of their score; the stored edge score is retained. During concurrent construction, which score is installed first can depend on thread timing.</p>
+<p>More distinct edges can improve recall but increase traversal work and reduce QPS at fixed search settings. Results vary by dataset and construction seed.</p>
+<p><strong>How to Enable</strong></p>
+<p>Automatic; no configuration required.</p>
+<p><strong>Notes</strong></p>
+<p>Library API and index format are unchanged. A full rebuild is required to remove previously stored duplicate neighbor IDs: loading an existing index or incrementally adding nodes does not guarantee that all old neighborhoods are repaired. Supersedes <a href="https://github.com/datastax/jvector/pull/522">#522</a>.</p>
+<hr />
+<h3 id="publish-s3-dataset-downloads-only-after-completion">Publish S3 Dataset Downloads Only After Completion<a class="headerlink" href="#publish-s3-dataset-downloads-only-after-completion" title="Permanent link">&para;</a></h3>
+<p><strong>PR:</strong> <a href="https://github.com/datastax/jvector/pull/745">#745</a></p>
+<p><strong>Description</strong></p>
+<p>Download S3 dataset files into private temporary files and atomically publish the
+cache path after successful completion and content-length validation. This prevents
+other benchmark processes from reading an in-progress download or losing a completed
+cache file when another download attempt fails.</p>
+<p><strong>How to Enable</strong></p>
+<p>No configuration is required. This applies to S3 downloads made by the example
+benchmark dataset loader; HTTP downloads already use atomic publication.</p>
+<p><strong>Notes</strong></p>
+<p>Normal failures remove their temporary files. A hard process termination may leave
+an unreferenced temporary file, which is not accepted as cached data. Existing cache
+files are not retroactively validated; remove any files known to come from an
+interrupted download before reusing that cache.</p>
+<hr />
+<h3 id="fix-hierarchical-search-failure-with-non-normalized-dot-product-vectors">Fix Hierarchical Search Failure with Non-Normalized Dot Product Vectors<a class="headerlink" href="#fix-hierarchical-search-failure-with-non-normalized-dot-product-vectors" title="Permanent link">&para;</a></h3>
+<p><strong>Description</strong></p>
+<p>Resolves <a href="https://github.com/datastax/jvector/issues/713">#713</a>. When searching a hierarchical graph with <code>VectorSimilarityFunction.DOT_PRODUCT</code> and vectors that are not unit-normalized, search could return no matches for an upper layer and fail with <code>AssertionError</code> in <code>GraphSearcher.internalSearch</code>.</p>
+<p>The descent through layers above level 0 searched each layer with a threshold of <code>0.0f</code>, treating it as "accept everything". That only holds for similarity functions bounded to <code>(0, 1]</code> (<code>COSINE</code> and <code>EUCLIDEAN</code>). <code>DOT_PRODUCT</code> is only bounded when vectors are unit length; with larger-magnitude vectors, scores can be negative. If every candidate reachable in an upper layer scored below 0, all were discarded, no entry point was found for the next layer, and the assertion fired. This surfaced in Cassandra's <code>VectorDotProductWithLengthTest.testTrueDotproduct</code>, which uses non-unit 2D vectors with components in <code>[-100, 100]</code>.</p>
+<p>Upper-layer descent now uses a threshold of <code>Float.NEGATIVE_INFINITY</code>. The <code>search(scoreProvider, topK, acceptOrds)</code> overload, which has no threshold parameter, now also defaults to <code>Float.NEGATIVE_INFINITY</code> instead of <code>0.0f</code>.</p>
+<p><strong>How to Enable</strong></p>
+<p>Automatic; no configuration required.</p>
+<p><strong>Notes</strong></p>
+<p>Results from <code>COSINE</code>, <code>EUCLIDEAN</code>, and unit-normalized <code>DOT_PRODUCT</code> searches are unchanged. For non-normalized <code>DOT_PRODUCT</code>, the <code>search(scoreProvider, topK, acceptOrds)</code> overload can now return results with negative scores that were previously filtered out. Callers who pass an explicit threshold and need to accept every result for non-normalized <code>DOT_PRODUCT</code> should pass <code>Float.NEGATIVE_INFINITY</code> rather than <code>0</code>. Index format and library API are unchanged. Regression coverage is in <code>TestHierarchyDotProductSearch</code>.</p>
+<hr />
+<h2 id="testing-enhancements">Testing Enhancements<a class="headerlink" href="#testing-enhancements" title="Permanent link">&para;</a></h2>
+<h3 id="optional-compaction-benchmark-and-dedicated-runner-for-regression-benchmarks">Optional Compaction Benchmark and Dedicated Runner for Regression Benchmarks<a class="headerlink" href="#optional-compaction-benchmark-and-dedicated-runner-for-regression-benchmarks" title="Permanent link">&para;</a></h3>
+<p><strong>PR:</strong> <a href="https://github.com/datastax/jvector/pull/736">#736</a></p>
+<p><strong>Description</strong>
+Two changes to the automated regression benchmark (<code>AutoBenchYAML</code> / <code>run-bench.yml</code>):</p>
+<ul>
+<li><strong>CompactionBench is now opt-in.</strong> <code>AutoBenchYAML</code> previously ran <code>CompactionBench</code> for every dataset after the main benchmark. Compaction benchmarking now runs only when a dataset's YAML configuration enables it with the new top-level <code>withCompaction</code> parameter. When it is not enabled, the step is skipped and logged, and the <code>-compaction.csv</code> / <code>-compaction.json</code> output files are not produced.</li>
+<li><strong>Benchmarks run on the large runner.</strong> The <code>test-avx512</code> job in <code>run-bench.yml</code> previously matched any self-hosted runner with the <code>isa-avx512f</code> label, so results could come from different machines between runs. The job now also requires the <code>jvector-runner-large</code> label, so every benchmark runs on the same hardware and results are comparable across runs.</li>
+</ul>
+<p><strong>How to Enable</strong>
+Compaction benchmarking is disabled by default; no existing YAML files were changed. To enable it for a dataset, add <code>withCompaction</code> at the same level as <code>yamlSchemaVersion</code> and <code>dataset</code>:</p>
+<div class="highlight"><pre><span></span><code><span class="nt">yamlSchemaVersion</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">1</span>
+<span class="nt">onDiskIndexVersion</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">6</span>
+
+<span class="nt">dataset</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">cap-10M</span>
+<span class="nt">withCompaction</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">[</span><span class="nv">Yes</span><span class="p p-Indicator">]</span>
+
+<span class="nt">construction</span><span class="p">:</span>
+<span class="w">  </span><span class="l l-Scalar l-Scalar-Plain">...</span>
+</code></pre></div>
+<p>If the parameter is absent or set to <code>[No]</code>, CompactionBench is not run. When <code>--config</code> is passed to <code>AutoBenchYAML</code>, that single file controls compaction for all datasets.</p>
+<p>The runner change requires no configuration in the repository, but the self-hosted runner must carry the custom label <code>jvector-runner-large</code>, as <code>runs-on</code> matches labels rather than runner names.</p>
+<p><strong>Notes</strong>
+- Used internally by JVector benchmarking, no client impact.
+- With both branch runs of a PR pinned to the same runner, they now execute sequentially rather than potentially in parallel on separate runners.</p>
+<hr />
+
+
+
+
+
+
+
+
+
+
+
+
+                
+              </article>
+            </div>
+          
+          
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+          <button type="button" class="md-top md-icon" data-md-component="top" hidden>
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M13 20h-2V8l-5.5 5.5-1.42-1.42L12 4.16l7.92 7.92-1.42 1.42L13 8z"/></svg>
+  Back to top
+</button>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+    
+      
+      <nav class="md-footer__inner md-grid" aria-label="Footer" >
+        
+          
+          <a href="../../" class="md-footer__link md-footer__link--prev" aria-label="Previous: About release notes">
+            <div class="md-footer__button md-icon">
+              
+              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+            </div>
+            <div class="md-footer__title">
+              <span class="md-footer__direction">
+                Previous
+              </span>
+              <div class="md-ellipsis">
+                About release notes
+              </div>
+            </div>
+          </a>
+        
+        
+          
+          <a href="../../4.0.1/4.0.1/" class="md-footer__link md-footer__link--next" aria-label="Next: 4.0.1">
+            <div class="md-footer__title">
+              <span class="md-footer__direction">
+                Next
+              </span>
+              <div class="md-ellipsis">
+                4.0.1
+              </div>
+            </div>
+            <div class="md-footer__button md-icon">
+              
+              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M4 11v2h12l-5.5 5.5 1.42 1.42L19.84 12l-7.92-7.92L10.5 5.5 16 11z"/></svg>
+            </div>
+          </a>
+        
+      </nav>
+    
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+  
+    Made with
+    <a href="https://squidfunk.github.io/mkdocs-material/" target="_blank" rel="noopener">
+      Material for MkDocs
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+    
+    
+      
+      <script id="__config" type="application/json">{"base": "../../..", "features": ["navigation.sections", "navigation.top", "navigation.footer", "search.suggest", "search.highlight", "content.code.copy", "content.action.edit"], "search": "../../../assets/javascripts/workers/search.d50fe291.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": {"default": ["latest", "dev"], "provider": "mike"}}</script>
+    
+    
+      <script src="../../../assets/javascripts/bundle.13a4f30d.min.js"></script>
+      
+    
+  </body>
+</html>
