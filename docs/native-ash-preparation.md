@@ -297,7 +297,10 @@ This structural change does not select a different BLAS/LAPACK backend.
 auxiliary landmark arrays, the Stiefel matrices (including row/outer arrays),
 model objects, provider-owned native FP32 backing and its adapter/delegate objects,
 optional Highway batch backing,
-and a distinct FP16 or INT8 query representation when initialized. Immutable Java sizes
+and a distinct FP16 or INT8 query representation when initialized. It also counts the
+model's largest-length record and the Java handles of its native segments;
+`nativeBytesUsed()` reports the native part, and per-thread scratch holders are
+excluded. Immutable Java sizes
 are cached during construction; reading the estimate does not scan matrices or
 create them. FP32 query selection and automatic FP16 fallback preserve the
 original projection view's identity, so shared FP32 backing is charged once.
