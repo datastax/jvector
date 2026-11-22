@@ -49,13 +49,12 @@ The optional oneDNN ABI and status structure are shared with FP16. INT8 checks A
 
 ## Direct-node scoring and query scratch
 
-Fused 2-bit direct-node scoring uses `ash_canonical_lut_dot_f32` and reuses the
-neighborhood scorer's FP32 nibble LUT. One lookup combines two projected
-coordinates. For 4-bit codes each nibble represents only one coordinate, so its
-LUT is 16 times larger than the projected query. The preferred native
-`ash_projection_dot_4bit_f32` instead decodes packed nibbles in registers,
-loads contiguous query coordinates and performs one final SIMD reduction. This
-also supplies the native provider's existing 4-bit projection-code dot API.
+Direct-node scoring of 2- and 4-bit codes uses `ash_projection_dot_2bit_f32` and
+`ash_projection_dot_4bit_f32`. Each decodes packed fields in registers, loads
+contiguous query coordinates and performs one final SIMD reduction, avoiding the
+gathers of a per-coordinate query LUT. They also supply the native provider's
+projection-code dot API. `ash_canonical_lut_dot_f32` remains for libraries
+without the 2-bit dot. 1-bit codes use the SIMD masked add over their sign bits.
 Neither operation materializes decoded vectors. Java applies the existing
 scale, landmark correction, offset and graph similarity conversion.
 
