@@ -18,6 +18,9 @@ reranking optionally rescores the candidates.
   the base vectors, query vectors, and ground truth.
   [Dataset metadata](../jvector-examples/yaml-configs/dataset-metadata.yml)
   supplies the similarity function. Vector types come from the dataset.
+  A dataset marked `is_int8: true` holds signed int8 vectors (unsigned `.bvecs` data such as
+  SIFT1B must be converted first). Its cases use `type: onDisk`, compression `None`,
+  `reranking.type: None` and `fusedGraph: [No]`, as the int8 files in `index-parameters` do.
 - [Run configuration](../jvector-examples/yaml-configs/run-config.yml) selects
   which measurements to compute, how to measure them, and which to display or
   log; see [Run configuration](#run-configuration).

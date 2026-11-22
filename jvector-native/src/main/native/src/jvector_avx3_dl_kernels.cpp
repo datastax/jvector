@@ -195,7 +195,7 @@ float dot_product_i8(const int8_t * __restrict__ a, size_t aoffset,
         __m512i vb = _mm512_loadu_si512(b + i);
         __m512i au = _mm512_add_epi8(va, _mm512_set1_epi8(-128));
         acc  = _mm512_dpbusd_epi32(acc,  au, vb);
-        
+
         // Promote vb to i16 for bias calculation
         __m512i vb_lo = _mm512_cvtepi8_epi16(_mm256_loadu_si256(reinterpret_cast<const __m256i*>(b + i)));
         __m512i vb_hi = _mm512_cvtepi8_epi16(_mm256_loadu_si256(reinterpret_cast<const __m256i*>(b + i + 32)));
@@ -334,7 +334,7 @@ float cosine_i8(const int8_t * __restrict__ a, size_t aoffset,
         normA1 = _mm512_dpbusd_epi32(normA1, au1, va1);
         normB0 = _mm512_dpbusd_epi32(normB0, bu0, vb0);
         normB1 = _mm512_dpbusd_epi32(normB1, bu1, vb1);
-        
+
         // Promote to i16 for bias calculations
         __m512i va0_lo = _mm512_cvtepi8_epi16(_mm256_loadu_si256(reinterpret_cast<const __m256i*>(a + i)));
         __m512i va0_hi = _mm512_cvtepi8_epi16(_mm256_loadu_si256(reinterpret_cast<const __m256i*>(a + i + 32)));
@@ -344,7 +344,7 @@ float cosine_i8(const int8_t * __restrict__ a, size_t aoffset,
         __m512i va1_hi = _mm512_cvtepi8_epi16(_mm256_loadu_si256(reinterpret_cast<const __m256i*>(a + i + 96)));
         __m512i vb1_lo = _mm512_cvtepi8_epi16(_mm256_loadu_si256(reinterpret_cast<const __m256i*>(b + i + 64)));
         __m512i vb1_hi = _mm512_cvtepi8_epi16(_mm256_loadu_si256(reinterpret_cast<const __m256i*>(b + i + 96)));
-        
+
         biasAB0 = _mm512_dpwssd_epi32(biasAB0, vb0_lo, bias128);
         biasAB0 = _mm512_dpwssd_epi32(biasAB0, vb0_hi, bias128);
         biasAB1 = _mm512_dpwssd_epi32(biasAB1, vb1_lo, bias128);
@@ -369,13 +369,13 @@ float cosine_i8(const int8_t * __restrict__ a, size_t aoffset,
         dot    = _mm512_dpbusd_epi32(dot,   au, vb);
         normA  = _mm512_dpbusd_epi32(normA, au, va);
         normB  = _mm512_dpbusd_epi32(normB, bu, vb);
-        
+
         // Promote to i16 for bias calculations
         __m512i va_lo = _mm512_cvtepi8_epi16(_mm256_loadu_si256(reinterpret_cast<const __m256i*>(a + i)));
         __m512i va_hi = _mm512_cvtepi8_epi16(_mm256_loadu_si256(reinterpret_cast<const __m256i*>(a + i + 32)));
         __m512i vb_lo = _mm512_cvtepi8_epi16(_mm256_loadu_si256(reinterpret_cast<const __m256i*>(b + i)));
         __m512i vb_hi = _mm512_cvtepi8_epi16(_mm256_loadu_si256(reinterpret_cast<const __m256i*>(b + i + 32)));
-        
+
         biasAB = _mm512_dpwssd_epi32(biasAB, vb_lo, bias128);
         biasAB = _mm512_dpwssd_epi32(biasAB, vb_hi, bias128);
         biasA  = _mm512_dpwssd_epi32(biasA,  va_lo, bias128);

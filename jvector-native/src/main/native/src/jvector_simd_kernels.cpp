@@ -1955,7 +1955,7 @@ HWY_FLATTEN float dot_product_i8(const int8_t *HWY_RESTRICT a, size_t aoffset,
         auto vb2 = hn::LoadU(d8, b + i + 2*lanes8);
         auto va3 = hn::LoadU(d8, a + i + 3*lanes8);
         auto vb3 = hn::LoadU(d8, b + i + 3*lanes8);
-        
+
         // Promote to i16 and accumulate using ReorderWidenMulAccumulate (2 i16s -> 1 i32)
         acc0 = hn::ReorderWidenMulAccumulate(d32, hn::PromoteLowerTo(d16, va0), hn::PromoteLowerTo(d16, vb0), acc0, acc0h);
         acc0 = hn::ReorderWidenMulAccumulate(d32, hn::PromoteUpperTo(d16, va0), hn::PromoteUpperTo(d16, vb0), acc0, acc0h);
@@ -1969,7 +1969,7 @@ HWY_FLATTEN float dot_product_i8(const int8_t *HWY_RESTRICT a, size_t aoffset,
     auto acc  = hn::Add(hn::Add(acc0,  acc1),  hn::Add(acc2,  acc3));
     auto acch = hn::Add(hn::Add(acc0h, acc1h), hn::Add(acc2h, acc3h));
     acc = hn::Add(acc, acch);
-    
+
     for (; i + lanes8 <= length; i += lanes8) {
         auto va = hn::LoadU(d8, a + i);
         auto vb = hn::LoadU(d8, b + i);
@@ -2073,7 +2073,7 @@ HWY_FLATTEN float cosine_i8(const int8_t *HWY_RESTRICT a, size_t aoffset,
         auto va_hi = hn::PromoteUpperTo(d16, va);
         auto vb_lo = hn::PromoteLowerTo(d16, vb);
         auto vb_hi = hn::PromoteUpperTo(d16, vb);
-        
+
         dot   = hn::ReorderWidenMulAccumulate(d32, va_lo, vb_lo, dot, doth);
         dot   = hn::ReorderWidenMulAccumulate(d32, va_hi, vb_hi, dot, doth);
         normA = hn::ReorderWidenMulAccumulate(d32, va_lo, va_lo, normA, normAh);
@@ -2081,15 +2081,15 @@ HWY_FLATTEN float cosine_i8(const int8_t *HWY_RESTRICT a, size_t aoffset,
         normB = hn::ReorderWidenMulAccumulate(d32, vb_lo, vb_lo, normB, normBh);
         normB = hn::ReorderWidenMulAccumulate(d32, vb_hi, vb_hi, normB, normBh);
     }
-    
+
     dot   = hn::Add(dot, doth);
     normA = hn::Add(normA, normAh);
     normB = hn::Add(normB, normBh);
-    
+
     int64_t dotResult   = (int64_t)hn::ReduceSum(d32, dot);
     int64_t normAResult = (int64_t)hn::ReduceSum(d32, normA);
     int64_t normBResult = (int64_t)hn::ReduceSum(d32, normB);
-    
+
     for (; i < length; i++) {
         int32_t ai = a[i], bi = b[i];
         dotResult   += ai * bi;
