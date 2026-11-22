@@ -54,6 +54,9 @@ public class GraphSearcher implements Closeable {
     final NodeQueue approximateResults;
     private final NodeQueue rerankedResults;
     private final IntHashSet visited;
+    // the marker passed to processNeighbors for the visited set; created once per searcher, since it captures
+    // nothing but the final visited set
+    private final ImmutableGraphIndex.IntMarker visitedMarker;
     private final NodesUnsorted evictedResults;
     // Scored nodes that the current layer search can no longer expand (see searchOneLayer); they return to the
     // candidates at the next layer search, so a later layer or resume() sees the same candidates as before.
@@ -102,6 +105,7 @@ public class GraphSearcher implements Closeable {
         this.approximateResults = new NodeQueue(new BoundedLongHeap(100), NodeQueue.Order.MIN_HEAP);
         this.rerankedResults = new NodeQueue(new BoundedLongHeap(100), NodeQueue.Order.MIN_HEAP);
         this.visited = new IntHashSet();
+        this.visitedMarker = visited::add;
 
         this.pruneSearch = false;
         this.scoreTrackerFactory = new ScoreTracker.ScoreTrackerFactory();
@@ -549,7 +553,7 @@ public class GraphSearcher implements Closeable {
                 expandedCount++;
 
                 // score the neighbors of the top candidate and add them to the queue
-                view.processNeighbors(level, topCandidateNode, scoreFunction, visited::add, neighborProcessor);
+                view.processNeighbors(level, topCandidateNode, scoreFunction, visitedMarker, neighborProcessor);
             }
             visitedCount += neighborProcessor.visits;
         } catch (Throwable t) {
