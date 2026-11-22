@@ -48,7 +48,8 @@ class NativeASHPreparationTest {
             for (float[] row : matrix) for (int j = 0; j < columns; j++) row[j] = random.nextFloat() - .5f;
             for (int j = 0; j < columns; j++) query[j] = random.nextFloat() - .5f;
             var projection = new NativeASHProjection(matrix);
-            assertEquals((long) rows * columns * Float.BYTES, projection.ramBytesUsed());
+            assertEquals((long) rows * columns * Float.BYTES, projection.nativeBytesUsed());
+            assertEquals(projection.nativeBytesUsed() + NativeSegmentHeap.of(projection.matrix()), projection.ramBytesUsed());
             float[] expected = new float[rows];
             double[] magnitude = new double[rows];
             for (int i = 0; i < rows; i++) {

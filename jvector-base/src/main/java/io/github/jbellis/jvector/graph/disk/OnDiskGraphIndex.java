@@ -422,14 +422,22 @@ public class OnDiskGraphIndex implements ImmutableGraphIndex, AutoCloseable, Acc
         Int2ObjectHashMap<FusedFeature.InlineSource> inMemoryFeaturesLocal  = inMemoryFeatures.get();
         long inMemoryFeaturesBytes = 0;
         if (inMemoryFeaturesLocal != null) {
-            inMemoryFeaturesBytes = inMemoryFeaturesLocal.values().stream().mapToLong(is -> Integer.BYTES * is.ramBytesUsed()).sum();
+            inMemoryFeaturesBytes = inMemoryFeaturesLocal.values().stream().mapToLong(FusedFeature.InlineSource::ramBytesUsed).sum();
         }
         inMemoryFeaturesBytes += RamUsageEstimator.NUM_BYTES_OBJECT_REF;
 
         return Long.BYTES + 6 * Integer.BYTES + RamUsageEstimator.NUM_BYTES_OBJECT_REF
                 + (long) 2 * RamUsageEstimator.NUM_BYTES_OBJECT_REF * FeatureId.values().length
                 + RamUsageEstimator.NUM_BYTES_OBJECT_REF + RamUsageEstimator.shallowSizeOfInstance(L0Layout.class)
-                + inMemoryNeighborsBytes + inMemoryFeaturesBytes;
+                + inMemoryNeighborsBytes + inMemoryFeaturesBytes
+                + features.values().stream().mapToLong(Feature::ramBytesUsed).sum();
+    }
+
+    /** The part of {@link #ramBytesUsed} held in native memory: its features' models' native projections. */
+    public long nativeBytesUsed() {
+        long bytes = 0;
+        for (var feature : features.values()) bytes += feature.nativeBytesUsed();
+        return bytes;
     }
 
     public void close() throws IOException {

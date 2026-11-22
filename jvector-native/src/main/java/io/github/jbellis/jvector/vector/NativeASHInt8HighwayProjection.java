@@ -66,6 +66,7 @@ final class NativeASHInt8HighwayProjection implements VectorUtilSupport.AshProje
 
     private final MemorySegment packed, scales, sums;
     private final int rows, columns, paddedRows, paddedColumns;
+    private final long handleBytes;
 
     private NativeASHInt8HighwayProjection(MemorySegment packed, MemorySegment scales, MemorySegment sums,
                                            int rows, int columns) {
@@ -76,6 +77,9 @@ final class NativeASHInt8HighwayProjection implements VectorUtilSupport.AshProje
         this.columns = columns;
         this.paddedRows = (rows + 15) & ~15;
         this.paddedColumns = (columns + 3) & ~3;
+        // The three segments share one arena, so its scope is counted once.
+        this.handleBytes = NativeSegmentHeap.of(packed) + io.github.jbellis.jvector.util.RamUsageEstimator.shallowSizeOf(scales)
+                + io.github.jbellis.jvector.util.RamUsageEstimator.shallowSizeOf(sums);
     }
 
     /**
@@ -127,10 +131,12 @@ final class NativeASHInt8HighwayProjection implements VectorUtilSupport.AshProje
 
     /** Packed rows, scales and sums, all native. */
     @Override
-    public long ramBytesUsed() { return packed.byteSize() + scales.byteSize() + sums.byteSize(); }
+    public long ramBytesUsed() {
+        return nativeBytesUsed() + handleBytes;
+    }
 
     @Override
-    public long nativeBytesUsed() { return ramBytesUsed(); }
+    public long nativeBytesUsed() { return packed.byteSize() + scales.byteSize() + sums.byteSize(); }
 
     @Override
     public String operandPrecision() { return "int8"; }

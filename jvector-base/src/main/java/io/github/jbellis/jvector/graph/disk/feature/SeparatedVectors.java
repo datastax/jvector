@@ -20,6 +20,7 @@ import io.github.jbellis.jvector.disk.IndexWriter;
 import io.github.jbellis.jvector.disk.RandomAccessReader;
 import io.github.jbellis.jvector.graph.disk.CommonHeader;
 import io.github.jbellis.jvector.graph.disk.OnDiskGraphIndex;
+import io.github.jbellis.jvector.util.RamUsageEstimator;
 import io.github.jbellis.jvector.vector.VectorizationProvider;
 import io.github.jbellis.jvector.vector.types.VectorTypeSupport;
 
@@ -32,6 +33,12 @@ public class SeparatedVectors extends AbstractSeparatedFeature {
     private long offset;
     // The largest length of the vectors this feature has written, for the header.
     private final MaxVectorNorm written = new MaxVectorNorm();
+
+    /** This feature and its record of the largest vector length. */
+    @Override
+    public long ramBytesUsed() {
+        return RamUsageEstimator.shallowSizeOf(this) + written.ramBytesUsed();
+    }
     // The largest length stored in a loaded index's header; NaN when unknown.
     private final float stored;
 

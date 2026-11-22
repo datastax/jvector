@@ -343,9 +343,11 @@ public class TestOnDiskGraphIndex extends RandomizedTest {
              var onDiskGraph = OnDiskGraphIndex.load(readerSupplier);
              var onDiskView = onDiskGraph.getView())
         {
-            // Fixed fields, two references per FeatureId and the record layout; the graph hasn't been read from.
+            // Fixed fields, two references per FeatureId, the record layout and the inline-vectors feature;
+            // the graph hasn't been read from.
             assertEquals(104 + RamUsageEstimator.NUM_BYTES_OBJECT_REF
-                    + RamUsageEstimator.shallowSizeOfInstance(L0Layout.class), onDiskGraph.ramBytesUsed());
+                    + RamUsageEstimator.shallowSizeOfInstance(L0Layout.class)
+                    + onDiskGraph.features.get(FeatureId.INLINE_VECTORS).ramBytesUsed(), onDiskGraph.ramBytesUsed());
             assertEquals(32, onDiskGraph.getDegree(0));
             assertEquals(2, onDiskGraph.version);
             assertEquals(100_000, onDiskGraph.size(0));

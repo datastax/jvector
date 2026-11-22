@@ -36,13 +36,21 @@ import java.util.concurrent.atomic.AtomicInteger;
  * <p>{@link #get} and {@link #restore} round-trip all three states through one float, for storage.
  */
 @Experimental
-public final class MaxVectorLength {
+public final class MaxVectorLength implements Accountable {
     private static final int NONE = -1;
     private static final int UNKNOWN = Float.floatToIntBits(Float.POSITIVE_INFINITY);
 
     // The largest squared length as float bits: nonnegative floats order like their bits, NONE orders below every
     // length and UNKNOWN above, so one compare-and-set loop keeps the maximum in every state.
     private final AtomicInteger squaredBits = new AtomicInteger(NONE);
+    private static final long BYTES = RamUsageEstimator.shallowSizeOfInstance(MaxVectorLength.class)
+            + RamUsageEstimator.shallowSizeOfInstance(AtomicInteger.class);
+
+    /** This object and its counter. */
+    @Override
+    public long ramBytesUsed() {
+        return BYTES;
+    }
 
     /** Records a vector's length. */
     public void record(VectorFloat<?> vector) {

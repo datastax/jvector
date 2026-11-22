@@ -45,9 +45,11 @@ final class NativeASHInt8Projection implements VectorUtilSupport.AshProjection {
 
     private final MemorySegment context;
     private final int rows, columns;
+    private final long handleBytes;
 
     private NativeASHInt8Projection(MemorySegment context, int rows, int columns) {
         this.context = context;
+        this.handleBytes = NativeSegmentHeap.of(context);
         this.rows = rows;
         this.columns = columns;
     }
@@ -122,12 +124,12 @@ final class NativeASHInt8Projection implements VectorUtilSupport.AshProjection {
     /** Retained native model storage, including lazily packed batch weights. */
     @Override
     public long ramBytesUsed() {
-        return jvector_ash_int8_bytes(context);
+        return nativeBytesUsed() + handleBytes;
     }
 
-    /** All of this view's storage is native. */
+    /** This view's storage, apart from its Java handle, is native. */
     @Override
-    public long nativeBytesUsed() { return ramBytesUsed(); }
+    public long nativeBytesUsed() { return jvector_ash_int8_bytes(context); }
 
     @Override
     public String operandPrecision() { return "int8"; }

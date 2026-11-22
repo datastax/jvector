@@ -82,7 +82,9 @@ class NativeASHProjectionTest {
             var nativeProjection = new NativeASHProjection(matrix);
             var panama = new PanamaVectorUtilSupport().prepareAshProjection(matrix);
             long matrixBytes = (long) shape[0] * shape[1] * Float.BYTES;
-            assertEquals(matrixBytes, nativeProjection.ramBytesUsed());
+            long handle = NativeSegmentHeap.of(nativeProjection.matrix());
+            assertEquals(matrixBytes, nativeProjection.nativeBytesUsed());
+            assertEquals(matrixBytes + handle, nativeProjection.ramBytesUsed());
             for (int count : new int[]{0,1,3,4,5,8,17,32,33,65}) {
                 float[][] inputs = randomRows(random, count + 1, shape[1]);
                 float[][] out = new float[count + 1][shape[0]];
@@ -101,7 +103,9 @@ class NativeASHProjectionTest {
                 for (int b = 0; b <= count; b++) assertArrayEquals(saved[b], inputs[b]);
                 for (float value : out[count]) assertEquals(123f, value);
             }
-            assertEquals(2 * matrixBytes, nativeProjection.ramBytesUsed());
+            // The packed copy is a second native segment with its own handle.
+            assertEquals(2 * matrixBytes, nativeProjection.nativeBytesUsed());
+            assertEquals(2 * matrixBytes + 2 * handle, nativeProjection.ramBytesUsed());
         }
     }
 

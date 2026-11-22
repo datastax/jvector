@@ -64,10 +64,12 @@ final class NativeASHFP16Projection implements VectorUtilSupport.AshProjection {
     }
     // Present only in automatic mode, for queries outside the finite FP16 range.
     private final VectorUtilSupport.AshProjection fallback;
+    private final long handleBytes;
 
     private NativeASHFP16Projection(MemorySegment context, int rows, int columns,
                                     long weightBytes, VectorUtilSupport.AshProjection fallback) {
         this.context = context;
+        this.handleBytes = NativeSegmentHeap.of(context);
         this.rows = rows;
         this.columns = columns;
         this.retainedBytes = weightBytes;
@@ -153,9 +155,9 @@ final class NativeASHFP16Projection implements VectorUtilSupport.AshProjection {
         return new IllegalStateException(message + " (status " + code + ")");
     }
 
-    /** Native owned storage; per-thread staging and opaque oneDNN scratch are excluded. */
+    /** Native owned storage and its Java handle; per-thread staging and opaque oneDNN scratch are excluded. */
     @Override
-    public long ramBytesUsed() { return retainedBytes; }
+    public long ramBytesUsed() { return retainedBytes + handleBytes; }
 
     @Override
     public long nativeBytesUsed() { return retainedBytes; }

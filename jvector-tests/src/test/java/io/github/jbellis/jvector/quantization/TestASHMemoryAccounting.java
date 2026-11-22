@@ -318,6 +318,19 @@ public class TestASHMemoryAccounting {
                  var view = loaded.getView()) {
                 var source = (FusedASH.FusedASHInlineSource)view.getInlineSourceFeatures().values().iterator().next();
                 assertEquals(RamUsageEstimator.shallowSizeOf(source)+source.getVector().ramBytesUsed(), source.ramBytesUsed());
+
+                // The graph alone holds the ASH model it read from its header, so it counts it.
+                var feature = loaded.getFeatures().get(FeatureId.FUSED_ASH);
+                long model = ((AsymmetricHashing) field(feature, "ash")).ramBytesUsed();
+                assertEquals(RamUsageEstimator.shallowSizeOf(feature) + RamUsageEstimator.shallowSizeOf(field(feature, "queryScratchFactory"))
+                        + model, feature.ramBytesUsed());
+                long nativeModel = ((AsymmetricHashing) field(feature, "ash")).nativeBytesUsed();
+                assertEquals(nativeModel, feature.nativeBytesUsed());
+                assertEquals(nativeModel, loaded.nativeBytesUsed());
+                long sources = view.getInlineSourceFeatures().values().stream()
+                        .mapToLong(FusedASH.InlineSource::ramBytesUsed).sum();
+                long retained = loaded.ramBytesUsed();
+                assertTrue(retained >= sources + model);
             }
         } finally { Files.deleteIfExists(path); }
     }

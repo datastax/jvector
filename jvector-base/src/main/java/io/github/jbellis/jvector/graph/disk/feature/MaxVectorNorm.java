@@ -20,6 +20,7 @@ import io.github.jbellis.jvector.disk.RandomAccessReader;
 import io.github.jbellis.jvector.vector.types.VectorFloat;
 
 import io.github.jbellis.jvector.util.MaxVectorLength;
+import io.github.jbellis.jvector.util.RamUsageEstimator;
 
 import java.io.IOException;
 
@@ -35,6 +36,10 @@ final class MaxVectorNorm {
     static final int VERSION = 7;
 
     private final MaxVectorLength written = new MaxVectorLength();
+
+    long ramBytesUsed() {
+        return RamUsageEstimator.shallowSizeOf(this) + written.ramBytesUsed();
+    }
 
     void record(VectorFloat<?> vector) {
         written.record(vector);

@@ -17,6 +17,7 @@
 package io.github.jbellis.jvector.graph.disk.feature;
 
 import io.github.jbellis.jvector.disk.IndexWriter;
+import io.github.jbellis.jvector.util.RamUsageEstimator;
 
 import java.io.IOException;
 import java.util.EnumMap;
@@ -49,6 +50,19 @@ public interface Feature extends Comparable<Feature> {
      */
     @Deprecated
     void writeHeader(IndexWriter out) throws IOException;
+
+    /**
+     * Memory retained by this feature for a loaded index, including any model read from the index
+     * header, which the index alone holds. Per-thread scratch is excluded.
+     */
+    default long ramBytesUsed() {
+        return RamUsageEstimator.shallowSizeOf(this);
+    }
+
+    /** The part of {@link #ramBytesUsed} held in native memory, outside the Java heap. */
+    default long nativeBytesUsed() {
+        return 0;
+    }
 
     /**
      * Writes this feature's header for a graph written at {@code version}. Features that serialize a

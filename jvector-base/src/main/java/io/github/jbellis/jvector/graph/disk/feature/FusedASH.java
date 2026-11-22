@@ -139,6 +139,22 @@ public class FusedASH extends AbstractFeature implements FusedFeature {
         return blockSize;
     }
 
+    /**
+     * This feature, its query-scratch factory and the ASH model read from the index header, including
+     * the model's native projections; per-thread scratch is excluded.
+     */
+    @Override
+    public long ramBytesUsed() {
+        return RamUsageEstimator.shallowSizeOf(this) + RamUsageEstimator.shallowSizeOf(queryScratchFactory)
+                + ash.ramBytesUsed();
+    }
+
+    /** The model's native projections. */
+    @Override
+    public long nativeBytesUsed() {
+        return ash.nativeBytesUsed();
+    }
+
     @Override
     public int headerSize() {
         return ash.compressorSize() + Integer.BYTES; // blockSize

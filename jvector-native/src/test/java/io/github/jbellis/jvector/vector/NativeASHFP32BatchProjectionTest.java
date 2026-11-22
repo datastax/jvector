@@ -113,8 +113,9 @@ class NativeASHFP32BatchProjectionTest {
                 // which keeps the owning view's identity and charges the matrix once.
                 assertSame(fullRange, automatic);
                 assertEquals(140000f, out[0]);
-                assertEquals(Float.BYTES + RamUsageEstimator.shallowSizeOfInstance(NativeASHProjection.class),
-                        fullRange.ramBytesUsed());
+                assertEquals(Float.BYTES, fullRange.nativeBytesUsed());
+                assertEquals(Float.BYTES + RamUsageEstimator.shallowSizeOfInstance(NativeASHProjection.class)
+                        + autoSegmentHandle(), fullRange.ramBytesUsed());
             }
         } finally {
             if (previous == null) System.clearProperty("jvector.ash.queryProjection");
@@ -163,8 +164,10 @@ class NativeASHFP32BatchProjectionTest {
                 for (float value : outputs[count]) assertEquals(123f, value);
             }
             // Batches of 4-32 rows ran on Highway, which packs one copy of the matrix.
+            assertEquals(2L * shape[0] * shape[1] * Float.BYTES, projection.nativeBytesUsed());
             assertEquals(2L * shape[0] * shape[1] * Float.BYTES
-                    + RamUsageEstimator.shallowSizeOfInstance(NativeASHProjection.class), projection.ramBytesUsed());
+                    + RamUsageEstimator.shallowSizeOfInstance(NativeASHProjection.class) + 2 * autoSegmentHandle(),
+                    projection.ramBytesUsed());
         }
     }
 
@@ -228,5 +231,10 @@ class NativeASHFP32BatchProjectionTest {
             });
             for (var result : pool.invokeAll(tasks)) result.get();
         }
+    }
+
+    /** The Java handle of one segment from its own automatic arena, as the projections allocate them. */
+    private static long autoSegmentHandle() {
+        return NativeSegmentHeap.of(java.lang.foreign.Arena.ofAuto().allocate(1, 64));
     }
 }

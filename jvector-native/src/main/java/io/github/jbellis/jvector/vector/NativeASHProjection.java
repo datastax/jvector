@@ -94,6 +94,8 @@ final class NativeASHProjection implements VectorUtilSupport.AshProjection {
     private volatile MemorySegment batchMatrix;
     private final int rows;
     private final int columns;
+    // The Java heap of one segment handle; the packed copy, once made, has an identical one.
+    private final long handleBytes;
 
     static boolean isAvailable() { return ADDRESS_OF_KERNEL != null; }
 
@@ -111,18 +113,20 @@ final class NativeASHProjection implements VectorUtilSupport.AshProjection {
         matrix = Arena.ofAuto().allocate(Math.multiplyExact((long) rows, rowBytes), 64);
         for (int row = 0; row < rows; row++)
             MemorySegment.copy(MemorySegment.ofArray(source[row]), 0, matrix, row * rowBytes, rowBytes);
+        handleBytes = NativeSegmentHeap.of(matrix);
     }
 
+    /** The native matrix and its packed copy, plus their Java handles. */
     @Override
     public long ramBytesUsed() {
-        MemorySegment packed = batchMatrix;
-        return matrix.byteSize() + (packed == null ? 0 : packed.byteSize());
+        return nativeBytesUsed() + (batchMatrix == null ? handleBytes : 2 * handleBytes);
     }
 
     /** The matrix and its packed copy are both native. */
     @Override
     public long nativeBytesUsed() {
-        return ramBytesUsed();
+        MemorySegment packed = batchMatrix;
+        return matrix.byteSize() + (packed == null ? 0 : packed.byteSize());
     }
 
     int rows() { return rows; }

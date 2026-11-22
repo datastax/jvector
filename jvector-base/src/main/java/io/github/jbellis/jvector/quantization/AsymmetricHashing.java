@@ -303,10 +303,10 @@ public class AsymmetricHashing implements VectorCompressor<AsymmetricHashing.Qua
                 + estimateArray2DBytes(landmarkProj)
                 + RamUsageEstimator.sizeOf(landmarkProjSum)
                 + stiefelTransform.heapBytes
-                // The similarity is a shared enum constant; its unit is a field. The per-thread unitScratch values
-                // are worker scratch, excluded as the encoding workspaces are.
+                // The similarity is a shared enum constant; its unit is a field. Per-thread scratch holders
+                // (unitScratch) and their values are excluded, as for every model.
                 + (scores == ASHScoreScale.DOT_PRODUCT ? 0 : RamUsageEstimator.shallowSizeOf(scores))
-                + RamUsageEstimator.shallowSizeOfInstance(ThreadLocal.class);
+                + maxEncoded.ramBytesUsed();
         for (VectorFloat<?> landmark : landmarks) bytes = Math.addExact(bytes, landmark.ramBytesUsed());
         this.heapBytes = bytes;
     }
