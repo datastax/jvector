@@ -293,53 +293,21 @@ This structural change does not select a different BLAS/LAPACK backend.
 
 ## Retained-memory accounting
 
-`AsymmetricHashing.ramBytesUsed()` counts the retained model: landmarks and
-auxiliary landmark arrays, the Stiefel matrices (including row/outer arrays),
-model objects, provider-owned native FP32 backing and its adapter/delegate objects,
-optional Highway batch backing,
-and a distinct FP16 or INT8 query representation when initialized. It also counts the
-model's largest-length record and the Java handles of its native segments;
-`nativeBytesUsed()` reports the native part, and per-thread scratch holders are
-excluded. Immutable Java sizes
-are cached during construction; reading the estimate does not scan matrices or
-create them. FP32 query selection and automatic FP16 fallback preserve the
-original projection view's identity, so shared FP32 backing is charged once.
-Dense row and block matrices use their corresponding storage layouts; other
-`RealMatrix` implementations retain a dense storage estimate without calling
-`getData()`, which could materialize a matrix copy.
+`ramBytesUsed()` includes native memory, and `nativeBytesUsed()` reports that part; the
+Java heap is the difference. Reads use totals cached when storage or a cache is created,
+so they allocate nothing and their cost does not grow with the number of vectors.
 
-`ASHVectors.ramBytesUsed()` includes its compressor once, its compact code
-pages and decoded scale/offset/landmark arrays, and any retained packed or
-symmetric-scoring caches. It uses heap array layout estimates, not serialized
-code sizes. Code storage is sized when the pages are allocated. Packed-block
-totals are charged when a layout is successfully created and include a small
-conservative allowance for map bookkeeping. Polling the estimate is
-constant-time with respect to vector count, even after packed caches are
-created. Vectors passed to the public constructor are copied, so repeated
-ordinals sharing one input vector are charged per ordinal. The model arrays must remain immutable after construction, as required by scoring.
+- **`AsymmetricHashing`:** the whole model, including native projections and any FP16
+  or INT8 query representation once created.
+- **`ASHVectors`:** the model once, the codes, and any packed or symmetric-scoring
+  caches once created. Vectors passed to the public constructor are copied, so
+  ordinals that share an input vector are each charged.
+- **Fused ASH graph:** `FusedASH.ramBytesUsed()` counts the model read from the index
+  header, and `OnDiskGraphIndex.ramBytesUsed()` includes it. Codes or a model a caller
+  loads separately, such as `ASHVectors` beside the graph, are separate copies and are
+  counted by their own `ramBytesUsed()`.
 
-Cached fused ASH sources report their owned source object and quantized vector,
-including its primitive arrays. The ASH model read from a fused graph's header is
-held only by that index, so `FusedASH.ramBytesUsed()` counts it once and
-`OnDiskGraphIndex.ramBytesUsed()` includes it. As elsewhere in ASH, totals include
-native projections and `nativeBytesUsed()` reports that part. Codes or a model a
-caller loads separately, such as `ASHVectors` beside a graph, are separate copies
-and are counted by their own `ramBytesUsed()`. A native segment's Java handle is
-counted as the segment object and its scope; the arena bookkeeping behind the scope
-is estimated (roughly 60 bytes per segment).
-
-As with PQ, these retained model/collection estimates exclude worker-owned query
-buffers, native staging/oneDNN execution scratch, training temporaries and OS file
-cache. Search concurrency and training memory require separate budgeting. They
-are estimates of retained ownership, not an allocator reservation or a total
-process-RSS bound. VM/native-runtime bookkeeping is approximate. Formats,
-compression byte budgets and scoring arithmetic are unchanged.
-
-The accounting regression tests derive storage expectations from the allocated
-arrays and the running JVM's layout, rather than fixed dataset-specific byte
-totals. They cover code widths 1, 2, 3, 4 and 9, empty collections, padded capacities,
-multiple landmarks, lazy query/batch/symmetric representations, repeated and
-concurrent cache creation, and allocation-free polling. When ASH storage or cache
-ownership changes, update its allocation-site totals and the corresponding tests
-together. Shared JVM layout and graph bookkeeping remain centralized in their
-common implementations.
+Not counted: per-thread query buffers, native staging and oneDNN scratch, training
+temporaries, and the OS page cache. Budget search concurrency and training separately.
+The Java handles of native segments are estimated (roughly 60 bytes each); everything
+else is sized from the allocated arrays and the running JVM's layout.
