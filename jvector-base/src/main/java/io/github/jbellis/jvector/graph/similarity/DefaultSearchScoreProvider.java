@@ -122,12 +122,7 @@ public final class DefaultSearchScoreProvider implements SearchScoreProvider {
     static ScoreFunction.ExactScoreFunction exactScoreFunction(VectorFloat<?> v, VectorSimilarityFunction vsf,
                                                                RandomAccessVectorValues ravv) {
         // don't use ESF.reranker, we need thread safety here
-        return new ScoreFunction.ExactScoreFunction() {
-            @Override
-            public float similarityTo(int node2) {
-                return vsf.compare(v, ravv.getVector(node2));
-            }
-        };
+        return new VectorValuesScoreFunction(v, vsf, ravv, null);
     }
 
     /**
@@ -137,12 +132,7 @@ public final class DefaultSearchScoreProvider implements SearchScoreProvider {
      */
     public static DefaultSearchScoreProvider exact(VectorFloat<?> v, int[] graphToRavvOrdMap ,VectorSimilarityFunction vsf, RandomAccessVectorValues ravv) {
         // don't use ESF.reranker, we need thread safety here
-        var sf = new ScoreFunction.ExactScoreFunction() {
-            @Override
-            public float similarityTo(int node2) {
-                return vsf.compare(v, ravv.getVector(graphToRavvOrdMap[node2]));
-            }
-        };
+        var sf = new VectorValuesScoreFunction(v, vsf, ravv, graphToRavvOrdMap);
         return forSimilarity(sf, null, vsf);
     }
 }

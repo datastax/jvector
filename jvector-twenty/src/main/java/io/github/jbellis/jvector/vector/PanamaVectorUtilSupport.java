@@ -800,6 +800,172 @@ class PanamaVectorUtilSupport implements VectorUtilSupport {
         return (float) (sum / Math.sqrt(aMagnitude * bMagnitude));
     }
 
+    // Bulk kernels: one query against four targets per pass. A random target is usually not in cache, and the four
+    // independent load streams keep more of them in flight than four sequential calls do. Each target accumulates
+    // exactly as in the single-pair method it stands for, so the results are the same; lengths that method handles
+    // on a different path are scored one pair at a time.
+
+    @Override
+    public void cosine(VectorFloat<?> q, VectorFloat<?>[] targets, int count, float[] results) {
+        int i = 0;
+        for (; i + 4 <= count; i += 4) {
+            cosine4(q, targets[i], targets[i + 1], targets[i + 2], targets[i + 3], results, i);
+        }
+        for (; i < count; i++) {
+            results[i] = cosine(q, targets[i]);
+        }
+    }
+
+    /** Four cosine(q, t) at once, accumulated as in {@link #cosine(VectorFloat, VectorFloat)}. */
+    private void cosine4(VectorFloat<?> q, VectorFloat<?> t0, VectorFloat<?> t1, VectorFloat<?> t2, VectorFloat<?> t3, float[] results, int at) {
+        var species = FloatVector.SPECIES_PREFERRED;
+        int length = q.length();
+        var qq = FloatVector.zero(species);
+        var s0 = qq; var s1 = qq; var s2 = qq; var s3 = qq;
+        var n0 = qq; var n1 = qq; var n2 = qq; var n3 = qq;
+        int vectorizedLength = species.loopBound(length);
+        for (int i = 0; i < vectorizedLength; i += species.length()) {
+            var a = fromVectorFloat(species, q, i);
+            var b0 = fromVectorFloat(species, t0, i);
+            var b1 = fromVectorFloat(species, t1, i);
+            var b2 = fromVectorFloat(species, t2, i);
+            var b3 = fromVectorFloat(species, t3, i);
+            qq = a.fma(a, qq);
+            s0 = a.fma(b0, s0); n0 = b0.fma(b0, n0);
+            s1 = a.fma(b1, s1); n1 = b1.fma(b1, n1);
+            s2 = a.fma(b2, s2); n2 = b2.fma(b2, n2);
+            s3 = a.fma(b3, s3); n3 = b3.fma(b3, n3);
+        }
+        float aMagnitude = qq.reduceLanes(VectorOperators.ADD);
+        float sum0 = s0.reduceLanes(VectorOperators.ADD), b0Magnitude = n0.reduceLanes(VectorOperators.ADD);
+        float sum1 = s1.reduceLanes(VectorOperators.ADD), b1Magnitude = n1.reduceLanes(VectorOperators.ADD);
+        float sum2 = s2.reduceLanes(VectorOperators.ADD), b2Magnitude = n2.reduceLanes(VectorOperators.ADD);
+        float sum3 = s3.reduceLanes(VectorOperators.ADD), b3Magnitude = n3.reduceLanes(VectorOperators.ADD);
+        for (int i = vectorizedLength; i < length; i++) {
+            float a = q.get(i);
+            aMagnitude += a * a;
+            sum0 += a * t0.get(i); b0Magnitude += t0.get(i) * t0.get(i);
+            sum1 += a * t1.get(i); b1Magnitude += t1.get(i) * t1.get(i);
+            sum2 += a * t2.get(i); b2Magnitude += t2.get(i) * t2.get(i);
+            sum3 += a * t3.get(i); b3Magnitude += t3.get(i) * t3.get(i);
+        }
+        results[at] = (float) (sum0 / Math.sqrt(aMagnitude * b0Magnitude));
+        results[at + 1] = (float) (sum1 / Math.sqrt(aMagnitude * b1Magnitude));
+        results[at + 2] = (float) (sum2 / Math.sqrt(aMagnitude * b2Magnitude));
+        results[at + 3] = (float) (sum3 / Math.sqrt(aMagnitude * b3Magnitude));
+    }
+
+    @Override
+    public void dotProduct(VectorFloat<?> q, VectorFloat<?>[] targets, int count, float[] results) {
+        int i = 0;
+        // shorter vectors take the other paths of dotProduct
+        if (q.length() >= 2 * FloatVector.SPECIES_PREFERRED.length()) {
+            for (; i + 4 <= count; i += 4) {
+                dotProduct4(q, targets[i], targets[i + 1], targets[i + 2], targets[i + 3], results, i);
+            }
+        }
+        for (; i < count; i++) {
+            results[i] = dotProduct(q, targets[i]);
+        }
+    }
+
+    /**
+     * Four dotProduct(q, t) at once, accumulated as in {@link #dotProductPreferred}: even vector-width chunks into one
+     * sum and odd ones into another, then a last odd chunk, the lane reduction, and the scalar tail.
+     */
+    private void dotProduct4(VectorFloat<?> q, VectorFloat<?> t0, VectorFloat<?> t1, VectorFloat<?> t2, VectorFloat<?> t3, float[] results, int at) {
+        var species = FloatVector.SPECIES_PREFERRED;
+        int vectorLength = species.length();
+        int length = q.length();
+        var e0 = FloatVector.zero(species);
+        var e1 = e0; var e2 = e0; var e3 = e0;
+        var o0 = e0; var o1 = e0; var o2 = e0; var o3 = e0;
+        int i = 0;
+        for (; i + 2 * vectorLength <= length; i += 2 * vectorLength) {
+            var a = fromVectorFloat(species, q, i);
+            e0 = a.fma(fromVectorFloat(species, t0, i), e0);
+            e1 = a.fma(fromVectorFloat(species, t1, i), e1);
+            e2 = a.fma(fromVectorFloat(species, t2, i), e2);
+            e3 = a.fma(fromVectorFloat(species, t3, i), e3);
+            a = fromVectorFloat(species, q, i + vectorLength);
+            o0 = a.fma(fromVectorFloat(species, t0, i + vectorLength), o0);
+            o1 = a.fma(fromVectorFloat(species, t1, i + vectorLength), o1);
+            o2 = a.fma(fromVectorFloat(species, t2, i + vectorLength), o2);
+            o3 = a.fma(fromVectorFloat(species, t3, i + vectorLength), o3);
+        }
+        e0 = e0.add(o0); e1 = e1.add(o1); e2 = e2.add(o2); e3 = e3.add(o3);
+        if (i + vectorLength <= length) {
+            var a = fromVectorFloat(species, q, i);
+            e0 = a.fma(fromVectorFloat(species, t0, i), e0);
+            e1 = a.fma(fromVectorFloat(species, t1, i), e1);
+            e2 = a.fma(fromVectorFloat(species, t2, i), e2);
+            e3 = a.fma(fromVectorFloat(species, t3, i), e3);
+            i += vectorLength;
+        }
+        float tail0 = 0, tail1 = 0, tail2 = 0, tail3 = 0;
+        for (; i < length; i++) {
+            float a = q.get(i);
+            tail0 += a * t0.get(i);
+            tail1 += a * t1.get(i);
+            tail2 += a * t2.get(i);
+            tail3 += a * t3.get(i);
+        }
+        results[at] = e0.reduceLanes(VectorOperators.ADD) + tail0;
+        results[at + 1] = e1.reduceLanes(VectorOperators.ADD) + tail1;
+        results[at + 2] = e2.reduceLanes(VectorOperators.ADD) + tail2;
+        results[at + 3] = e3.reduceLanes(VectorOperators.ADD) + tail3;
+    }
+
+    @Override
+    public void squareDistance(VectorFloat<?> q, VectorFloat<?>[] targets, int count, float[] results) {
+        int i = 0;
+        // shorter vectors, and those exactly one vector wide, take the other paths of squareDistance
+        if (q.length() > FloatVector.SPECIES_PREFERRED.length()) {
+            for (; i + 4 <= count; i += 4) {
+                squareDistance4(q, targets[i], targets[i + 1], targets[i + 2], targets[i + 3], results, i);
+            }
+        }
+        for (; i < count; i++) {
+            results[i] = squareDistance(q, targets[i]);
+        }
+    }
+
+    /** Four squareDistance(q, t) at once, accumulated as in {@link #squareDistancePreferred(VectorFloat, int, VectorFloat, int, int)}. */
+    private void squareDistance4(VectorFloat<?> q, VectorFloat<?> t0, VectorFloat<?> t1, VectorFloat<?> t2, VectorFloat<?> t3, float[] results, int at) {
+        var species = FloatVector.SPECIES_PREFERRED;
+        int length = q.length();
+        var s0 = FloatVector.zero(species);
+        var s1 = s0; var s2 = s0; var s3 = s0;
+        int vectorizedLength = species.loopBound(length);
+        int i = 0;
+        for (; i < vectorizedLength; i += species.length()) {
+            var a = fromVectorFloat(species, q, i);
+            var d0 = a.sub(fromVectorFloat(species, t0, i));
+            var d1 = a.sub(fromVectorFloat(species, t1, i));
+            var d2 = a.sub(fromVectorFloat(species, t2, i));
+            var d3 = a.sub(fromVectorFloat(species, t3, i));
+            s0 = d0.fma(d0, s0);
+            s1 = d1.fma(d1, s1);
+            s2 = d2.fma(d2, s2);
+            s3 = d3.fma(d3, s3);
+        }
+        float r0 = s0.reduceLanes(VectorOperators.ADD);
+        float r1 = s1.reduceLanes(VectorOperators.ADD);
+        float r2 = s2.reduceLanes(VectorOperators.ADD);
+        float r3 = s3.reduceLanes(VectorOperators.ADD);
+        for (; i < length; i++) {
+            float a = q.get(i);
+            var d0 = a - t0.get(i); r0 += d0 * d0;
+            var d1 = a - t1.get(i); r1 += d1 * d1;
+            var d2 = a - t2.get(i); r2 += d2 * d2;
+            var d3 = a - t3.get(i); r3 += d3 * d3;
+        }
+        results[at] = r0;
+        results[at + 1] = r1;
+        results[at + 2] = r2;
+        results[at + 3] = r3;
+    }
+
     float squareDistance64(VectorFloat<?> v1, int offset1, VectorFloat<?> v2, int offset2) {
         var a = fromVectorFloat(FloatVector.SPECIES_64, v1, offset1);
         var b = fromVectorFloat(FloatVector.SPECIES_64, v2, offset2);
