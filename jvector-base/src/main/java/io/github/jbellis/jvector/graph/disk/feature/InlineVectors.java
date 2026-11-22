@@ -19,6 +19,7 @@ package io.github.jbellis.jvector.graph.disk.feature;
 import io.github.jbellis.jvector.disk.IndexWriter;
 import io.github.jbellis.jvector.disk.RandomAccessReader;
 import io.github.jbellis.jvector.graph.disk.CommonHeader;
+import io.github.jbellis.jvector.util.RamUsageEstimator;
 import io.github.jbellis.jvector.vector.VectorizationProvider;
 import io.github.jbellis.jvector.vector.types.VectorFloat;
 import io.github.jbellis.jvector.vector.types.VectorTypeSupport;
@@ -34,6 +35,12 @@ public class InlineVectors extends AbstractFeature {
 
     public InlineVectors(int dimension) {
         this.dimension = dimension;
+    }
+
+    /** Only primitive fields; the vectors stay on disk. */
+    @Override
+    public long ramBytesUsed() {
+        return RamUsageEstimator.shallowSizeOf(this);
     }
 
     @Override
