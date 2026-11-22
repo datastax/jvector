@@ -186,6 +186,61 @@ public class GraphIndexBuilderTest extends LuceneTestCase {
                      rawEntryDegree, visibleEntryDegree);
     }
 
+    /**
+     * The neighbor arrays are sized for (int) (M * overflow) computed in double, while inserts capped the list at the
+     * same product computed in float. For overflow factors such as 1.3 and 1.4 the float product rounds up to the next
+     * integer (1.4f * 5 == 7.0f, but 1.4f * 5.0 == 6.99999988), so an insert could exceed the array capacity and,
+     * with assertions on, failed "overflow 1.4 could exceed max overflow degree 6".
+     */
+    @Test
+    public void testOverflowFactorsThatRoundUpInFloat() throws IOException {
+        var vectors = createRandomFloatVectors(200, 8, getRandom());
+        var ravv = MockVectorValues.fromValues(vectors);
+        for (float overflow : new float[] {1.3f, 1.4f, 1.8f, 1.9f}) {
+            for (int m : new int[] {5, 10, 20}) {
+                try (var builder = new GraphIndexBuilder(ravv, VectorSimilarityFunction.EUCLIDEAN, m, 20, overflow, 1.2f, false)) {
+                    var graph = builder.build(ravv);
+                    try (var view = graph.getView()) {
+                        for (int node = 0; node < ravv.size(); node++) {
+                            assertTrue(view.getNeighborsIterator(0, node).size() <= m);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /**
+     * A builder over an existing graph may use a larger overflow than the graph's neighbor arrays were sized for;
+     * inserts must still stay within the arrays.
+     */
+    @Test
+    public void testExistingGraphWithLargerOverflow() throws IOException {
+        int m = 16;
+        var vectors = createRandomFloatVectors(400, 8, getRandom());
+        var ravv = MockVectorValues.fromValues(vectors);
+        var bsp = BuildScoreProvider.randomAccessScoreProvider(ravv, VectorSimilarityFunction.EUCLIDEAN);
+        try (var first = GraphIndexBuilder.builder(bsp, ravv.dimension(), m)
+                .withBeamWidth(20).withNeighborOverflow(1.2f).withAlpha(1.2f).build()) {
+            for (int node = 0; node < 200; node++) {
+                first.addGraphNode(node, ravv.getVector(node));
+            }
+            var graph = (OnHeapGraphIndex) first.getGraph();
+            try (var second = GraphIndexBuilder.builder(bsp, ravv.dimension(), graph)
+                    .withBeamWidth(20).withNeighborOverflow(2.0f).withAlpha(1.2f).build()) {
+                for (int node = 200; node < ravv.size(); node++) {
+                    second.addGraphNode(node, ravv.getVector(node));
+                }
+                second.cleanup();
+                try (var view = graph.getView()) {
+                    for (int node = 0; node < ravv.size(); node++) {
+                        assertTrue(view.getNeighborsIterator(0, node).size() <= m);
+                    }
+                }
+            }
+        }
+    }
+
     @Test
     public void testSaveAndLoad() throws IOException {
         int dimension = randomIntBetween(2, 32);
