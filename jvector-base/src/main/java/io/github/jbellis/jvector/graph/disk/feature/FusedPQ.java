@@ -32,6 +32,7 @@ import io.github.jbellis.jvector.quantization.PQVectors;
 import io.github.jbellis.jvector.quantization.ProductQuantization;
 import io.github.jbellis.jvector.quantization.VectorCompressor;
 import io.github.jbellis.jvector.util.ExplicitThreadLocal;
+import io.github.jbellis.jvector.util.RamUsageEstimator;
 import io.github.jbellis.jvector.vector.VectorSimilarityFunction;
 import io.github.jbellis.jvector.vector.VectorizationProvider;
 import io.github.jbellis.jvector.vector.types.ByteSequence;
@@ -98,6 +99,11 @@ public class FusedPQ extends AbstractFeature implements FusedFeature {
     @Override
     public int headerSize(int version) {
         return pq.compressorSize(version);
+    }
+
+    @Override
+    public long ramBytesUsed() {
+        return RamUsageEstimator.shallowSizeOf(this) + pq.ramBytesUsed();
     }
 
     @Override
@@ -199,6 +205,7 @@ public class FusedPQ extends AbstractFeature implements FusedFeature {
     }
 
     public static class FusedPQInlineSource implements InlineSource {
+        private static final long SHALLOW_BYTES = RamUsageEstimator.shallowSizeOfInstance(FusedPQInlineSource.class);
         private ByteSequence<?> code;
 
         public FusedPQInlineSource(ByteSequence<?> code) {
@@ -207,7 +214,7 @@ public class FusedPQ extends AbstractFeature implements FusedFeature {
 
         @Override
         public long ramBytesUsed() {
-            return code.length();
+            return SHALLOW_BYTES + code.ramBytesUsed();
         }
 
         public ByteSequence<?> getCode() {

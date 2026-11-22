@@ -23,6 +23,7 @@ import io.github.jbellis.jvector.graph.RandomAccessVectorValues;
 import io.github.jbellis.jvector.graph.VectorAccess;
 import io.github.jbellis.jvector.graph.disk.OnDiskGraphIndex;
 import io.github.jbellis.jvector.util.Accountable;
+import io.github.jbellis.jvector.util.RamUsageEstimator;
 import io.github.jbellis.jvector.vector.VectorUtil;
 import io.github.jbellis.jvector.vector.VectorizationProvider;
 import io.github.jbellis.jvector.vector.types.ByteSequence;
@@ -358,7 +359,10 @@ public class NVQuantization implements VectorCompressor<NVQuantization.Quantized
 
     @Override
     public long ramBytesUsed() {
-        return globalMean.ramBytesUsed();
+        long size = RamUsageEstimator.shallowSizeOf(this) + globalMean.ramBytesUsed()
+                + RamUsageEstimator.shallowSizeOf(subvectorSizesAndOffsets);
+        for (int[] subvector : subvectorSizesAndOffsets) size += RamUsageEstimator.sizeOf(subvector);
+        return size;
     }
 
     @Override

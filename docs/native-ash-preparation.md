@@ -47,7 +47,7 @@ datasets, batched FP32 encoding cut BenchYAML's ASH encoding time by 1.2x to
 5.7x over one-at-a-time projection, with byte-identical trained models;
 oneDNN added up to 1.13x over Highway.
 
-## Retained memory
+## Retained-memory accounting
 
 `ramBytesUsed()` includes native memory, and `nativeBytesUsed()` reports that
 part. Per-thread query buffers, native staging, oneDNN scratch, training

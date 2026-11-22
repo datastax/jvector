@@ -23,6 +23,7 @@ import io.github.jbellis.jvector.graph.RandomAccessVectorValues;
 import io.github.jbellis.jvector.graph.VectorAccess;
 import io.github.jbellis.jvector.graph.disk.OnDiskGraphIndex;
 import io.github.jbellis.jvector.util.Accountable;
+import io.github.jbellis.jvector.util.RamUsageEstimator;
 import io.github.jbellis.jvector.util.PhysicalCoreExecutor;
 import io.github.jbellis.jvector.vector.VectorSimilarityFunction;
 import io.github.jbellis.jvector.vector.VectorUtil;
@@ -803,13 +804,23 @@ public class ProductQuantization implements VectorCompressor<ByteSequence<?>>, A
         return codebooks.length;
     }
 
+    /**
+     * Retained model storage: codebooks, centroid, subspace layout, centroid norms and the cosine
+     * magnitude table once created. Per-thread scratch is excluded. Reading this allocates nothing.
+     */
     @Override
     public long ramBytesUsed() {
-        long size = 0;
-        for (VectorFloat<?> codebook : codebooks) {
-            size += codebook.ramBytesUsed();
-        }
-
+        long size = RamUsageEstimator.shallowSizeOf(this) + RamUsageEstimator.shallowSizeOf(codebooks)
+                + RamUsageEstimator.shallowSizeOf(subvectorSizesAndOffsets)
+                + RamUsageEstimator.shallowSizeOf(centroidNormsSquared)
+                + RamUsageEstimator.shallowSizeOf(partialSquaredMagnitudes);
+        for (VectorFloat<?> codebook : codebooks) size += codebook.ramBytesUsed();
+        for (int[] subvector : subvectorSizesAndOffsets) size += RamUsageEstimator.sizeOf(subvector);
+        for (float[] norms : centroidNormsSquared) size += RamUsageEstimator.sizeOf(norms);
+        if (globalCentroid != null) size += globalCentroid.ramBytesUsed();
+        VectorFloat<?> magnitudes = partialSquaredMagnitudes.get();
+        if (magnitudes != null) size += magnitudes.ramBytesUsed();
+        size += maxEncoded.ramBytesUsed();
         return size;
     }
 

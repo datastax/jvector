@@ -468,19 +468,25 @@ public abstract class PQVectors implements CompressedVectors {
         return 1024;
     }
 
+    /**
+     * Retained vector storage plus the compressor's model ({@link ProductQuantization#ramBytesUsed()}).
+     * Built-in subclasses cache the storage part and add their scoring tables once created.
+     */
     @Override
     public long ramBytesUsed() {
-        int REF_BYTES = RamUsageEstimator.NUM_BYTES_OBJECT_REF;
-        int OH_BYTES = RamUsageEstimator.NUM_BYTES_OBJECT_HEADER;
-        int AH_BYTES = RamUsageEstimator.NUM_BYTES_ARRAY_HEADER;
+        return pq.ramBytesUsed() + storageBytes();
+    }
 
-        long codebooksSize = pq.ramBytesUsed();
-        long chunksArraySize = OH_BYTES + AH_BYTES + (long) validChunkCount() * REF_BYTES;
-        long dataSize = 0;
-        for (int i = 0; i < validChunkCount(); i++) {
-            dataSize += compressedDataChunks[i].ramBytesUsed();
+    /**
+     * This object, the chunk array and each chunk's {@link ByteSequence#ramBytesUsed()}. Chunks that
+     * share backing storage are each charged for it.
+     */
+    protected long storageBytes() {
+        long bytes = RamUsageEstimator.shallowSizeOf(this) + RamUsageEstimator.shallowSizeOf(compressedDataChunks);
+        for (var chunk : compressedDataChunks) {
+            if (chunk != null) bytes += chunk.ramBytesUsed();
         }
-        return codebooksSize + chunksArraySize + dataSize;
+        return bytes;
     }
 
     @Override
