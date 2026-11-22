@@ -114,5 +114,24 @@ mvn compile exec:exec@tutorial -Dtutorial=disk -pl jvector-examples -am
 ```
 The full example also illustrates the impact that adjusting `rerankK` has on recall.
 
+### Stopping by distance instead of beam width (experimental)
+
+With the call above, `rerankK` is also the beam width: the search keeps going until `rerankK` results are closer
+to the query than anything left to explore, so every query does about the same amount of work. `AdaptiveTermination`
+implements the stopping rule of [Adaptive Beam Search](https://arxiv.org/abs/2505.15636) instead: the search stops
+once `rerankK` results are closer than the best remaining candidate by a factor of `1 + gamma`. Easy queries stop
+early and hard ones search longer.
+
+```java
+// rerankK is now the number of results to wait for, not a beam width
+var termination = AdaptiveTermination.of(vsf, 0.05f);
+SearchResult sr = searcher.search(ssp, topK, topK, 0.0f, 0.0f, Bits.ALL, termination);
+```
+
+Useful values of `gamma` are small, because in many dimensions most distances are within a few percent of each
+other. On 100,000 1024-dimension text embeddings (COSINE, M=32, exact scores, `topK` 10), recall@10 matched a beam of
+100 at `gamma` 0.05 with 14% fewer nodes visited, and a beam of 250 at `gamma` 0.07 with 19% fewer. The hardest
+queries take longer than with a beam, so tail latency rises even where mean latency falls; measure both.
+
 Next tutorial:
 - Larger than memory indexes with Product Quantization

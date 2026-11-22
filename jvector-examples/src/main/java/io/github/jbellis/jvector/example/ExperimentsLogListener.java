@@ -59,6 +59,7 @@ final class ExperimentsLogListener implements GridListener {
                 row.topK,
                 row.overquery,
                 row.rerankK,
+                row.adaptiveGamma,
                 selection.apply(row.metrics, resolved)
         );
     }

@@ -64,14 +64,16 @@ public final class ExperimentsSchemaV1 {
                 "usePruning",
                 "topK",
                 "overquery",
-                "rerankK"
+                "rerankK",
+                // Blank on beam-search rows.
+                "adaptiveGamma"
         ));
         return List.copyOf(columns);
     }
 
     /**
      * The construction-parameter columns, in column order. Each names a key of the build parameters passed
-     * to {@link #fixedValues(RunContext, String, Map, Set, String, String, boolean, int, double, int)}.
+     * to {@link #fixedValues(RunContext, String, Map, Set, String, String, boolean, int, double, int, Float)}.
      * Adding one changes the schema.
      */
     private static final List<String> BUILD_PARAMETER_COLUMNS = List.of(
@@ -83,13 +85,9 @@ public final class ExperimentsSchemaV1 {
     );
 
     /**
-     * Build the fixed-column value map for one experiments.csv row.
+     * Build the fixed-column value map for one beam-search experiments.csv row (blank {@code adaptiveGamma}).
      *
-     * Grid/orchestrators supply raw values; this method owns column naming consistency.
-     *
-     * @param buildParameters construction parameters by name; every build-parameter column must be present,
-     *                        and parameters without a column are not written
-     * @throws IllegalArgumentException if a build-parameter column is missing from {@code buildParameters}
+     * @see #fixedValues(RunContext, String, Map, Set, String, String, boolean, int, double, int, Float)
      */
     public static Map<String, String> fixedValues(RunContext run,
                                                   String datasetName,
@@ -101,6 +99,31 @@ public final class ExperimentsSchemaV1 {
                                                   int topK,
                                                   double overquery,
                                                   int rerankK) {
+        return fixedValues(run, datasetName, buildParameters, featureSet, buildCompressorString,
+                searchCompressorString, usePruning, topK, overquery, rerankK, null);
+    }
+
+    /**
+     * Build the fixed-column value map for one experiments.csv row.
+     *
+     * Grid/orchestrators supply raw values; this method owns column naming consistency.
+     *
+     * @param buildParameters construction parameters by name; every build-parameter column must be present,
+     *                        and parameters without a column are not written
+     * @param adaptiveGamma   adaptive termination gamma, or null for a beam-search row (written blank)
+     * @throws IllegalArgumentException if a build-parameter column is missing from {@code buildParameters}
+     */
+    public static Map<String, String> fixedValues(RunContext run,
+                                                  String datasetName,
+                                                  Map<String, ?> buildParameters,
+                                                  Set<FeatureId> featureSet,
+                                                  String buildCompressorString,
+                                                  String searchCompressorString,
+                                                  boolean usePruning,
+                                                  int topK,
+                                                  double overquery,
+                                                  int rerankK,
+                                                  Float adaptiveGamma) {
         Map<String, String> fixed = new HashMap<>();
         fixed.put("schema_version", Integer.toString(run.schemaVersion()));
         fixed.put("run_id", run.runId());
@@ -122,12 +145,13 @@ public final class ExperimentsSchemaV1 {
         fixed.put("topK", Integer.toString(topK));
         fixed.put("overquery", Double.toString(overquery));
         fixed.put("rerankK", Integer.toString(rerankK));
+        fixed.put("adaptiveGamma", adaptiveGamma == null ? "" : Float.toString(adaptiveGamma));
 
         return fixed;
     }
 
     /**
-     * @deprecated Use {@link #fixedValues(RunContext, String, Map, Set, String, String, boolean, int, double, int)},
+     * @deprecated Use {@link #fixedValues(RunContext, String, Map, Set, String, String, boolean, int, double, int, Float)},
      * which takes the construction parameters by name.
      */
     @Deprecated

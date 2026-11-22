@@ -22,6 +22,7 @@ import java.util.ArrayList;
 import java.util.List;
 
 import io.github.jbellis.jvector.example.Grid.ConfiguredSystem;
+import io.github.jbellis.jvector.graph.AdaptiveTermination;
 import io.github.jbellis.jvector.example.benchmarks.diagnostics.BenchmarkDiagnostics;
 
 /**
@@ -67,6 +68,7 @@ public class QueryTester {
      * @param topK        the top‑K parameter for all benchmarks
      * @param rerankK     the rerank‑K parameter
      * @param usePruning  whether to enable pruning
+     * @param termination adaptive termination rule, or null for beam search
      * @param queryRuns   number of runs for each benchmark
      */
     public List<Metric> run(
@@ -74,6 +76,7 @@ public class QueryTester {
             int topK,
             int rerankK,
             boolean usePruning,
+            AdaptiveTermination termination,
             int queryRuns) {
 
         List<Metric> results = new ArrayList<>();
@@ -90,7 +93,7 @@ public class QueryTester {
             diagnostics.capturePrePhaseSnapshot("Query");
 
             for (var benchmark : benchmarks) {
-                var metrics = benchmark.runBenchmark(cs, topK, rerankK, usePruning, queryRuns);
+                var metrics = benchmark.runBenchmark(cs, topK, rerankK, usePruning, termination, queryRuns);
                 results.addAll(metrics);
             }
 

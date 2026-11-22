@@ -50,7 +50,12 @@ final class ConsoleReportListener implements GridListener {
         Map<String, Object> indexConfig = new LinkedHashMap<>();
         indexConfig.put("featureSetForIndex", ctx.indexFeatures);
         indexConfig.putAll(ctx.build.reportedParameters());
-        printer.printConfig(indexConfig, Map.of("usePruning", usePruning));
+        Map<String, Object> queryConfig = new LinkedHashMap<>();
+        queryConfig.put("usePruning", usePruning);
+        if (!ctx.search.adaptiveGammaGrid.isEmpty()) {
+            queryConfig.put("adaptiveGamma", ctx.search.adaptiveGammaGrid);
+        }
+        printer.printConfig(indexConfig, queryConfig);
     }
 
     @Override
@@ -65,7 +70,10 @@ final class ConsoleReportListener implements GridListener {
     public void onQueryResult(SearchContext ctx, QueryRow row) {
         // Best-effort runtime availability warnings (warn once per key)
         selection.warnMissing(row.metrics, resolved);
-        printer.printRow(row.overquery, selection.apply(row.metrics, resolved));
+        // A Gamma column only when the grid runs adaptive termination, so beam-only output is unchanged.
+        String gamma = ctx.search.adaptiveGammaGrid.isEmpty() ? null
+                : row.adaptiveGamma == null ? "beam" : row.adaptiveGamma.toString();
+        printer.printRow(row.overquery, gamma, selection.apply(row.metrics, resolved));
     }
 
     @Override

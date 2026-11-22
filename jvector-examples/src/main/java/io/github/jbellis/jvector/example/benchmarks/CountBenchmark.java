@@ -22,6 +22,7 @@ import java.util.concurrent.atomic.LongAdder;
 import java.util.stream.IntStream;
 
 import io.github.jbellis.jvector.example.Grid.ConfiguredSystem;
+import io.github.jbellis.jvector.graph.AdaptiveTermination;
 import io.github.jbellis.jvector.graph.SearchResult;
 
 /**
@@ -96,6 +97,7 @@ public class CountBenchmark extends AbstractQueryBenchmark {
             int topK,
             int rerankK,
             boolean usePruning,
+            AdaptiveTermination termination,
             int queryRuns) {
 
         if (!(computeAvgNodesVisited || computeAvgNodesExpanded || computeAvgNodesExpandedBaseLayer)) {
@@ -112,7 +114,7 @@ public class CountBenchmark extends AbstractQueryBenchmark {
                     .parallel()
                     .forEach(i -> {
                         SearchResult sr = QueryExecutor.executeQuery(
-                                cs, topK, rerankK, usePruning, i);
+                                cs, topK, rerankK, usePruning, termination, i);
                         nodesVisited.add(sr.getVisitedCount());
                         nodesExpanded.add(sr.getExpandedCount());
                         nodesExpandedBaseLayer.add(sr.getExpandedCountBaseLayer());

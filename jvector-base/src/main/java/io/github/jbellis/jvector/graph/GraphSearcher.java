@@ -61,6 +61,9 @@ public class GraphSearcher implements Closeable {
     private SearchScoreProvider scoreProvider;
     private CachingReranker cachingReranker;
 
+    // how the base layer search stops: by this rule, or by beam width if null. Kept for resume().
+    private AdaptiveTermination termination;
+
     private boolean pruneSearch;
     private final ScoreTracker.ScoreTrackerFactory scoreTrackerFactory;
 
@@ -229,6 +232,29 @@ public class GraphSearcher implements Closeable {
                                float rerankFloor,
                                Bits acceptOrds)
     {
+        return search(scoreProvider, topK, rerankK, threshold, rerankFloor, acceptOrds, null);
+    }
+
+    /**
+     * Like {@link #search(SearchScoreProvider, int, int, float, float, Bits)}, but the base layer search stops by
+     * the given distance-based rule instead of by beam width. {@code rerankK} is then the number of results the rule
+     * waits for, not a beam width: a typical call passes {@code rerankK = topK} for exact scores, or the number of
+     * approximately-scored results to rerank.
+     * <p>
+     * Upper layers of a hierarchical graph are searched greedily as usual. A {@link #resume} of this search uses the
+     * same rule.
+     *
+     * @param termination the stopping rule, or null to stop by beam width (rerankK) as the other overloads do
+     */
+    @Experimental
+    public SearchResult search(SearchScoreProvider scoreProvider,
+                               int topK,
+                               int rerankK,
+                               float threshold,
+                               float rerankFloor,
+                               Bits acceptOrds,
+                               AdaptiveTermination termination)
+    {
         NodeAtLevel entry = view.entryNode();
         if (acceptOrds == null) {
             throw new IllegalArgumentException("Use MatchAllBits to indicate that all ordinals are accepted, instead of null");
@@ -241,7 +267,7 @@ public class GraphSearcher implements Closeable {
             return new SearchResult(new SearchResult.NodeScore[0], 0, 0, 0, 0, Float.POSITIVE_INFINITY);
         }
 
-        internalSearch(scoreProvider, entry, topK, rerankK, threshold, acceptOrds);
+        internalSearch(scoreProvider, entry, topK, rerankK, threshold, acceptOrds, termination);
         return reranking(topK, rerankK, rerankFloor);
     }
 
@@ -272,7 +298,23 @@ public class GraphSearcher implements Closeable {
                                   float threshold,
                                   Bits acceptOrds)
     {
+        internalSearch(scoreProvider, entry, topK, rerankK, threshold, acceptOrds, null);
+    }
+
+    /**
+     * {@link #internalSearch(SearchScoreProvider, NodeAtLevel, int, int, float, Bits)} with the base layer stopped by
+     * the given rule, or by beam width if it is null.
+     */
+    protected void internalSearch(SearchScoreProvider scoreProvider,
+                                  NodeAtLevel entry,
+                                  int topK,
+                                  int rerankK,
+                                  float threshold,
+                                  Bits acceptOrds,
+                                  AdaptiveTermination termination)
+    {
         initializeInternal(scoreProvider, entry, acceptOrds);
+        this.termination = termination;
 
         // Move downward from entry.level to 1
         for (int lvl = entry.level; lvl > 0; lvl--) {
@@ -288,7 +330,7 @@ public class GraphSearcher implements Closeable {
         }
 
         // Now do the main search at layer 0
-        searchLayer0(topK, rerankK, threshold);;
+        searchLayer0(topK, rerankK, threshold);
     }
 
     /**
@@ -362,13 +404,22 @@ public class GraphSearcher implements Closeable {
         visitedCount = 0;
         expandedCount = 0;
         expandedCountBaseLayer = 0;
+        // a search started here stops by beam width unless internalSearch says otherwise
+        termination = null;
     }
 
-    private boolean stopSearch(NodeQueue localCandidates, ScoreTracker scoreTracker, int rerankK, float threshold) {
+    private boolean stopSearch(NodeQueue localCandidates, ScoreTracker scoreTracker, int rerankK, float threshold, int level) {
         float topCandidateScore = localCandidates.topScore();
 
-        // we're done when we have K results and the best candidate is worse than the worst result so far
-        if (approximateResults.size() >= rerankK && topCandidateScore < approximateResults.topScore()) {
+        if (termination != null && level == 0) {
+            // we're done when we have K results and the best candidate is farther than the worst of them by the
+            // rule's factor (no results are wanted at all if K is 0)
+            if (approximateResults.size() >= rerankK
+                && (rerankK == 0 || termination.shouldStop(topCandidateScore, approximateResults.topScore()))) {
+                return true;
+            }
+        } else if (approximateResults.size() >= rerankK && topCandidateScore < approximateResults.topScore()) {
+            // we're done when we have K results and the best candidate is worse than the worst result so far
             return true;
         }
 
@@ -431,7 +482,7 @@ public class GraphSearcher implements Closeable {
 
             // the main search loop
             while (candidates.size() > 0) {
-                if (stopSearch(candidates, scoreTracker, rerankK, threshold)) {
+                if (stopSearch(candidates, scoreTracker, rerankK, threshold, level)) {
                     break;
                 }
 
@@ -537,6 +588,10 @@ public class GraphSearcher implements Closeable {
             float evictedScore = approximateResults.topScore();
             evictedResults.add(evictedNode, evictedScore);
             approximateResults.push(topCandidateNode, topCandidateScore);
+        } else if (topCandidateScore < approximateResults.topScore()) {
+            // worse than every result: only an AdaptiveTermination search expands such a node (beam search stops
+            // first). Keep it for resume(), which would not find it again since it has been visited.
+            evictedResults.add(topCandidateNode, topCandidateScore);
         } else {
             // score is exactly equal to the worst candidate in our results, so we don't bother
             // changing the results queue.  (We still want to check its neighbors to see if one of them
