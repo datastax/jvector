@@ -16,17 +16,27 @@
         <native.jextract.skip>true</native.jextract.skip>
         <!-- Set to true via -Dnative.crossarch to also cross-compile for the other arch -->
         <native.crossarch>false</native.crossarch>
+        <!-- Whether to skip building the native library on this machine. The OS profiles below
+             (Linux x86_64/aarch64, Windows x86_64) set it to false. Pass
+             -Dnative.skip=true to opt out; the jar is then built without a bundled library and
+             jvector falls back to the Panama/Java providers. -->
+        <native.skip>true</native.skip>
+        <!-- bash used to run build_native_lib.sh (the Windows profile points at Git for Windows' bash,
+             because a bare "bash" can resolve to the WSL launcher in System32). -->
+        <native.bash>bash</native.bash>
     </properties>
     <build>
-        <!-- Pick up the .so files from target/meson-build/ so that mvn clean
+        <!-- Pick up the native libraries from target/meson-build/ so that mvn clean
              removes stale libraries along with every other build artefact.
-             The build script no longer writes into src/main/resources/. -->
+             The build script no longer writes into src/main/resources/.
+             Naming must match LibraryLoader.resourceNameFor(). -->
         <resources>
             <resource>
                 <directory>${project.build.directory}/meson-build</directory>
                 <includes>
                     <include>libjvector-x86_64.so</include>
                     <include>libjvector-aarch64.so</include>
+                    <include>jvector-windows-x86_64.dll</include>
                 </includes>
             </resource>
         </resources>
@@ -51,8 +61,75 @@
                 <configuration>
                     <nonFilteredFileExtensions>
                         <nonFilteredFileExtension>so</nonFilteredFileExtension>
+                        <nonFilteredFileExtension>dll</nonFilteredFileExtension>
                     </nonFilteredFileExtensions>
                 </configuration>
+            </plugin>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-enforcer-plugin</artifactId>
+                <version>3.2.1</version>
+                <executions>
+                    <execution>
+                        <id>enforce-java</id>
+                        <goals>
+                            <goal>enforce</goal>
+                        </goals>
+                        <configuration>
+                            <skip>${native.skip}</skip>
+                            <rules>
+                                <requireJavaVersion>
+                                    <version>[20,)</version>
+                                </requireJavaVersion>
+                                <requireProfileIdsExist/>
+                                <requireProperty>
+                                    <property>native.buildtype</property>
+                                    <regex>^(debug|debugoptimized|release)$</regex>
+                                    <regexMessage>native.buildtype must be one of: debug, debugoptimized, release. Use -Dnative.debug, -Dnative.debugoptimized, or -Dnative.release to set it.</regexMessage>
+                                </requireProperty>
+                            </rules>
+                        </configuration>
+                    </execution>
+                </executions>
+            </plugin>
+            <plugin>
+                <groupId>org.codehaus.mojo</groupId>
+                <artifactId>exec-maven-plugin</artifactId>
+                <executions>
+                    <execution>
+                        <id>jextract-generate</id>
+                        <!-- Note that jextract in the generate-sources phase runs before the library is built in the generate-resources phase -->
+                        <phase>generate-sources</phase>
+                        <goals>
+                            <goal>exec</goal>
+                        </goals>
+                        <configuration>
+                            <executable>${native.bash}</executable>
+                            <arguments>
+                                <argument>jextract_generate_bindings.sh</argument>
+                            </arguments>
+                            <skip>${native.jextract.skip}</skip>
+                            <workingDirectory>${project.basedir}/src/main/native/src/</workingDirectory>
+                        </configuration>
+                    </execution>
+                    <execution>
+                        <id>execute-native-compile-script</id>
+                        <phase>generate-resources</phase>
+                        <goals>
+                            <goal>exec</goal>
+                        </goals>
+                        <configuration>
+                            <executable>${native.bash}</executable>
+                            <arguments>
+                                <argument>build_native_lib.sh</argument>
+                                <argument>${native.buildtype}</argument>
+                                <argument>${native.crossarch}</argument>
+                            </arguments>
+                            <skip>${native.skip}</skip>
+                            <workingDirectory>${project.basedir}/src/main/native/src/</workingDirectory>
+                        </configuration>
+                    </execution>
+                </executions>
             </plugin>
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
@@ -125,81 +202,32 @@
 
         <profile>
             <id>unix-amd64-profile</id>
+            <!-- Linux (x86_64 or aarch64). Kept under this id because CI and docs pass -Punix-amd64-profile
+                 explicitly; the build itself is configured in the main <build> section above. -->
             <activation>
                 <os>
                     <name>Linux</name>
                 </os>
             </activation>
-            <build>
-                <plugins>
-                    <plugin>
-                        <groupId>org.apache.maven.plugins</groupId>
-                        <artifactId>maven-enforcer-plugin</artifactId>
-                        <version>3.2.1</version>
-                        <executions>
-                            <execution>
-                                <id>enforce-java</id>
-                                <goals>
-                                    <goal>enforce</goal>
-                                </goals>
-                                <configuration>
-                                    <rules>
-                                        <requireJavaVersion>
-                                            <version>[20,)</version>
-                                        </requireJavaVersion>
-                                        <requireProfileIdsExist/>
-                                        <requireProperty>
-                                            <property>native.buildtype</property>
-                                            <regex>^(debug|debugoptimized|release)$</regex>
-                                            <regexMessage>native.buildtype must be one of: debug, debugoptimized, release. Use -Dnative.debug, -Dnative.debugoptimized, or -Dnative.release to set it.</regexMessage>
-                                        </requireProperty>
-                                    </rules>
-                                </configuration>
-                            </execution>
-                        </executions>
-                    </plugin>
+            <properties>
+                <native.skip>false</native.skip>
+            </properties>
+        </profile>
 
-                    <plugin>
-                        <groupId>org.codehaus.mojo</groupId>
-                        <artifactId>exec-maven-plugin</artifactId>
-                        <executions>
-                            <execution>
-                                <id>jextract-generate</id>
-                                <!-- Note that jextract in the generate-sources phase runs before the .so is built in the generate-resources phase -->
-                                <phase>generate-sources</phase>
-                                <goals>
-                                    <goal>exec</goal>
-                                </goals>
-                                <configuration>
-                                    <executable>bash</executable>
-                                    <arguments>
-                                        <argument>jextract_generate_bindings.sh</argument>
-                                    </arguments>
-                                    <skip>${native.jextract.skip}</skip>
-                                    <workingDirectory>${project.basedir}/src/main/native/src/</workingDirectory>
-                                </configuration>
-                            </execution>
-                            <execution>
-                                <id>execute-native-compile-script</id>
-                                <phase>generate-resources</phase>
-                                <goals>
-                                    <goal>exec</goal>
-                                </goals>
-                                <configuration>
-                                    <executable>bash</executable>
-                                    <arguments>
-                                        <argument>build_native_lib.sh</argument>
-                                        <argument>${native.buildtype}</argument>
-                                        <argument>${native.crossarch}</argument>
-                                    </arguments>
-                                    <skip>false</skip>
-                                    <workingDirectory>${project.basedir}/src/main/native/src/</workingDirectory>
-                                </configuration>
-                            </execution>
-                        </executions>
-                    </plugin>
-                </plugins>
-            </build>
+        <profile>
+            <id>windows-x86_64-profile</id>
+            <activation>
+                <os>
+                    <family>windows</family>
+                    <arch>amd64</arch>
+                </os>
+            </activation>
+            <properties>
+                <native.skip>false</native.skip>
+                <!-- Git for Windows' bash; override with -Dnative.bash=... if installed elsewhere.
+                     Maven upper-cases environment variable names on Windows, hence PROGRAMFILES. -->
+                <native.bash>${env.PROGRAMFILES}\Git\bin\bash.exe</native.bash>
+            </properties>
         </profile>
     </profiles>
     <dependencies>

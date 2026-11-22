@@ -53,16 +53,34 @@ public class TestVectorizationProviderSelection {
     }
 
     private static boolean nativeAvailable() throws Exception {
-        if (Runtime.version().feature() < 22 || !HAS_VECTOR_MODULE
-                || !System.getProperty("os.name").startsWith("Linux")) return false;
-        String arch = System.getProperty("os.arch");
-        String resource = arch.equals("aarch64") ? "/libjvector-aarch64.so"
-                : (arch.equals("amd64") || arch.equals("x86_64")) ? "/libjvector-x86_64.so" : null;
+        if (Runtime.version().feature() < 22 || !HAS_VECTOR_MODULE) return false;
+        String resource = bundledLibraryResource();
         if (resource == null) return false;
         try {
             return Class.forName("io.github.jbellis.jvector.vector.NativeVectorizationProvider", false,
                     TestVectorizationProviderSelection.class.getClassLoader()).getResource(resource) != null;
         } catch (ClassNotFoundException e) { return false; }
+    }
+
+    private static boolean isLinux() {
+        return System.getProperty("os.name").startsWith("Linux");
+    }
+
+    /// Native is available *and* this is Linux: for tests that compile stand-in `libjvector.so`
+    /// libraries with `cc` or borrow the JDK's `.so`, which only work there.
+    private static boolean nativeAvailableOnLinux() throws Exception {
+        return isLinux() && nativeAvailable();
+    }
+
+    /// Mirrors LibraryLoader.resourceNameFor(): the jar resource holding the native library for this platform.
+    private static String bundledLibraryResource() {
+        String os = System.getProperty("os.name").toLowerCase(java.util.Locale.ROOT);
+        String arch = System.getProperty("os.arch");
+        boolean aarch64 = arch.equals("aarch64") || arch.equals("arm64");
+        boolean x86_64 = arch.equals("amd64") || arch.equals("x86_64");
+        if (os.contains("linux")) return aarch64 ? "/libjvector-aarch64.so" : x86_64 ? "/libjvector-x86_64.so" : null;
+        if (os.contains("windows")) return x86_64 ? "/jvector-windows-x86_64.dll" : null;
+        return null;
     }
 
     private static String javaProvider() {
@@ -275,7 +293,7 @@ public class TestVectorizationProviderSelection {
     /// compute correctly. At `599478a1` the probe selects `NativeVectorizationProvider` and exits
     /// with `UnsatisfiedLinkError: unresolved symbol: dot_product_f32`.
     @Test public void libraryWithoutKernelsFallsBackToJavaProvider() throws Exception {
-        Assume.assumeTrue(nativeAvailable());
+        Assume.assumeTrue(nativeAvailableOnLinux());
         Path foreign = Path.of(System.getProperty("java.home"), "lib", "libsyslookup.so");
         Assume.assumeTrue("needs the JDK's libsyslookup.so", Files.isRegularFile(foreign));
         var libraryPath = Files.createTempDirectory("provider-selection-libpath-");
@@ -295,7 +313,7 @@ public class TestVectorizationProviderSelection {
     }
 
     @Test public void libraryWithIsaButMissingLaterKernelIsRejected() throws Exception {
-        Assume.assumeTrue(nativeAvailable());
+        Assume.assumeTrue(nativeAvailableOnLinux());
         var libraryPath = Files.createTempDirectory("provider-selection-partial-");
         try {
             compileSelectionLibrary(libraryPath, "missing-kernel.c");
@@ -337,7 +355,7 @@ public class TestVectorizationProviderSelection {
     }
 
     private static void assertAbiLibrary(String rejection, String... definitions) throws Exception {
-        Assume.assumeTrue(nativeAvailable());
+        Assume.assumeTrue(nativeAvailableOnLinux());
         var libraryPath = Files.createTempDirectory("provider-selection-abi-");
         try {
             compileSelectionLibrary(libraryPath, "abi-library.c", definitions);

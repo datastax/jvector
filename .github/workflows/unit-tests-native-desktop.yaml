@@ -1,0 +1,117 @@
+name: Unit Test CI — Native (Windows x86_64)
+
+# Builds the native SIMD library on Windows (x86_64, clang), runs the C++ kernel tests, then runs
+# the Java suite requiring NativeVectorizationProvider, so a library that fails to build, export
+# its symbols, or load is a hard failure rather than a silent fallback to the Panama provider.
+# Linux is covered by unit-tests.yaml and unit-tests-arm64.yaml.
+
+on:
+  workflow_dispatch:
+  pull_request:
+  push:
+    branches:
+      - main
+    paths:
+      - .github/workflows/unit-tests-native-desktop.yaml
+      - '**.java'
+      - '**/pom.xml'
+      - 'jvector-native/**'
+
+jobs:
+  windows-x86_64:
+    concurrency:
+      group: ${{ github.workflow }}-${{ github.ref }}-windows-x86_64-${{ matrix.max_isa }}
+      cancel-in-progress: true
+    strategy:
+      fail-fast: false
+      matrix:
+        # Mirrors the Linux avx512f/avx2/sse42 matrix. "auto" is no cap; the others cap both the
+        # native dispatcher (JVECTOR_MAX_ISA) and the Java Vector API. Which tier "auto" reaches
+        # depends on the hosted runner's CPU.
+        max_isa: [ auto, avx2, sse42 ]
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: bash
+    env:
+      JDK: 24
+      # clang targets the MSVC ABI; lld is the linker (the LLVM install on the runner ships it).
+      CC: clang
+      CXX: clang++
+      CXX_LD: lld
+      JVECTOR_MAX_ISA: ${{ matrix.max_isa == 'auto' && '' || matrix.max_isa }}
+      JAVA_TOOL_OPTIONS: >-
+        ${{ matrix.max_isa == 'sse42' && '-XX:MaxVectorSize=16 -Djvector.test.expected_vector_bits=128' ||
+            matrix.max_isa == 'avx2' && '-XX:MaxVectorSize=32 -Djvector.test.expected_vector_bits=256' || '' }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Initialize Git Submodules
+        run: git submodule update --init
+
+      # Sets LIB/INCLUDE/PATH for the MSVC CRT and Windows SDK, which clang needs to compile and link.
+      - name: Set up MSVC developer environment
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+
+      - name: Install Meson and Ninja
+        run: pip install meson ninja
+
+      - name: Check clang
+        run: |
+          export PATH="/c/Program Files/LLVM/bin:$PATH"
+          if ! command -v clang++ >/dev/null; then choco install llvm -y --no-progress; fi
+          echo "C:\Program Files\LLVM\bin" >> "$GITHUB_PATH"
+          clang++ --version
+          lld-link --version || true
+
+      - name: Report CPU
+        run: |
+          powershell -NoProfile -Command "Get-CimInstance Win32_Processor | Select-Object Name,NumberOfCores"
+
+      - name: Build test_simd_kernels (native C++)
+        working-directory: jvector-native/src/main/native
+        run: |
+          meson wrap install gtest
+          meson setup build --wipe --buildtype=release
+          meson compile -C build test_simd_kernels
+
+      - name: Run test_simd_kernels (JVECTOR_MAX_ISA=${{ matrix.max_isa }})
+        working-directory: jvector-native/src/main/native
+        run: ./build/test_simd_kernels.exe
+
+      - name: Set up JDK ${{ env.JDK }}
+        uses: actions/setup-java@v4
+        with:
+          java-version: ${{ env.JDK }}
+          distribution: temurin
+          cache: maven
+
+      # The windows-x86_64-profile Maven profile activates automatically and builds jvector.dll
+      # via build_native_lib.sh (run with Git for Windows' bash).
+      - name: Verify native-access vector support
+        run: >-
+          mvn -B -pl jvector-tests -am test
+          -DTest_RequireSpecificVectorizationProvider=NativeVectorizationProvider
+          -Dsurefire.failIfNoSpecifiedTests=false
+          -Dtest=TestVectorizationProvider
+
+      - name: Test full suite with native vectorization
+        run: >-
+          mvn -B test
+          -DTest_RequireSpecificVectorizationProvider=NativeVectorizationProvider
+
+      - name: Test Summary
+        if: always()
+        uses: test-summary/action@v2
+        with:
+          paths: |
+            **/target/surefire-reports/TEST-*.xml
+
+      - name: Upload Surefire Test Results
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: surefire-results--windows-x86_64-${{ matrix.max_isa }}
+          path: "**/target/surefire-reports/**"
