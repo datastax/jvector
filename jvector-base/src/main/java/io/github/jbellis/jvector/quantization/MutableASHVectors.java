@@ -795,6 +795,11 @@ public final class MutableASHVectors implements MutableCompressedVectors<VectorF
         /** Gathers same-model codes into one buffer and scores them in one call; same scores as one at a time. */
         @Override
         public void similarityTo(int[] nodes, int count, float[] scores) {
+            // Without the rows kernel (1-bit codes, or no SIMD), score one at a time.
+            if (!batch) {
+                for (int i = 0; i < count; i++) scores[i] = similarityTo(nodes[i]);
+                return;
+            }
             byte[] rows = gather(count * bodyBytes);
             Page[] targets = new Page[count];
             int same = 0;
