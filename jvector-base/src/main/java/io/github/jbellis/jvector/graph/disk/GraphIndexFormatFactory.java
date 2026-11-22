@@ -35,7 +35,8 @@ public class GraphIndexFormatFactory {
         3, new GraphIndexFormatV3(),
         4, new GraphIndexFormatV4(),
         5, new GraphIndexFormatV5(),
-        6, new GraphIndexFormatV6()
+        6, new GraphIndexFormatV6(),
+        7, new GraphIndexFormatV7()
     );
 
     /**

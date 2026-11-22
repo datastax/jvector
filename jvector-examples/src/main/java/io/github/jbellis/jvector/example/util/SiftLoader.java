@@ -35,9 +35,15 @@ public class SiftLoader {
     private static final VectorTypeSupport vectorTypeSupport = VectorizationProvider.getInstance().getVectorTypeSupport();
 
     public static List<VectorFloat<?>> readFvecs(String filePath) {
+        return readFvecs(filePath, Integer.MAX_VALUE);
+    }
+
+    /** Reads at most {@code maxVectors} vectors without loading the rest of the file. */
+    public static List<VectorFloat<?>> readFvecs(String filePath, int maxVectors) {
+        if (maxVectors <= 0) throw new IllegalArgumentException("maxVectors must be positive");
         var vectors = new ArrayList<VectorFloat<?>>();
         try (var dis = new DataInputStream(new BufferedInputStream(new FileInputStream(filePath)))) {
-            while (dis.available() > 0) {
+            while (vectors.size() < maxVectors && dis.available() > 0) {
                 var dimension = Integer.reverseBytes(dis.readInt());
                 if (dimension <= 0) {
                     throw new IOException("Corrupt fvecs file: negative or zero dimension " + dimension + " (possible file corruption or wrong format)");

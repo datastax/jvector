@@ -1,8 +1,9 @@
 # Retained memory accounting
 
-`ramBytesUsed()` reports the Java heap an object retains. Callers such as a database's
-memory limits can read it often: reads allocate nothing, and their cost does not grow with
-the number of vectors (a PQ or NVQ model adds a loop over its subspaces).
+`ramBytesUsed()` reports the memory an object retains: its Java heap, plus native memory
+for ASH. Callers such as a database's memory limits can read it often: reads allocate
+nothing, and their cost does not grow with the number of vectors (a PQ or NVQ model adds
+a loop over its subspaces).
 
 ## What is counted
 
@@ -13,6 +14,9 @@ the number of vectors (a PQ or NVQ model adds a loop over its subspaces).
   (for example the PQ cosine table).
 - **PQ vectors:** their code storage plus the model, and, for immutable vectors, each
   scoring table once it exists.
+- **ASH:** models can hold native memory (their native projections). `ramBytesUsed()`
+  includes it and `nativeBytesUsed()` reports that part, for the index, the `FusedASH`
+  feature and the model. See [Native ASH](native-ash-preparation.md#retained-memory-accounting).
 
 Not counted: per-thread scratch, the caller's reader supplier, JVM-global objects, and
 memory-mapped file pages or the OS page cache, which are not Java heap.
@@ -20,7 +24,8 @@ memory-mapped file pages or the OS page cache, which are not Java heap.
 ## Accuracy
 
 Totals match the JVM's measured sizes exactly, except fixed per-index metadata, which is
-estimated within 256 bytes and does not grow with the index. Immutable PQ chunks that
+estimated within 256 bytes and does not grow with the index, and the Java handles of an
+ASH model's native segments, estimated within 512 bytes per model. Immutable PQ chunks that
 share backing storage are each charged for it, so those totals can err high.
 
 Sizes follow the running JVM's object layout (compressed or wide references and class

@@ -42,6 +42,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.List;
 import java.util.Set;
 import java.util.stream.Collectors;
 import java.util.stream.IntStream;
@@ -423,5 +424,16 @@ public class OnHeapGraphIndexTest extends RandomizedTest  {
         }
 
         return ((float) hits) / (float) actualK;
+    }
+
+    /** A node that creates several new layers at once gives each the degree of its own level. */
+    @Test
+    public void testNewLayersGetTheirOwnDegrees() {
+        var graph = new OnHeapGraphIndex(List.of(32, 16, 8), 4, 1.0, null, true);
+        graph.addNode(3, 0);
+        assertEquals(32, graph.layers[0].maxDegree);
+        assertEquals(16, graph.layers[1].maxDegree);
+        assertEquals(8, graph.layers[2].maxDegree);
+        assertEquals(8, graph.layers[3].maxDegree);
     }
 }

@@ -24,6 +24,7 @@ import io.github.jbellis.jvector.graph.disk.OnDiskGraphIndexWriter;
 import io.github.jbellis.jvector.graph.ImmutableGraphIndex;
 import io.github.jbellis.jvector.graph.disk.feature.Feature;
 import io.github.jbellis.jvector.graph.disk.feature.FeatureId;
+import io.github.jbellis.jvector.graph.disk.feature.FusedASH;
 import io.github.jbellis.jvector.graph.disk.feature.FusedPQ;
 import io.github.jbellis.jvector.graph.disk.feature.InlineVectors;
 import io.github.jbellis.jvector.graph.disk.feature.NVQ;
@@ -149,7 +150,9 @@ public class TestRetainedMemoryAccounting {
         verifyBuffers();
         verifyPQStorage();
         verifyGraphs();
+        verifyAshGraphs();
         System.out.println("Footprint graph metadata maxError=" + maxMetadataError);
+        System.out.println("Footprint ASH native-handle maxError=" + maxNativeHandleError);
         System.out.println("Retained-memory footprints match the JVM");
     }
 
@@ -210,7 +213,7 @@ public class TestRetainedMemoryAccounting {
         var types = VectorizationProvider.getInstance().getVectorTypeSupport();
         int[][] shapes = {{0, 0, 1}, {1, 0, 1}, {7, 2, 1}, {37, 8, 1}, {257, 32, 1},
                 {37, 8, 2}, {257, 32, 4}, {65, 2, 12}, {37, 2, 32}};
-        for (int version = 2; version <= 6; version++) {
+        for (int version = 2; version <= OnDiskGraphIndex.CURRENT_VERSION; version++) {
             for (int[] shape : shapes) {
                 if (version < 4 && shape[2] > 1) continue;
                 verifyGraph(version, shape, null);
@@ -232,6 +235,89 @@ public class TestRetainedMemoryAccounting {
                 }
             }
         }
+    }
+
+    /** Fused ASH graphs, also page-aligned; measured again after a search creates the model's query caches. */
+    private static void verifyAshGraphs() throws Exception {
+        var types = VectorizationProvider.getInstance().getVectorTypeSupport();
+        var random = new Random(4127);
+        var input = new VectorFloat<?>[97];
+        for (int i = 0; i < input.length; i++) {
+            input[i] = types.createFloatVector(64);
+            for (int d = 0; d < 64; d++) input[i].set(d, random.nextFloat() - .5f);
+            io.github.jbellis.jvector.vector.VectorUtil.l2normalize(input[i]);
+        }
+        var values = io.github.jbellis.jvector.graph.MockVectorValues.fromValues(input);
+        var dot = io.github.jbellis.jvector.vector.VectorSimilarityFunction.DOT_PRODUCT;
+        for (int bits : new int[]{1, 2, 4}) {
+            var ash = AsymmetricHashing.initialize(values, dot, AsymmetricHashing.RANDOM,
+                    AsymmetricHashing.HEADER_BITS + 33 * bits, 1, bits);
+            var encoded = ash.encodeAll(values, java.util.concurrent.ForkJoinPool.commonPool());
+            assertModelHeap("ASH bits=" + bits, ash);
+            for (int levels : new int[]{1, 3}) {
+                for (boolean aligned : new boolean[]{false, true}) {
+                    var layers = new ArrayList<CommonHeader.LayerInfo>();
+                    for (int level = 0; level < levels; level++) {
+                        int count = Math.max(1, input.length >>> level);
+                        layers.add(new CommonHeader.LayerInfo(count, Math.min(8, count - 1)));
+                    }
+                    var graph = new TestUtil.RandomlyConnectedGraphIndex(layers, new Random(7381));
+                    var path = Files.createTempFile("ash-owned-graph-", ".index");
+                    String description = "FusedASH bits=" + bits + " levels=" + levels + " aligned=" + aligned;
+                    try {
+                        var suppliers = new EnumMap<FeatureId, IntFunction<Feature.State>>(FeatureId.class);
+                        try (var view = graph.getView()) {
+                            var builder = new OnDiskGraphIndexWriter.Builder(graph, path)
+                                    .with(new FusedASH(8, ash)).with(new InlineVectors(64));
+                            if (aligned) builder.withPageAlignment(4096);
+                            suppliers.put(FeatureId.FUSED_ASH, node -> new FusedASH.State(view, encoded, node));
+                            suppliers.put(FeatureId.INLINE_VECTORS, node -> new InlineVectors.State(input[node]));
+                            try (var writer = builder.build()) { writer.write(suppliers); }
+                        }
+                        try (var reader = new SimpleMappedReader.Supplier(path);
+                             var loaded = OnDiskGraphIndex.load(reader, 0)) {
+                            Set<Object> external = Collections.newSetFromMap(new IdentityHashMap<>());
+                            external.add(reader);
+                            var format = OnDiskGraphIndex.class.getDeclaredField("format");
+                            format.setAccessible(true);
+                            external.add(format.get(loaded));
+                            assertGraphEquals(description, loaded, external);
+                            try (var searcher = new io.github.jbellis.jvector.graph.GraphSearcher(loaded)) {
+                                var view = (OnDiskGraphIndex.View) searcher.getView();
+                                var fused = view.approximateScoreFunctionFor(input[3], dot);
+                                var scores = new io.github.jbellis.jvector.graph.similarity.DefaultSearchScoreProvider(
+                                        fused, view.rerankerFor(input[3], dot), dot);
+                                searcher.search(scores, 10, 10, 0f, 0f, io.github.jbellis.jvector.util.Bits.ALL);
+                            }
+                            assertGraphEquals(description + " searched", loaded, external);
+                            for (var feature : loaded.getFeatures().values()) {
+                                if (feature instanceof FusedASH) {
+                                    var model = FusedASH.class.getDeclaredField("ash");
+                                    model.setAccessible(true);
+                                    assertModelHeap(description + " searched model", (AsymmetricHashing) model.get(feature));
+                                }
+                            }
+                        }
+                    } finally {
+                        Files.deleteIfExists(path);
+                    }
+                }
+            }
+        }
+    }
+
+    /**
+     * The heap held by native segment handles is estimated: the arena bookkeeping behind each segment's scope is
+     * not reachable through the public API (roughly 60 bytes per segment). A model holds a few native segments,
+     * more once queries have created their projections; this does not grow with the data.
+     */
+    private static final long NATIVE_HANDLE_TOLERANCE = 512;
+    private static long maxNativeHandleError;
+
+    private static void assertModelHeap(String message, AsymmetricHashing ash) throws Exception {
+        long error = (ash.ramBytesUsed() - ash.nativeBytesUsed()) - measured(ash, Collections.emptySet());
+        if (Math.abs(error) > NATIVE_HANDLE_TOLERANCE) fail(message + ": ASH model heap error " + error);
+        maxNativeHandleError = Math.max(maxNativeHandleError, Math.abs(error));
     }
 
     private static void verifyPQStorage() throws Exception {
@@ -399,9 +485,11 @@ public class TestRetainedMemoryAccounting {
 
     private static void assertGraphEquals(String message, OnDiskGraphIndex graph, Set<Object> external) throws Exception {
         long measured = measured(graph, external);
-        long expected = measured;
+        // Native model memory is part of the reported total but not of the Java heap.
+        long expected = measured + graph.nativeBytesUsed();
         long error = graph.ramBytesUsed() - expected;
-        if (Math.abs(error) > METADATA_TOLERANCE) {
+        long tolerance = METADATA_TOLERANCE + (graph.nativeBytesUsed() > 0 ? NATIVE_HANDLE_TOLERANCE : 0);
+        if (Math.abs(error) > tolerance) {
             fail(message + ": reported " + graph.ramBytesUsed() + ", measured " + expected + " (error " + error + ")");
         }
         maxMetadataError = Math.max(maxMetadataError, Math.abs(error));
@@ -409,9 +497,11 @@ public class TestRetainedMemoryAccounting {
     }
 
     private static boolean isOwned(Object value) {
-        // Models are measured; per-thread scratch and JVM-global objects are not owned.
+        // Models are measured; per-thread scratch and JVM-global objects (such as the vectorization provider,
+        // which a projection can capture) are not owned.
         if (value instanceof Class<?> || value instanceof Enum<?>
-                || value instanceof ThreadLocal<?> || value instanceof ExplicitThreadLocal<?>) return false;
+                || value instanceof ThreadLocal<?> || value instanceof ExplicitThreadLocal<?>
+                || value instanceof io.github.jbellis.jvector.vector.VectorUtilSupport) return false;
         if (value.getClass().isArray() && value.getClass().getComponentType().isEnum()) return false;
         if (value instanceof Integer && value == Integer.valueOf((Integer) value)) return false;
         return true;

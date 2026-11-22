@@ -539,6 +539,9 @@ public class GraphIndexBuilder implements Closeable, Accountable {
         this.searchers = ExplicitThreadLocal.withInitial(() -> {
             var gs = new GraphSearcher(graph);
             gs.usePruning(false);
+            // Construction keeps adaptive stopping where the build provider asks for it, as ASH's does; the other
+            // build providers name no similarity function, so their searches keep the standard rule.
+            gs.useAdaptiveTermination(true);
             return gs;
         });
 
@@ -633,6 +636,9 @@ public class GraphIndexBuilder implements Closeable, Accountable {
         this.searchers = ExplicitThreadLocal.withInitial(() -> {
             var gs = new GraphSearcher(graph);
             gs.usePruning(false);
+            // Construction keeps adaptive stopping where the build provider asks for it, as ASH's does; the other
+            // build providers name no similarity function, so their searches keep the standard rule.
+            gs.useAdaptiveTermination(true);
             return gs;
         });
 

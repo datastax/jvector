@@ -278,6 +278,14 @@ public class TestOnDiskGraphIndexCompactor extends RandomizedTest {
         OnDiskGraphIndex compacted = OnDiskGraphIndex.load(rsOut);
         assertEquals(2 * n, compacted.size(0));
 
+        // The compacted header stores the largest length of the vectors it holds, for adaptive dot-product stopping.
+        float maxLength = 0;
+        for (var v : vecs0) maxLength = Math.max(maxLength, (float) Math.sqrt(io.github.jbellis.jvector.vector.VectorUtil.dotProduct(v, v)));
+        for (var v : vecs1) maxLength = Math.max(maxLength, (float) Math.sqrt(io.github.jbellis.jvector.vector.VectorUtil.dotProduct(v, v)));
+        var inline = (io.github.jbellis.jvector.graph.disk.feature.InlineVectors)
+                compacted.getFeatures().get(io.github.jbellis.jvector.graph.disk.feature.FeatureId.INLINE_VECTORS);
+        assertEquals(maxLength, inline.maxVectorNorm(), maxLength * 1e-6f);
+
         var view = compacted.getView();
         VectorFloat<?> buf = vectorTypeSupport.createFloatVector(dim);
 
@@ -1018,7 +1026,7 @@ public class TestOnDiskGraphIndexCompactor extends RandomizedTest {
         PQVectors pqv0 = (PQVectors) pq0.encodeAll(ravv0, simdExecutor);
         PQVectors pqv1 = (PQVectors) pq1.encodeAll(ravv1, simdExecutor);
 
-        for (int version : new int[]{2, 3, 4, OnDiskGraphIndex.CURRENT_VERSION}) {
+        for (int version : new int[]{2, 3, 4, 6, OnDiskGraphIndex.CURRENT_VERSION}) {
             try (ReaderSupplier rs0 = ReaderSupplierFactory.open(graph0); ReaderSupplier rs1 = ReaderSupplierFactory.open(graph1)) {
                 OnDiskGraphIndex g0 = OnDiskGraphIndex.load(rs0);
                 OnDiskGraphIndex g1 = OnDiskGraphIndex.load(rs1);
@@ -1302,7 +1310,8 @@ public class TestOnDiskGraphIndexCompactor extends RandomizedTest {
                 paths.add(buildPlainSourceGraph(vecs, vsf, hierarchy, "version_" + (hierarchy ? "h" : "flat") + "_src_" + sIdx));
                 all.addAll(vecs);
             }
-            int[] versions = hierarchy ? new int[]{4, 5, 6} : new int[]{2, 3, 4, 5, 6};
+            int[] versions = hierarchy ? new int[]{4, 5, 6, OnDiskGraphIndex.CURRENT_VERSION}
+                                         : new int[]{2, 3, 4, 5, 6, OnDiskGraphIndex.CURRENT_VERSION};
             for (int version : versions) {
                 compactAtVersion(paths, all, vsf, version, hierarchy, "version_" + (hierarchy ? "h" : "flat") + "_v" + version);
             }
@@ -1316,6 +1325,23 @@ public class TestOnDiskGraphIndexCompactor extends RandomizedTest {
             fused.add(buildFusedSourceGraph(seededVectors(rnd, perSource, dimension), vsf, true, "version_fused_src_" + sIdx));
         }
         assertRejectedVersion(fused, vsf, 5, "fused PQ needs version 6");
+        // fused PQ compacted at version 6 (the rollback format) reads back with its fused codes and searches
+        for (int version : new int[]{6, OnDiskGraphIndex.CURRENT_VERSION}) {
+            Path out = testDirectory.resolve("version_fused_v" + version);
+            openCompactor(fused, vsf).withVersion(version).compact(out);
+            try (ReaderSupplier rs = ReaderSupplierFactory.open(out)) {
+                var merged = OnDiskGraphIndex.load(rs);
+                assertEquals("version of fused output", version, merged.version);
+                assertEquals("nodes of fused output", nSrc * perSource, merged.size(0));
+                assertTrue("fused PQ kept at version " + version, merged.getFeatures().containsKey(FeatureId.FUSED_PQ));
+                try (GraphSearcher searcher = new GraphSearcher(merged); var view = merged.getView()) {
+                    var q = vectorTypeSupport.createFloatVector(dimension);
+                    view.getVectorInto(0, q, 0);
+                    var ssp = DefaultSearchScoreProvider.exact(q, vsf, view);
+                    assertEquals("search over fused output", 10, searcher.search(ssp, 10, Bits.ALL).getNodes().length);
+                }
+            }
+        }
         try {
             openCompactor(fused, vsf).withVersion(OnDiskGraphIndex.CURRENT_VERSION + 1);
             org.junit.Assert.fail("an unknown version must be rejected");

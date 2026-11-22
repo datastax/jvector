@@ -40,12 +40,25 @@ public class ImmutablePQVectors extends PQVectors {
      * @param vectorsPerChunk the number of vectors per chunk
      */
     public ImmutablePQVectors(ProductQuantization pq, ByteSequence<?>[] compressedDataChunks, int vectorCount, int vectorsPerChunk) {
+        this(pq, compressedDataChunks, vectorCount, vectorsPerChunk, true);
+    }
+
+    /**
+     * @param recordCodes whether {@code pq} must count these codes' lengths in its
+     *                    {@link ProductQuantization#maxEncodedNorm}: true unless it encoded them, or they were saved
+     *                    with it
+     */
+    ImmutablePQVectors(ProductQuantization pq, ByteSequence<?>[] compressedDataChunks, int vectorCount,
+                       int vectorsPerChunk, boolean recordCodes) {
         super(pq);
         // Own the reference array; callers may still update code values, whose sizes are fixed.
         this.compressedDataChunks = compressedDataChunks.clone();
         this.vectorCount = vectorCount;
         this.vectorsPerChunk = vectorsPerChunk;
         this.codebookPartialSums = new AtomicReferenceArray<>(VectorSimilarityFunction.values().length);
+        if (recordCodes) {
+            for (int i = 0; i < vectorCount; i++) pq.recordCode(getChunk(i), getOffsetInChunk(i));
+        }
         retainedBytes = storageBytes() + RamUsageEstimator.shallowSizeOf(codebookPartialSums)
                 + RamUsageEstimator.sizeOfArray(VectorSimilarityFunction.values().length, RamUsageEstimator.NUM_BYTES_OBJECT_REF);
     }

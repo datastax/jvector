@@ -97,6 +97,35 @@ public class TestMemoryAccountingCost {
                     Files.delete(path);
                 }
             }
+            // A fused ASH graph: reporting reads its features' live totals, including the ASH model.
+            var random = new Random(4127);
+            var input = new VectorFloat<?>[97];
+            for (int i = 0; i < input.length; i++) {
+                input[i] = types.createFloatVector(64);
+                for (int d = 0; d < 64; d++) input[i].set(d, random.nextFloat() - .5f);
+                io.github.jbellis.jvector.vector.VectorUtil.l2normalize(input[i]);
+            }
+            var values = io.github.jbellis.jvector.graph.MockVectorValues.fromValues(input);
+            var ash = AsymmetricHashing.initialize(values, io.github.jbellis.jvector.vector.VectorSimilarityFunction.DOT_PRODUCT,
+                    AsymmetricHashing.RANDOM, AsymmetricHashing.HEADER_BITS + 33 * 2, 1, 2);
+            var encoded = ash.encodeAll(values, java.util.concurrent.ForkJoinPool.commonPool());
+            var ashPath = Files.createTempFile("memory-cost-ash-", ".index");
+            try {
+                var graph = new TestUtil.RandomlyConnectedGraphIndex(List.of(
+                        new CommonHeader.LayerInfo(97, 8), new CommonHeader.LayerInfo(24, 4)), new Random(739));
+                var states = new EnumMap<FeatureId, IntFunction<Feature.State>>(FeatureId.class);
+                try (var view = graph.getView(); var writer = new OnDiskGraphIndexWriter.Builder(graph, ashPath)
+                        .with(new io.github.jbellis.jvector.graph.disk.feature.FusedASH(8, ash)).with(new InlineVectors(64)).build()) {
+                    states.put(FeatureId.FUSED_ASH, node -> new io.github.jbellis.jvector.graph.disk.feature.FusedASH.State(view, encoded, node));
+                    states.put(FeatureId.INLINE_VECTORS, node -> new InlineVectors.State(input[node]));
+                    writer.write(states);
+                }
+                try (var reader = new SimpleMappedReader.Supplier(ashPath); var loaded = OnDiskGraphIndex.load(reader, 0)) {
+                    measure("ash-graph", loaded, iterations, assertNoAllocation, bean);
+                }
+            } finally {
+                Files.delete(ashPath);
+            }
             for (int vectors : new int[]{1, 16385}) {
                 var mutable = new MutablePQVectors(pq);
                 mutable.setZero(vectors - 1);

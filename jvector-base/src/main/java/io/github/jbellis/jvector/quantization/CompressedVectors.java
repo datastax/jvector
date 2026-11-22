@@ -51,6 +51,15 @@ public interface CompressedVectors extends Accountable {
     /** @return the compressor used by this instance */
     VectorCompressor<?> getCompressor();
 
+    /**
+     * The similarity these vectors were compressed for and always score by, fixed when their index was created and
+     * saved with it, as ASH does; null when each scoring call chooses the similarity (the original contract, which PQ
+     * and BQ keep). When non-null, score functions for any other similarity are rejected.
+     */
+    default VectorSimilarityFunction similarityFunction() {
+        return null;
+    }
+
     /** precomputes partial scores for the given query with every centroid; suitable for most searches */
     ScoreFunction.ApproximateScoreFunction precomputedScoreFunctionFor(VectorFloat<?> q, VectorSimilarityFunction similarityFunction);
 

@@ -150,9 +150,8 @@ final public class MemorySegmentVectorFloat implements VectorFloat<MemorySegment
 
     @Override
     public void writeTo(IndexWriter writer) throws IOException {
-        for (int i = 0; i < length(); i++) {
-            writer.writeFloat(get(i));
-        }
+        // The storage is always a whole heap array, so it is written in one call rather than a float at a time.
+        writer.writeFloats(array(), 0, length());
     }
 
     @Override

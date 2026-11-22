@@ -1,0 +1,50 @@
+# MPNet 10M (768 dimensions) as a larger-than-memory index: built on disk from streamed vectors and
+# compact ASH codes, then served from disk with page-aligned records.
+#
+# Record size: node id (4) + NVQ (828) + 32 fused ASH codes of 97 bytes (3,104) + neighbor count and
+# list (132) = 4,068 bytes, so each record fits one 4 KB page (0.7% padding). 776 encoded bits is
+# 368 projected dimensions at 2 bits plus the 40-bit header; it is chosen to keep the record within a page.
+yamlSchemaVersion: 3
+onDiskIndexVersion: 7
+dataset: mpnet-10m
+useDatasetPrefetching: true  # Stream base vectors in order instead of loading them all into memory.
+
+construction:
+  type: onDisk
+  writerMode: parallel
+  pageAlignment: 4096      # Records never cross a page: one page read per node from disk.
+  # workers: 16            # Default: physical cores. Insertion also gains from hyperthreads.
+  outDegree: [32]
+  efConstruction: [100]
+  neighborOverflow: [1.2f]
+  addHierarchy: [Yes]
+  refineFinalGraph: [Yes]
+  fusedGraph: [Yes]
+  compression:
+    - type: ASH
+      scoring: symmetric   # Score stored codes against each other; no source vectors in memory.
+      parameters:
+        encodedBits: 776
+        optimizer: ITQ
+        landmarkCount: 1
+        bitsPerDimension: 2
+  reranking:
+    type: NVQ
+  useSavedIndexIfExists: No   # Set Yes to query a saved index again in a later run.
+
+search:
+  topKOverquery:
+    10: [1.0, 2.0, 4.0, 10.0]
+  useSearchPruning: [No]
+  workers: [8, 16, 32, 64]   # Queries in flight; disk-bound search needs more than one per core.
+                             # Only the first value gives cold queries; run one value per JVM for each.
+  queryExecution: queued
+  requestsPerWorker: 1       # No queue behind busy workers, so latency is the search itself.
+  compression:
+    - type: ASH
+      parameters:
+        encodedBits: 776
+        optimizer: ITQ
+        landmarkCount: 1
+        bitsPerDimension: 2
+        maxBatchSize: 1      # Batching query projection saves microseconds; disk reads take milliseconds.

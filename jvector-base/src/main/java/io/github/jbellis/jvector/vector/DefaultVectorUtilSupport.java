@@ -547,4 +547,6 @@ final class DefaultVectorUtilSupport implements VectorUtilSupport {
     return squaredSum;
   }
 
+
+
 }

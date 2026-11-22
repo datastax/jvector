@@ -1,0 +1,108 @@
+site_name: JVector
+site_description: Java library for approximate nearest neighbor vector search with graph indexes.
+site_url: https://datastax.github.io/jvector/
+repo_url: https://github.com/datastax/jvector
+repo_name: datastax/jvector
+edit_uri: edit/main/docs/
+
+theme:
+  name: material
+  features:
+    - navigation.sections
+    - navigation.top
+    - navigation.footer
+    - search.suggest
+    - search.highlight
+    - content.code.copy
+    - content.action.edit
+  palette:
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      toggle:
+        icon: material/brightness-7
+        name: Switch to dark mode
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      toggle:
+        icon: material/brightness-4
+        name: Switch to light mode
+
+# Version picker. The publish workflow deploys main as "dev" and each release
+# as its major.minor version, with the newest release aliased "latest".
+extra:
+  version:
+    provider: mike
+    default: [latest, dev]
+
+markdown_extensions:
+  - admonition
+  - attr_list
+  - tables
+  - toc:
+      permalink: true
+  - pymdownx.highlight
+  - pymdownx.superfences
+
+# Rewrites links to repository files outside docs/ into GitHub links.
+hooks:
+  - .github/docs-site/hooks.py
+
+not_in_nav: |
+  /release notes/**/*.*.md
+  /release notes/**/pr*.md
+
+validation:
+  nav:
+    omitted_files: info
+  links:
+    not_found: warn
+    anchors: warn
+    unrecognized_links: info
+
+nav:
+  - Home: index.md
+  - Getting started:
+      - Quick start: getting-started.md
+      - Building and installing: building-and-installing.md
+      - "Tutorial 1: Introduction": tutorials/1-intro-tutorial.md
+      - "Tutorial 2: On-disk indexes": tutorials/2-disk-tutorial.md
+      - "Tutorial 3: Larger than memory": tutorials/3-larger-than-memory-tutorial.md
+  - Guides:
+      - Choosing an index: choosing-an-index.md
+      - Graph construction: graph-construction.md
+      - Fused and separated layouts: fused-and-separated.md
+      - Tuning construction and search: tuning.md
+      - Memory and disk sizing: sizing.md
+      - Larger-than-memory indexes: larger-than-memory-indexes.md
+      - Compaction: compaction.md
+      - Batched input vector access: batched-vector-access.md
+      - Deferred batch serialization: deferred-batch-writer.md
+  - Quantizers:
+      - Product quantization (PQ): pq.md
+      - ASH (experimental):
+          - Configuration and defaults: ash-configuration.md
+          - Query-projection precision: ash-projection-precision.md
+          - Integrating ASH queries: ash-query-integration.md
+          - Performance: ash-performance.md
+      - NVQ (reranking): nvq.md
+      - Binary quantization (BQ): bq.md
+  - Benchmarking:
+      - Running benchmarks: benchmarking.md
+      - BenchYAML guide: benchyaml-guide.md
+      - Reproducing ASH versus PQ: ash-pq-benchmark.md
+      - Vector prefetching benchmark: vector-prefetch-benchmark.md
+  - Design notes:
+      - ASH query batching: ash-query-batching-design.md
+      - Native ASH projection: native-ash-preparation.md
+      - ASH PCA correctness: ash-pca-native-svd.md
+      - JVector step by step (legacy): legacy/jvector-step-by-step.md
+  - Reference:
+      - API reference (Javadoc): https://javadoc.io/doc/io.github.jbellis/jvector
+      - Upgrading: https://github.com/datastax/jvector/blob/main/UPGRADING.md
+      - Changelog: https://github.com/datastax/jvector/blob/main/CHANGELOG.md
+      - Release notes:
+          - About release notes: release notes/README.md
+          - 4.0.2: release notes/4.0.2/4.0.2.md
+          - 4.0.1: release notes/4.0.1/4.0.1.md
+          - 4.0.0-RC.9: release notes/4.0.0-RC.9/4.0.0-RC.9.md
+          - 4.0.0-RC.8: release notes/4.0.0-RC.8/4.0.0-RC.8.md

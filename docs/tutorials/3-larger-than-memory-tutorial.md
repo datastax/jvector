@@ -103,7 +103,7 @@ for (int ordinal = 0; ordinal < ravv.size(); ordinal++) {
 ```
 
 > [!TIP]
-> When you call `builder.build(ravv)`, vectors from the RAVV are added to the graph in parallel. There's no parallelization if you add vectors one by one in the same thread. But you can parallelize manually by inserting from multiple threads at once, see the full example in LargerThanMemory.java.
+> When you call `builder.build(ravv)`, vectors from the RAVV are added to the graph in parallel. There's no parallelization if you add vectors one by one in the same thread. But you can parallelize manually by inserting from multiple threads at once, see the full example in [`LargerThanMemory.java`](../../jvector-examples/src/main/java/io/github/jbellis/jvector/example/tutorial/LargerThanMemory.java).
 
 Once we've added all the vectors we can write the graph structure to disk:
 
@@ -185,7 +185,7 @@ SearchResult sr = searcher.search(ssp, topK, rerankK, 0.0f, 0.0f, Bits.ALL);
 
 ## Full Example
 
-The complete code from this tutorial is available in `LargerThanMemory.java`. Run it from the root of this repo using:
+The complete code from this tutorial is available in [`LargerThanMemory.java`](../../jvector-examples/src/main/java/io/github/jbellis/jvector/example/tutorial/LargerThanMemory.java). Run it from the root of this repo using:
 
 ```sh
 mvn compile exec:exec@tutorial -Dtutorial=ltm -pl jvector-examples -am

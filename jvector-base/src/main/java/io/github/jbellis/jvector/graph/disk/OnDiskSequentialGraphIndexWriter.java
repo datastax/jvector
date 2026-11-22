@@ -21,6 +21,7 @@ import io.github.jbellis.jvector.graph.ImmutableGraphIndex;
 import io.github.jbellis.jvector.graph.disk.feature.*;
 
 import java.io.IOException;
+import java.io.UncheckedIOException;
 import java.util.EnumMap;
 import java.util.Map;
 import java.util.function.IntFunction;
@@ -81,6 +82,11 @@ public class OnDiskSequentialGraphIndexWriter extends AbstractGraphIndexWriter<I
     public synchronized void write(Map<FeatureId, IntFunction<Feature.State>> featureStateSuppliers) throws IOException
     {
         long startOffset = out.position();
+        var alignment = (PageAlignment) featureMap.get(FeatureId.PAGE_ALIGNMENT);
+        if (alignment != null && (startOffset + headerSize) % alignment.pageBytes() != 0) {
+            throw new IllegalStateException("Page alignment was computed for another start position than "
+                    + startOffset + "; build the writer where the index will be written");
+        }
         graphIndexFormat.writeOnDiskSequential(createContext(startOffset), out, featureStateSuppliers);
     }
 
@@ -91,6 +97,16 @@ public class OnDiskSequentialGraphIndexWriter extends AbstractGraphIndexWriter<I
     public static class Builder extends AbstractGraphIndexWriter.Builder<OnDiskSequentialGraphIndexWriter, IndexWriter> {
         public Builder(ImmutableGraphIndex graphIndex, IndexWriter out) {
             super(graphIndex, out);
+        }
+
+        /** The index starts where the output is when the writer is built. */
+        @Override
+        protected long startOffset() {
+            try {
+                return out.position();
+            } catch (IOException e) {
+                throw new UncheckedIOException(e);
+            }
         }
 
         @Override

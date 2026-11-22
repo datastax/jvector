@@ -43,13 +43,55 @@ if [[ "$jextract_version" != "$want_jextract_version" ]] ;then
     echo 1>&2 "WARNING: Generated bindings may cause compile errors."
 fi
 
+# ASH kernels (ash_*) are bound by their own classes (NativeASH*), which look up each
+# symbol themselves and choose a critical or ordinary downcall per call, so leave them
+# out of NativeSimdOps: list every symbol in the header, then drop the ash_ functions.
+INCLUDES_FILE="$(mktemp)"
+trap 'rm -f "${INCLUDES_FILE}" "${INCLUDES_FILE}.simd"' EXIT
+"$JEXTRACT_BIN" \
+  -I "${SCRIPT_DIR}" \
+  --dump-includes "${INCLUDES_FILE}" \
+  "${SCRIPT_DIR}/jvector_simd.h"
+grep -v -e '--include-function ash_' "${INCLUDES_FILE}" > "${INCLUDES_FILE}.simd"
+
 "$JEXTRACT_BIN" \
   --output "${JAVA_OUT_DIR}" \
   -t io.github.jbellis.jvector.vector.cnative \
   -I "${SCRIPT_DIR}" \
   --header-class-name NativeSimdOps \
+  "@${INCLUDES_FILE}.simd" \
   "${SCRIPT_DIR}/jvector_simd.h"
 
 # Set critical linker option with heap-based segments for all generated methods
 sed -i 's/DESC)/DESC, Linker.Option.critical(true))/g' \
   "${JAVA_OUT_DIR}/io/github/jbellis/jvector/vector/cnative/NativeSimdOps.java"
+
+# Optional oneDNN ASH query-projection add-on (built with -Dnative.onednn=true).
+# These calls do long-running oneDNN work, so they are left as ordinary
+# (non-critical) downcalls; do not apply the critical-option edit above.
+ONEDNN_DIR="${MODULE_ROOT}/src/main/onednn/src"
+"$JEXTRACT_BIN" \
+  --output "${JAVA_OUT_DIR}" \
+  -t io.github.jbellis.jvector.vector.cnative \
+  -I "${ONEDNN_DIR}" \
+  --header-class-name NativeAshOneDnn \
+  --include-function jvector_ash_fp16_abi \
+  --include-function jvector_ash_fp16_create \
+  --include-function jvector_ash_fp16_destroy \
+  --include-function jvector_ash_fp16_bytes \
+  --include-function jvector_ash_fp16_project \
+  --include-function jvector_ash_fp16_project_batch \
+  --include-function jvector_ash_fp32_project_batch \
+  --include-function jvector_ash_int8_create \
+  --include-function jvector_ash_int8_destroy \
+  --include-function jvector_ash_int8_bytes \
+  --include-function jvector_ash_int8_project_batch \
+  --include-struct jvector_ash_fp16_result \
+  --include-typedef jvector_ash_fp16_result \
+  --include-constant JV_ASH_FP16_OK \
+  --include-constant JV_ASH_FP16_UNSUPPORTED \
+  --include-constant JV_ASH_FP16_INVALID_ARGUMENT \
+  --include-constant JV_ASH_FP16_RANGE \
+  --include-constant JV_ASH_FP16_NO_MEMORY \
+  --include-constant JV_ASH_FP16_ERROR \
+  "${ONEDNN_DIR}/jvector_ash_fp16.h"
