@@ -134,6 +134,48 @@ public class TestThreadLocalCopies {
         assertSame(unshared, supplier.get());
     }
 
+    @Test
+    public void closingSupplierClosesCopiesInsideRemappedRavv() throws Exception {
+        AtomicInteger closed = new AtomicInteger();
+        var remapped = new RemappedRandomAccessVectorValues(new CloseTrackingRavv(closed), new int[] {0});
+        var supplier = remapped.threadLocalSupplier();
+
+        ExecutorService pool = Executors.newFixedThreadPool(2);
+        try {
+            for (int i = 0; i < 2; i++) {
+                pool.submit(() -> supplier.get()).get();
+            }
+        }
+        finally {
+            pool.shutdown();
+            pool.awaitTermination(10, TimeUnit.SECONDS);
+        }
+
+        ((AutoCloseable) supplier).close();
+        assertEquals(2, closed.get());
+    }
+
+    @Test
+    public void remappedCopyOfUnsharedRavvDoesNotCloseTheSource() throws Exception {
+        AtomicInteger closed = new AtomicInteger();
+        RandomAccessVectorValues unshared = new CloseTrackingRavv(closed, false) {
+            @Override
+            public boolean isValueShared() {
+                return false;
+            }
+
+            @Override
+            public RandomAccessVectorValues copy() {
+                return this;
+            }
+        };
+        var copy = new RemappedRandomAccessVectorValues(unshared, new int[] {0}).copy();
+        if (copy instanceof AutoCloseable) {
+            ((AutoCloseable) copy).close();
+        }
+        assertEquals(0, closed.get());
+    }
+
     /** Shared RAVV whose copies fail node 0 and record any read that overlaps close(). */
     static class SlowFailingRavv implements RandomAccessVectorValues, AutoCloseable {
         static final int SIZE = 64;
