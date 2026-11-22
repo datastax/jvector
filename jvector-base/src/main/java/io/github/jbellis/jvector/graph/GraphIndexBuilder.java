@@ -815,6 +815,11 @@ public class GraphIndexBuilder implements Closeable, Accountable {
     /** Reconnection is best-effort: linking one orphan evicts another node's worst edge, which can orphan that node. */
     private static final int MAX_RECONNECT_PASSES = 5;
 
+    /** the reconnection could not find a node to connect the orphan to */
+    private static final int NO_EDGE_ADDED = -1;
+    /** the reconnection added an edge without evicting another one */
+    private static final int NO_EVICTION = -2;
+
     /**
      * Repairs nodes that are unreachable from the entry node in layer 0 once degrees have been enforced.
      * <p>
@@ -822,6 +827,11 @@ public class GraphIndexBuilder implements Closeable, Accountable {
      * outgoing edges but no path from the entry node, so no search can ever return it. For each such node we add an
      * in-edge from the closest reachable neighbor (or, failing that, from the closest node found by searching),
      * evicting that neighbor's worst edge so the degree cap still holds.
+     * <p>
+     * Adding such an edge evicts the worst edge of the node we connect from, which may leave the evicted node --
+     * and everything that was only reachable through it -- unreachable.  We therefore recompute the reachable nodes
+     * whenever an eviction happened, so that we never connect an orphan from a node that has itself become
+     * unreachable, and so that we notice the orphans that an eviction created.
      */
     private void reconnectOrphanedNodes() {
         int upper = graph.getIdUpperBound();
@@ -830,61 +840,63 @@ public class GraphIndexBuilder implements Closeable, Accountable {
         var connectionTargets = new AtomicFixedBitSet(upper);
         connectionTargets.set(graph.entryNode().node);
 
-        for (int pass = 0; pass < MAX_RECONNECT_PASSES; pass++) {
-            var connected = findConnectedNodes(upper);
-            var orphans = new IntArrayList();
-            for (int node = 0; node < upper; node++) {
-                if (graph.contains(0, node) && !connected.get(node)) {
-                    orphans.addInt(node);
+        var connected = new FixedBitSet(upper);
+        var unreachable = new AtomicInteger();
+        // The reconnection runs in the SIMD executor because it scores vectors with the search provider.
+        simdExecutor.submit(() -> {
+            for (int pass = 0; pass < MAX_RECONNECT_PASSES; pass++) {
+                findConnectedNodes(connected);
+                var orphans = new IntArrayList();
+                for (int node = 0; node < upper; node++) {
+                    if (graph.contains(0, node) && !connected.get(node)) {
+                        orphans.addInt(node);
+                    }
                 }
-            }
-            if (orphans.isEmpty()) {
-                return;
-            }
+                if (orphans.isEmpty()) {
+                    return;
+                }
 
-            var reconnected = new AtomicInteger();
-            // One node at a time: once an orphan is linked in, everything it reaches is reachable too and needs no
-            // edge of its own. Linking every orphan separately would spend one reconnection edge per node, and with
-            // a large unreachable partition and few reachable targets five passes could not get through them all.
-            simdExecutor.submit(() -> {
+                var reconnected = new AtomicInteger();
                 for (int i = 0; i < orphans.size(); i++) {
                     int orphan = orphans.getInt(i);
                     if (connected.get(orphan)) {
                         continue; // reached through an orphan that was linked in earlier in this pass
                     }
-                    if (reconnectOrphan(orphan, connected, connectionTargets)) {
-                        reconnected.incrementAndGet();
-                        markReachable(connected, orphan);
+                    int result = reconnectOrphan(orphan, connected, connectionTargets);
+                    if (result == NO_EDGE_ADDED) {
+                        continue;
+                    }
+                    reconnected.incrementAndGet();
+                    if (result != NO_EVICTION) {
+                        // The eviction may have disconnected the evicted node and everything that was only reachable
+                        // through it, so the reachable set has to be recomputed before we connect the next orphan.
+                        findConnectedNodes(connected);
                     }
                 }
-            }).join();
-            logger.debug("Reconnect pass {}: {} unreachable nodes, {} reconnected", pass, orphans.size(), reconnected.get());
-            if (reconnected.get() == 0) {
-                return;
-            }
-        }
-    }
-
-    /** Marks {@code start} and everything reachable from it through layer-0 edges as connected. */
-    private void markReachable(FixedBitSet connected, int start) {
-        var stack = new IntArrayList();
-        if (!connected.getAndSet(start)) {
-            stack.addInt(start);
-        }
-        while (!stack.isEmpty()) {
-            int node = stack.removeAt(stack.size() - 1);
-            for (var it = graph.getNeighborsIterator(0, node); it.hasNext(); ) {
-                int neighbor = it.nextInt();
-                if (!connected.getAndSet(neighbor)) {
-                    stack.addInt(neighbor);
+                logger.debug("Reconnect pass {}: {} unreachable nodes, {} reconnected", pass, orphans.size(), reconnected.get());
+                if (reconnected.get() == 0) {
+                    break;
                 }
             }
+
+            findConnectedNodes(connected);
+            for (int node = 0; node < upper; node++) {
+                if (graph.contains(0, node) && !connected.get(node)) {
+                    unreachable.incrementAndGet();
+                }
+            }
+        }).join();
+
+        if (unreachable.get() > 0) {
+            logger.warn("{} of {} nodes are still unreachable from the entry node after {} reconnect passes; "
+                            + "searches will never return them",
+                        unreachable.get(), graph.size(0), MAX_RECONNECT_PASSES);
         }
     }
 
-    /** @return the nodes reachable from the entry node by following layer-0 edges */
-    private FixedBitSet findConnectedNodes(int idUpperBound) {
-        var connected = new FixedBitSet(idUpperBound);
+    /** Sets {@code connected} to the nodes of layer 0 that are reachable from the entry node. */
+    private void findConnectedNodes(FixedBitSet connected) {
+        connected.clear();
         var stack = new IntArrayList();
         int entry = graph.entryNode().node;
         connected.set(entry);
@@ -898,16 +910,16 @@ public class GraphIndexBuilder implements Closeable, Accountable {
                 }
             }
         }
-        return connected;
     }
 
     /**
      * Adds an in-edge to the unreachable {@code node} from a reachable node that has not been used as a
      * connection target yet.
      *
-     * @return true if an edge was added
+     * @return the node that was evicted to make room for the new edge, {@link #NO_EVICTION} if no edge was
+     * evicted, or {@link #NO_EDGE_ADDED} if no edge could be added at all
      */
-    private boolean reconnectOrphan(int node, Bits connected, AtomicFixedBitSet connectionTargets) {
+    private int reconnectOrphan(int node, Bits connected, AtomicFixedBitSet connectionTargets) {
         var sf = scoreProvider.searchProviderFor(node).scoreFunction();
 
         // First choice: the closest of our own neighbors that is reachable. It already considered us close enough
@@ -926,8 +938,8 @@ public class GraphIndexBuilder implements Closeable, Accountable {
             }
         }
         if (bestNeighbor >= 0 && !connectionTargets.getAndSet(bestNeighbor)) {
-            graph.insertEdgeNotDiverse(0, bestNeighbor, node, bestScore);
-            return true;
+            int evicted = graph.insertEdgeNotDiverse(0, bestNeighbor, node, bestScore);
+            return evicted >= 0 ? evicted : NO_EVICTION;
         }
 
         // Otherwise search for nearby reachable nodes, resuming a bounded number of times to find an unused target.
@@ -944,12 +956,12 @@ public class GraphIndexBuilder implements Closeable, Accountable {
             for (int resumes = 0; ; resumes++) {
                 for (var candidate : result.getNodes()) {
                     if (!connectionTargets.getAndSet(candidate.node)) {
-                        graph.insertEdgeNotDiverse(0, candidate.node, node, candidate.score);
-                        return true;
+                        int evicted = graph.insertEdgeNotDiverse(0, candidate.node, node, candidate.score);
+                        return evicted >= 0 ? evicted : NO_EVICTION;
                     }
                 }
                 if (result.getNodes().length == 0 || resumes >= 2 * graph.maxDegree()) {
-                    return false;
+                    return NO_EDGE_ADDED;
                 }
                 result = gs.resume(beamWidth, beamWidth, Float.NEGATIVE_INFINITY, 0.0f);
             }

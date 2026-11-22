@@ -123,8 +123,9 @@ interface MutableGraphIndex extends ImmutableGraphIndex {
      * Only valid once degrees have been enforced, i.e. from {@code GraphIndexBuilder.cleanup()}.
      *
      * @param score the similarity of {@code toNode} to {@code fromNode}
+     * @return the node evicted from {@code fromNode} to make room for {@code toNode}, or -1 if none was evicted
      */
-    void insertEdgeNotDiverse(int level, int fromNode, int toNode, float score);
+    int insertEdgeNotDiverse(int level, int fromNode, int toNode, float score);
 
     /**
      * Returns an iterator over the neighbors for the given node at the specified level, which can be empty if the node does not belong to that layer.
