@@ -19,9 +19,9 @@ package io.github.jbellis.jvector.graph.disk;
 import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
-import java.nio.MappedByteBuffer;
 import java.nio.file.Path;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -38,7 +38,6 @@ import io.github.jbellis.jvector.vector.types.ByteSequence;
 import io.github.jbellis.jvector.vector.types.VectorFloat;
 import io.github.jbellis.jvector.vector.types.VectorTypeSupport;
 
-import static io.github.jbellis.jvector.graph.disk.OnDiskGraphIndexCompactor.SelectedVecCache;
 import static io.github.jbellis.jvector.graph.disk.OnDiskGraphIndexCompactor.WriteResult;
 
 final class CompactWriter implements AutoCloseable {
@@ -53,9 +52,9 @@ final class CompactWriter implements AutoCloseable {
     private final RandomAccessWriter writer;
     private final int recordSize;
     private final long startOffset;
+    private final InlineVectors inlineVectorFeature;
     private final int headerSize;
     private final Header header;
-    private final int version;
     private final FusedFeature fusedFeature;
     private final int baseDegree;
     private final int maxOrdinal;
@@ -63,6 +62,7 @@ final class CompactWriter implements AutoCloseable {
     private final ThreadLocal<ByteBuffer> bufferPerThread;
     private final ThreadLocal<ByteSequence<?>> zeroPQ;
     private final boolean fusedPQEnabled;
+    private final boolean usesFooter;
     private final Path outputPath;
     private final List<CommonHeader.LayerInfo> configuredLayerInfo;
     private final List<Integer> configuredLayerDegrees;
@@ -72,14 +72,19 @@ final class CompactWriter implements AutoCloseable {
     private ByteSequence<?> entryNodePqCode;
 
     // Optional pre-computed PQ codes by new ordinal. When set, writeInlineNodeRecord copies
-    // codes from this buffer instead of calling pq.encodeTo per neighbor. Each worker thread
-    // gets its own duplicated view via pqCacheViewPerThread so positions don't race.
-    private MappedByteBuffer pqCodeCache;
+    // codes from the cache instead of calling pq.encodeTo per neighbor. The cache handles
+    // per-thread view duplication internally, so positions don't race.
+    private PreEncodedCodeCache pqCodeCache;
     private int pqCodeSize;
-    private ThreadLocal<ByteBuffer> pqCacheViewPerThread;
     private ThreadLocal<byte[]> pqCodeBufPerThread;
 
+    /**
+     * @param version the on-disk format version to write, one {@link GraphIndexFormatFactory} knows.
+     *                Fused PQ needs a version that supports it (6), an output with upper layers one
+     *                that supports multi-layer graphs (4 and above).
+     */
     CompactWriter(Path outputPath,
+                  int version,
                   int maxOrdinal,
                   int numBaseLayerNodes,
                   long startOffset,
@@ -91,7 +96,19 @@ final class CompactWriter implements AutoCloseable {
             throws IOException {
         this.fusedFeature = fusedFeature;
         this.fusedPQEnabled = fusedFeature != null;
-        this.version = OnDiskGraphIndex.CURRENT_VERSION;
+        // The format is checked once, here, against what this output needs. Everywhere below,
+        // `fusedPQEnabled` alone then stands for "the format supports fused PQ", and `usesFooter`
+        // for "the format is footer-based" (5 and above; the header is written at the start either way).
+        GraphIndexFormat format = GraphIndexFormatFactory.forVersion(version);
+        if (fusedPQEnabled && !format.supportsFeature(FeatureId.FUSED_PQ)) {
+            throw new IllegalArgumentException(
+                    "Fused PQ requires a format version that supports it; version " + version + " does not");
+        }
+        if (layerInfo.size() > 1 && !format.supportsMultiLayer()) {
+            throw new IllegalArgumentException(
+                    "A graph with upper layers requires a format version that supports them; version " + version + " does not");
+        }
+        this.usesFooter = format.usesFooter();
         this.outputPath = outputPath;
         this.writer = new BufferedRandomAccessWriter(outputPath);
         this.startOffset = startOffset;
@@ -104,7 +121,7 @@ final class CompactWriter implements AutoCloseable {
         this.entryNodePqCode = null;
 
         Map<FeatureId, Feature> featureMap = new LinkedHashMap<>();
-        InlineVectors inlineVectorFeature = new InlineVectors(dimension);
+        this.inlineVectorFeature = new InlineVectors(dimension);
         featureMap.put(FeatureId.INLINE_VECTORS, inlineVectorFeature);
         if (fusedFeature != null) {
             featureMap.put(fusedFeature.id(), fusedFeature);
@@ -117,7 +134,7 @@ final class CompactWriter implements AutoCloseable {
         this.recordSize = rsize;
 
         this.configuredLayerInfo.set(0, new CommonHeader.LayerInfo(numBaseLayerNodes, baseDegree));
-        var commonHeader = new CommonHeader(this.version, dimension, entryNode, this.configuredLayerInfo, this.maxOrdinal + 1);
+        var commonHeader = new CommonHeader(version, dimension, entryNode, this.configuredLayerInfo, this.maxOrdinal + 1);
         this.header = new Header(commonHeader, featureMap);
         this.headerSize = header.size();
 
@@ -139,27 +156,61 @@ final class CompactWriter implements AutoCloseable {
      * call. Once enabled, neighbor PQ codes are copied from {@code cache} instead of being
      * re-encoded per write.
      *
-     * @param cache       a buffer holding pqCodeSize bytes per new ordinal (length must be at
-     *                    least {@code (maxOrdinal + 1) * pqCodeSize})
+     * @param cache       a cache holding one code per new ordinal, for ordinals
+     *                    {@code 0..maxOrdinal}
      * @param pqCodeSize  bytes per code (== FusedFeature.codeSize() of the source's feature)
      */
-    public void enablePqCodeCache(MappedByteBuffer cache, int pqCodeSize) {
+    public void enablePqCodeCache(PreEncodedCodeCache cache, int pqCodeSize) {
         this.pqCodeCache = cache;
         this.pqCodeSize = pqCodeSize;
-        // Each worker thread gets its own ByteBuffer view so absolute-position seeks don't race.
-        this.pqCacheViewPerThread = ThreadLocal.withInitial(() -> cache.duplicate());
         this.pqCodeBufPerThread = ThreadLocal.withInitial(() -> new byte[pqCodeSize]);
     }
+
+    /** The pre-encoded code cache, or null when not enabled. Codes are keyed by new ordinal. */
+    PreEncodedCodeCache pqCodeCache() {
+        return pqCodeCache;
+    }
+
+    /**
+     * Whether {@link #writeInlineNodeRecord} reads {@code selectedCache.vecs} — true only for
+     * fused output without the pre-encoded code cache, where neighbor codes are produced by
+     * encoding the neighbor vectors. Callers that can supply neighbor ids without vectors
+     * (the retained-only fast path) use this to skip the vector reads.
+     */
+    boolean needsNeighborVectors() {
+        return fusedPQEnabled && pqCodeCache == null;
+    }
+
+    // The header as writeHeader() serialized it, kept only with assertions enabled, for the check in
+    // writeFooter(): every header field (version, dimension, entry node, layer sizes, features) is fixed
+    // in the constructor and nothing fills one in while the records are written. A footer-based format
+    // (version 5 and above) writes the header again at the end, so a late change would at least reach
+    // the file there; a header-based format (4 and below) has only the copy written at the start, so
+    // for it a late change would be lost.
+    private static final boolean ASSERTIONS_ENABLED = CompactWriter.class.desiredAssertionStatus();
+    private byte[] headerAtStart;
 
     public void writeHeader() throws IOException {
         writer.seek(startOffset);
         header.write(writer);
         assert writer.position() == startOffset + headerSize : String.format("%d != %d", writer.position(), startOffset + headerSize);
         writer.flush();
+        if (ASSERTIONS_ENABLED) {
+            headerAtStart = serializedHeader();
+        }
+    }
+
+    private byte[] serializedHeader() throws IOException {
+        var out = ByteBufferIndexWriter.create(headerSize, false);
+        header.write(out);
+        return Arrays.copyOf(out.getBuffer().array(), out.getBuffer().position());
     }
 
     void writeFooter() throws IOException {
-        if (fusedPQEnabled && version == 6) {
+        // No "&& version == 6" here: the constructor already verified that the format this writer
+        // targets supports fused PQ whenever fusedPQEnabled is true, so that's the only condition
+        // this needs to check. See the constructor for why that's a safe simplification.
+        if (fusedPQEnabled) {
             if (!level1FeatureRecords.isEmpty()) {
                 // Hierarchy is enabled: write PQ source feature for every level-1 node.
                 // Mirrors AbstractGraphIndexWriter.writeSparseLevels (getMaxLevel >= 1 branch).
@@ -175,6 +226,14 @@ final class CompactWriter implements AutoCloseable {
                 writer.writeInt(entryNode);
                 vectorTypeSupport.writeByteSequence(writer, entryNodePqCode);
             }
+        }
+        if (!usesFooter) {
+            // A header-based format: the header written at the start is the metadata, and it is not
+            // written again, so it must not have changed since (see headerAtStart; null when writeHeader
+            // was not called, which the assertion then does not judge).
+            assert headerAtStart == null || Arrays.equals(headerAtStart, serializedHeader())
+                    : "the header changed after writeHeader(); a header-based format cannot record that";
+            return;
         }
         long headerOffset = writer.position();
         header.write(writer);
@@ -197,6 +256,25 @@ final class CompactWriter implements AutoCloseable {
         this.entryNodePqCode = code;
     }
 
+    private long scratchWatermark = -1;
+
+    /**
+     * Reserves {@code bytes} of transient space past the projected end of the output and returns
+     * its offset. Strategies claim their pre-encode caches through this rather than starting at
+     * {@link #projectedOutputSize()} directly, so that two of them - an inline fused strategy and a
+     * sidecar scratch - can coexist instead of mapping on top of each other. The file is still
+     * truncated back to {@link #projectedOutputSize()} when compaction completes, since every
+     * reserved region lies past it.
+     */
+    public synchronized long reserveScratch(long bytes) {
+        if (scratchWatermark < 0) {
+            scratchWatermark = projectedOutputSize();
+        }
+        long at = scratchWatermark;
+        scratchWatermark += Math.max(0L, bytes);
+        return at;
+    }
+
     /**
      * Returns the projected end-of-output offset, computed from layer counts and degrees.
      * Used to place a transient PQ-code mmap section past the end of the output during
@@ -213,10 +291,12 @@ final class CompactWriter implements AutoCloseable {
             int count = configuredLayerInfo.get(level).size;
             total += (long) count * (Integer.BYTES * 2L + (long) degree * Integer.BYTES);
         }
-        // PQ feature records written at the start of writeFooter() when v6 + fused PQ:
+        // PQ feature records written at the start of writeFooter() when fused PQ is enabled:
         //   - hierarchy enabled: one [ord, code] record per level-1 node;
         //   - no hierarchy:      one [entryOrd, code] record for the entry node only.
-        if (fusedPQEnabled && version == 6) {
+        // No "&& version == 6" here either -- see the constructor for why fusedPQEnabled alone
+        // already implies the target format supports this layout.
+        if (fusedPQEnabled) {
             int pqSize = fusedFeature.codeSize();
             if (configuredLayerInfo.size() > 1) {
                 int level1Count = configuredLayerInfo.get(1).size;
@@ -226,7 +306,9 @@ final class CompactWriter implements AutoCloseable {
             }
         }
         // Footer trailer: header copy + headerOffset (long) + magic (int).
-        total += headerSize + FOOTER_SIZE;
+        if (usesFooter) {
+            total += headerSize + FOOTER_SIZE;
+        }
         return total;
     }
 
@@ -241,7 +323,9 @@ final class CompactWriter implements AutoCloseable {
         for (; n < degree; n++) {
             writer.writeInt(-1);
         }
-        if (fusedPQEnabled && version == 6 && level == 1 && level1PqCode != null) {
+        // No "&& version == 6" here either -- see the constructor for why fusedPQEnabled alone
+        // already implies the target format supports this layout.
+        if (fusedPQEnabled && level == 1 && level1PqCode != null) {
             level1FeatureRecords.add(new UpperLayerFeatureRecord(ordinal, level1PqCode.copy()));
         }
     }
@@ -264,6 +348,8 @@ final class CompactWriter implements AutoCloseable {
         for(int i = 0; i < vec.length(); ++i) {
             bwriter.writeFloat(vec.get(i));
         }
+        // The footer's copy of the header, which loading reads, then stores the largest length written.
+        inlineVectorFeature.recordWritten(vec);
 
         // write fused PQ
         // since we build a graph in a streaming way,
@@ -272,13 +358,10 @@ final class CompactWriter implements AutoCloseable {
             int k = 0;
             if (pqCodeCache != null) {
                 // Look up neighbors' codes from the pre-encoded mmap'd cache instead of re-encoding.
-                ByteBuffer cacheView = pqCacheViewPerThread.get();
                 byte[] codeBuf = pqCodeBufPerThread.get();
                 for (; k < selectedCache.size; k++) {
                     int newOrd = selectedCache.nodes[k]; // already remapped before this call
-                    int offset = newOrd * pqCodeSize;
-                    cacheView.position(offset);
-                    cacheView.get(codeBuf, 0, pqCodeSize);
+                    pqCodeCache.get(newOrd, codeBuf);
                     bwriter.write(codeBuf, 0, pqCodeSize);
                 }
             } else {

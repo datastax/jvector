@@ -49,7 +49,7 @@ class DispatcherCpuFlagsTest {
 
     // ISA tier names in ascending capability order — index doubles as ordinal.
     private static final List<String> ISA_TIERS =
-            List.of("sse42", "avx2", "avx3", "avx3_dl", "avx3_spr");
+            List.of("sse42", "avx2", "avx3", "avx3_vnni", "avx3_dl", "avx3_spr");
 
     // Loaded once for the whole test class
     private static Set<String> cpuFlags;
@@ -132,6 +132,25 @@ class DispatcherCpuFlagsTest {
     }
 
     /**
+     * AVX3_VNNI (Cascade Lake, Cooper Lake) additionally requires avx512_vnni on top of AVX3.
+     */
+    @Test
+    void testAvx3VnniDetection() {
+        boolean cpuHasAvx3Vnni = hasAvx3Vnni(cpuFlags);
+        String activeIsa = nativeSupport.getActiveIsa();
+        if (cpuHasAvx3Vnni && !isCappedBelow("avx3_vnni")) {
+            assertTrue(
+                    tiersAtOrAbove("avx3_vnni").contains(activeIsa),
+                    "Expected AVX3_VNNI or higher tier when avx512_vnni is present, got: " + activeIsa);
+        } else if (!cpuHasAvx3Vnni) {
+            assertTrue(
+                    tiersBelow("avx3_vnni").contains(activeIsa),
+                    "Expected below AVX3_VNNI when avx512_vnni is absent, got: " + activeIsa);
+        }
+        // else: cap is below avx3_vnni — testDispatcherMatchesCpuInfo covers the exact value
+    }
+
+    /**
      * AVX3_DL (Ice Lake) additionally requires the ICX feature set on top of AVX3.
      * Relevant /proc/cpuinfo flags: avx512_vnni, avx512_vbmi, avx512_vbmi2, avx512_ifma,
      * avx512_bitalg, avx512_vpopcntdq, gfni, vaes, vpclmulqdq.
@@ -205,6 +224,7 @@ class DispatcherCpuFlagsTest {
         String best;
         if (hasAvx3Spr(flags))      best = "avx3_spr";
         else if (hasAvx3Dl(flags))  best = "avx3_dl";
+        else if (hasAvx3Vnni(flags)) best = "avx3_vnni";
         else if (hasAvx3(flags))    best = "avx3";
         else if (flags.contains("avx2")) best = "avx2";
         else                        best = "sse42";
@@ -252,6 +272,11 @@ class DispatcherCpuFlagsTest {
      * AVX3_DL = AVX3 + the full ICX feature set.
      * Flag names in /proc/cpuinfo use underscores and no "avx512_" prefix for gfni/vaes/vpclmulqdq.
      */
+    /** AVX3_VNNI = AVX3 + avx512_vnni (Cascade Lake, Cooper Lake). */
+    private static boolean hasAvx3Vnni(Set<String> flags) {
+        return hasAvx3(flags) && flags.contains("avx512_vnni");
+    }
+
     private static boolean hasAvx3Dl(Set<String> flags) {
         return hasAvx3(flags)
                 && flags.contains("avx512_vnni")

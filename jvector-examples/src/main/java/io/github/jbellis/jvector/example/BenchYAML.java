@@ -16,13 +16,14 @@
 
 package io.github.jbellis.jvector.example;
 
-import io.github.jbellis.jvector.example.benchmarks.datasets.DataSet;
+import io.github.jbellis.jvector.example.benchmarks.datasets.BaseVectorLoading;
 import io.github.jbellis.jvector.example.benchmarks.datasets.DataSets;
 import io.github.jbellis.jvector.example.reporting.RunArtifacts;
 import io.github.jbellis.jvector.example.reporting.SearchReportingCatalog;
 import io.github.jbellis.jvector.example.yaml.DatasetCollection;
 import io.github.jbellis.jvector.example.yaml.MultiConfig;
 import io.github.jbellis.jvector.example.yaml.RunConfig;
+import io.github.jbellis.jvector.example.yaml.SearchParameters;
 
 import java.io.IOException;
 import java.security.InvalidParameterException;
@@ -36,6 +37,12 @@ import java.util.stream.Collectors;
 public class BenchYAML {
 
     public static void main(String[] args) throws IOException {
+        try (var projectionSetting = new SearchParameters.AshQueryProjectionSetting()) {
+            run(args, projectionSetting);
+        }
+    }
+
+    private static void run(String[] args, SearchParameters.AshQueryProjectionSetting projectionSetting) throws IOException {
         // args is one of:
         // - a list of regexes, possibly needing to be split by whitespace.
         // - a list of YAML files
@@ -43,17 +50,28 @@ public class BenchYAML {
         if (args == null) {
             throw new InvalidParameterException("argv[] is null, check your maven exec config");
         }
+        Grid.configureWriterForBenchmark();
+
+        // A file path is not a dataset regular expression (and may contain
+        // spaces, brackets or platform-specific path separators).
+        List<String> configNames = Arrays.stream(args).filter(Objects::nonNull)
+                .filter(s -> s.endsWith(".yml")).collect(Collectors.toList());
+
         String regex = Arrays.stream(args)
                 .filter(Objects::nonNull)
+                .filter(s -> !s.endsWith(".yml"))
                 .flatMap(s -> Arrays.stream(s.split("\\s")))
                 .filter(s -> !s.isEmpty())
                 .collect(Collectors.joining("|"));
         var pattern = Pattern.compile(regex.isEmpty() ? ".*" : regex);
 
-        System.out.println("Heap space available is " + Runtime.getRuntime().maxMemory());
+        System.out.printf(java.util.Locale.ROOT, "Maximum heap: %.1f GiB%n", Runtime.getRuntime().maxMemory() / 1073741824.0);
 
         var datasetCollection = DatasetCollection.load();
-        var datasetNames = datasetCollection.getAll().stream().filter(dn -> pattern.matcher(dn).find()).collect(Collectors.toList());
+        var datasetNames = regex.isEmpty() && !configNames.isEmpty() ? List.<String>of()
+                : regex.isEmpty()
+                ? datasetCollection.getAllExcept(DatasetCollection.REGRESSION_TESTS)
+                : datasetCollection.getAll().stream().filter(dn -> pattern.matcher(dn).find()).collect(Collectors.toList());
 
         List<MultiConfig> allConfigs = new ArrayList<>();
 
@@ -66,19 +84,13 @@ public class BenchYAML {
                 String name = raw.endsWith(HDF5) ? raw.substring(0, raw.length() - HDF5.length()) : raw;
                 allConfigs.add(MultiConfig.getDefaultConfig(name));
             }
-
-            MultiConfig.printDefaultConfigUsageSummary();
         }
 
         // get the list of YAML files from args
-        List<String> configNames = (args == null) ? Collections.emptyList() : Arrays.stream(args)
-                .filter(Objects::nonNull)
-                .filter(s -> s.endsWith(".yml"))
-                .collect(Collectors.toList());
 
         if (!configNames.isEmpty()) {
             for (var configName : configNames) {
-                MultiConfig config = MultiConfig.getDefaultConfig(configName);
+                MultiConfig config = MultiConfig.getConfig(configName);
                 allConfigs.add(config);
             }
         }
@@ -88,12 +100,16 @@ public class BenchYAML {
             return;
         }
 
+        projectionSetting.apply(allConfigs);
+
         // Set up reporting for run
         RunArtifacts artifacts;
         try {
             RunConfig runCfg = RunConfig.loadDefault();
             artifacts = RunArtifacts.open(runCfg, allConfigs);
+            Grid.setMeasurement(runCfg.measurement);
         } catch (java.io.FileNotFoundException e) {
+            if (System.getProperty("jvector.bench.runConfig") != null) throw e;
             // Legacy yamlSchemaVersion "0" behavior: no run-config.yml
             // - logging disabled
             // - console shows compute selection
@@ -116,27 +132,20 @@ public class BenchYAML {
 
 
         for (var config : allConfigs) {
+            var loading = BaseVectorLoading.forBenchmark(config);
 
             String datasetName = config.dataset;
-            DataSet ds = DataSets.loadDataSet(datasetName).orElseThrow(
+            String pipeline = config.describePipeline();
+            if (pipeline != null) ConsoleSections.pipeline(datasetName, pipeline);
+            ConsoleSections.stage("Dataset");
+            try (var ds = DataSets.loadDataSet(datasetName, loading).orElseThrow(
                     () -> new RuntimeException("Could not load dataset:" + datasetName)
-            ).getDataSet();
-            // Register dataset info the first time we actually load the dataset for benchmarking
-            artifacts.registerDataset(datasetName, ds);
+            ).getDataSet()) {
+                // Register dataset info the first time we actually load the dataset for benchmarking
+                artifacts.registerDataset(datasetName, ds);
 
-            Grid.runAll(ds,
-                    config.construction.useSavedIndexIfExists,
-                    config.construction.outDegree,
-                    config.construction.efConstruction,
-                    config.construction.neighborOverflow,
-                    config.construction.addHierarchy,
-                    config.construction.refineFinalGraph,
-                    config.construction.getFeatureSets(),
-                    config.construction.getCompressorParameters(),
-                    config.search.getCompressorParameters(),
-                    config.search.topKOverquery,
-                    config.search.useSearchPruning,
-                    artifacts);
+                Grid.run(ds, GridSpec.fromConfig(config), artifacts);
+            }
         }
     }
 

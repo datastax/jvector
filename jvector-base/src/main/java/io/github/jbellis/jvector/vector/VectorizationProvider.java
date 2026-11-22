@@ -92,7 +92,12 @@ public abstract class VectorizationProvider {
           try {
             return (VectorizationProvider) Class.forName("io.github.jbellis.jvector.vector.NativeVectorizationProvider").getConstructor().newInstance();
           } catch (Throwable e) {
-            throw new RuntimeException("Failed to load forced NativeVectorizationProvider", e);
+            Throwable cause = e instanceof InvocationTargetException && e.getCause() != null ? e.getCause() : e;
+            String reason = String.valueOf(cause.getMessage() != null ? cause.getMessage() : cause)
+                .replaceAll("[.\\s]+$", "");
+            throw new RuntimeException("Failed to load forced NativeVectorizationProvider: " + reason
+                + ". It needs Java 22+ on Linux x86-64 or AArch64; remove jvector.vectorization_provider"
+                + " to let JVector choose.", e);
           }
         default:
           throw new IllegalArgumentException("Unknown vectorization provider: " + forcedProvider);
@@ -120,9 +125,10 @@ public abstract class VectorizationProvider {
         return new DefaultVectorizationProvider();
       }
 
-      // check for jvector.experimental.enable_native_vectorization
-      // this is an experimental feature subject to change
-      if (Boolean.getBoolean("jvector.experimental.enable_native_vectorization")) {
+      // Native uses Java 22 FFM. The new setting takes precedence over its deprecated alias.
+      if (runtimeVersion >= 22 && Boolean.parseBoolean(System.getProperty(
+          "jvector.enable_native_vectorization",
+          System.getProperty("jvector.experimental.enable_native_vectorization", "true")))) {
         try {
           Class<?> clazz = Class.forName("io.github.jbellis.jvector.vector.NativeVectorizationProvider");
           Constructor<?> ctor = clazz.getConstructor();
@@ -141,7 +147,7 @@ public abstract class VectorizationProvider {
         } catch (UnsupportedOperationException uoe) {
           LOG.warning("Native vector API was not enabled. " + uoe.getMessage());
         } catch (ClassNotFoundException e) {
-          LOG.warning("Java version does not support native vector API");
+          LOG.fine("Native vector provider is not on the classpath; trying the Java Vector API.");
         } catch (InvocationTargetException e) {
           // unwrap, check for UnsupportedOperationException
           if (e.getCause() instanceof UnsupportedOperationException) {

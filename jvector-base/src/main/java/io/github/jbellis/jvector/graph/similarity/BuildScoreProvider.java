@@ -18,6 +18,9 @@ package io.github.jbellis.jvector.graph.similarity;
 
 import io.github.jbellis.jvector.graph.RandomAccessVectorValues;
 import io.github.jbellis.jvector.graph.RemappedRandomAccessVectorValues;
+import io.github.jbellis.jvector.quantization.AsymmetricHashing;
+import io.github.jbellis.jvector.quantization.ASHVectors;
+import io.github.jbellis.jvector.quantization.ASHSymmetricScorer;
 import io.github.jbellis.jvector.quantization.BQVectors;
 import io.github.jbellis.jvector.quantization.PQVectors;
 import io.github.jbellis.jvector.vector.VectorSimilarityFunction;
@@ -110,6 +113,29 @@ public interface BuildScoreProvider {
         var vectorsCopy = ravv.threadLocalSupplier();
 
         return new BuildScoreProvider() {
+            /// Exact scores against `node1`.
+            ///
+            /// For a value-shared source the anchor is read on the first comparison and kept as
+            /// a private copy, so creating a score function reads nothing, later reads through the
+            /// same views can't overwrite the anchor, and each comparison reads only `node2`.
+            private ScoreFunction.ExactScoreFunction scoreFunctionFor(int node1) {
+                if (ravv.isValueShared()) {
+                    return new ScoreFunction.ExactScoreFunction() {
+                        private VectorFloat<?> anchor;
+
+                        @Override
+                        public float similarityTo(int node2) {
+                            var a = anchor;
+                            if (a == null) anchor = a = vectors.get().getVector(node1).copy();
+                            return similarityFunction.compare(a, vectorsCopy.get().getVector(node2));
+                        }
+                    };
+                }
+                var vector = vectors.get().getVector(node1);
+                var vc = vectorsCopy.get();
+                return node2 -> similarityFunction.compare(vector, vc.getVector(node2));
+            }
+
             @Override
             public boolean isExact() {
                 return true;
@@ -119,43 +145,35 @@ public interface BuildScoreProvider {
             public VectorFloat<?> approximateCentroid() {
                 var vv = vectors.get();
                 var centroid = vts.createFloatVector(vv.dimension());
-                for (int i = 0; i < vv.size(); i++) {
+                int size = vv.size();
+                for (int i = 0; i < size; i++) {
                     var v = vv.getVector(i);
-                    if (v != null) { // MapRandomAccessVectorValues is not necessarily dense
-                        VectorUtil.addInPlace(centroid, v);
-                    }
+                    if (v != null) VectorUtil.addInPlace(centroid, v);
                 }
-                VectorUtil.scale(centroid, 1.0f / vv.size());
+                VectorUtil.scale(centroid, 1.0f / size);
                 return centroid;
             }
 
             @Override
             public SearchScoreProvider searchProviderFor(VectorFloat<?> vector) {
+                // Construction keeps the standard stopping rule for full-precision scores.
                 var vc = vectorsCopy.get();
-                return DefaultSearchScoreProvider.exact(vector, similarityFunction, vc);
+                return new DefaultSearchScoreProvider(DefaultSearchScoreProvider.exactScoreFunction(vector, similarityFunction, vc));
             }
 
             @Override
             public SearchScoreProvider searchProviderFor(int node1) {
-                RandomAccessVectorValues randomAccessVectorValues = vectors.get();
-                var v = randomAccessVectorValues.getVector(node1);
-                return searchProviderFor(v);
+                return new DefaultSearchScoreProvider(scoreFunctionFor(node1));
             }
 
             @Override
             public SearchScoreProvider diversityProviderFor(int node1) {
-                RandomAccessVectorValues randomAccessVectorValues = vectors.get();
-                var v = randomAccessVectorValues.getVector(node1);
-                var vc = vectorsCopy.get();
-                return DefaultSearchScoreProvider.exact(v, similarityFunction, vc);
+                return new DefaultSearchScoreProvider(scoreFunctionFor(node1));
             }
 
             @Override
             public ScoreFunction diversityScoreFunctionFor(int node1) {
-                var v = vectors.get().getVector(node1);
-                var vc = vectorsCopy.get();
-                // don't use ESF.reranker, we need thread safety here
-                return (ScoreFunction.ExactScoreFunction) node2 -> similarityFunction.compare(v, vc.getVector(node2));
+                return scoreFunctionFor(node1);
             }
         };
     }
@@ -253,6 +271,63 @@ public interface BuildScoreProvider {
                         return bqv.similarityBetween(encoded1, bqv.get(node2));
                     }
                 };
+            }
+        };
+    }
+
+    /**
+     * Returns a BSP that performs approximate score comparisons using the given ASHVectors.
+     *
+     * <p>Scores use the similarity the ASH model was trained for.
+     *
+     * <p><b>Construction (node-node) scoring:</b> Uses symmetric ASH–ASH dot-product approximation
+     * computed from the complete encoded payload + per-vector header fields (scale, offset).
+     *
+     * <p><b>Query (vector-node) scoring:</b> Delegates to ASHVectors' query-time score function
+     * (asymmetric float query → ASH vector).
+     *
+     * <p><b>Constraint:</b> This provider requires {@code C=1} (single landmark).
+     */
+    static BuildScoreProvider ashBuildScoreProvider(ASHVectors ashv) {
+        final VectorSimilarityFunction vsf = ashv.similarityFunction();
+
+        final AsymmetricHashing ash = ashv.getCompressor();
+        if (ash.landmarkCount != 1) {
+            throw new IllegalArgumentException("ASH build scoring requires landmarkCount==1, got " + ash.landmarkCount);
+        }
+
+        final var symmetric = new ASHSymmetricScorer(ashv);
+
+        return new BuildScoreProvider() {
+            @Override
+            public boolean isExact() {
+                return false;
+            }
+
+            @Override
+            public VectorFloat<?> approximateCentroid() {
+                // In the C=1 case, ASH uses the dataset mean as its single landmark.
+                // Return a copy so callers can't mutate ASH's internal landmark.
+                return ash.landmarks[0].copy();
+            }
+
+            @Override
+            public SearchScoreProvider searchProviderFor(VectorFloat<?> vector) {
+                // Query-time asymmetric scoring is already implemented by ASHVectors.
+                return new DefaultSearchScoreProvider(ashv.precomputedScoreFunctionFor(vector, vsf), null, vsf);
+            }
+
+            @Override
+            public SearchScoreProvider searchProviderFor(int node1) {
+                // A stored node's length is not kept; the largest encoded length bounds it.
+                float m = ash.maxEncodedNorm();
+                return new DefaultSearchScoreProvider(symmetric.scoreFunctionFor(node1), null, vsf, m * m);
+            }
+
+            @Override
+            public SearchScoreProvider diversityProviderFor(int node1) {
+                // Keep search/diversity consistent for approximate scoring.
+                return searchProviderFor(node1);
             }
         };
     }

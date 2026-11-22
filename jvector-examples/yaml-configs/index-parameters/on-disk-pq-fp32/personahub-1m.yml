@@ -1,0 +1,35 @@
+# personahub-1m (1024 dimensions): build with PQ scoring (D/8 subspaces) and write the graph with
+# full-precision vectors. Searches traverse with PQ codes in memory and rescore from disk.
+yamlSchemaVersion: 3
+onDiskIndexVersion: 7
+
+dataset: personahub-1m
+
+construction:
+  type: onDisk
+  outDegree: [32]
+  efConstruction: [100]
+  neighborOverflow: [1.2f]
+  addHierarchy: [Yes]
+  refineFinalGraph: [Yes]
+  fusedGraph: [No]
+  compression:
+    - type: PQ
+      parameters:
+        mFactor: 8
+        k: 256
+        anisotropicThreshold: -1.0
+  reranking:
+    type: FP32
+  useSavedIndexIfExists: No
+
+search:
+  topKOverquery:
+    10: [1.0, 2.0, 4.0]
+  useSearchPruning: [No]
+  compression:
+    - type: PQ
+      parameters:
+        mFactor: 8
+        k: 256
+        anisotropicThreshold: -1.0

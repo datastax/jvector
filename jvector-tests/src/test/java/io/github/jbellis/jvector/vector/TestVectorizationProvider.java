@@ -98,13 +98,13 @@ public class TestVectorizationProvider extends RandomizedTest {
      *   -ea
      *   --add-modules jdk.incubator.vector
      *   --enable-native-access=ALL-UNNAMED
-     *   -Djvector.experimental.enable_native_vectorization=true
      * }</pre>
      *
      * To run with panama support, use
      * <pre>{@code
-     *   --ea
+     *   -ea
      *   --add-modules jdk.incubator.vector
+     *   -Djvector.vectorization_provider=panama
      * }</pre>
      *
      * If <pre>{@code -DTest_RequireSpecificVectorizationProvider=<simplename>}</pre>

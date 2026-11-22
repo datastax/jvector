@@ -16,6 +16,9 @@
 
 #include "test_helpers.h"
 
+#include <fstream>
+#include <sstream>
+
 // ---------------------------------------------------------------------------
 // Global test environment — prints the active ISA once for the whole binary.
 // Registered via AddGlobalTestEnvironment at static-init time so it fires
@@ -74,6 +77,25 @@ const std::vector<KernelTestParam> kKernelTestParams = {
     {128, "large_power_of_2"},
     {255, "large_odd_tail_15"},
 };
+
+std::unordered_set<std::string> parse_cpuinfo_line(const std::string& key)
+{
+    std::unordered_set<std::string> tokens;
+    std::ifstream f("/proc/cpuinfo");
+    if (!f.is_open()) return tokens;
+
+    std::string line;
+    while (std::getline(f, line)) {
+        if (line.rfind(key, 0) != 0) continue;
+        auto colon = line.find(':');
+        if (colon == std::string::npos) continue;
+        std::istringstream iss(line.substr(colon + 1));
+        std::string token;
+        while (iss >> token) tokens.insert(token);
+        break;
+    }
+    return tokens;
+}
 
 std::vector<float> make_vec(size_t n, float seed)
 {

@@ -25,6 +25,12 @@ import io.github.jbellis.jvector.graph.diversity.VamanaDiversityProvider;
 import io.github.jbellis.jvector.graph.similarity.BuildScoreProvider;
 import io.github.jbellis.jvector.graph.similarity.ScoreFunction;
 import io.github.jbellis.jvector.graph.similarity.SearchScoreProvider;
+import io.github.jbellis.jvector.management.CompressionType;
+import io.github.jbellis.jvector.management.GraphIndexBuilderConfig;
+import io.github.jbellis.jvector.quantization.BinaryQuantization;
+import io.github.jbellis.jvector.quantization.BQVectors;
+import io.github.jbellis.jvector.quantization.PQVectors;
+import io.github.jbellis.jvector.quantization.ProductQuantization;
 import io.github.jbellis.jvector.util.*;
 import io.github.jbellis.jvector.vector.VectorSimilarityFunction;
 import io.github.jbellis.jvector.vector.types.VectorFloat;
@@ -71,6 +77,11 @@ public class GraphIndexBuilder implements Closeable, Accountable {
     @VisibleForTesting
     final MutableGraphIndex graph;
 
+    @VisibleForTesting
+    boolean isRefineFinalGraph() {
+        return refineFinalGraph;
+    }
+
     private final ConcurrentSkipListSet<NodeAtLevel> insertionsInProgress = new ConcurrentSkipListSet<>();
 
     private final BuildScoreProvider scoreProvider;
@@ -81,6 +92,28 @@ public class GraphIndexBuilder implements Closeable, Accountable {
     private final ExplicitThreadLocal<GraphSearcher> searchers;
 
     private final Random rng;
+
+    private static BuildScoreProvider getBuildScoreProvider(RandomAccessVectorValues vectorValues, VectorSimilarityFunction similarityFunction) {
+        CompressionType type = resolveJmxBuildCompressionType();
+        switch(type) {
+            case NONE:
+                return BuildScoreProvider.randomAccessScoreProvider(vectorValues, similarityFunction);
+            case PQ: {
+                var config = GraphIndexBuilderConfig.getInstance();
+                int m = vectorValues.dimension() / config.getPqMFactor();
+                var compressor = ProductQuantization.compute(vectorValues, m, config.getPqK(),
+                                                            config.isPqCenterData(), config.getPqAnisotropicThreshold());
+                PQVectors pqVectors = compressor.encodeAll(vectorValues, ForkJoinPool.commonPool());
+                return BuildScoreProvider.pqBuildScoreProvider(similarityFunction, pqVectors);
+            }
+            case BQ: {
+                BQVectors bqVectors = (BQVectors) BinaryQuantization.compute(vectorValues).encodeAll(vectorValues, ForkJoinPool.commonPool());
+                return BuildScoreProvider.bqBuildScoreProvider(bqVectors);
+            }
+            default:
+                throw new IllegalArgumentException("Unsupported build compression type: " + type);
+        }
+    }
 
     /**
      * Reads all the vectors from vector values, builds a graph connecting them by their dense
@@ -97,7 +130,10 @@ public class GraphIndexBuilder implements Closeable, Accountable {
      *                         allow longer edges.  If alpha = 1.0 then the equivalent of the lowest level of
      *                         an HNSW graph will be created, which is usually not what you want.
      * @param addHierarchy     whether we want to add an HNSW-style hierarchy on top of the Vamana index.
+     * @deprecated Use the equivalent constructor without {@code addHierarchy}; that value is now
+     *             controlled via {@link io.github.jbellis.jvector.management.GraphIndexBuilderConfig}.
      */
+    @Deprecated
     public GraphIndexBuilder(RandomAccessVectorValues vectorValues,
                              VectorSimilarityFunction similarityFunction,
                              int M,
@@ -131,7 +167,10 @@ public class GraphIndexBuilder implements Closeable, Accountable {
      *                         an HNSW graph will be created, which is usually not what you want.
      * @param addHierarchy     whether we want to add an HNSW-style hierarchy on top of the Vamana index.
      * @param refineFinalGraph whether we do a second pass over each node in the graph to refine its connections
+     * @deprecated Use the equivalent constructor without {@code addHierarchy} and {@code refineFinalGraph};
+     *             those values are now controlled via {@link io.github.jbellis.jvector.management.GraphIndexBuilderConfig}.
      */
+    @Deprecated
     public GraphIndexBuilder(RandomAccessVectorValues vectorValues,
                              VectorSimilarityFunction similarityFunction,
                              int M,
@@ -166,7 +205,10 @@ public class GraphIndexBuilder implements Closeable, Accountable {
      *                         allow longer edges.  If alpha = 1.0 then the equivalent of the lowest level of
      *                         an HNSW graph will be created, which is usually not what you want.
      * @param addHierarchy     whether we want to add an HNSW-style hierarchy on top of the Vamana index.
+     * @deprecated Use the equivalent constructor without {@code addHierarchy}; that value is now
+     *             controlled via {@link io.github.jbellis.jvector.management.GraphIndexBuilderConfig}.
      */
+    @Deprecated
     public GraphIndexBuilder(BuildScoreProvider scoreProvider,
                              int dimension,
                              int M,
@@ -193,7 +235,10 @@ public class GraphIndexBuilder implements Closeable, Accountable {
      *                         an HNSW graph will be created, which is usually not what you want.
      * @param addHierarchy     whether we want to add an HNSW-style hierarchy on top of the Vamana index.
      * @param refineFinalGraph whether we do a second pass over each node in the graph to refine its connections
+     * @deprecated Use the equivalent constructor without {@code addHierarchy} and {@code refineFinalGraph};
+     *             those values are now controlled via {@link io.github.jbellis.jvector.management.GraphIndexBuilderConfig}.
      */
+    @Deprecated
     public GraphIndexBuilder(BuildScoreProvider scoreProvider,
                              int dimension,
                              int M,
@@ -223,7 +268,10 @@ public class GraphIndexBuilder implements Closeable, Accountable {
      * @param simdExecutor     ForkJoinPool instance for SIMD operations, best is to use a pool with the size of
      *                         the number of physical cores.
      * @param parallelExecutor ForkJoinPool instance for parallel stream operations
+     * @deprecated Use the equivalent constructor without {@code addHierarchy} and {@code refineFinalGraph};
+     *             those values are now controlled via {@link io.github.jbellis.jvector.management.GraphIndexBuilderConfig}.
      */
+    @Deprecated
     public GraphIndexBuilder(BuildScoreProvider scoreProvider,
                              int dimension,
                              int M,
@@ -254,7 +302,10 @@ public class GraphIndexBuilder implements Closeable, Accountable {
      *                         an HNSW graph will be created, which is usually not what you want.
      * @param addHierarchy     whether we want to add an HNSW-style hierarchy on top of the Vamana index.
      * @param refineFinalGraph whether we do a second pass over each node in the graph to refine its connections
+     * @deprecated Use the equivalent constructor without {@code addHierarchy} and {@code refineFinalGraph};
+     *             those values are now controlled via {@link io.github.jbellis.jvector.management.GraphIndexBuilderConfig}.
      */
+    @Deprecated
     public GraphIndexBuilder(BuildScoreProvider scoreProvider,
                              int dimension,
                              List<Integer> maxDegrees,
@@ -285,7 +336,10 @@ public class GraphIndexBuilder implements Closeable, Accountable {
      * @param simdExecutor     ForkJoinPool instance for SIMD operations, best is to use a pool with the size of
      *                         the number of physical cores.
      * @param parallelExecutor ForkJoinPool instance for parallel stream operations
+     * @deprecated Use the equivalent constructor without {@code addHierarchy} and {@code refineFinalGraph};
+     *             those values are now controlled via {@link io.github.jbellis.jvector.management.GraphIndexBuilderConfig}.
      */
+    @Deprecated
     public GraphIndexBuilder(BuildScoreProvider scoreProvider,
                              int dimension,
                              List<Integer> maxDegrees,
@@ -297,6 +351,164 @@ public class GraphIndexBuilder implements Closeable, Accountable {
                              ForkJoinPool simdExecutor,
                              ForkJoinPool parallelExecutor)
     {
+        this(scoreProvider, dimension, maxDegrees, beamWidth, neighborOverflow, alpha,
+             logCallerAddHierarchy(addHierarchy),
+             logCallerRefineFinalGraph(refineFinalGraph),
+             simdExecutor, parallelExecutor, null);
+    }
+
+    /**
+     * Entry point for the fluent builder. {@code addHierarchy}, {@code refineFinalGraph}, and the
+     * build-time compression strategy are administrative concerns controlled via
+     * {@link io.github.jbellis.jvector.management.GraphIndexBuilderConfig} and are not exposed here;
+     * use one of the deprecated constructors if you need to pin those per-instance.
+     *
+     * @param scoreProvider describes how to determine the similarities between vectors
+     * @param dimension     the dimension of the vectors
+     * @param maxDegrees    the maximum number of connections a node can have in each layer; if fewer entries
+     *                      are specified than the number of layers, the last entry is used for all remaining layers.
+     */
+    public static Builder builder(BuildScoreProvider scoreProvider, int dimension, List<Integer> maxDegrees) {
+        return new Builder(scoreProvider, dimension, maxDegrees);
+    }
+
+    /**
+     * Entry point for the fluent builder, for the common case of a single (non-hierarchical) max degree.
+     *
+     * @param scoreProvider describes how to determine the similarities between vectors
+     * @param dimension     the dimension of the vectors
+     * @param M             the maximum number of connections a node can have
+     */
+    public static Builder builder(BuildScoreProvider scoreProvider, int dimension, int M) {
+        return new Builder(scoreProvider, dimension, List.of(M));
+    }
+
+    /**
+     * Entry point for the fluent builder, resolving the {@link BuildScoreProvider} from raw vectors via
+     * {@link #getBuildScoreProvider(RandomAccessVectorValues, VectorSimilarityFunction)}.
+     *
+     * @param vectorValues       the vectors whose relations are represented by the graph
+     * @param similarityFunction the similarity function to score vectors with
+     * @param maxDegrees         the maximum number of connections a node can have in each layer; if fewer entries
+     *                           are specified than the number of layers, the last entry is used for all remaining layers.
+     */
+    public static Builder builder(RandomAccessVectorValues vectorValues, VectorSimilarityFunction similarityFunction, List<Integer> maxDegrees) {
+        return new Builder(getBuildScoreProvider(vectorValues, similarityFunction), vectorValues.dimension(), maxDegrees);
+    }
+
+    /**
+     * Entry point for the fluent builder, for the common case of a single (non-hierarchical) max degree,
+     * resolving the {@link BuildScoreProvider} from raw vectors.
+     *
+     * @param vectorValues       the vectors whose relations are represented by the graph
+     * @param similarityFunction the similarity function to score vectors with
+     * @param M                  the maximum number of connections a node can have
+     */
+    public static Builder builder(RandomAccessVectorValues vectorValues, VectorSimilarityFunction similarityFunction, int M) {
+        return builder(vectorValues, similarityFunction, List.of(M));
+    }
+
+    /**
+     * Entry point for the fluent builder, building from an existing {@link MutableGraphIndex} (e.g. one just
+     * loaded from disk) rather than constructing a fresh {@link OnHeapGraphIndex}. {@code addHierarchy} is not
+     * settable here — it is structural and is always derived from {@code mutableGraphIndex}'s own topology.
+     *
+     * @param buildScoreProvider the provider responsible for calculating build scores.
+     * @param dimension          the dimension of the vectors.
+     * @param mutableGraphIndex  a mutable graph index to take ownership of and continue building on.
+     */
+    public static Builder builder(BuildScoreProvider buildScoreProvider, int dimension, MutableGraphIndex mutableGraphIndex) {
+        return new Builder(buildScoreProvider, dimension, mutableGraphIndex);
+    }
+
+    /**
+     * Fluent builder for {@link GraphIndexBuilder}. Collects the mutable configuration state itself;
+     * {@code GraphIndexBuilder}'s own fields remain {@code final} and are set exactly once, in
+     * {@link #build()}, via the private all-args constructors.
+     * <p>
+     * {@code beamWidth}, {@code neighborOverflow}, and {@code alpha} are required — if left unset,
+     * {@link #build()} fails with the same {@link IllegalArgumentException} the constructors throw.
+     */
+    public static class Builder {
+        private final BuildScoreProvider scoreProvider;
+        private final int dimension;
+        private final List<Integer> maxDegrees;
+        private final MutableGraphIndex existingGraph;
+        private int beamWidth;
+        private float neighborOverflow;
+        private float alpha;
+        private ForkJoinPool simdExecutor = PhysicalCoreExecutor.pool();
+        private ForkJoinPool parallelExecutor = ForkJoinPool.commonPool();
+
+        private Builder(BuildScoreProvider scoreProvider, int dimension, List<Integer> maxDegrees) {
+            this.scoreProvider = scoreProvider;
+            this.dimension = dimension;
+            this.maxDegrees = maxDegrees;
+            this.existingGraph = null;
+        }
+
+        private Builder(BuildScoreProvider scoreProvider, int dimension, MutableGraphIndex existingGraph) {
+            this.scoreProvider = scoreProvider;
+            this.dimension = dimension;
+            this.maxDegrees = null;
+            this.existingGraph = existingGraph;
+        }
+
+        /** The size of the beam search to use when finding nearest neighbors. */
+        public Builder withBeamWidth(int beamWidth) {
+            this.beamWidth = beamWidth;
+            return this;
+        }
+
+        /** The ratio of extra neighbors to allow temporarily when inserting a node. */
+        public Builder withNeighborOverflow(float neighborOverflow) {
+            this.neighborOverflow = neighborOverflow;
+            return this;
+        }
+
+        /** How aggressive pruning diverse neighbors should be; alpha &gt; 1.0 allows longer edges. */
+        public Builder withAlpha(float alpha) {
+            this.alpha = alpha;
+            return this;
+        }
+
+        /** ForkJoinPool for SIMD operations; ideally sized to the number of physical cores. Defaults to {@link PhysicalCoreExecutor#pool()}. */
+        public Builder withSimdExecutor(ForkJoinPool simdExecutor) {
+            this.simdExecutor = simdExecutor;
+            return this;
+        }
+
+        /** ForkJoinPool for general parallel stream operations. Defaults to {@link ForkJoinPool#commonPool()}. */
+        public Builder withParallelExecutor(ForkJoinPool parallelExecutor) {
+            this.parallelExecutor = parallelExecutor;
+            return this;
+        }
+
+        public GraphIndexBuilder build() {
+            if (existingGraph != null) {
+                boolean refineFinalGraph = resolveJmxRefineFinalGraph();
+                return new GraphIndexBuilder(scoreProvider, dimension, existingGraph, beamWidth, neighborOverflow, alpha,
+                                              refineFinalGraph, simdExecutor, parallelExecutor, null);
+            }
+            boolean addHierarchy = resolveJmxAddHierarchy(maxDegrees);
+            boolean refineFinalGraph = resolveJmxRefineFinalGraph();
+            return new GraphIndexBuilder(scoreProvider, dimension, maxDegrees, beamWidth, neighborOverflow, alpha,
+                                          addHierarchy, refineFinalGraph, simdExecutor, parallelExecutor, null);
+        }
+    }
+
+    // Private workhorse — all public constructors funnel here.
+    private GraphIndexBuilder(BuildScoreProvider scoreProvider,
+                              int dimension,
+                              List<Integer> maxDegrees,
+                              int beamWidth,
+                              float neighborOverflow,
+                              float alpha,
+                              boolean addHierarchy,
+                              boolean refineFinalGraph,
+                              ForkJoinPool simdExecutor,
+                              ForkJoinPool parallelExecutor,
+                              @SuppressWarnings("unused") Void disambiguator) {
         if (maxDegrees.stream().anyMatch(i -> i <= 0)) {
             throw new IllegalArgumentException("layer degrees must be positive");
         }
@@ -313,12 +525,12 @@ public class GraphIndexBuilder implements Closeable, Accountable {
             throw new IllegalArgumentException("alpha must be positive");
         }
 
+        this.addHierarchy = addHierarchy;
+        this.refineFinalGraph = refineFinalGraph;
         this.scoreProvider = scoreProvider;
         this.dimension = dimension;
         this.neighborOverflow = neighborOverflow;
         this.alpha = alpha;
-        this.addHierarchy = addHierarchy;
-        this.refineFinalGraph = refineFinalGraph;
         this.beamWidth = beamWidth;
         this.simdExecutor = simdExecutor;
         this.parallelExecutor = parallelExecutor;
@@ -328,6 +540,9 @@ public class GraphIndexBuilder implements Closeable, Accountable {
         this.searchers = ExplicitThreadLocal.withInitial(() -> {
             var gs = new GraphSearcher(graph);
             gs.usePruning(false);
+            // Construction keeps adaptive stopping where the build provider asks for it, as ASH's does; the other
+            // build providers name no similarity function, so their searches keep the standard rule.
+            gs.useAdaptiveTermination(true);
             return gs;
         });
 
@@ -336,6 +551,39 @@ public class GraphIndexBuilder implements Closeable, Accountable {
         this.concurrentScratch = ExplicitThreadLocal.withInitial(() -> new NodeArray(max(beamWidth, graph.maxDegree() + 1)));
 
         this.rng = new Random(0);
+    }
+
+    // ── Source-logging helpers ────────────────────────────────────────────────
+    // These are evaluated as arguments before this() fires, allowing us to log
+    // the value source before the constructor body runs.
+
+    private static boolean resolveJmxAddHierarchy(List<Integer> maxDegrees) {
+        // if multiple degrees are specified, hierarchy is structurally required
+        boolean v = maxDegrees.size() > 1 || GraphIndexBuilderConfig.getInstance().isAddHierarchy();
+        logger.debug("addHierarchy={} (from GraphIndexBuilderConfig)", v);
+        return v;
+    }
+
+    private static boolean resolveJmxRefineFinalGraph() {
+        boolean v = GraphIndexBuilderConfig.getInstance().isRefineFinalGraph();
+        logger.debug("refineFinalGraph={} (from GraphIndexBuilderConfig)", v);
+        return v;
+    }
+
+    private static CompressionType resolveJmxBuildCompressionType() {
+        String v = GraphIndexBuilderConfig.getInstance().getBuildCompressionType();
+        logger.debug("buildCompressionType={} (from GraphIndexBuilderConfig)", v);
+        return CompressionType.valueOf(v);
+    }
+
+    private static boolean logCallerAddHierarchy(boolean v) {
+        logger.debug("addHierarchy={} (caller-provided via deprecated constructor)", v);
+        return v;
+    }
+
+    private static boolean logCallerRefineFinalGraph(boolean v) {
+        logger.debug("refineFinalGraph={} (caller-provided via deprecated constructor)", v);
+        return v;
     }
 
     /**
@@ -350,9 +598,19 @@ public class GraphIndexBuilder implements Closeable, Accountable {
      * @param refineFinalGraph whether to perform a refinement step on the final graph structure.
      * @param simdExecutor the ForkJoinPool executor used for SIMD tasks during graph building.
      * @param parallelExecutor the ForkJoinPool executor used for general parallelization during graph building.
+     * @deprecated Use the equivalent constructor without {@code refineFinalGraph}; that value is now
+     *             controlled via {@link io.github.jbellis.jvector.management.GraphIndexBuilderConfig}.
      */
+    @Deprecated
     @Experimental
     public GraphIndexBuilder(BuildScoreProvider buildScoreProvider, int dimension, MutableGraphIndex mutableGraphIndex, int beamWidth, float neighborOverflow, float alpha, boolean refineFinalGraph, ForkJoinPool simdExecutor, ForkJoinPool parallelExecutor) {
+        this(buildScoreProvider, dimension, mutableGraphIndex, beamWidth, neighborOverflow, alpha,
+             logCallerRefineFinalGraph(refineFinalGraph), simdExecutor, parallelExecutor,
+             null);
+    }
+
+    // Private mutableGraphIndex workhorse — addHierarchy is always derived from the existing graph.
+    private GraphIndexBuilder(BuildScoreProvider buildScoreProvider, int dimension, MutableGraphIndex mutableGraphIndex, int beamWidth, float neighborOverflow, float alpha, boolean refineFinalGraph, ForkJoinPool simdExecutor, ForkJoinPool parallelExecutor, @SuppressWarnings("unused") Void disambiguator) {
         if (beamWidth <= 0) {
             throw new IllegalArgumentException("beamWidth must be positive");
         }
@@ -367,6 +625,7 @@ public class GraphIndexBuilder implements Closeable, Accountable {
         this.neighborOverflow = neighborOverflow;
         this.dimension = dimension;
         this.alpha = alpha;
+        // addHierarchy is structural — it must match the existing graph's topology
         this.addHierarchy = mutableGraphIndex.isHierarchical();
         this.refineFinalGraph = refineFinalGraph;
         this.beamWidth = beamWidth;
@@ -378,6 +637,9 @@ public class GraphIndexBuilder implements Closeable, Accountable {
         this.searchers = ExplicitThreadLocal.withInitial(() -> {
             var gs = new GraphSearcher(graph);
             gs.usePruning(false);
+            // Construction keeps adaptive stopping where the build provider asks for it, as ASH's does; the other
+            // build providers name no similarity function, so their searches keep the standard rule.
+            gs.useAdaptiveTermination(true);
             return gs;
         });
 
@@ -425,6 +687,12 @@ public class GraphIndexBuilder implements Closeable, Accountable {
                     }
                     newBuilder.graph.connectNode(lvl, i, newNeighbors);
                 }
+
+                // connectNode alone leaves the node's completion time at its CompletionTracker
+                // default (Integer.MAX_VALUE), which makes ConcurrentGraphIndexView.getNeighborsIterator
+                // hide it from every subsequent concurrent view taken on newBuilder.graph. Mark it complete now,
+                // so any view afterward sees the whole copied graph again.
+                newBuilder.graph.markComplete(new NodeAtLevel(maxLayer, i));
             });
         }).join();
 
@@ -537,13 +805,16 @@ public class GraphIndexBuilder implements Closeable, Accountable {
                 ssp = scoreProvider.searchProviderFor(node);
 
                 if (graph.getNeighborsIterator(lvl, node).size() > 0) {
-                    gs.searchOneLayer(ssp, beamWidth, 0.0f, lvl, acceptedBits);
+                    // Threshold NEGATIVE_INFINITY, not 0.0f: only COSINE and EUCLIDEAN scores are bounded below by 0.
+                    // DOT_PRODUCT scores are (1 + dot) / 2, which is negative for non-normalized vectors, and a 0.0f
+                    // floor would discard every candidate of a node that is dissimilar to everything else.
+                    gs.searchOneLayer(ssp, beamWidth, Float.NEGATIVE_INFINITY, lvl, acceptedBits);
 
                     var candidates = new NodeArray(gs.approximateResults.size());
                     gs.approximateResults.foreach(candidates::insertSorted);
                     graph.addEdges(lvl, node, candidates, neighborOverflow);
                 } else {
-                    gs.searchOneLayer(ssp, 1, 0.0f, lvl, acceptedBits);
+                    gs.searchOneLayer(ssp, 1, Float.NEGATIVE_INFINITY, lvl, acceptedBits);
                 }
                 gs.setEntryPointsFromPreviousLayer();
             }
@@ -642,9 +913,9 @@ public class GraphIndexBuilder implements Closeable, Accountable {
                 // Move downward from entry.level to 1
                 for (int lvl = entry.level; lvl > 0; lvl--) {
                     if (lvl > nodeLevel.level) {
-                        gs.searchOneLayer(searchScoreProvider, 1, 0.0f, lvl, gs.getView().liveNodes());
+                        gs.searchOneLayer(searchScoreProvider, 1, Float.NEGATIVE_INFINITY, lvl, gs.getView().liveNodes());
                     } else {
-                        gs.searchOneLayer(searchScoreProvider, beamWidth, 0.0f, lvl, gs.getView().liveNodes());
+                        gs.searchOneLayer(searchScoreProvider, beamWidth, Float.NEGATIVE_INFINITY, lvl, gs.getView().liveNodes());
                         NodeScore[] neighbors = new NodeScore[gs.approximateResults.size()];
                         AtomicInteger index = new AtomicInteger();
                         // TODO extract an interface that lets us avoid the copy here and in toScratchCandidates
@@ -658,7 +929,10 @@ public class GraphIndexBuilder implements Closeable, Accountable {
                 }
 
                 // Now do the main search at layer 0
-                result = gs.resume(beamWidth, beamWidth, 0.0f, 0.0f);
+                // The threshold and the rerank floor are NEGATIVE_INFINITY, not 0.0f, as in the layer searches above and
+                // in improveConnections. A score provider with a reranker only reranks candidates at or above the floor,
+                // so a floor of 0 would drop the candidates with a negative score (DOT_PRODUCT, non-normalized vectors).
+                result = gs.resume(beamWidth, beamWidth, Float.NEGATIVE_INFINITY, Float.NEGATIVE_INFINITY);
             }
 
             updateNeighborsOneLayer(0, nodeLevel.node, result.getNodes(), naturalScratchPooled, inProgressBefore, concurrentScratchPooled, searchScoreProvider);
@@ -1010,6 +1284,9 @@ public class GraphIndexBuilder implements Closeable, Accountable {
     /**
      * Convenience method to build a new graph from an existing one, with the addition of new nodes.
      * This is useful when we want to merge a new set of vectors into an existing graph that is already on disk.
+     * <p>
+     * Loading and extending an existing graph does not guarantee removal of previously stored
+     * duplicate neighbor IDs. Rebuild from vectors to regenerate all neighborhoods with ID uniqueness.
      *
      * @param in a reader from which to read the on-heap graph.
      * @param newVectors a super set RAVV containing the new vectors to be added to the graph as well as the old ones that are already in the graph
@@ -1036,6 +1313,9 @@ public class GraphIndexBuilder implements Closeable, Accountable {
     /**
      * Convenience method to build a new graph from an existing one, with the addition of new nodes.
      * This is useful when we want to merge a new set of vectors into an existing graph that is already on disk.
+     * <p>
+     * Loading and extending an existing graph does not guarantee removal of previously stored
+     * duplicate neighbor IDs. Rebuild from vectors to regenerate all neighborhoods with ID uniqueness.
      *
      * @param in a reader from which to read the on-heap graph.
      * @param newVectors a super set RAVV containing the new vectors to be added to the graph as well as the old ones that are already in the graph
@@ -1071,17 +1351,13 @@ public class GraphIndexBuilder implements Closeable, Accountable {
 
         try (MutableGraphIndex graph = OnHeapGraphIndex.load(in, newVectors.dimension(), overflowRatio, diversityProvider);) {
 
-            GraphIndexBuilder builder = new GraphIndexBuilder(
-                    buildScoreProvider,
-                    newVectors.dimension(),
-                    graph,
-                    beamWidth,
-                    overflowRatio,
-                    alpha,
-                    true,
-                    simdExecutor,
-                    parallelExecutor
-            );
+            GraphIndexBuilder builder = GraphIndexBuilder.builder(buildScoreProvider, newVectors.dimension(), graph)
+                    .withBeamWidth(beamWidth)
+                    .withNeighborOverflow(overflowRatio)
+                    .withAlpha(alpha)
+                    .withSimdExecutor(simdExecutor)
+                    .withParallelExecutor(parallelExecutor)
+                    .build();
 
             var vv = newVectors.threadLocalSupplier();
             try {

@@ -31,6 +31,11 @@
 extern "C" {
 #endif
 
+// Stable bootstrap contract: return 1 if this library implements the requested
+// ABI, otherwise 0 (including unknown IDs). IDs are positive and never reused.
+// Keep this signature unchanged across all future ABIs.
+JVECTOR_SIMD_API int32_t jvector_supports_abi(int32_t abi);
+
 #define KERNEL_ENTRY(ret_type, name, params, names) \
     JVECTOR_SIMD_API ret_type name params;
 
@@ -42,13 +47,13 @@ JVECTOR_SIMD_KERNEL_LIST
 
 // Returns the name of the ISA tier that was selected at library init time by
 // dispatch_kernels().  Useful for diagnostics, tests, and logging.
-// Possible return values: "avx3_spr", "avx3_dl", "avx3", "avx2", "sse42".
+// Possible return values: "avx3_spr", "avx3_dl", "avx3_vnni", "avx3", "avx2", "sse42".
 // The returned pointer is a string literal; do not free it.
 JVECTOR_SIMD_API const char *jvector_simd_get_active_isa(void);
 
 // Returns the value of JVECTOR_MAX_ISA that was read at library init time, or
 // NULL if the variable was absent or contained an unrecognised value.
-// Possible non-null return values: "avx3_spr", "avx3_dl", "avx3", "avx2", "sse42".
+// Possible non-null return values: "avx3_spr", "avx3_dl", "avx3_vnni", "avx3", "avx2", "sse42".
 // The returned pointer (when non-null) is a string literal; do not free it.
 JVECTOR_SIMD_API const char *jvector_simd_get_max_isa_env(void);
 
@@ -56,4 +61,3 @@ JVECTOR_SIMD_API const char *jvector_simd_get_max_isa_env(void);
 }
 #endif // extern "C"
 #endif // VECTOR_SIMD_DOT_H
-

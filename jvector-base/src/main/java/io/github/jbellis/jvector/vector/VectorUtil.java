@@ -100,6 +100,61 @@ public final class VectorUtil {
   }
 
   /**
+   * Tries a bulk closest-centroid operation by squared L2 distance. Returns -1
+   * when unsupported, allowing callers to retain their existing Java scan.
+   * Equal distances retain the first centroid. No distance array is allocated.
+   * With assertions enabled, a second distance scan checks that every distance is finite.
+   */
+  public static int tryClosestCentroid(VectorFloat<?> point, int pointOffset,
+                                    VectorFloat<?> centroids, int centroidCount, int dimension) {
+    int nearest = impl.tryClosestCentroid(point, pointOffset, centroids, centroidCount, dimension);
+    // Preserve the former loop's finite-distance checks; this repeats the scan only with -ea.
+    assert nearest < 0 || centroidDistancesAreFinite(point, pointOffset, centroids, centroidCount, dimension);
+    return nearest;
+  }
+
+  /**
+   * Optionally writes {@code source * multiplier} into the destination at the given offset.
+   * The source and destination regions must not overlap. Returns {@code false}
+   * without modifying the destination when unsupported.
+   */
+  public static boolean tryScaleTo(VectorFloat<?> source, VectorFloat<?> destination,
+                                   int destinationOffset, float multiplier) {
+    return impl.tryScaleTo(source, destination, destinationOffset, multiplier);
+  }
+
+  /**
+   * Optionally subtracts {@code point} from {@code oldSum} and adds it to {@code newSum}.
+   * All three vectors must have equal lengths and disjoint storage. Returns
+   * {@code false} without modifying the sums when unsupported.
+   */
+  public static boolean trySubtractAddInPlace(VectorFloat<?> oldSum, VectorFloat<?> newSum,
+                                             VectorFloat<?> point) {
+    return impl.trySubtractAddInPlace(oldSum, newSum, point);
+  }
+
+  /**
+   * Optionally writes squared distances from the points to the centroid into scratch,
+   * then updates the componentwise minima. Points must have the centroid's dimension;
+   * input and output storage must be disjoint. Returns {@code false} without modifying
+   * either output when unsupported, so callers can use their existing loops.
+   */
+  public static boolean tryUpdateKMeansDistances(VectorFloat<?>[] points, VectorFloat<?> centroid,
+                                                  VectorFloat<?> minima, VectorFloat<?> scratch) {
+    return impl.tryUpdateKMeansDistances(points, centroid, minima, scratch);
+  }
+
+  private static boolean centroidDistancesAreFinite(VectorFloat<?> point, int pointOffset,
+                                                    VectorFloat<?> centroids, int centroidCount, int dimension) {
+    for (int i = 0; i < centroidCount; i++) {
+      if (!Float.isFinite(impl.squareDistance(point, pointOffset, centroids, i * dimension, dimension))) {
+        return false;
+      }
+    }
+    return true;
+  }
+
+  /**
    * Modifies the argument to be unit length, dividing by its l2-norm. IllegalArgumentException is
    * thrown for zero vectors.
    *
@@ -141,6 +196,12 @@ public final class VectorUtil {
   public static void subInPlace(VectorFloat<?> v1, VectorFloat<?> v2) {
     impl.subInPlace(v1, v2);
   }
+
+  /** @see VectorUtilSupport#dotProductMulti */
+  public static void dotProductMulti(VectorFloat<?> vector, VectorFloat<?>[] queries, int count, float[] out) {
+    impl.dotProductMulti(vector, queries, count, out);
+  }
+
 
   public static void subInPlace(VectorFloat<?> vector, float value) {
     impl.subInPlace(vector, value);
@@ -212,12 +273,51 @@ public final class VectorUtil {
     return impl.pqDecodedCosineSimilarity(encoded, encodedOffset, encodedLength, clusterCount, partialSums, aMagnitude, bMagnitude);
   }
 
+  /**
+   * Like {@link #min(VectorFloat)}, with a provider-specific implementation for NVQ setup.
+   * Does not modify the input; returns {@link Float#MAX_VALUE} for an empty vector.
+   */
+  public static float nvqMin(VectorFloat<?> vector) { return impl.nvqMin(vector); }
+
+  /** Like {@link #scale(VectorFloat, float)}, multiplying the NVQ setup vector in place. */
+  public static void nvqScale(VectorFloat<?> vector, float multiplier) { impl.nvqScale(vector, multiplier); }
+
+  /**
+   * Returns a new vector containing {@code a - b} for NVQ setup. Inputs must have
+   * equal dimensions; neither input is modified.
+   */
+  public static VectorFloat<?> nvqSub(VectorFloat<?> a, VectorFloat<?> b) { return impl.nvqSub(a, b); }
+
+  /**
+   * Returns a new vector containing the difference of the specified NVQ setup regions.
+   * Offsets and length are in float elements; both regions must be in bounds.
+   * Neither input is modified, including when their storage overlaps.
+   */
+  public static VectorFloat<?> nvqSub(VectorFloat<?> a, int aOffset, VectorFloat<?> b, int bOffset, int length) {
+    return impl.nvqSub(a, aOffset, b, bOffset, length);
+  }
+
   public static float nvqDotProduct8bit(VectorFloat<?> vector, ByteSequence<?> bytes, float growthRate, float midpoint, float minValue, float maxValue) {
     return impl.nvqDotProduct8bit(vector, bytes, growthRate, midpoint, minValue, maxValue);
   }
 
   public static float nvqSquareL2Distance8bit(VectorFloat<?> vector, ByteSequence<?> bytes, float growthRate, float midpoint, float minValue, float maxValue) {
     return impl.nvqSquareL2Distance8bit(vector, bytes, growthRate, midpoint, minValue, maxValue);
+  }
+
+  /** Whether NVQ scoring should use the packed cosine result instead of the array result. */
+  public static boolean supportsNvqCosine8bitPacked() {
+    return impl.supportsNvqCosine8bitPacked();
+  }
+
+  /**
+   * Like {@link #nvqCosine8bit}, returning two floats as raw bits in a long:
+   * low 32 bits contain the dot sum; high 32 bits contain the reconstructed squared magnitude.
+   * The vector, centroid and quantized bytes follow the same layout as the array-returning method.
+   */
+  public static long nvqCosine8bitPacked(VectorFloat<?> vector, ByteSequence<?> bytes, float growthRate,
+                                        float midpoint, float minValue, float maxValue, VectorFloat<?> centroid) {
+    return impl.nvqCosine8bitPacked(vector, bytes, growthRate, midpoint, minValue, maxValue, centroid);
   }
 
   public static float[] nvqCosine8bit(VectorFloat<?> vector, ByteSequence<?> bytes, float growthRate, float midpoint, float minValue, float maxValue, VectorFloat<?> centroid) {
@@ -234,6 +334,14 @@ public final class VectorUtil {
 
   public static float nvqLoss(VectorFloat<?> vector, float growthRate, float midpoint, float minValue, float maxValue, int nBits) {
     return impl.nvqLoss(vector, growthRate, midpoint, minValue, maxValue, nBits);
+  }
+
+  /**
+   * Optionally performs NVQ's coarse/fine growth-rate search without modifying the vector.
+   * Returns {@link Float#NaN} when unsupported, so callers can use their Java search.
+   */
+  public static float tryNvqGrowthRate(VectorFloat<?> vector, float minValue, float maxValue, int nBits) {
+    return impl.tryNvqGrowthRate(vector, minValue, maxValue, nBits);
   }
 
   public static float nvqUniformLoss(VectorFloat<?> vector, float minValue, float maxValue, int nBits) {

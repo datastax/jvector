@@ -70,6 +70,7 @@ public class OnDiskParallelGraphIndexWriter extends RandomAccessOnDiskGraphIndex
     private final int parallelWorkerThreads;
     private final boolean parallelUseDirectBuffers;
     private final ExecutorService parallelExecutor;
+    private final int parallelBatchSize;
 
     /**
      * Constructs an OnDiskParallelGraphIndexWriter with all parameters including file path
@@ -119,6 +120,24 @@ public class OnDiskParallelGraphIndexWriter extends RandomAccessOnDiskGraphIndex
                                    boolean parallelUseDirectBuffers,
                                    ExecutorService parallelExecutor)
     {
+        this(randomAccessWriter, version, startOffset, graph, oldToNewOrdinals, dimension, features,
+                filePath, parallelWorkerThreads, parallelUseDirectBuffers, parallelExecutor,
+                ParallelGraphWriter.DEFAULT_RECORDS_PER_BATCH);
+    }
+
+    OnDiskParallelGraphIndexWriter(RandomAccessWriter randomAccessWriter,
+                                   int version,
+                                   long startOffset,
+                                   ImmutableGraphIndex graph,
+                                   OrdinalMapper oldToNewOrdinals,
+                                   int dimension,
+                                   EnumMap<FeatureId, Feature> features,
+                                   Path filePath,
+                                   int parallelWorkerThreads,
+                                   boolean parallelUseDirectBuffers,
+                                   ExecutorService parallelExecutor,
+                                   int parallelBatchSize)
+    {
         super(randomAccessWriter, version, startOffset, graph, oldToNewOrdinals, dimension, features);
         if (filePath == null) {
             throw new IllegalStateException("Parallel writes require a file path");
@@ -127,6 +146,7 @@ public class OnDiskParallelGraphIndexWriter extends RandomAccessOnDiskGraphIndex
         this.parallelWorkerThreads = parallelWorkerThreads;
         this.parallelUseDirectBuffers = parallelUseDirectBuffers;
         this.parallelExecutor = parallelExecutor;
+        this.parallelBatchSize = parallelBatchSize;
     }
 
     /**
@@ -153,7 +173,8 @@ public class OnDiskParallelGraphIndexWriter extends RandomAccessOnDiskGraphIndex
         var config = new ParallelGraphWriter.Config(
             parallelWorkerThreads,
             parallelUseDirectBuffers,
-            4  // Default task multiplier (4x cores)
+            4, // Default task multiplier (4x cores)
+            parallelBatchSize
         );
 
         try (var parallelWriter = new ParallelGraphWriter(
@@ -162,7 +183,8 @@ public class OnDiskParallelGraphIndexWriter extends RandomAccessOnDiskGraphIndex
                 inlineFeatures,
                 config,
                 filePath,
-                parallelExecutor)) {
+                parallelExecutor,
+                l0Layout)) {
 
             parallelWriter.writeL0Records(
                 ordinalMapper,
@@ -175,7 +197,7 @@ public class OnDiskParallelGraphIndexWriter extends RandomAccessOnDiskGraphIndex
             maxOrdinalWritten = ordinalMapper.maxOrdinal();
 
             // Calculate end offset
-            long endOffset = baseOffset + (long) (ordinalMapper.maxOrdinal() + 1) * parallelWriter.getRecordSize();
+            long endOffset = baseOffset + l0Layout.totalBytes(ordinalMapper.maxOrdinal() + 1L);
             
             // CRITICAL: After parallel writes via AsynchronousFileChannel, we must invalidate
             // the BufferedRandomAccessWriter's buffer cache. The parallel writes bypassed the
@@ -200,6 +222,7 @@ public class OnDiskParallelGraphIndexWriter extends RandomAccessOnDiskGraphIndex
         private int parallelWorkerThreads = 0;
         private boolean parallelUseDirectBuffers = false;
         private ExecutorService parallelExecutor = null;
+        private int parallelBatchSize = ParallelGraphWriter.DEFAULT_RECORDS_PER_BATCH;
 
         public Builder(ImmutableGraphIndex graphIndex, Path outPath) throws FileNotFoundException {
             super(graphIndex, new BufferedRandomAccessWriter(outPath));
@@ -213,6 +236,11 @@ public class OnDiskParallelGraphIndexWriter extends RandomAccessOnDiskGraphIndex
         public Builder withStartOffset(long startOffset) {
             this.startOffset = startOffset;
             return this;
+        }
+
+        @Override
+        protected long startOffset() {
+            return startOffset;
         }
 
         /**
@@ -254,11 +282,21 @@ public class OnDiskParallelGraphIndexWriter extends RandomAccessOnDiskGraphIndex
             return this;
         }
 
+        /**
+         * Maximum complete L0 records per worker buffer (default 64).
+         * Does not change the disk format. Prewritten features retain their component-write path.
+         */
+        public Builder withParallelBatchSize(int records) {
+            if (records <= 0) throw new IllegalArgumentException("Record batch size must be positive");
+            this.parallelBatchSize = records;
+            return this;
+        }
+
         @Override
         protected OnDiskParallelGraphIndexWriter reallyBuild(int dimension) {
             return new OnDiskParallelGraphIndexWriter(
                 out, version, startOffset, graphIndex, ordinalMapper, dimension, features, filePath,
-                parallelWorkerThreads, parallelUseDirectBuffers, parallelExecutor
+                parallelWorkerThreads, parallelUseDirectBuffers, parallelExecutor, parallelBatchSize
             );
         }
     }

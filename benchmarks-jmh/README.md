@@ -133,7 +133,7 @@ The formatter will output a clean table showing:
 - **Visited_Count**: Average number of nodes visited during search
 - **Expanded_Count_BaseLayer**: Average number of nodes expanded in base layer
 
-Example output:
+Example output:[^machine]
 ```
  k  PQ_Subspaces   Time_ms  Recall  ReRanked_Count  Visited_Count  Expanded_Count_BaseLayer
 50             0  19.283   1.000             0.0        3290.8                     253.7
@@ -143,3 +143,5 @@ Example output:
 
 
 
+
+[^machine]: Machine type and core count were not recorded for this formatting example; its timings are illustrative, not a hardware baseline.

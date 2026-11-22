@@ -19,6 +19,7 @@ package io.github.jbellis.jvector.quantization;
 import io.github.jbellis.jvector.vector.Matrix;
 import io.github.jbellis.jvector.vector.VectorUtil;
 import io.github.jbellis.jvector.vector.VectorizationProvider;
+import io.github.jbellis.jvector.vector.types.FloatArray;
 import io.github.jbellis.jvector.vector.types.VectorFloat;
 import io.github.jbellis.jvector.vector.types.VectorTypeSupport;
 
@@ -36,7 +37,16 @@ import static java.lang.Math.max;
  * A KMeans++ implementation for float vectors.  Optimizes to use SIMD vector instructions if available.
  */
 public class KMeansPlusPlusClusterer {
+    private static final org.slf4j.Logger LOG = org.slf4j.LoggerFactory.getLogger(KMeansPlusPlusClusterer.class);
+
     private static final VectorTypeSupport vectorTypeSupport = VectorizationProvider.getInstance().getVectorTypeSupport();
+
+    // Observability flags (disabled by default)
+    private static final boolean VERBOSE_KMEANS =
+            Boolean.getBoolean("jvector.kmeans.verbose");
+
+    private static final boolean VERBOSE_KMEANS_TIMING =
+            Boolean.getBoolean("jvector.kmeans.timing");
 
     public static final float UNWEIGHTED = -1.0f;
 
@@ -129,18 +139,70 @@ public class KMeansPlusPlusClusterer {
      * @return a VectorFloat of cluster centroids.
      */
     public VectorFloat<?> cluster(int unweightedIterations, int anisotropicIterations) {
-        // Always cluster unweighted first, it is significantly faster
+
+        final int n = points.length;
+        final int threshold = Math.max(1, (int) (0.01 * n));
+
+        // ------------------------------------------------------------
+        // Unweighted (isotropic) k-means phase
+        // ------------------------------------------------------------
         for (int i = 0; i < unweightedIterations; i++) {
+
+            long t0 = VERBOSE_KMEANS_TIMING ? System.nanoTime() : 0L;
             int changedCount = clusterOnceUnweighted();
-            if (changedCount <= 0.01 * points.length) {
+            long t1 = VERBOSE_KMEANS_TIMING ? System.nanoTime() : 0L;
+
+            if (VERBOSE_KMEANS) {
+                LOG.info(String.format("KMeans unweighted iter %d: %d/%d reassigned (%.3f%%)",
+                        i,
+                        changedCount,
+                        n,
+                        100.0 * changedCount / n)
+                );
+            }
+
+            if (VERBOSE_KMEANS_TIMING) {
+                LOG.info(String.format("  time = %.3f ms",
+                        (t1 - t0) * 1e-6)
+                );
+            }
+
+            if (changedCount <= threshold) {
+                if (VERBOSE_KMEANS) {
+                    LOG.info("KMeans unweighted converged early");
+                }
                 break;
             }
         }
 
-        // Optionally, refine using anisotropic clustering
+        // ------------------------------------------------------------
+        // Anisotropic refinement phase
+        // ------------------------------------------------------------
         for (int i = 0; i < anisotropicIterations; i++) {
+
+            long t0 = VERBOSE_KMEANS_TIMING ? System.nanoTime() : 0L;
             int changedCount = clusterOnceAnisotropic();
-            if (changedCount <= 0.01 * points.length) {
+            long t1 = VERBOSE_KMEANS_TIMING ? System.nanoTime() : 0L;
+
+            if (VERBOSE_KMEANS) {
+                LOG.info(String.format("KMeans anisotropic iter %d: %d/%d reassigned (%.3f%%)",
+                        i,
+                        changedCount,
+                        n,
+                        100.0 * changedCount / n)
+                );
+            }
+
+            if (VERBOSE_KMEANS_TIMING) {
+                LOG.info(String.format("  time = %.3f ms",
+                        (t1 - t0) * 1e-6)
+                );
+            }
+
+            if (changedCount <= threshold) {
+                if (VERBOSE_KMEANS) {
+                    LOG.info("KMeans anisotropic converged early");
+                }
                 break;
             }
         }
@@ -183,15 +245,20 @@ public class KMeansPlusPlusClusterer {
         Arrays.fill(distances, Float.MAX_VALUE);
         VectorFloat<?> distancesVector = vectorTypeSupport.createFloatVector(distances);
         int distancesLength = points.length;
+        // Keep the scalar probability scan on existing array storage when available.
+        // The vector and array share updates; no vector wrapper is needed per read.
+        float[] distanceValues = distancesVector instanceof FloatArray ? ((FloatArray) distancesVector).array() : null;
 
         // Choose the first centroid randomly
         VectorFloat<?> firstCentroid = points[random.nextInt(points.length)];
         centroids.copyFrom(firstCentroid, 0, 0, firstCentroid.length());
         VectorFloat<?> newDistancesVector = vectorTypeSupport.createFloatVector(points.length);
-        for (int i = 0; i < points.length; i++) {
-            newDistancesVector.set(i, squareL2Distance(points[i], firstCentroid));
+        if (!VectorUtil.tryUpdateKMeansDistances(points, firstCentroid, distancesVector, newDistancesVector)) {
+            for (int i = 0; i < points.length; i++) {
+                newDistancesVector.set(i, squareL2Distance(points[i], firstCentroid));
+            }
+            VectorUtil.minInPlace(distancesVector, newDistancesVector);
         }
-        VectorUtil.minInPlace(distancesVector, newDistancesVector);
 
         // For each subsequent centroid
         for (int i = 1; i < k; i++) {
@@ -200,7 +267,7 @@ public class KMeansPlusPlusClusterer {
             float r = random.nextFloat() * totalDistance;
             int selectedIdx = -1;
             for (int j = 0; j < distancesLength; j++) {
-                r -= distancesVector.get(j);
+                r -= distanceValues != null ? distanceValues[j] : distancesVector.get(j);
                 if (r < 1e-6) {
                     selectedIdx = j;
                     break;
@@ -216,10 +283,12 @@ public class KMeansPlusPlusClusterer {
 
             // Update distances, but only if the new centroid provides a closer distance
             // All entries of newDistancesVector is overwritten with the updated squareL2Distance value
-            for (int j = 0; j < distancesLength; j++) {
-                newDistancesVector.set(j, squareL2Distance(points[j], nextCentroid));
+            if (!VectorUtil.tryUpdateKMeansDistances(points, nextCentroid, distancesVector, newDistancesVector)) {
+                for (int j = 0; j < distancesLength; j++) {
+                    newDistancesVector.set(j, squareL2Distance(points[j], nextCentroid));
+                }
+                VectorUtil.minInPlace(distancesVector, newDistancesVector);
             }
-            VectorUtil.minInPlace(distancesVector, newDistancesVector);
         }
         assertFinite(centroids);
         return centroids;
@@ -258,9 +327,11 @@ public class KMeansPlusPlusClusterer {
 
             if (newAssignment != oldAssignment) {
                 centroidDenoms[oldAssignment] = centroidDenoms[oldAssignment] - 1;
-                subInPlace(centroidNums[oldAssignment], point);
                 centroidDenoms[newAssignment] = centroidDenoms[newAssignment] + 1;
-                addInPlace(centroidNums[newAssignment], point);
+                if (!VectorUtil.trySubtractAddInPlace(centroidNums[oldAssignment], centroidNums[newAssignment], point)) {
+                    subInPlace(centroidNums[oldAssignment], point);
+                    addInPlace(centroidNums[newAssignment], point);
+                }
                 assignments[i] = newAssignment;
                 changedCount++;
             }
@@ -327,6 +398,10 @@ public class KMeansPlusPlusClusterer {
      * Return the index of the closest centroid to the given point
      */
     private int getNearestCluster(VectorFloat<?> point) {
+        int bulkNearest = VectorUtil.tryClosestCentroid(point, 0, centroids, k, point.length());
+        if (bulkNearest >= 0) {
+            return bulkNearest;
+        }
         float minDistance = Float.MAX_VALUE;
         int nearestCluster = 0;
 
@@ -363,9 +438,13 @@ public class KMeansPlusPlusClusterer {
                 // no points assigned to this cluster
                 initializeCentroidToRandomPoint(i);
             } else {
-                var centroid = centroidNums[i].copy();
-                scale(centroid, 1.0f / centroidDenoms[i]);
-                centroids.copyFrom(centroid, 0, i * centroid.length(), centroid.length());
+                var sum = centroidNums[i];
+                float multiplier = 1.0f / centroidDenoms[i];
+                if (!VectorUtil.tryScaleTo(sum, centroids, i * sum.length(), multiplier)) {
+                    var centroid = sum.copy();
+                    scale(centroid, multiplier);
+                    centroids.copyFrom(centroid, 0, i * centroid.length(), centroid.length());
+                }
             }
         }
     }

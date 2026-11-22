@@ -18,10 +18,10 @@ package io.github.jbellis.jvector.graph.disk;
 
 import io.github.jbellis.jvector.disk.IndexWriter;
 import io.github.jbellis.jvector.graph.ImmutableGraphIndex;
-import io.github.jbellis.jvector.graph.OnHeapGraphIndex;
 import io.github.jbellis.jvector.graph.disk.feature.*;
 
 import java.io.IOException;
+import java.io.UncheckedIOException;
 import java.util.EnumMap;
 import java.util.Map;
 import java.util.function.IntFunction;
@@ -81,87 +81,15 @@ public class OnDiskSequentialGraphIndexWriter extends AbstractGraphIndexWriter<I
     @Override
     public synchronized void write(Map<FeatureId, IntFunction<Feature.State>> featureStateSuppliers) throws IOException
     {
-        if (graph instanceof OnHeapGraphIndex) {
-            var ohgi = (OnHeapGraphIndex) graph;
-            if (ohgi.getDeletedNodes().cardinality() > 0) {
-                throw new IllegalArgumentException("Run builder.cleanup() before writing the graph");
-            }
+        long startOffset = out.position();
+        var alignment = (PageAlignment) featureMap.get(FeatureId.PAGE_ALIGNMENT);
+        if (alignment != null && (startOffset + headerSize) % alignment.pageBytes() != 0) {
+            throw new IllegalStateException("Page alignment was computed for another start position than "
+                    + startOffset + "; build the writer where the index will be written");
         }
-        for (var featureId : featureStateSuppliers.keySet()) {
-            if (!featureMap.containsKey(featureId)) {
-                throw new IllegalArgumentException(String.format("Feature %s not configured for index", featureId));
-            }
-        }
-        if (ordinalMapper.maxOrdinal() < graph.size(0) - 1) {
-            var msg = String.format("Ordinal mapper from [0..%d] does not cover all nodes in the graph of size %d",
-                    ordinalMapper.maxOrdinal(), graph.size(0));
-            throw new IllegalStateException(msg);
-        }
-
-        var view = graph.getView();
-
-        final var startOffset = out.position();
-        writeHeader(view, startOffset);
-
-        // for each graph node, write the associated features, followed by its neighbors at L0
-        for (int newOrdinal = 0; newOrdinal <= ordinalMapper.maxOrdinal(); newOrdinal++) {
-            var originalOrdinal = ordinalMapper.newToOld(newOrdinal);
-
-            // if no node exists with the given ordinal, write a placeholder
-            if (originalOrdinal == OrdinalMapper.OMITTED) {
-                throw new IllegalStateException("Ordinal mapper mapped new ordinal" + newOrdinal + " to non-existing node. This behavior is not supported on OnDiskSequentialGraphIndexWriter. Use OnDiskGraphIndexWriter instead.");
-            }
-
-            if (!graph.containsNode(originalOrdinal)) {
-                var msg = String.format("Ordinal mapper mapped new ordinal %s to non-existing node %s", newOrdinal, originalOrdinal);
-                throw new IllegalStateException(msg);
-            }
-            out.writeInt(newOrdinal); // unnecessary, but a reasonable sanity check
-            assert out.position() == featureOffsetForOrdinal(startOffset, newOrdinal) : String.format("%d != %d", out.position(), featureOffsetForOrdinal(startOffset, newOrdinal));
-            for (var feature : inlineFeatures) {
-                var supplier = featureStateSuppliers.get(feature.id());
-                if (supplier == null) {
-                    throw new IllegalStateException("Supplier for feature " + feature.id() + " not found");
-                } else {
-                    feature.writeInline(out, supplier.apply(originalOrdinal));
-                }
-            }
-
-            var neighbors = view.getNeighborsIterator(0, originalOrdinal);
-            if (neighbors.size() > graph.getDegree(0)) {
-                var msg = String.format("Node %d has more neighbors %d than the graph's max degree %d -- run Builder.cleanup()!",
-                                        originalOrdinal, neighbors.size(), graph.getDegree(0));
-                throw new IllegalStateException(msg);
-            }
-            // write neighbors list
-            out.writeInt(neighbors.size());
-            int n = 0;
-            for (; n < neighbors.size(); n++) {
-                var newNeighborOrdinal = ordinalMapper.oldToNew(neighbors.nextInt());
-                if (newNeighborOrdinal < 0 || newNeighborOrdinal > ordinalMapper.maxOrdinal()) {
-                    var msg = String.format("Neighbor ordinal out of bounds: %d/%d", newNeighborOrdinal, ordinalMapper.maxOrdinal());
-                    throw new IllegalStateException(msg);
-                }
-                out.writeInt(newNeighborOrdinal);
-            }
-            assert !neighbors.hasNext();
-
-            // pad out to maxEdgesPerNode
-            for (; n < graph.getDegree(0); n++) {
-                out.writeInt(-1);
-            }
-        }
-
-        writeSparseLevels(view, featureStateSuppliers);
-
-        writeSeparatedFeatures(featureStateSuppliers);
-
-        // Write the footer with all the metadata info about the graph
-        writeFooter(view, out.position());
-        // Note: flushing the data output is the responsibility of the caller we are not going to make assumptions about further uses of the data outputs
-
-        view.close();
+        graphIndexFormat.writeOnDiskSequential(createContext(startOffset), out, featureStateSuppliers);
     }
+
 
     /**
      * Builder for {@link OnDiskSequentialGraphIndexWriter}, with optional features.
@@ -169,6 +97,16 @@ public class OnDiskSequentialGraphIndexWriter extends AbstractGraphIndexWriter<I
     public static class Builder extends AbstractGraphIndexWriter.Builder<OnDiskSequentialGraphIndexWriter, IndexWriter> {
         public Builder(ImmutableGraphIndex graphIndex, IndexWriter out) {
             super(graphIndex, out);
+        }
+
+        /** The index starts where the output is when the writer is built. */
+        @Override
+        protected long startOffset() {
+            try {
+                return out.position();
+            } catch (IOException e) {
+                throw new UncheckedIOException(e);
+            }
         }
 
         @Override

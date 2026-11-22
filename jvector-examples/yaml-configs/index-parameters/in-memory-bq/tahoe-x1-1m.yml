@@ -1,0 +1,25 @@
+# tahoe-x1-1m (2560 dimensions): in-memory graph built and searched with 1-bit BQ codes,
+# then rescored with full-precision vectors. BQ suits very high-dimensional embeddings.
+yamlSchemaVersion: 3
+onDiskIndexVersion: 7
+
+dataset: tahoe-x1-1m
+
+construction:
+  type: inMemory
+  outDegree: [32]
+  efConstruction: [100]
+  neighborOverflow: [1.2f]
+  addHierarchy: [Yes]
+  refineFinalGraph: [Yes]
+  compression:
+    - type: BQ
+  reranking:
+    type: FP32
+
+search:
+  topKOverquery:
+    10: [2.0, 4.0, 8.0]
+  useSearchPruning: [No]
+  compression:
+    - type: BQ

@@ -16,33 +16,37 @@ limitations under the License.
 
 # JVector Native SIMD Library
 
-This directory contains the C++ source for `libjvector.so`, the native SIMD
-backend that accelerates vector operations in JVector via the Java Foreign
-Function & Memory (FFM) API.
+This directory contains the C++ source for `libjvector-x86_64.so` and
+`libjvector-aarch64.so`, the native SIMD backends that accelerate vector
+operations in JVector via the Java Foreign Function & Memory (FFM) API.
 
 > **Platform support:** Currently enabled on **Linux x86-64** (SSE4.2, AVX2,
-> and AVX-512). Windows and macOS are not yet supported. Support for **ARM**
-> (NEON and SVE) is planned for the near future; the
-> [Google Highway](https://github.com/google/highway) library used for SIMD
-> portability already targets both AArch64 targets, which will make the
-> extension straightforward.
+> AVX-512) and **Linux AArch64** (NEON, SVE, SVE2). Windows and macOS are not
+> yet supported.
 
 ---
 
 ## Directory layout
 
 ```
-jvector_simd.h                — Public C ABI (symbols exported to Java via FFM)
-jvector_simd.cpp              — Runtime ISA dispatcher; thin wrappers over the vtable
-jvector_simd_kernels.h        — Internal C++ declarations for all ISA namespaces (auto-generated from kernel list)
-jvector_simd_kernels.cpp      — Actual SIMD kernels (compiled three times, see below)
-jvector_simd_kernel_list.h    — X-Macro table: single source of truth for all kernel signatures
-jvector_cpu_features.h        — CPUID/XGETBV-based CPU feature detection
-assert_hwy_targets.h          — Compile-time assertions that the expected HWY target is active
-meson.build                   — Build description
-jextract_vector_simd.sh       — Build + jextract script (the usual entry point)
-third_party/highway/          — Google Highway header-only library (git submodule)
+jvector_simd.h                - Public C ABI (symbols exported to Java via FFM)
+jvector_simd.cpp              - Runtime ISA dispatcher; thin wrappers over the vtable
+jvector_simd_kernels.h        - Internal C++ declarations for all ISA namespaces (auto-generated from kernel list)
+jvector_simd_kernels.cpp      - Actual SIMD kernels (compiled three times, see below)
+jvector_simd_kernel_list.h    - X-Macro table: single source of truth for all kernel signatures
+jvector_cpu_features.h        - CPUID/XGETBV-based CPU feature detection
+assert_hwy_targets.h          - Compile-time assertions that the expected HWY target is active
+meson.build                   - Build description
+aarch64-cross.ini             - Meson cross-compile file: build aarch64 from an x86_64 host
+x86_64-cross.ini              - Meson cross-compile file: build x86_64 from an aarch64 host
+jextract_generate_bindings.sh - Generate Java bindings from native headers using jextract
+build_native_lib.sh           - Build the native library (native arch + optional cross-compile)
+subprojects/highway.wrap      - Google Highway revision, fetched by Meson and used header-only
 ```
+
+The optional oneDNN add-on (`libjvector_ash_fp16`) is a separate Meson project in
+[`../onednn`](../onednn), with its own `meson.build` and `subprojects/onednn.wrap`.
+libjvector never depends on it.
 
 ---
 
@@ -52,81 +56,242 @@ third_party/highway/          — Google Highway header-only library (git submod
 
 | Tool | Minimum version | Notes |
 |------|----------------|-------|
-| g++ / clang++ | GCC 11+ | Must support `-march=skylake-avx512` |
+| g++ (x86-64) | GCC 12+ | Needed for the AVX3_SPR tier; `build_native_lib.sh` checks it |
+| g++ (AArch64) | GCC 11+ | All three tiers (NEON, SVE, SVE2) built |
+| clang++ (x86-64) | Clang any recent | Must support `-march=skylake-avx512` (Clang 7+) |
+| clang++ (AArch64) | Clang any recent | NEON tier always built; SVE/SVE2 require **Clang ≥ 22** — older Clang produces a NEON-only build with a warning |
 | [Meson](https://mesonbuild.com/) | 0.55 | `pip install meson` |
 | [Ninja](https://ninja-build.org/) | any | `sudo apt install ninja-build` |
-| Git submodules | — | `git submodule update --init` (needed once) |
+| CMake (oneDNN add-on only) | 3.13+ | `sudo apt install cmake`; needed in addition to Meson and Ninja |
+| JDK (native ASH) | 22+ | Final FFM API; build and run the native provider with supported native-access settings |
+
+Meson fetches Google Highway at the revision pinned in `subprojects/highway.wrap`
+on the first `meson setup`; no Git submodule is needed. Offline builds can
+populate `subprojects/highway` with that revision beforehand.
+
+> **AArch64 compiler note:** On Clang < 22, the SVE and SVE2 tiers are
+> automatically skipped at configure time (`meson setup` prints a warning).
+> The resulting library contains only the NEON tier and falls back to it at
+> runtime even on SVE2-capable hardware (e.g. Graviton 4).  Upgrade to
+> Clang ≥ 22 or use GCC to get full SVE/SVE2 acceleration.
+
+For ASH, the oneDNN add-on is the preferred projection implementation for FP32
+encoding batches and FP16/INT8 queries where supported. It is built from the pinned
+source and bundled; users do not need a separately installed `libdnnl`. Building
+oneDNN takes a few minutes, so it is off by default and enabled with
+`-Dnative.onednn=true` (Maven) or `true` as the script's third argument; CI and
+the release profile enable it. A first online build needs access to the source URL
+in `../onednn/subprojects/onednn.wrap`; offline builds can populate that exact
+revision beforehand. On Ubuntu, install the native build prerequisites with:
+
+```bash
+sudo apt-get install g++ meson ninja-build cmake
+```
 
 ### Build steps
 
 Run the build script from this directory:
 
 ```bash
-bash jextract_vector_simd.sh [buildtype]
+bash src/build_native_lib.sh [buildtype] [crossarch] [onednn]
 ```
 
-The `buildtype` parameter is optional and defaults to `release`. Valid values are:
-- `release` (default) - Optimized build with no debug symbols
-- `debug` - Unoptimized build with debug symbols (`-g -O0`)
-- `debugoptimized` - Optimized build with debug symbols (`-g -O2`)
+Parameters (all optional):
 
-The script:
-1. Verifies prerequisites (g++, meson, ninja, Highway submodule).
-2. Runs `meson setup ../../../target/meson-build --wipe --buildtype=<buildtype>` then `meson compile`.
-3. Copies the versioned `.so` to `../resources/libjvector.so` where the Java
-   `LibraryLoader` expects it.
-4. Optionally re-generates the Java FFM bindings via `jextract` (only needed
-   when `jvector_simd.h` changes — see [Updating the Java bindings](#updating-the-java-bindings)).
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `buildtype` | `release` | `release`, `debug`, or `debugoptimized` |
+| `crossarch` | `false` | Set to `true` to also cross-compile for the other arch |
+| `onednn` | `false` | Set to `true` to also build and bundle the oneDNN add-on (FP32 batch, FP16 query projection, and INT8 on CPUs without AVX-512 VNNI) |
 
-To install all required dependencies automatically (g++, meson, ninja) and then build, pass `--auto-install-deps`:
+To include oneDNN:
 
 ```bash
-bash jextract_vector_simd.sh --auto-install-deps
+bash src/build_native_lib.sh release false true
+```
+
+The script:
+1. Detects the host arch via `uname -m` (x86_64 or aarch64).
+2. Verifies prerequisites (g++, meson, ninja; cmake when oneDNN is on).
+3. Always builds the **native arch** library into `target/meson-build-<arch>/`.
+4. If `crossarch=true`, also cross-compiles the **other arch** library into
+   `target/meson-build-<other-arch>/` using the bundled cross-compile file.
+5. Copies each built `.so` to `jvector-native/target/meson-build/libjvector-<arch>.so`
+   (relative to the repository root), which Maven includes as a resource.
+6. If `onednn=true`, builds the separate `../onednn` project into
+   `target/meson-build-onednn-<arch>/` and copies `libjvector_ash_fp16-<arch>.so` beside it.
+   The script does not strip or split debug symbols.
+
+To install all required dependencies automatically and then build, pass `--auto-install-deps` as the first argument:
+
+```bash
+bash src/build_native_lib.sh --auto-install-deps
 ```
 
 This is the easiest way to get started on a fresh Ubuntu machine. For other
 distributions the script will print an error indicating which install commands
 need to be added.
 
-To build without regenerating bindings (e.g. when `jextract` is not installed):
+The build is quiet by default. A first build prints one line when each library starts and one
+when it finishes; a later build prints a finish line only for a library it actually rebuilt.
+Meson and Ninja output goes to `target/meson-build-<arch>.setup.log` and `.compile.log` and is
+printed only if a step fails. Set `JVECTOR_NATIVE_BUILD_VERBOSE=1` to print everything,
+including each command the script runs.
+
+### Cross-compilation
+
+Both `.so` files can be produced on a single machine without access to the
+target hardware.
+
+#### Build aarch64 from an x86_64 host
+
+Install the cross-toolchain:
 
 ```bash
-bash jextract_vector_simd.sh   # jextract step is skipped with a warning if not found
+sudo apt-get install -y g++-aarch64-linux-gnu
 ```
+
+Build both libraries:
+
+```bash
+bash src/build_native_lib.sh release true
+# produces (relative to the repository root):
+# jvector-native/target/meson-build/libjvector-x86_64.so
+# jvector-native/target/meson-build/libjvector-aarch64.so
+```
+
+#### Build x86_64 from an aarch64 host
+
+Install the cross-toolchain:
+
+```bash
+sudo apt-get install -y g++-x86-64-linux-gnu
+```
+
+Build both libraries:
+
+```bash
+bash src/build_native_lib.sh release true
+# produces (relative to the repository root):
+# jvector-native/target/meson-build/libjvector-aarch64.so
+# jvector-native/target/meson-build/libjvector-x86_64.so
+```
+
+The cross-compile file used for each direction lives in this directory:
+
+| File | Direction |
+|------|-----------|
+| [`aarch64-cross.ini`](aarch64-cross.ini) | x86_64 host → aarch64 target |
+| [`x86_64-cross.ini`](x86_64-cross.ini) | aarch64 host → x86_64 target |
+
+Meson reads the cross file (via `--cross-file`) and sets
+`host_machine.cpu_family` to the target arch, which causes `meson.build` to
+select the correct ISA variant list (x86 tiers vs AArch64 tiers) automatically.
 
 ### Building with Maven
 
-From the project root, you can build the native module using Maven:
+From the project root, the recommended ASH build includes oneDNN:
 
-**Release build (default):**
+```bash
+mvn -pl jvector-native -am package -Dnative.onednn=true
+```
+
+It requires the CMake prerequisite above. The commands below build only the
+Highway library; append `-Dnative.onednn=true` to include oneDNN. The `release`
+profile turns it on.
+
+**Native arch only — release (default):**
 ```bash
 mvn clean install
 ```
 
-**Debug build:**
+**Native arch only — debug:**
 ```bash
 mvn clean install -Dnative.debug
 ```
 
-**Debug-optimized build:**
+**Native arch only — debug-optimized:**
 ```bash
 mvn clean install -Dnative.debugoptimized
 ```
 
-The Maven build automatically invokes the `jextract_vector_simd.sh` script with the appropriate buildtype parameter. The available profiles are:
-- `release` (default) - Optimized build with no debug symbols
-- `debug` - Unoptimized build with debug symbols (`-g -O0`)
-- `debugoptimized` - Optimized build with debug symbols (`-g -O2`)
+**Both architectures (native + cross-compiled):**
+```bash
+mvn clean install -Dnative.crossarch
+```
+
+**Both architectures, debug build:**
+```bash
+mvn clean install -Dnative.crossarch -Dnative.debug
+```
+
+The `-Dnative.crossarch` flag activates the `native.crossarch` Maven profile,
+which passes `crossarch=true` as the second argument to `build_native_lib.sh`.
+Without it, only the library for the host architecture is built.
 
 ### Manual meson build
 
+**Native build:**
 ```bash
 cd jvector-native/src/main/native
-meson setup ../../../target/meson-build --wipe --buildtype=release
-meson compile -C ../../../target/meson-build
+meson setup ../../../target/meson-build-x86_64 . --wipe --buildtype=release
+meson compile -C ../../../target/meson-build-x86_64
 ```
 
-The output is `target/meson-build/libjvector.so.<version>` (relative to the project root).
+**Cross-compile aarch64 from x86_64:**
+```bash
+cd jvector-native/src/main/native
+meson setup ../../../target/meson-build-aarch64 . --wipe \
+    --cross-file aarch64-cross.ini --buildtype=release
+meson compile -C ../../../target/meson-build-aarch64
+```
+
+The versioned output (e.g. `libjvector.so.0.1.0`) is the real file; copy and
+rename it to `jvector-native/target/meson-build/libjvector-<arch>.so` (relative
+to the repository root) before Maven processes resources to make it available to
+`LibraryLoader`.
+
+### Generating Java bindings for native code
+
+Jextract is used for generating Java bindings, which are checked in to git.
+These need to be regenerated if the public header file changes. This is done by
+running the jextract script:
+
+```bash
+bash src/jextract_generate_bindings.sh  # uses jextract from the PATH
+```
+
+After regeneration the script automatically patches the generated file to add
+`Linker.Option.critical(true)` to every downcall, which avoids heap allocation
+on each call.
+
+The script also generates `NativeAshOneDnn` (with `jvector_ash_fp16_result`) from
+the oneDNN add-on header, `src/main/onednn/src/jvector_ash_fp16.h`, which declares
+the FP16, INT8 and FP32-batch ASH projection entry points. Those calls run
+long oneDNN work, so they are not patched to critical downcalls. The add-on is
+optional and older builds may lack newer entry points, so callers check
+`NativeASHAddOn.unavailable(...)` before their first call.
+
+You can streamline your combined Java + C++ workflow while building by asking
+maven to call the script for you. You still need to manually update the
+consumers of those bindings if the signatures change.
+
+```bash
+mvn compile -Dnative.jextract.skip=false
+```
+
+As of writing, this module supports Java 22. Newer jextract versions may
+use output bindings using newer language features which break the build, so you
+should ensure that you're using jextract 22. If you have multiple versions of
+jextract on the system, or if it's not on the PATH, you can specify the location
+via environment variable:
+
+```bash
+JEXTRACT_BIN="/opt/jextract-22/bin/jextract" bash src/jextract_generate_bindings.sh
+```
+
+The same environment variable can be used when invoking the script through
+maven.
 
 ---
 
@@ -242,35 +407,61 @@ JVECTOR_MAX_ISA=sse42 ../../../target/meson-build/bench_simd_kernels
 
 ## How it is integrated into JVector
 
+**x86-64:**
 ```
 Java caller
   └─ NativeVectorUtilSupport   (jvector-native/.../vector/)
        └─ NativeSimdOps        (jvector-native/.../vector/cnative/ — FFM glue, generated by jextract)
             └─ libjvector.so   (this library, loaded at runtime by LibraryLoader)
                  └─ jvector_simd.cpp — dispatches to the best ISA vtable
-                      ├─ AVX3_SPR::* (compiled with -march=skylake-avx512 -mavx512fp16 …, Sapphire Rapids)
-                      ├─ AVX3_DL::*  (compiled with -march=skylake-avx512 -mavx512vnni …, Ice Lake)
+                      ├─ AVX3_SPR::* (compiled with -march=sapphirerapids)
+                      ├─ AVX3_DL::*  (compiled with -march=icelake-server)
                       ├─ AVX3::*     (compiled with -march=skylake-avx512)
                       ├─ AVX2::*     (compiled with -march=haswell)
                       └─ SSE42::*    (compiled with -msse4.2, scalar fallback)
+```
+
+**oneDNN ASH add-on (optional, built with `-Dnative.onednn=true`):**
+```
+Java caller
+  └─ NativeASHFP16Projection / NativeASHInt8Projection / NativeASHFP32BatchProjection
+       └─ NativeAshOneDnn      (jvector-native/.../vector/cnative/ — FFM glue, generated by jextract)
+            └─ libjvector_ash_fp16.so   (loaded at runtime by LibraryLoader)
+```
+
+**AArch64:**
+```
+Java caller
+  └─ NativeVectorUtilSupport   (jvector-native/.../vector/)
+       └─ NativeSimdOps        (jvector-native/.../vector/cnative/ — FFM glue, generated by jextract)
+            └─ libjvector.so   (this library, loaded at runtime by LibraryLoader)
+                 └─ jvector_simd.cpp — dispatches to the best ISA vtable
+                      ├─ SVE2::*  (compiled with -march=armv9-a+sve2,   scalable VL)
+                      ├─ SVE::*   (compiled with -march=armv8.4-a+sve,  scalable VL)
+                      └─ NEON::*  (compiled with -march=armv8-a+crypto, baseline)
 ```
 
 ### Load sequence
 
 1. `NativeVectorizationProvider` calls `LibraryLoader.loadJvector()` at startup.
 2. `LibraryLoader` first tries `System.loadLibrary("jvector")` (picks up a
-   system-installed `.so`), then falls back to extracting `libjvector.so` from
-   the JAR's resources and loading it from a temp file.
-3. On first call into `NativeSimdOps`, the FFM `SymbolLookup` resolves each
-   exported symbol directly against the loaded library.
+   system-installed `.so`), then falls back to reading `os.arch` to select the
+   correct resource name (`libjvector-x86_64.so` or `libjvector-aarch64.so`),
+   extracting it from the JAR, and loading it from a temp file.
+3. The provider checks that `jvector_supports_abi` exists and returns 1 for the
+   ABI required by the Java bindings. See [Native ABI compatibility](#native-abi-compatibility).
+4. The provider checks that all bound symbols exist and calls the ISA accessor
+   before making the provider available. FFM bindings resolve their function
+   addresses lazily; no kernel is called before the ABI check succeeds.
 
 ### ISA dispatch
 
 Dispatch happens **once** at C++ static-init time (before `main()`):
 
-1. `populate_cpu_features()` issues CPUID / XGETBV and fills a feature array.
-2. `dispatch_kernels()` checks the feature array in descending capability order
-   (`AVX3` ⊃ `AVX2` ⊃ `SSE42`) and returns a copy of the matching `KernelVTable`.
+1. `populate_cpu_features()` issues CPUID / XGETBV (x86) or `getauxval` (AArch64) and fills a feature array.
+2. `dispatch_kernels()` checks the feature array in descending capability order and returns a copy of the matching `KernelVTable`:
+   - x86-64: `AVX3_SPR` ⊃ `AVX3_DL` ⊃ `AVX3` ⊃ `AVX2` ⊃ `SSE42`
+   - AArch64: `SVE2` ⊃ `SVE` ⊃ `NEON`
 3. All public API functions are one-liner wrappers that call through
    `kernels.<fn>`.
 
@@ -279,37 +470,32 @@ Dispatch happens **once** at C++ static-init time (before `main()`):
 Set the `JVECTOR_MAX_ISA` environment variable before starting the JVM to cap
 the selected ISA without recompiling:
 
+**x86-64:**
 ```bash
-JVECTOR_MAX_ISA=avx3_spr java ...   # use Sapphire-Rapids FP16 tier
-JVECTOR_MAX_ISA=avx3_dl  java ...   # use Ice Lake tier
-JVECTOR_MAX_ISA=avx3  java ...      # use AVX-512 even if a higher tier is available
-JVECTOR_MAX_ISA=avx2  java ...      # use AVX2 even on an AVX-512 machine
-JVECTOR_MAX_ISA=sse42 java ...      # force scalar/SSE4.2 fallback
+JVECTOR_MAX_ISA=avx3_spr  java ...  # use Sapphire-Rapids FP16 tier
+JVECTOR_MAX_ISA=avx3_dl   java ...  # use Ice Lake tier
+JVECTOR_MAX_ISA=avx3_vnni java ...  # use AVX-512 + VNNI tier (Cascade Lake, Cooper Lake)
+JVECTOR_MAX_ISA=avx3      java ...  # use AVX-512 without VNNI even if a higher tier is available
+JVECTOR_MAX_ISA=avx2      java ...  # use AVX2 even on an AVX-512 machine
+JVECTOR_MAX_ISA=sse42     java ...  # force scalar/SSE4.2 fallback
 ```
 
-Accepted values (case-sensitive): `avx3_spr`, `avx3_dl`, `avx3`, `avx2`, `sse42`.
+**AArch64:**
+```bash
+JVECTOR_MAX_ISA=sve2  java ...   # use SVE2 tier (Graviton 4 / Neoverse V2/N2)
+JVECTOR_MAX_ISA=sve   java ...   # use SVE tier  (Graviton 3 / Neoverse V1)
+JVECTOR_MAX_ISA=neon  java ...   # force NEON baseline
+```
+
+Accepted values (case-sensitive): `avx3_spr`, `avx3_dl`, `avx3_vnni`, `avx3`, `avx2`, `sse42` (x86-64); `sve2`, `sve`, `neon` (AArch64).
 An unrecognised value is silently ignored and full CPU detection is used.
-
-### Updating the Java bindings
-
-The Java FFM glue in `cnative/NativeSimdOps.java` is generated from
-`jvector_simd.h` by `jextract`. Re-run the script whenever the public C header
-changes:
-
-```bash
-bash jextract_vector_simd.sh   # requires jextract on PATH
-```
-
-After regeneration the script automatically patches the generated file to add
-`Linker.Option.critical(true)` to every downcall, which avoids heap allocation
-on each call.
 
 ---
 
 ## Adding a new SIMD kernel
 
 The kernel registry is driven by the X-macro file
-[`jvector_simd_kernel_list.h`](jvector_simd_kernel_list.h). A single entry
+[`jvector_simd_kernel_list.h`](src/jvector_simd_kernel_list.h). A single entry
 there auto-generates:
 
 - the public C declaration in `jvector_simd.h` (exported to Java via FFM)
@@ -510,7 +696,7 @@ Add the new tier above `AVX3_SPR` in ascending capability order:
 
 ```cpp
 // jvector_simd.cpp
-enum class MaxIsa { Unset = -1, SSE42 = 0, AVX2 = 1, AVX3 = 2, AVX3_DL = 3, AVX3_SPR = 4, MY_NEW_TIER = 5 };
+enum class MaxIsa { Unset = -1, SSE42 = 0, AVX2 = 1, AVX3 = 2, AVX3_VNNI = 3, AVX3_DL = 4, AVX3_SPR = 5, MY_NEW_TIER = 6 };
 ```
 
 Also update `read_max_isa()` to map the corresponding string:
@@ -554,7 +740,7 @@ if (max_isa != MaxIsa::SSE42 && max_isa != MaxIsa::AVX2
 }
 ```
 
-If the required CPUID bits are not yet in [`jvector_cpu_features.h`](jvector_cpu_features.h),
+If the required CPUID bits are not yet in [`jvector_cpu_features.h`](src/jvector_cpu_features.h),
 add them to the `CpuFeature` enum and populate them in
 `populate_cpu_features()`.
 
@@ -584,7 +770,7 @@ HWY_FLATTEN float my_kernel(const float *a, size_t length)
 
 Add a `JV_REQUIRE_HWY_*` guard so the build fails loudly if the compiler selects
 the wrong Highway target for this translation unit. The existing checks for
-`JV_REQUIRE_HWY_AVX3` and `JV_REQUIRE_HWY_AVX2` in [`assert_hwy_targets.h`](assert_hwy_targets.h)
+`JV_REQUIRE_HWY_AVX3` and `JV_REQUIRE_HWY_AVX2` in [`assert_hwy_targets.h`](src/assert_hwy_targets.h)
 show the pattern — add an `#elif` block for the new tier:
 
 ```cpp
@@ -624,3 +810,253 @@ isa_libs += my_new_tier_lib
 - Update the architecture diagram in the **How it is integrated into JVector**
   section above.
 - Add the new `JVECTOR_MAX_ISA` value to the **ISA cap** section.
+
+## Native ABI compatibility
+
+### Querying support
+
+The Java provider requires ABI 1. Before resolving kernel bindings it calls this
+export from [`src/jvector_simd.h`](src/jvector_simd.h):
+
+```c
+int32_t jvector_supports_abi(int32_t abi);
+```
+
+The native library stores an explicit set of supported ABI IDs, initially `{1}`,
+in [`src/jvector_simd.cpp`](src/jvector_simd.cpp). The query returns exactly 1 for
+a supported ID and 0 for any other ID, including nonpositive and unknown IDs.
+C and C++ consumers can call the same query before using an ABI's entry points.
+The query's name, signature, and return convention are permanent bootstrap
+contracts; they must remain unchanged when new ABIs are introduced.
+
+The Java JAR requires one ABI, rather than a particular native release number.
+For example, if a future Java release requires ABI 2:
+
+| Native supported set | Java requires ABI 1 | Java requires ABI 2 |
+| --- | --- | --- |
+| `{1}` | Accept | Reject |
+| `{1, 2}` | Accept | Accept |
+| `{2}` | Reject | Accept |
+| Query missing | Reject | Reject |
+
+Sets need not be contiguous. A library advertising `{1, 3}` must return 0 for
+ABI 2. Never infer support for older IDs from the highest supported ID.
+
+An unsupported ABI or missing query causes automatic Java provider selection to
+fall back to Panama. Explicitly forcing native fails during initialization.
+Native libraries from before this handshake are rejected, even if their kernels
+might otherwise be compatible. Each release bundles a library supporting its
+required ABI. A system library found through `java.library.path` is checked too;
+if it loads but fails validation, selection falls back to Panama rather than
+trying the bundled native copy.
+
+### Evolving the native library
+
+ABI IDs describe calling contracts, not JVector release numbers. Optimizations,
+bug fixes that preserve the contract, and compatible additions retain the existing
+ABI ID. Required-symbol checks still reject older libraries missing functions
+that a newer Java release needs, even when the ABI ID is supported.
+
+An incompatible change to a signature, data layout, or calling convention requires
+a new ABI ID. To support both IDs, retain the old contract and expose changed
+functions under distinct entry points, such as a new `_v2` name. Never reinterpret
+an existing symbol's signature. Java bindings for each ABI must resolve the
+corresponding entry points. Advertise an old ID only while its contract is still
+implemented; removing it makes Java releases requiring that ID reject the library.
+
+When changing the native interface:
+
+1. Update the public declarations and native implementations. Keep the supported
+   set in `jvector_simd.cpp` accurate. Incompatible changes also require updating
+   `REQUIRED_ABI` in
+   [`NativeVectorizationProvider.java`](../java/io/github/jbellis/jvector/vector/NativeVectorizationProvider.java)
+   and adapting the Java callers to the new entry points.
+2. Regenerate the checked-in `NativeSimdOps.java` bindings with jextract 22 when
+   the public header changes. Follow [Generating Java bindings for native code](#generating-java-bindings-for-native-code).
+3. Rebuild and package the native library along with the Java changes. A Java-only
+   rebuild cannot add new exports to an existing `.so`; build each shipped architecture.
+4. Run `TestVectorizationProviderSelection` against the rebuilt library. It covers
+   the real supported set, noncontiguous test sets, unsupported and missing queries,
+   missing kernels, automatic fallback, and forced-native startup failure. Update
+   the fixtures and assertions when the required ABI or bound functions change.
+5. For release packaging, run `jvector-native/verify_native_lib.sh` from the
+   repository root against the cross-architecture JAR. It requires both shipped
+   libraries and checks their architecture, dependencies, and required exports,
+   including `jvector_supports_abi`, where the inspection tools are available.
+   Export inspection complements the runtime tests; it does not establish ABI
+   support by itself.
+
+
+<a id="ash-fp16-query-projection"></a>
+## ASH query projection
+
+ASH base-vector encoding retains FP32: batch projection prefers oneDNN and
+single-vector projection uses Highway. Training uses the BLAS/LAPACK provider.
+Query scoring can prepare a separate immutable FP16 or explicit INT8 view of
+the same trained projection matrix. Model and graph formats do not change.
+
+Use [Choosing ASH query-projection precision](../../../../docs/ash-projection-precision.md)
+for processor-family recommendations, settings and when selection takes effect.
+This section describes native build, arithmetic, ownership and diagnostics.
+
+### FP16 behavior
+
+FP16 uses FP16 operands with strict FP32 accumulation/output. The existing
+`auto` policy prefers optimized FP16 and retains its FP32 fallback. An individual
+query outside the finite FP16 range uses FP32 in automatic mode. Required `fp16`
+accepts only matrix values and finite query values with magnitude at most 65504;
+underflow and rounding follow IEEE binary16 arithmetic. A query with a NaN or
+infinite value gets NaN outputs, as in FP32, without affecting other queries in
+its batch. Input shape/aliasing errors,
+allocation failures and execution errors are reported rather than hidden.
+
+### INT8 behavior
+
+Required `int8` prepares symmetric signed weights per output row and quantizes
+each query independently, as two INT8 digits with one scale (a coarse digit and its
+rounding remainder). Unsigned-input/signed-weight products accumulate in signed
+32 bits. Correcting the input offset and dequantizing produces FP32 output.
+
+On CPUs with AVX-512 VNNI the native library computes the products itself, with the
+Highway kernel in `ash_projection_i8-inl.h`: the Java model owns the packed INT8
+rows, row scales and row sums, and the kernel holds no state. Tiles use 512-bit
+registers on the AVX3_SPR tier (Sapphire Rapids and later) and 256-bit registers on
+the AVX3_DL tier (Ice Lake, AMD Zen 4/5) and the AVX3_VNNI tier (Cascade Lake,
+Cooper Lake). Other CPUs use the oneDNN add-on described below, which only CPUs
+with AVX-VNNI but not AVX-512 need; `JVECTOR_ASH_INT8_ONEDNN` selects it everywhere.
+Both compute the same integers, so their outputs are identical. Scales, quantization and rescaling use FP32 arithmetic. A nonzero operand whose
+scale rounds to zero is rejected before integer conversion. A nonfinite matrix
+value is rejected; a query with a NaN or infinite value gets NaN outputs, as in
+FP32, without affecting other queries in its batch. Output rescaling retains
+ordinary FP32 overflow behavior.
+
+In the oneDNN add-on, only the INT8 quantization and batch-projection functions use
+an AVX2 compiler target. The generic model-creation guard runs first and requires a
+qualified VNNI/AMX backend, whose ISA includes AVX2. This keeps rounding in native
+instructions without changing FP16/FP32 or library-wide compiler settings.
+
+The add-on's qualified oneDNN VNNI/AMX kernels preserve full-range integer dot products. Legacy
+kernels can saturate at a 16-bit intermediate; INT8 rejects them rather than
+silently changing the quantization range. Both the effective oneDNN ISA and the
+selected primitive are checked. CPU vendor names do not control dispatch.
+The 65535-column bound prevents signed 32-bit accumulation overflow.
+
+Explicit INT8 reports unsupported backends without substituting another
+precision. The loader validates the existing add-on ABI before binding its
+symbols. Invalid operands, numeric range failures, allocation failures and
+unexpected execution failures retain distinct error categories across FFM.
+
+### Recommended oneDNN build and package
+
+Native Maven and direct-script builds include oneDNN when asked to
+(`-Dnative.onednn=true`, or `true` as the script's third argument) on the supported
+Linux platforms; the `release` profile and CI turn it on. Use JDK 22 or newer. It is
+**automatically preferred** for FP32 encoding batches and supported FP16 queries;
+INT8 is available through explicit selection. Highway stays independent and supplies
+FP32 fallback when the add-on or the requested operation is unavailable:
+
+
+```bash
+mvn -pl jvector-native -am package -Dnative.onednn=true
+```
+
+For a direct native build:
+
+```bash
+bash src/build_native_lib.sh release false true
+```
+
+The recommended oneDNN build requires CMake 3.13+ in addition to the native prerequisites. Meson
+fetches the exact oneDNN revision pinned in `../onednn/subprojects/onednn.wrap`; an offline
+build can populate `../onednn/subprojects/onednn` with that revision beforehand. oneDNN is
+built with the sequential CPU runtime, no GPU support, and only inference
+matrix-multiplication/reorder primitives. Its dispatcher selects supported CPU
+instructions at runtime; the build does not use `-march=native`.
+
+oneDNN is statically linked into `libjvector_ash_fp16-<arch>.so`, so the jar
+carries one self-contained add-on and needs no system oneDNN. Maven packages
+this library and the upstream license/third-party notices beside the Highway
+resource. The existing architecture-aware loader first tries the system library
+path, then extracts the matching classpath resource. No external `libdnnl` or
+benchmark-specific path is required. The resource keeps its existing FP16 name
+for binary compatibility but supplies FP32 batch and FP16/INT8 query projection.
+Without `-Dnative.onednn=true` (the default) the build leaves oneDNN projection out
+of the package and removes stale add-on resources from previous builds; Highway FP32
+is then used.
+The optional component follows the native module's Linux platform support;
+cross-compilation still requires the corresponding target toolchain.
+
+FP32 batch projection retains the original FP32 matrix and uses sequential
+oneDNN SGEMM without converting database operands to FP16. Single-vector encoding
+continues to use Highway FP32. The FP32 loader validates the same ABI as FP16;
+missing/older add-ons and unsupported operations keep Highway. FP16 automatic
+mode additionally falls back for operands outside FP16's finite range. Explicit
+`fp16` and `int8` modes require support; invalid inputs, allocation failures and execution
+errors propagate. See [implementation and measured encoding scope](../../../../docs/native-ash-preparation.md#onednn-fp32-encoding-projection).
+
+### Ownership, parallelism and tests
+
+Each model owns its immutable prepared low-precision weights and execution
+plans. Java automatic arenas release the native context when it becomes
+unreachable. Each calling thread reuses its conversion, staging and scratch
+buffers; neither thread-local cache retains the model or weights. Calls use
+ordinary FFM downcalls. oneDNN starts no search workers or nested thread pool.
+Concurrent callers use the same immutable model with separate workspaces.
+
+The native-module Java tests retain FP32 coverage and check FP16 against an
+independent rounded-operand oracle, irregular and large dimensions, numeric
+boundaries, input guards, model switching, concurrent platform/virtual threads,
+query-only precision and loading without the optional library. INT8 tests additionally
+cover full-range integer accumulation, FP32 scale underflow/overflow guards, batch tails,
+concurrent model switching, lazy packed-weight accounting, ABI compatibility and
+required-mode rejection of legacy integer kernels. On a machine
+known to support FP16, require both oneDNN paths rather than capability skips with:
+
+```bash
+mvn -pl jvector-native -am test -Dnative.onednn=true -Djvector.test.requireFp16=true -Djvector.test.requireFp32OneDnn=true
+```
+
+On VNNI/AMX hardware, require INT8 execution instead of capability skips:
+
+```bash
+mvn -pl jvector-native -am test -Djvector.test.requireInt8=true
+```
+
+No INT8 diagnostics are printed unconditionally. For a separate diagnostic run,
+use oneDNN's standard verbose mode to inspect the selected primitive:
+
+```text
+ONEDNN_VERBOSE=1 java ... -Djvector.ash.queryProjection=int8 ...
+```
+
+Keep verbose diagnostics out of reported timing runs.
+
+With Google Test installed, Meson also builds `test_ash_fp16`; run it with
+`meson test -C <build-directory> --suite ash_fp16 --print-errorlogs`.
+
+For projection throughput, use the built-in `DistancesASH` comparison with
+`-Djvector.bench.int8-projection=true`. The existing `jvector.bench.recall`
+setting controls optional exhaustive scans; leave it false for projection-only
+measurements. Graph recall and latency are measured separately with BenchYAML.
+
+For performance validation, use the standard BenchYAML query path on identical
+saved graphs for `fp32`, `auto`/`fp16` or explicit `int8`. Include normal query preparation in
+its timers and compare recall@10 as well as QPS. Control CPU affinity and NUMA
+memory placement consistently across runs; otherwise projection locality can
+obscure the precision comparison. Do not include compilation or another active
+benchmark in the query measurement interval.
+
+
+### Concurrent query integration
+
+ASH can combine independent queries when the selected projection advertises
+batch support. FP16 uses true oneDNN matrix multiplication and INT8 the Highway
+VNNI kernel (or oneDNN on CPUs without AVX-512 VNNI), each retaining a singleton path. Applications continue
+to issue synchronous searches; no query executor or nested native thread pool
+is created. Base-vector encoding and training remain FP32.
+
+Database developers should follow [Integrating ASH queries into a database](../../../../docs/ash-query-integration.md)
+for caller concurrency, bounded admission, resource ownership and latency
+validation. The [maintainer design](../../../../docs/ash-query-batching-design.md)
+describes coordination separately. Native batch entry points accept counts above
+eight; internal micro-tiling does not restrict their API.

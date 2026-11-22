@@ -18,7 +18,9 @@ package io.github.jbellis.jvector.example.reporting;
 
 import io.github.jbellis.jvector.graph.disk.feature.FeatureId;
 
+import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.regex.Pattern;
@@ -47,39 +49,61 @@ public final class ExperimentsSchemaV1 {
     }
 
     public static List<String> fixedColumns() {
-        return List.of(
+        return fixedColumns(false);
+    }
+
+    static List<String> fixedColumns(boolean includeIndexOptions) {
+        List<String> columns = new ArrayList<>(List.of(
                 "schema_version",
                 "run_id",
                 "run_uuid",
                 "system_id",
-                "dataset_name",
-                "M",
-                "efConstruction",
-                "neighborOverflow",
-                "addHierarchy",
-                "refineFinalGraph",
+                "dataset_name"
+        ));
+        columns.addAll(BUILD_PARAMETER_COLUMNS);
+        columns.addAll(List.of(
                 "feature_set",
                 "build_compressor",
                 "search_compressor",
                 "usePruning",
                 "topK",
                 "overquery",
-                "rerankK"
-        );
+                "rerankK",
+                "ash_query_projection_requested",
+                "ash_query_projection_effective"
+        ));
+        if (includeIndexOptions) {
+            columns.addAll(List.of("index_type", "writer_mode", "reranking_type", "ash_construction_mode",
+                    "query_execution", "query_threads", "max_batch_size"));
+        }
+        return List.copyOf(columns);
     }
+
+    /**
+     * The construction-parameter columns, in column order. Each names a key of the build parameters passed
+     * to {@link #fixedValues(RunContext, String, Map, Set, String, String, boolean, int, double, int)}.
+     * Adding one changes the schema.
+     */
+    private static final List<String> BUILD_PARAMETER_COLUMNS = List.of(
+            "M",
+            "efConstruction",
+            "neighborOverflow",
+            "addHierarchy",
+            "refineFinalGraph"
+    );
 
     /**
      * Build the fixed-column value map for one experiments.csv row.
      *
      * Grid/orchestrators supply raw values; this method owns column naming consistency.
+     *
+     * @param buildParameters construction parameters by name; every build-parameter column must be present,
+     *                        and parameters without a column are not written
+     * @throws IllegalArgumentException if a build-parameter column is missing from {@code buildParameters}
      */
     public static Map<String, String> fixedValues(RunContext run,
                                                   String datasetName,
-                                                  int M,
-                                                  int efConstruction,
-                                                  float neighborOverflow,
-                                                  boolean addHierarchy,
-                                                  boolean refineFinalGraph,
+                                                  Map<String, ?> buildParameters,
                                                   Set<FeatureId> featureSet,
                                                   String buildCompressorString,
                                                   String searchCompressorString,
@@ -94,11 +118,12 @@ public final class ExperimentsSchemaV1 {
         fixed.put("system_id", run.systemId());
         fixed.put("dataset_name", datasetName);
 
-        fixed.put("M", Integer.toString(M));
-        fixed.put("efConstruction", Integer.toString(efConstruction));
-        fixed.put("neighborOverflow", Float.toString(neighborOverflow));
-        fixed.put("addHierarchy", Boolean.toString(addHierarchy));
-        fixed.put("refineFinalGraph", Boolean.toString(refineFinalGraph));
+        for (String column : BUILD_PARAMETER_COLUMNS) {
+            if (!buildParameters.containsKey(column)) {
+                throw new IllegalArgumentException("Missing build parameter for experiments.csv column " + column);
+            }
+            fixed.put(column, String.valueOf(buildParameters.get(column)));
+        }
         fixed.put("feature_set", featureSet == null ? "" : featureSet.toString());
         fixed.put("build_compressor", csvEscape(buildCompressorString));
         fixed.put("search_compressor", csvEscape(searchCompressorString));
@@ -109,5 +134,46 @@ public final class ExperimentsSchemaV1 {
         fixed.put("rerankK", Integer.toString(rerankK));
 
         return fixed;
+    }
+
+    static void addIndexOptions(Map<String, String> row, Map<String, ?> build, Map<String, ?> search) {
+        row.put("index_type", java.util.Objects.toString(build.get("type"), ""));
+        row.put("writer_mode", java.util.Objects.toString(build.get("writerMode"), ""));
+        row.put("reranking_type", java.util.Objects.toString(build.get("reranking"), ""));
+        row.put("ash_construction_mode", java.util.Objects.toString(build.get("ashConstruction"), ""));
+        row.put("query_execution", java.util.Objects.toString(search.get("executionMode"), ""));
+        String threadCountKey = "queued".equals(search.get("executionMode")) ? "workers" : "callerThreads";
+        Object threadCount = search.get(threadCountKey);
+        row.put("query_threads", threadCount instanceof Number ? threadCount.toString() : "");
+        row.put("max_batch_size", java.util.Objects.toString(search.get("maxBatchSize"), ""));
+    }
+
+    /**
+     * @deprecated Use {@link #fixedValues(RunContext, String, Map, Set, String, String, boolean, int, double, int)},
+     * which takes the construction parameters by name.
+     */
+    @Deprecated
+    public static Map<String, String> fixedValues(RunContext run,
+                                                  String datasetName,
+                                                  int M,
+                                                  int efConstruction,
+                                                  float neighborOverflow,
+                                                  boolean addHierarchy,
+                                                  boolean refineFinalGraph,
+                                                  Set<FeatureId> featureSet,
+                                                  String buildCompressorString,
+                                                  String searchCompressorString,
+                                                  boolean usePruning,
+                                                  int topK,
+                                                  double overquery,
+                                                  int rerankK) {
+        Map<String, Object> buildParameters = new LinkedHashMap<>();
+        buildParameters.put("M", M);
+        buildParameters.put("efConstruction", efConstruction);
+        buildParameters.put("neighborOverflow", neighborOverflow);
+        buildParameters.put("addHierarchy", addHierarchy);
+        buildParameters.put("refineFinalGraph", refineFinalGraph);
+        return fixedValues(run, datasetName, buildParameters, featureSet, buildCompressorString,
+                searchCompressorString, usePruning, topK, overquery, rerankK);
     }
 }

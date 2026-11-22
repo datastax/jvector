@@ -32,6 +32,36 @@ import org.junit.jupiter.api.Test;
 public class MemorySegmentVectorProviderTest {
 
     @Test
+    void testCopyBetweenArrayAndMemorySegmentStorage() {
+        var arraySource = new ArrayVectorFloat(new float[] {1, 2, 3, 4});
+        var segmentDest = new MemorySegmentVectorFloat(new float[] {9, 9, 9, 9});
+        segmentDest.copyFrom(arraySource, 1, 2, 2);
+        Assert.assertArrayEquals(new float[] {9, 9, 2, 3}, segmentDest.array(), 0);
+
+        var arrayDest = new ArrayVectorFloat(new float[] {8, 8, 8, 8});
+        arrayDest.copyFrom(segmentDest, 2, 1, 2);
+        Assert.assertArrayEquals(new float[] {8, 2, 3, 8}, arrayDest.array(), 0);
+
+        segmentDest.copyFrom(arraySource, arraySource.length(), segmentDest.length(), 0);
+        arrayDest.copyFrom(segmentDest, segmentDest.length(), arrayDest.length(), 0);
+        org.junit.jupiter.api.Assertions.assertThrows(IndexOutOfBoundsException.class,
+                () -> segmentDest.copyFrom(arraySource, 3, 0, 2));
+        org.junit.jupiter.api.Assertions.assertThrows(IndexOutOfBoundsException.class,
+                () -> arrayDest.copyFrom(segmentDest, 0, 3, 2));
+    }
+
+    @Test
+    void testCrossStorageCopyWithOverlappingBackingArray() {
+        float[] data = {1, 2, 3, 4};
+        var array = new ArrayVectorFloat(data);
+        var segment = new MemorySegmentVectorFloat(data);
+        segment.copyFrom(array, 0, 1, 3);
+        Assert.assertArrayEquals(new float[] {1, 1, 2, 3}, data, 0);
+        array.copyFrom(segment, 1, 0, 3);
+        Assert.assertArrayEquals(new float[] {1, 2, 3, 3}, data, 0);
+    }
+
+    @Test
     void testWriteByteSequenceSlice() throws IOException {
         MemorySegmentVectorProvider provider = new MemorySegmentVectorProvider();
 

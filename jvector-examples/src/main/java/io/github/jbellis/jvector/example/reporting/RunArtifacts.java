@@ -21,11 +21,14 @@ import io.github.jbellis.jvector.example.benchmarks.Metric;
 import io.github.jbellis.jvector.example.yaml.MultiConfig;
 import io.github.jbellis.jvector.example.yaml.MetricSelection;
 import io.github.jbellis.jvector.example.yaml.RunConfig;
+import io.github.jbellis.jvector.example.yaml.SearchParameters;
 import io.github.jbellis.jvector.graph.disk.feature.FeatureId;
+import io.github.jbellis.jvector.quantization.AsymmetricHashing;
 
 import java.io.IOException;
 import java.io.UncheckedIOException;
 import java.nio.file.Paths;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
@@ -42,6 +45,8 @@ import java.util.Set;
  */
 public final class RunArtifacts {
 
+    private final String ashQueryProjectionRequested =
+            System.getProperty(SearchParameters.ASH_QUERY_PROJECTION_PROPERTY, "auto");
     private final RunContext run;
     private final DatasetInfoWriter datasetInfoWriter;
     private final ExperimentsCsvWriter experimentsWriter;
@@ -128,16 +133,18 @@ public final class RunArtifacts {
         }
 
         // Logging enabled => create run artifacts
-        var reporting = RunReporting.open(runCfg);
+        var reporting = RunReporting.open(runCfg, datasetConfigs);
         var run = reporting.run();
 
-        System.out.println("Logging enabled: " + run.runDir().toAbsolutePath() + ".\n" +
-                "Delete this directory to remove run artifacts and free up disk space.");
+        System.out.println("Results: " + run.runDir().toAbsolutePath());
 
         var datasetInfoWriter = DatasetInfoWriter.open(run);
 
         var outputKeyColumns = LoggingSchemaPlanner.unionLoggingMetricKeys(runCfg, datasetConfigs);
-        var experimentsWriter = new ExperimentsCsvWriter(run, ExperimentsSchemaV1.fixedColumns(), outputKeyColumns);
+        boolean includeIndexOptions = datasetConfigs != null
+                && datasetConfigs.stream().anyMatch(cfg -> cfg != null && cfg.usesSchema3());
+        var experimentsWriter = new ExperimentsCsvWriter(run, ExperimentsSchemaV1.fixedColumns(includeIndexOptions),
+                outputKeyColumns);
 
         return new RunArtifacts(
                 run,
@@ -183,7 +190,88 @@ public final class RunArtifacts {
     /**
      * Append one experiments.csv row for a single (index config × query config) measurement.
      * No-op if experiments logging is not enabled.
+     *
+     * @param buildParameters construction parameters by name; see {@link ExperimentsSchemaV1#fixedValues}
+     *                        for which ones become columns
      */
+    public void logRow(String datasetName, Map<String, ?> buildParameters,
+                       Set<FeatureId> featureSet, String buildCompressor, String searchCompressor,
+                       boolean usePruning, int topK, double overquery, int rerankK, List<Metric> outputs) {
+        logRow(datasetName, buildParameters, featureSet, buildCompressor, searchCompressor,
+                usePruning, topK, overquery, rerankK, null, outputs);
+    }
+
+    @Deprecated
+    public void logRow(String datasetName, int M, int efConstruction, float neighborOverflow,
+                       boolean addHierarchy, boolean refineFinalGraph, Set<FeatureId> features,
+                       String buildCompressor, String searchCompressor, boolean usePruning,
+                       int topK, double overquery, int rerankK, AsymmetricHashing ashModel, List<Metric> outputs) {
+        Map<String, Object> parameters = new LinkedHashMap<>();
+        parameters.put("M", M);
+        parameters.put("efConstruction", efConstruction);
+        parameters.put("neighborOverflow", neighborOverflow);
+        parameters.put("addHierarchy", addHierarchy);
+        parameters.put("refineFinalGraph", refineFinalGraph);
+        logRow(datasetName, parameters, features, buildCompressor, searchCompressor,
+                usePruning, topK, overquery, rerankK, ashModel, outputs);
+    }
+
+    public void logRow(String datasetName,
+                       Map<String, ?> buildParameters,
+                       Set<FeatureId> featureSetForIndex,
+                       String buildCompressorString,
+                       String searchCompressorString,
+                       boolean usePruning,
+                       int topK,
+                       double overquery,
+                       int rerankK,
+                       AsymmetricHashing ashQueryModel,
+                       List<Metric> logOutputs) {
+        logRow(datasetName, buildParameters, featureSetForIndex, buildCompressorString, searchCompressorString,
+                usePruning, topK, overquery, rerankK, ashQueryModel, Map.of(), logOutputs);
+    }
+
+    public void logRow(String datasetName, Map<String, ?> buildParameters, Set<FeatureId> featureSetForIndex,
+                       String buildCompressorString, String searchCompressorString, boolean usePruning,
+                       int topK, double overquery, int rerankK, AsymmetricHashing ashQueryModel,
+                       Map<String, ?> queryParameters, List<Metric> logOutputs) {
+        if (experimentsWriter == null || run == null) {
+            return;
+        }
+
+        var fixed = ExperimentsSchemaV1.fixedValues(
+                run,
+                datasetName,
+                buildParameters,
+                featureSetForIndex,
+                buildCompressorString,
+                searchCompressorString,
+                usePruning,
+                topK,
+                overquery,
+                rerankK
+        );
+
+        fixed.put("ash_query_projection_requested", ashQueryModel == null ? "" : ashQueryProjectionRequested);
+        String effective = ashQueryModel == null ? null
+                : ashQueryModel.stiefelTransform.initializedQueryProjectionPrecision();
+        fixed.put("ash_query_projection_effective", effective == null ? "" : effective);
+        if (buildParameters.containsKey("type")) {
+            ExperimentsSchemaV1.addIndexOptions(fixed, buildParameters, queryParameters);
+        }
+
+        try {
+            experimentsWriter.appendRow(fixed, logOutputs);
+        } catch (IOException e) {
+            throw new UncheckedIOException("Failed to append experiments.csv row", e);
+        }
+    }
+
+    /**
+     * @deprecated Use {@link #logRow(String, Map, Set, String, String, boolean, int, double, int, List)},
+     * which takes the construction parameters by name.
+     */
+    @Deprecated
     public void logRow(String datasetName,
                        int M,
                        int efConstruction,
@@ -198,32 +286,14 @@ public final class RunArtifacts {
                        double overquery,
                        int rerankK,
                        List<Metric> logOutputs) {
-        if (experimentsWriter == null || run == null) {
-            return;
-        }
-
-        var fixed = ExperimentsSchemaV1.fixedValues(
-                run,
-                datasetName,
-                M,
-                efConstruction,
-                neighborOverflow,
-                addHierarchy,
-                refineFinalGraph,
-                featureSetForIndex,
-                buildCompressorString,
-                searchCompressorString,
-                usePruning,
-                topK,
-                overquery,
-                rerankK
-        );
-
-        try {
-            experimentsWriter.appendRow(fixed, logOutputs);
-        } catch (IOException e) {
-            throw new UncheckedIOException("Failed to append experiments.csv row", e);
-        }
+        Map<String, Object> buildParameters = new LinkedHashMap<>();
+        buildParameters.put("M", M);
+        buildParameters.put("efConstruction", efConstruction);
+        buildParameters.put("neighborOverflow", neighborOverflow);
+        buildParameters.put("addHierarchy", addHierarchy);
+        buildParameters.put("refineFinalGraph", refineFinalGraph);
+        logRow(datasetName, buildParameters, featureSetForIndex, buildCompressorString, searchCompressorString,
+                usePruning, topK, overquery, rerankK, logOutputs);
     }
 
     public RunContext run() { return run; }

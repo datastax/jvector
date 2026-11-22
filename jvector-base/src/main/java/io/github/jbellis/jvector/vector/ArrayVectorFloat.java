@@ -23,12 +23,15 @@ import io.github.jbellis.jvector.vector.types.VectorFloat;
 
 import java.io.IOException;
 import java.util.Arrays;
+import java.util.Objects;
 
 /**
  * VectorFloat implementation backed by an on-heap float array.
  */
 final public class ArrayVectorFloat implements VectorFloat<float[]>, FloatArray
 {
+    private static final long SHALLOW_BYTES = RamUsageEstimator.shallowSizeOfInstance(ArrayVectorFloat.class);
+
     private final float[] data;
 
     ArrayVectorFloat(int length)
@@ -82,15 +85,21 @@ final public class ArrayVectorFloat implements VectorFloat<float[]>, FloatArray
     @Override
     public void copyFrom(VectorFloat<?> src, int srcOffset, int destOffset, int length)
     {
-        ArrayVectorFloat csrc = (ArrayVectorFloat) src;
-        System.arraycopy(csrc.data, srcOffset, data, destOffset, length);
+        if (src instanceof FloatArray) {
+            System.arraycopy(((FloatArray) src).array(), srcOffset, data, destOffset, length);
+        } else {
+            Objects.checkFromIndexSize(srcOffset, length, src.length());
+            Objects.checkFromIndexSize(destOffset, length, data.length);
+            for (int i = 0; i < length; i++) {
+                data[destOffset + i] = src.get(srcOffset + i);
+            }
+        }
     }
 
     @Override
     public long ramBytesUsed()
     {
-        int OH_BYTES = RamUsageEstimator.NUM_BYTES_OBJECT_HEADER;
-        return OH_BYTES + RamUsageEstimator.sizeOf(data);
+        return SHALLOW_BYTES + RamUsageEstimator.sizeOf(data);
     }
 
     @Override
@@ -130,4 +139,3 @@ final public class ArrayVectorFloat implements VectorFloat<float[]>, FloatArray
         return get();
     }
 }
-

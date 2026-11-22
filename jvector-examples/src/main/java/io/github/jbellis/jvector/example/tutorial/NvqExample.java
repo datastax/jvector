@@ -17,11 +17,9 @@
 package io.github.jbellis.jvector.example.tutorial;
 
 import java.io.IOException;
-import java.io.UncheckedIOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
-import java.util.Map;
 import java.util.stream.Collectors;
 import java.util.stream.IntStream;
 
@@ -33,7 +31,7 @@ import io.github.jbellis.jvector.graph.GraphSearcher;
 import io.github.jbellis.jvector.graph.ImmutableGraphIndex;
 import io.github.jbellis.jvector.graph.SearchResult;
 import io.github.jbellis.jvector.graph.disk.OnDiskGraphIndex;
-import io.github.jbellis.jvector.graph.disk.OnDiskGraphIndexWriter;
+import io.github.jbellis.jvector.graph.disk.OnDiskParallelGraphIndexWriter;
 import io.github.jbellis.jvector.graph.disk.OrdinalMapper;
 import io.github.jbellis.jvector.graph.disk.feature.Feature;
 import io.github.jbellis.jvector.graph.disk.feature.FeatureId;
@@ -52,7 +50,8 @@ import me.tongfei.progressbar.ProgressBar;
 public class NvqExample {
     public static void main(String[] args) throws IOException {
         // Load a preconfigured dataset
-        var ds = DataSets.loadDataSet("ada002-100k").orElseThrow(() -> 
+        String datasetName = args.length == 0 ? "ada002-100k" : args[0];
+        var ds = DataSets.loadDataSet(datasetName).orElseThrow(() ->
             new RuntimeException("dataset not found"))
         .getDataSet();
         var dim = ds.getDimension();
@@ -62,7 +61,7 @@ public class NvqExample {
         var numSubVectors = 2;
 
         // Setup NVQ parameters.
-        // The base vectors RAVV instance is used only for computing the global mean
+        // Compute NVQ statistics; the source remains readable for final encoding.
         var nvq = NVQuantization.compute(base, numSubVectors);
         // Use this method instead if you don't have all the vectors up-front but can estimate the mean
         // var nvq = NVQuantization.create(scaledGlobalMean, numSubVectors);
@@ -88,16 +87,11 @@ public class NvqExample {
 
         Path graphPath = Files.createTempFile("jvector-nvq-graph", null);
 
-        System.out.println("Building graph in streaming mode...");
+        var vectors = base.threadLocalSupplier();
+        System.out.println("Building graph incrementally with resident PQ vectors...");
         try (
             // Create the graph builder using PQ-based scoring
             var builder = new GraphIndexBuilder(bsp, dim, M, ef, nOv, alpha, addHierarchy);
-            // Create the on-disk writer configured with NVQ feature
-            // This allows us to write both the graph structure and NVQ-compressed vectors
-            var writer = new OnDiskGraphIndexWriter.Builder(builder.getGraph(), graphPath)
-                .with(new NVQ(nvq))
-                .withMapper(new OrdinalMapper.IdentityMapper(base.size() - 1))
-                .build();
             var pb = new ProgressBar("Build graph", base.size());
         ) {
 
@@ -105,22 +99,12 @@ public class NvqExample {
                 IntStream.range(0, base.size())
                     .parallel()
                     .forEach(ordinal -> {
-                        var vec = base.getVector(ordinal);
+                        var vec = vectors.get().getVector(ordinal);
                         
                         // Encode the PQ vector first, then add the graph node
                         pqv.encodeAndSet(ordinal, vec);
                         builder.addGraphNode(ordinal, vec);
 
-                        // Encode and write NVQ vectors for later re-ranking
-                        var nvqVec = nvq.encode(vec);
-                        Map<FeatureId, Feature.State> featureMap = Map.of(
-                            FeatureId.NVQ_VECTORS, new NVQ.State(nvqVec)
-                        );
-                        try {
-                            writer.writeFeaturesInline(ordinal, featureMap);
-                        } catch (IOException e) {
-                            throw new UncheckedIOException(e);
-                        }
                         pb.step();
                     });
             }).join();
@@ -129,7 +113,16 @@ public class NvqExample {
             // cleanup
             System.out.println("Cleanup...");
             builder.cleanup();
-            writer.write(Map.of());
+            // NVQ is reranking data; encode it while writing complete records after cleanup.
+            System.out.println("Writing graph and NVQ vectors...");
+            try (var writer = new OnDiskParallelGraphIndexWriter.Builder(builder.getGraph(), graphPath)
+                    .withParallelWorkerThreads(PhysicalCoreExecutor.getPhysicalCoreCount())
+                    .with(new NVQ(nvq))
+                    .withMapper(new OrdinalMapper.IdentityMapper(base.size() - 1))
+                    .build()) {
+                writer.write(Feature.singleStateFactory(FeatureId.NVQ_VECTORS,
+                        ordinal -> new NVQ.State(nvq.encode(vectors.get().getVector(ordinal)))));
+            }
         }
 
         // Search parameters

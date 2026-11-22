@@ -57,9 +57,9 @@ jobs:
     steps:
       - name: Set up GCC
         run: sudo apt install -y gcc
-      - name: Install Meson and Ninja
+      - name: Install native build dependencies
         run: |
-          sudo apt update && sudo apt install -y meson ninja-build
+          sudo apt update && sudo apt install -y cmake meson ninja-build
       - uses: actions/checkout@v4
       - name: Set up JDK ${{ matrix.jdk }}
         uses: actions/setup-java@v3
@@ -74,11 +74,13 @@ jobs:
           ref: ${{ matrix.branch }}
           fetch-depth: 0
 
+      # Branches from before the Highway Meson wrap still use a submodule;
+      # this step is a no-op on newer ones.
       - name: Initialize Git Submodules
         run: git submodule update --init
 
       - name: Build branch
-        run: mvn -B -Punix-amd64-profile package --file pom.xml
+        run: mvn -B -Punix-amd64-profile -Dnative.onednn=true package --file pom.xml
 
       - name: Run CompactorBenchmark
         id: run-benchmark
