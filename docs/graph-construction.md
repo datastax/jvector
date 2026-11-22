@@ -18,6 +18,12 @@ many threads can insert at once, and a graph can keep growing after it is first 
 `cleanup()` must run before a graph is written or handed to readers: it removes deleted nodes,
 optionally refines the graph (below) and trims every neighbor list back to the maximum degree.
 
+`StreamingASHIndex` can start with a trained model or cold. A cold index records the vectors it
+is given and answers searches by scoring them exactly, while it keeps a uniform sample. Once
+enough have arrived it trains its first model on the sample (or fixes a random projection), then
+inserts the recorded vectors into its graph while new inserts continue; inserts never wait for
+training. Later models re-encode the codes page by page; the graph is never rebuilt.
+
 ## What construction scores with
 
 Every insertion is a search, so the representation used for scoring sets much of the build's

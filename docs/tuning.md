@@ -52,6 +52,21 @@ search:
     100: [1.0, 2.0]
 ```
 
+### Adaptive termination (experimental)
+
+`GraphSearcher.useAdaptiveTermination(true)` makes a top-K search stop by distance instead of
+beam width: it stops when the best unexpanded candidate is more than `1 + gamma` times as far
+from the query as the k-th best result found (default gamma about 0.005; pass another with
+`useAdaptiveTermination(true, gamma)`). Scores are read back as true distances, so gamma means
+the same for `DOT_PRODUCT`, `EUCLIDEAN` and `COSINE` and for vectors of any length. For dot
+products the distance is measured from the query's length times the largest stored vector length,
+which format version 7 stores; without it the standard rule decides.
+
+A search that stops adaptively expands at least the nodes the standard rule would and at most the
+nodes a standard search with twice the beam would. It is off by default for search: with
+compressed scores and reranking, raising the overquery has so far given more recall at the same
+throughput. ASH graph construction uses it.
+
 ## A tuning order that works
 
 1. **Fix the code size first.** It sets the memory budget and the accuracy ceiling; see

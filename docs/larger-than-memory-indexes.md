@@ -90,7 +90,9 @@ places records so none crosses a page boundary:
 - A record larger than a page starts on a page and is padded to whole pages, but only when its last page
   would be at least half full. Otherwise the padding would cost most of a page per record while saving a
   small fraction of a page read, and the index is written unaligned.
-- The header is padded to whole pages, so the first record starts on a page boundary.
+- The header is padded to whole pages, so the first record starts on a page boundary. Pages are
+  counted from the start of the file, so an index written after other data in the same file lines
+  up too.
 
 `describeRecordLayout()` on the writer reports the record size, the placement and the padding, or why a
 requested alignment was not applied. Alignment needs format version 7, changes no search results, and is

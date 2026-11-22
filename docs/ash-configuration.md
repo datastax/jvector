@@ -171,6 +171,17 @@ Construction policy can change the graph, recall and QPS. Use fresh indexes
 when comparing modes: the graph cache key does not include this JVM property,
 so changing it does not invalidate an existing cached graph.
 
+### Encoding while vectors arrive
+
+To build a graph while its vectors stream in with a fixed model,
+`ash.vectorsBuilder(capacity)` encodes batches from any number of threads into
+distinct ordinals. Its `live()` view scores codes while they fill in, so a graph
+can be built over them at the same time; score a code only after its batch is
+encoded. `build(size)` returns the finished, immutable `ASHVectors`. Ordinals
+never encoded keep the all-zero code. For an index whose model changes while it
+grows, `StreamingASHIndex` uses `MutableASHVectors`, which re-encodes its pages
+for a new model one at a time.
+
 ### In-memory code layout
 
 `ASHVectors` keeps one copy of the codes, in compact pages. Each vector's code
@@ -202,6 +213,15 @@ not build them.
 | `jvector.ash.singleKernel` | `auto` | `auto`, `scalar`, `simd`; single-vector ASH scoring kernels, subject to provider/format support. |
 | `jvector.ash.blockKernel` | `auto` | `auto`, `scalar`, `simd`; blocked/fused ASH scoring kernels, subject to provider/format support. |
 | `jvector.ash.queryBatchSize` | `8` | Positive integer below `Integer.MAX_VALUE`; maximum opportunistic batch for model-owned synchronous query preparation; `1` disables combining. Separate from the queued batch limit below. Default for models without query options set in code. |
+| `jvector.ash.gatheredScoring` | `false` | Experimental. `true` scores a node's neighbors from in-memory 2- or 4-bit codes as one gathered block, as fused ASH scores its stored neighborhoods (one landmark, backend support required). It lowers single-query latency, but with every core busy it has measured 1–6% lower throughput. |
+
+Single-vector scoring (separated codes, streaming indexes and fused upper layers)
+depends on the bit width. 1-bit codes use a SIMD masked add over their sign bits.
+2- and 4-bit codes use a projection dot that decodes codes in registers: native
+Highway kernels, or with Panama a contiguous-query kernel on JDK 25+ and a
+query-gather kernel on earlier JDKs. The other widths use the native nibble-LUT
+dot; with Panama they are decoded in scalar Java, so prefer 1, 2 or 4 bits there.
+Fused graphs score base-layer neighborhoods with whole-block kernels at every width.
 
 To choose these per model in code, call `setQueryOptions` before the model
 projects its first query, for example right after opening an index. Later calls
