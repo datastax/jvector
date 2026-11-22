@@ -157,7 +157,9 @@ public final class ASHScorer {
         }
         // Two coordinates share each 2-bit LUT entry. Four-bit codes instead
         // use the backend's contiguous projection dot, avoiding a 16x larger table.
-        if ((ash.bitsPerDimension == 2 || AsymmetricHashing.usesOffsetBinaryCode(ash.bitsPerDimension))
+        // Offset-binary codes decode faster in registers than through the LUT, where the backend can.
+        if ((ash.bitsPerDimension == 2 || (AsymmetricHashing.usesOffsetBinaryCode(ash.bitsPerDimension)
+                        && !backend.supportsAshOffsetBinaryDot()))
                 && mode != ASHVectors.AshSingleKernel.SCALAR
                 && backend.supportsAshCanonicalLutScoring()) {
             int groups = FusedASHLayout.codeGroups(qp.d, ash.bitsPerDimension);
@@ -301,16 +303,17 @@ public final class ASHScorer {
     }
 
     /**
-     * Offset-binary codes (3 and 5 to 9 bits): {@code scale * <Aq, code> + <q, mu_c> + offset}. The native
-     * SIMD path sums the code's 4-bit groups through a query LUT prepared once per scorer; the Panama path
-     * decodes fields in registers; the scalar path decodes each field and is the independent reference.
+     * Offset-binary codes (3 and 5 to 9 bits): {@code scale * <Aq, code> + <q, mu_c> + offset}. The SIMD path
+     * decodes fields in registers (2-5x faster than the native LUT kernel on Ice Lake), or else sums the code's 4-bit
+     * groups through a query LUT prepared once per scorer; the scalar path decodes each field and is the independent
+     * reference.
      */
     private CodeScorer genericMultibitDotProductScorer(QueryPrecompute qp, boolean simd) {
         final int d = qp.d;
         final int C = qp.C;
         final int bitsPerDimension = ash.bitsPerDimension;
         final var backend = VectorizationProvider.getInstance().getVectorUtilSupport();
-        if (simd && !backend.supportsAshCanonicalLutScoring() && backend.supportsAshOffsetBinaryDot()) {
+        if (simd && backend.supportsAshOffsetBinaryDot()) {
             return (signBits, signOffset, code, codeOffset, scale, offset, c) ->
                     scale * backend.ashOffsetBinaryDot(qp.qProj, code, codeOffset, d, bitsPerDimension)
                     + qp.dotQMuByLandmark[c] + offset;

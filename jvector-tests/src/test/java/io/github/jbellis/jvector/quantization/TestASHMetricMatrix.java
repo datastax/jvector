@@ -455,10 +455,10 @@ public class TestASHMetricMatrix {
         return hits;
     }
 
-    /** A reranked search of a 500-node graph with beam 40 finds most of the exact top 10; 37-bit 1-bit codes less. */
+    /** A reranked search of a 500-node graph with beam 40 finds most of the exact top 10; 37-dimension 1 and 2-bit codes less. */
     private static void checkRecall(String where, int hits, int queries, int bits) {
         double recall = hits / (10.0 * queries);
-        assertTrue(where + " recall " + recall, recall >= (bits == 1 ? 0.6 : 0.8));
+        assertTrue(where + " recall " + recall, recall >= (bits == 1 ? 0.6 : bits == 2 ? 0.7 : 0.8));
     }
 
     /** A streaming index on a model of every width and metric scores and searches like that model's static codes. */

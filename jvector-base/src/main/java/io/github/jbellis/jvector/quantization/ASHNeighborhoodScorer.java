@@ -50,6 +50,8 @@ public final class ASHNeighborhoodScorer {
     /** Offset-binary widths: the query as two INT8 digits for field-block neighborhoods; otherwise null. */
     private final ASHInt8Query int8Query;
     private final VectorUtilSupport int8Backend;
+    // Sums one lane's INT8 field-block dot in SIMD where the whole-neighborhood kernel does not apply
+    private final VectorUtilSupport int8LaneBackend;
     private final ASHLutKernel kernel = new ASHLutKernel();
     private final ASHScoreScale scale;
     /** A EUCLIDEAN model's factor for native kernels that write its scale directly; zero to convert in Java. */
@@ -119,9 +121,11 @@ public final class ASHNeighborhoodScorer {
             this.int8Backend = kernel.isSimd() && dotQMu.length == 1 && backend.supportsAshInt8NeighborhoodScoring()
                     ? backend : null;
             this.neighborhoodBackend = null;
+            this.int8LaneBackend = kernel.isSimd() && backend.supportsAshOffsetBinaryInt8Dot() ? backend : null;
         } else {
             this.int8Query = null;
             this.int8Backend = null;
+            this.int8LaneBackend = null;
             this.neighborhoodBackend =
                     kernel.isSimd() && dotQMu.length == 1 && backend.supportsAshNeighborhoodScoring() ? backend : null;
         }
@@ -172,7 +176,9 @@ public final class ASHNeighborhoodScorer {
             int base = block * blockSize;
             int count = Math.min(blockSize, maxDegree - base);
             if (int8Query != null) {
-                for (int lane = 0; lane < count; lane++) out[base + lane] = int8Query.laneDot(packed, offset, lane, blockSize);
+                for (int lane = 0; lane < count; lane++) {
+                    out[base + lane] = int8Query.laneDot(packed, offset, lane, blockSize, int8LaneBackend);
+                }
             } else {
                 kernel.score(packed, offset, groups, blockSize, 0, count, lut, out, base);
             }
@@ -193,7 +199,7 @@ public final class ASHNeighborhoodScorer {
     public String toString() {
         Object implementation = neighborhoodBackend != null ? "native Highway whole-neighborhood FFM"
                 : int8Backend != null ? "native Highway whole-neighborhood FFM, INT8 field blocks"
-                : int8Query != null ? "Java INT8 field blocks" : kernel;
+                : int8Query != null ? (int8LaneBackend != null ? "SIMD" : "Java") + " INT8 field blocks" : kernel;
         return "ASHNeighborhoodScorer[" + implementation + ", blockSize=" + blockSize + ", capacity=" + maxDegree + "]";
     }
 

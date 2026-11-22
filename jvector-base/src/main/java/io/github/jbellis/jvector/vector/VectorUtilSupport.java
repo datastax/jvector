@@ -150,6 +150,19 @@ public interface VectorUtilSupport {
     throw new UnsupportedOperationException("Offset-binary ASH SIMD is unavailable on this backend");
   }
 
+  /** Whether {@link #ashOffsetBinaryInt8Dot} has a SIMD kernel. */
+  default boolean supportsAshOffsetBinaryInt8Dot() { return false; }
+
+  /**
+   * Exact integer dot product of an INT8 query with one lane of a FusedASH field-block neighborhood (3 and 5 to 9
+   * bits): unit {@code u} holds 8 unsigned {@code bits}-bit fields in {@code bits} bytes at
+   * {@code offset + u * unitStride}, and {@code digits[u * 8 + k]} multiplies field {@code k}. Requires
+   * {@link #supportsAshOffsetBinaryInt8Dot()}.
+   */
+  default long ashOffsetBinaryInt8Dot(byte[] codes, int offset, int unitStride, int units, int bits, byte[] digits) {
+    throw new UnsupportedOperationException("Offset-binary INT8 ASH SIMD is unavailable on this backend");
+  }
+
   /** Dot product of a projected query with a canonical signed-magnitude 2/4-bit code. */
   default float ashProjectionDot(float[] query, byte[] code, int dimensions, int bitsPerDimension) {
     return ashProjectionDot(query, code, 0, dimensions, bitsPerDimension);

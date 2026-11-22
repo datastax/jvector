@@ -16,6 +16,8 @@
 
 package io.github.jbellis.jvector.quantization;
 
+import io.github.jbellis.jvector.vector.VectorUtilSupport;
+
 /**
  * A projected query {@code Aq} rounded to INT8 for scoring offset-binary codes (3 and 5 to 9 bits) in graph
  * neighborhoods. With {@code s = 127 / max|Aq|}, the dot product with a code's unsigned fields {@code u} is
@@ -75,7 +77,16 @@ final class ASHInt8Query {
      * kernel's arithmetic: an exact integer sum, then {@code (sum - center) * invScale}.
      */
     float laneDot(byte[] block, int blockOffset, int lane, int blockSize) {
+        return laneDot(block, blockOffset, lane, blockSize, null);
+    }
+
+    /** As {@link #laneDot(byte[], int, int, int)}, summed by {@code simd}'s kernel when it is not null. */
+    float laneDot(byte[] block, int blockOffset, int lane, int blockSize, VectorUtilSupport simd) {
         int b = bits;
+        if (simd != null) {
+            long dot = simd.ashOffsetBinaryInt8Dot(block, blockOffset + lane * b, blockSize * b, units, b, digits);
+            return ((float) dot - center) * invScale;
+        }
         long dot = 0;
         for (int unit = 0; unit < units; unit++) {
             int base = blockOffset + (unit * blockSize + lane) * b;
