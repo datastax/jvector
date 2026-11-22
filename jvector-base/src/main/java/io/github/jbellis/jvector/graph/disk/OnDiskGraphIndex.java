@@ -475,7 +475,8 @@ public class OnDiskGraphIndex implements ImmutableGraphIndex, AutoCloseable, Acc
     /**
      * Retained shared graph heap, including metadata, cache containers at their allocated capacity,
      * source buffers, and upper-layer adjacency arrays. Computed once during loading, with
-     * shared backing objects counted once. Repeated reads are allocation-free and constant-time.
+     * shared backing objects counted once. Repeated reads are allocation-free, and their cost does
+     * not grow with the number of vectors; a feature's model adds a loop over its subspaces.
      *
      * <p>Includes each feature's live {@link Feature#ramBytesUsed()}, so models read from the header,
      * and caches they create later, are counted here. The caller owns the reader supplier; format/enum metadata is JVM-global; per-worker
