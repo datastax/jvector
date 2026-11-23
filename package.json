@@ -1,6 +1,6 @@
 {
   "name": "jvector-release",
-  "version": "4.0.2",
+  "version": "4.1.0-rc.1",
   "devDependencies": {
     "auto-changelog": "*"
   },
