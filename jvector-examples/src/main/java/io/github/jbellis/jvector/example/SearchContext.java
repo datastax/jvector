@@ -16,6 +16,7 @@
 
 package io.github.jbellis.jvector.example;
 
+import io.github.jbellis.jvector.example.benchmarks.datasets.BaseDataSet;
 import io.github.jbellis.jvector.example.benchmarks.datasets.DataSet;
 import io.github.jbellis.jvector.example.benchmarks.diagnostics.SystemMonitor;
 import io.github.jbellis.jvector.example.util.CompressorParameters;
@@ -34,7 +35,8 @@ import java.util.function.Function;
 final class SearchContext {
     final Map<String, Object> queryParameters;
     final AsymmetricHashing ashQueryProjectionModel;
-    final DataSet ds;
+    /** The dataset, float or int8. */
+    final BaseDataSet ds;
     final BuildConfig build;
     final SearchConfig search;
     /** The feature set the index was requested with. */
@@ -53,7 +55,7 @@ final class SearchContext {
     /** Memory state captured right after the build, or null if none was captured. */
     final SystemMonitor.SystemSnapshot buildSnapshot;
 
-    SearchContext(DataSet ds,
+    SearchContext(BaseDataSet ds,
                   BuildConfig build,
                   SearchConfig search,
                   Set<FeatureId> requestedFeatures,
@@ -68,7 +70,7 @@ final class SearchContext {
                 searchCompressorLabel, indexBuildTimeS, indexFileSizeBytes, buildSnapshot, Map.of(), null);
     }
 
-    SearchContext(DataSet ds, BuildConfig build, SearchConfig search,
+    SearchContext(BaseDataSet ds, BuildConfig build, SearchConfig search,
                   Set<FeatureId> requestedFeatures, Set<FeatureId> indexFeatures,
                   String buildCompressorLabel, Function<DataSet, CompressorParameters> searchCompressor,
                   String searchCompressorLabel, Double indexBuildTimeS, Long indexFileSizeBytes,

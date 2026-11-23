@@ -20,14 +20,14 @@ import java.util.List;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Objects;
-import java.util.concurrent.ThreadLocalRandom;
 import java.util.concurrent.TimeUnit;
+import java.util.function.Consumer;
 import java.util.function.Function;
 import java.util.function.LongSupplier;
+import java.util.function.Supplier;
 
 import io.github.jbellis.jvector.example.Grid.ConfiguredSystem;
 import io.github.jbellis.jvector.graph.SearchResult;
-import io.github.jbellis.jvector.vector.VectorUtil;
 import io.github.jbellis.jvector.vector.VectorizationProvider;
 import io.github.jbellis.jvector.vector.types.VectorFloat;
 
@@ -107,25 +107,41 @@ public class LatencyBenchmark extends AbstractQueryBenchmark {
                           long minimumNanos, Function<VectorFloat<?>, SearchResult> search,
                           LongSupplier clock) {
         Objects.requireNonNull(queries, "queries");
+        if (queries.length > 0) {
+            int dimension = Objects.requireNonNull(queries[0], "query").length();
+            if (dimension <= 0) throw new IllegalArgumentException("Query dimension must be positive");
+        }
+        var floats = VectorizationProvider.getInstance().getVectorTypeSupport();
+        int dimension = queries.length == 0 ? 0 : queries[0].length();
+        return measure(queries, () -> floats.createFloatVector(dimension), FloatQuerySet::randomizeVector,
+                queryRuns, warmupPasses, minimumNanos, search, clock);
+    }
+
+    /**
+     * As above, for queries of any vector type: {@code newQuery} allocates a warmup buffer, once per query, and
+     * {@code randomize} refills one before each warmup sweep.
+     */
+    static <Q> long[] measure(Q[] queries, Supplier<Q> newQuery, Consumer<Q> randomize, int queryRuns,
+                              int warmupPasses, long minimumNanos, Function<Q, SearchResult> search,
+                              LongSupplier clock) {
+        Objects.requireNonNull(queries, "queries");
         Objects.requireNonNull(search, "search");
         Objects.requireNonNull(clock, "clock");
         if (queries.length == 0 || queryRuns <= 0 || warmupPasses <= 0 || minimumNanos < 0)
             throw new IllegalArgumentException("Require queries, positive run counts, and nonnegative warmup duration");
-        int dimension = Objects.requireNonNull(queries[0], "query").length();
-        if (dimension <= 0) throw new IllegalArgumentException("Query dimension must be positive");
+        Objects.requireNonNull(queries[0], "query");
         long[] times = new long[Math.multiplyExact(queries.length, queryRuns)];
-        var vectors = VectorizationProvider.getInstance().getVectorTypeSupport();
-        VectorFloat<?>[] randomInputs = new VectorFloat<?>[queries.length];
-        for (int i = 0; i < randomInputs.length; i++) randomInputs[i] = vectors.createFloatVector(dimension);
+        Q[] randomInputs = Arrays.copyOf(queries, queries.length);
+        for (int i = 0; i < randomInputs.length; i++) randomInputs[i] = newQuery.get();
 
         for (int phase = 0; phase <= warmupPasses; phase++) {
             boolean warming = phase < warmupPasses;
-            VectorFloat<?>[] inputs = warming ? randomInputs : queries;
+            Q[] inputs = warming ? randomInputs : queries;
             int repeats = warming ? 1 : queryRuns;
             int offset = 0;
             long started = clock.getAsLong();
             do {
-                if (warming) { randomize(randomInputs, dimension); offset = 0; }
+                if (warming) { for (Q query : randomInputs) randomize.accept(query); offset = 0; }
                 for (int run = 0; run < repeats; run++)
                     offset = runPass(inputs, search, times, offset);
             } while (warming && clock.getAsLong() - started < minimumNanos);
@@ -133,23 +149,9 @@ public class LatencyBenchmark extends AbstractQueryBenchmark {
         return times;
     }
 
-    private static void randomize(VectorFloat<?>[] inputs, int dimension) {
-        var random = ThreadLocalRandom.current();
-        for (var query : inputs) {
-            boolean nonZero = false;
-            for (int d = 0; d < dimension; d++) {
-                float value = random.nextFloat();
-                query.set(d, value);
-                nonZero |= value != 0;
-            }
-            if (!nonZero) query.set(0, 1);
-            VectorUtil.l2normalize(query);
-        }
-    }
-
     /** No warmup/measurement branch or allocation at the timed call site. */
-    private static int runPass(VectorFloat<?>[] queries, Function<VectorFloat<?>, SearchResult> search,
-                               long[] times, int offset) {
+    private static <Q> int runPass(Q[] queries, Function<Q, SearchResult> search,
+                                   long[] times, int offset) {
         Objects.checkFromIndexSize(offset, queries.length, times.length);
         for (int i = 0; i < queries.length; i++) {
             long start = System.nanoTime();
@@ -198,14 +200,21 @@ public class LatencyBenchmark extends AbstractQueryBenchmark {
             throw new IllegalArgumentException("At least one parameter must be set to true");
         }
 
-        VectorFloat<?>[] queries = cs.getDataSet().getQueryVectors().toArray(new VectorFloat<?>[0]);
-        try (QueuedQueryExecution queued = cs.usesQueuedExecution()
-                ? new QueuedQueryExecution(cs, topK, rerankK, usePruning) : null) {
-            Function<VectorFloat<?>, SearchResult> search = query -> queued == null
-                    ? QueryExecutor.executeQuery(cs, topK, rerankK, usePruning, query)
+        return metrics(latencies(cs, cs.queries(), topK, rerankK, usePruning, queryRuns));
+    }
+
+    /** Each query's latency, with every query copied into an array before timing starts. */
+    private static <Q> long[] latencies(ConfiguredSystem cs, QuerySet<Q> queries, int topK, int rerankK,
+                                        boolean usePruning, int queryRuns) {
+        Q[] inputs = queries.newArray(queries.size());
+        for (int i = 0; i < inputs.length; i++) inputs[i] = queries.get(i);
+        try (QueuedQueryExecution<Q> queued = cs.usesQueuedExecution()
+                ? new QueuedQueryExecution<>(cs, queries, topK, rerankK, usePruning) : null) {
+            Function<Q, SearchResult> search = query -> queued == null
+                    ? QueryExecutor.executeQuery(cs, queries, topK, rerankK, usePruning, query)
                     : queued.executeSingle(query);
-            long[] times = measure(queries, queryRuns, WARMUP_PASSES, MIN_WARMUP_NANOS, search, System::nanoTime);
-            return metrics(times);
+            return measure(inputs, queries::newQuery, queries::randomize, queryRuns, WARMUP_PASSES, MIN_WARMUP_NANOS,
+                    search, System::nanoTime);
         }
     }
 }

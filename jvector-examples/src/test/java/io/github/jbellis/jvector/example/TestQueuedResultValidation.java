@@ -15,6 +15,7 @@
  */
 package io.github.jbellis.jvector.example;
 
+import io.github.jbellis.jvector.example.benchmarks.datasets.DataSet;
 import io.github.jbellis.jvector.example.benchmarks.QueuedQueryExecution;
 import io.github.jbellis.jvector.example.benchmarks.datasets.SimpleDataSet;
 import io.github.jbellis.jvector.graph.ImmutableGraphIndex;
@@ -119,8 +120,8 @@ public class TestQueuedResultValidation {
     public void identicalPreparedMathValidatesAcrossWorkersAndNormalPassDoesNotSearchTwice() throws Exception {
         for (int workers : new int[]{1, 3}) {
             var graph = new Graph(false);
-            try (var cs = system(graph, workers); var queued = new QueuedQueryExecution(cs, 1, 1, false)) {
-                var queries = cs.getDataSet().getQueryVectors();
+            try (var cs = system(graph, workers); var queued = QueuedQueryExecution.forFloatQueries(cs, 1, 1, false)) {
+                var queries = ((DataSet) cs.getDataSet()).getQueryVectors();
                 queued.verifyConcurrentResults(queries.size(), queries::get);
                 assertEquals(2 * queries.size(), graph.bindings.get());
                 graph.bindings.set(0);
@@ -137,8 +138,8 @@ public class TestQueuedResultValidation {
 
     @Test(timeout=10000)
     public void corruptedPreparedStateStillFailsValidation() throws Exception {
-        try (var cs = system(new Graph(true), 2); var queued = new QueuedQueryExecution(cs, 1, 1, false)) {
-            var queries = cs.getDataSet().getQueryVectors();
+        try (var cs = system(new Graph(true), 2); var queued = QueuedQueryExecution.forFloatQueries(cs, 1, 1, false)) {
+            var queries = ((DataSet) cs.getDataSet()).getQueryVectors();
             var error = assertThrows(IllegalStateException.class,
                     () -> queued.verifyConcurrentResults(queries.size(), queries::get));
             assertTrue(error.getMessage().startsWith("Concurrent prepared query mismatch at "));
@@ -165,10 +166,10 @@ public class TestQueuedResultValidation {
     public void concurrentDirectValidationPreparesOneProviderPerInput() throws Exception {
         var preparations = new AtomicInteger();
         try (var cs = directSystem(false, preparations)) {
-            java.util.stream.IntStream.range(0, cs.getDataSet().getQueryVectors().size()).parallel()
+            java.util.stream.IntStream.range(0, ((DataSet) cs.getDataSet()).getQueryVectors().size()).parallel()
                     .forEach(i -> io.github.jbellis.jvector.example.benchmarks.QueryExecutor
                             .verifyConcurrentQuery(cs, 1, 1, false, i));
-            assertEquals(cs.getDataSet().getQueryVectors().size(), preparations.get());
+            assertEquals(((DataSet) cs.getDataSet()).getQueryVectors().size(), preparations.get());
         }
     }
 

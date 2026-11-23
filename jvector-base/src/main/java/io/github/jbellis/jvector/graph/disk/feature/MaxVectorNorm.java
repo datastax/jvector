@@ -17,6 +17,7 @@ package io.github.jbellis.jvector.graph.disk.feature;
 
 import io.github.jbellis.jvector.disk.IndexWriter;
 import io.github.jbellis.jvector.disk.RandomAccessReader;
+import io.github.jbellis.jvector.vector.types.ByteSequence;
 import io.github.jbellis.jvector.vector.types.VectorFloat;
 
 import io.github.jbellis.jvector.util.MaxVectorLength;
@@ -25,8 +26,10 @@ import io.github.jbellis.jvector.util.RamUsageEstimator;
 import java.io.IOException;
 
 /**
- * The largest length of the full-precision vectors a feature stores, kept in its header from format version
- * {@value #VERSION}. Dot-product searches that stop adaptively need it; without it they stop by the standard rule.
+ * The largest length of the full-precision or int8 vectors a feature stores, kept in its header from format version
+ * {@value #VERSION}. Float dot-product searches that stop adaptively need it; without it they stop by the standard
+ * rule. Int8 headers store it for the same future use, but nothing reads it for them yet (see
+ * {@link InlineByteVectors#maxVectorNorm()}).
  *
  * <p>A feature records each vector as it writes it. A header written before any vector, as a sequential writer writes
  * it, stores NaN (unknown); a writer that rewrites the header after the vectors stores their largest length.
@@ -43,6 +46,16 @@ final class MaxVectorNorm {
 
     void record(VectorFloat<?> vector) {
         written.record(vector);
+    }
+
+    /** Records an int8 vector's length, summing its squared components exactly. */
+    void record(ByteSequence<?> vector) {
+        long squared = 0;
+        for (int i = 0; i < vector.length(); i++) {
+            int c = vector.get(i);
+            squared += c * c;
+        }
+        written.recordSquared(squared);
     }
 
     /** The largest length recorded, or NaN if none was. */

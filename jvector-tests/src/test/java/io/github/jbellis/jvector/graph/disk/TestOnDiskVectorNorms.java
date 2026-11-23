@@ -20,10 +20,13 @@ import io.github.jbellis.jvector.disk.SimpleMappedReader;
 import io.github.jbellis.jvector.graph.ListRandomAccessVectorValues;
 import io.github.jbellis.jvector.graph.disk.feature.Feature;
 import io.github.jbellis.jvector.graph.disk.feature.FeatureId;
+import io.github.jbellis.jvector.graph.disk.feature.InlineByteVectors;
 import io.github.jbellis.jvector.graph.disk.feature.InlineVectors;
 import io.github.jbellis.jvector.graph.disk.feature.SeparatedVectors;
 import io.github.jbellis.jvector.vector.VectorSimilarityFunction;
 import io.github.jbellis.jvector.vector.VectorUtil;
+import io.github.jbellis.jvector.vector.VectorizationProvider;
+import io.github.jbellis.jvector.vector.types.ByteSequence;
 import io.github.jbellis.jvector.vector.types.VectorFloat;
 import org.junit.Test;
 
@@ -33,11 +36,12 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Random;
 
+import static org.junit.Assert.assertArrayEquals;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertTrue;
 
 /**
- * On-disk graphs store the largest length of their full-precision vectors from format version 7, so dot-product
+ * On-disk graphs store the largest length of their full-precision and int8 vectors from format version 7, so dot-product
  * searches over them can stop adaptively; older formats leave it unknown, and those searches stop by the standard rule.
  */
 public class TestOnDiskVectorNorms {
@@ -91,6 +95,49 @@ public class TestOnDiskVectorNorms {
              var index = OnDiskGraphIndex.load(readers)) {
             float stored = ((SeparatedVectors) index.getFeatures().get(FeatureId.SEPARATED_VECTORS)).maxVectorNorm();
             assertEquals(maxNorm, stored, maxNorm * 1e-6f);
+        }
+    }
+
+    @Test
+    public void int8HeadersStoreTheLargestLength() throws Exception {
+        var random = new Random(41);
+        var vts = VectorizationProvider.getInstance().getVectorTypeSupport();
+        List<ByteSequence<?>> vectors = new ArrayList<>();
+        long maxSquared = 0;
+        for (int i = 0; i < N; i++) {
+            byte[] raw = new byte[DIM];
+            random.nextBytes(raw);
+            long squared = 0;
+            for (byte b : raw) squared += b * b;
+            maxSquared = Math.max(maxSquared, squared);
+            vectors.add(vts.createByteSequence(raw));
+        }
+        float maxNorm = (float) Math.sqrt(maxSquared);
+        var graph = new TestUtil.RandomlyConnectedGraphIndex(N, 8, random);
+        Path directory = Files.createTempDirectory("ondisk-int8-norms");
+
+        // Unaligned and page-aligned records both keep the vectors and the stored length.
+        for (Integer pageBytes : new Integer[] {null, 4096}) {
+            var path = directory.resolve("int8-" + pageBytes);
+            var builder = new OnDiskGraphIndexWriter.Builder(graph, path).with(new InlineByteVectors(DIM));
+            if (pageBytes != null) builder.withPageAlignment(pageBytes);
+            try (var writer = builder.build()) {
+                writer.write(Feature.singleStateFactory(FeatureId.INLINE_BYTE_VECTORS,
+                        node -> new InlineByteVectors.State(vectors.get(node))));
+            }
+            try (var readers = new SimpleMappedReader.Supplier(path);
+                 var index = OnDiskGraphIndex.load(readers);
+                 var view = index.getView()) {
+                float stored = ((InlineByteVectors) index.getFeatures().get(FeatureId.INLINE_BYTE_VECTORS)).maxVectorNorm();
+                assertEquals(maxNorm, stored, maxNorm * 1e-6f);
+                for (int node = 0; node < N; node++) {
+                    var actual = view.getByteVector(node);
+                    var expected = vectors.get(node);
+                    byte[] a = new byte[DIM], e = new byte[DIM];
+                    for (int d = 0; d < DIM; d++) { a[d] = actual.get(d); e[d] = expected.get(d); }
+                    assertArrayEquals("pageBytes " + pageBytes + ", node " + node, e, a);
+                }
+            }
         }
     }
 }

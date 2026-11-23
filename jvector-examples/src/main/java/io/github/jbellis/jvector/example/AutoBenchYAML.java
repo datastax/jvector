@@ -21,6 +21,8 @@ import io.github.jbellis.jvector.example.util.BenchmarkSummarizer;
 import io.github.jbellis.jvector.example.util.BenchmarkSummarizer.SummaryStats;
 import io.github.jbellis.jvector.example.util.CheckpointManager;
 import io.github.jbellis.jvector.example.benchmarks.datasets.BaseVectorLoading;
+import io.github.jbellis.jvector.example.benchmarks.datasets.ByteDataSet;
+import io.github.jbellis.jvector.example.benchmarks.datasets.DataSet;
 import io.github.jbellis.jvector.example.benchmarks.datasets.DataSets;
 import io.github.jbellis.jvector.example.yaml.DatasetCollection;
 import io.github.jbellis.jvector.example.yaml.MultiConfig;
@@ -151,8 +153,9 @@ public class AutoBenchYAML {
                     logger.info("Loading dataset: {}", datasetName);
                     try (var ds = DataSets.loadDataSet(datasetName, loading).orElseThrow(
                             () -> new RuntimeException("Dataset " + datasetName + " not found")
-                    ).getDataSet()) {
-                        logger.info("Dataset loaded: {} with {} vectors", datasetName, ds.getBaseVectors().size());
+                    ).getBaseDataSet()) {
+                        logger.info("Dataset loaded: {} with {} vectors", datasetName, ds.size());
+                        if (ds instanceof ByteDataSet) config.validateForInt8Dataset();
 
                         List<BenchResult> datasetResults = Grid.runAndCollectResults(ds, GridSpec.fromConfig(config));
                         results.addAll(datasetResults);
@@ -162,7 +165,9 @@ public class AutoBenchYAML {
                         checkpointManager.markDatasetCompleted(datasetName, datasetResults);
 
                         // Compaction regression is opt-in; failures remain non-fatal.
-                        if (config.isCompactionEnabled()) {
+                        if (config.isCompactionEnabled() && ds instanceof ByteDataSet) {
+                            logger.info("Skipping compaction benchmark for dataset: {} (int8 indexes are not compacted)", datasetName);
+                        } else if (config.isCompactionEnabled()) {
                             try {
                                 logger.info("Running compaction benchmark for dataset: {}", datasetName);
                                 List<BenchResult> datasetCompactionResults;
@@ -174,7 +179,7 @@ public class AutoBenchYAML {
                                         datasetCompactionResults = CompactionBench.run(resident);
                                     }
                                 } else {
-                                    datasetCompactionResults = CompactionBench.run(ds);
+                                    datasetCompactionResults = CompactionBench.run((DataSet) ds);
                                 }
                                 compactionResults.addAll(datasetCompactionResults);
                                 logger.info("Compaction benchmark completed for dataset: {} ({} configs)",

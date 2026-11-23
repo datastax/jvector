@@ -337,6 +337,7 @@ meson test -C ../../../target/meson-build --suite simd_kernels -v
 | Source file | What it tests |
 |---|---|
 | `tests/test_similarity.cpp` | `cosine_f32`, `dot_product_f32`, `euclidean_f32` across all ISA tiers |
+| `tests/test_similarity_i8.cpp` | `cosine_i8`, `dot_product_i8`, `euclidean_i8` (signed int8) across all ISA tiers, including the AVX3_DL VNNI kernels |
 | `tests/test_elementwise.cpp` | Element-wise vector operations |
 | `tests/test_cpu_features.cpp` | CPUID feature detection |
 | `tests/test_helpers.cpp` | Shared test utilities (not a test suite on its own) |
@@ -394,6 +395,7 @@ meson compile -C ../../../target/meson-build
 | Source file | Kernels benchmarked | Dimensions |
 |---|---|---|
 | `benchmarks/bench_similarity_f32.cpp` | `cosine_f32`, `dot_product_f32`, `euclidean_f32` | 128, 256, 512, 1024, 1536, 3072 |
+| `benchmarks/bench_similarity_i8.cpp` | `cosine_i8`, `dot_product_i8`, `euclidean_i8` | 128, 256, 512, 1024, 1536, 3072 |
 
 The binary dispatches to the **best ISA available on the host** at startup. Use
 `JVECTOR_MAX_ISA` to benchmark a specific tier:

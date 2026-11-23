@@ -15,6 +15,7 @@
  */
 package io.github.jbellis.jvector.example;
 
+import io.github.jbellis.jvector.example.benchmarks.datasets.DataSet;
 import io.github.jbellis.jvector.example.benchmarks.Metric;
 import io.github.jbellis.jvector.example.benchmarks.QueryBenchmark;
 import io.github.jbellis.jvector.example.benchmarks.QueryTester;
@@ -142,14 +143,14 @@ public class TestDeferredQueryReporting {
     @Test(timeout=10000)
     public void rejectedSubmissionReturnsItsPooledRequestAndInputGuardsPrecedeAllocation() throws Exception {
         try (var cs = system()) {
-            assertThrows(IllegalArgumentException.class, () -> new QueuedQueryExecution(cs, 0, 1, false));
-            assertThrows(IllegalArgumentException.class, () -> new QueuedQueryExecution(cs, 2, 1, false));
-            var queued = new QueuedQueryExecution(cs, 1, 1, false);
+            assertThrows(IllegalArgumentException.class, () -> QueuedQueryExecution.forFloatQueries(cs, 0, 1, false));
+            assertThrows(IllegalArgumentException.class, () -> QueuedQueryExecution.forFloatQueries(cs, 2, 1, false));
+            var queued = QueuedQueryExecution.forFloatQueries(cs, 1, 1, false);
             assertThrows(IllegalArgumentException.class, () -> queued.runPass(-1, i -> null, null, false));
             assertThrows(NullPointerException.class, () -> queued.runPass(0, null, null, false));
             assertThrows(NullPointerException.class, () -> queued.executeSingle(null));
             queued.close();
-            var query = cs.getDataSet().getQueryVectors().get(0);
+            var query = ((DataSet) cs.getDataSet()).getQueryVectors().get(0);
             for (int i = 0; i < 100; i++)
                 assertThrows(java.util.concurrent.RejectedExecutionException.class, () -> queued.executeSingle(query));
         }
@@ -159,7 +160,7 @@ public class TestDeferredQueryReporting {
     public void completedSnapshotSurvivesExecutorCloseAndCanOnlyBeTransferredOnce() throws Exception {
         try (var cs = system()) {
             QueuedQueryExecution.Measurements samples;
-            try (var queued = new QueuedQueryExecution(cs, 1, 1, false)) {
+            try (var queued = QueuedQueryExecution.forFloatQueries(cs, 1, 1, false)) {
                 assertThrows(IllegalStateException.class, queued::finishMeasurements);
                 queued.beginMeasurements();
                 assertThrows(IllegalStateException.class, queued::beginMeasurements);

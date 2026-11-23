@@ -24,6 +24,7 @@ import java.util.Set;
 /**
  * Version 7 adds ASH feature payloads while retaining the V6 graph record layout.
  * Feature headers describe the quantizer and the fused source representation.
+ * It also adds inline int8 vectors, one byte per dimension in each node record.
  */
 final class GraphIndexFormatV7 extends GraphIndexFormatV6 {
     GraphIndexFormatV7() {
@@ -35,6 +36,7 @@ final class GraphIndexFormatV7 extends GraphIndexFormatV6 {
         var features = EnumSet.copyOf(allFeatures());
         features.add(FeatureId.FUSED_ASH);
         features.add(FeatureId.PAGE_ALIGNMENT);
+        features.add(FeatureId.INLINE_BYTE_VECTORS);
         return features;
     }
 }

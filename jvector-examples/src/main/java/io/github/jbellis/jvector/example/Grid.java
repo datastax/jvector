@@ -27,6 +27,11 @@ import io.github.jbellis.jvector.example.benchmarks.QueryTester;
 import io.github.jbellis.jvector.example.benchmarks.ThroughputBenchmark;
 import io.github.jbellis.jvector.example.benchmarks.diagnostics.BenchmarkDiagnostics;
 import io.github.jbellis.jvector.example.benchmarks.diagnostics.DiagnosticLevel;
+import io.github.jbellis.jvector.example.benchmarks.FloatQuerySet;
+import io.github.jbellis.jvector.example.benchmarks.Int8QuerySet;
+import io.github.jbellis.jvector.example.benchmarks.QuerySet;
+import io.github.jbellis.jvector.example.benchmarks.datasets.BaseDataSet;
+import io.github.jbellis.jvector.example.benchmarks.datasets.ByteDataSet;
 import io.github.jbellis.jvector.example.benchmarks.datasets.DataSet;
 import io.github.jbellis.jvector.example.reporting.RunArtifacts;
 import io.github.jbellis.jvector.example.util.CompressorParameters;
@@ -97,7 +102,7 @@ public class Grid {
      * Runs {@code spec} against {@code ds}, printing console tables and writing experiments.csv rows as
      * selected by {@code artifacts}.
      */
-    public static void run(DataSet ds, GridSpec spec, RunArtifacts artifacts) throws IOException {
+    public static void run(BaseDataSet ds, GridSpec spec, RunArtifacts artifacts) throws IOException {
         runGrid(ds, spec, () -> setupBenchmarks(artifacts.benchmarksToCompute()), reportingListeners(artifacts), artifacts);
     }
 
@@ -105,7 +110,7 @@ public class Grid {
      * Runs {@code spec} against {@code ds} with the fixed regression benchmarks, printing console tables
      * and returning one result per measurement.
      */
-    public static List<BenchResult> runAndCollectResults(DataSet ds, GridSpec spec) throws IOException {
+    public static List<BenchResult> runAndCollectResults(BaseDataSet ds, GridSpec spec) throws IOException {
         var collector = new BenchResultCollector();
         runGrid(ds, spec, Grid::regressionBenchmarks,
                 List.of(new ConsoleReportListener(RunArtifacts.disabled()), collector), RunArtifacts.disabled());
@@ -123,7 +128,7 @@ public class Grid {
      * @param benchmarks creates the query benchmarks for each index and search compressor
      * @param listeners receive every measurement, in order
      */
-    private static void runGrid(DataSet ds,
+    private static void runGrid(BaseDataSet ds,
                                 GridSpec spec,
                                 Supplier<List<QueryBenchmark>> benchmarks,
                                 List<GridListener> listeners, RunArtifacts artifacts) throws IOException
@@ -131,7 +136,8 @@ public class Grid {
         // Resolve every point first, so an incomplete sweep fails before any build.
         final List<BuildConfig> buildPoints = spec.buildPoints();
         var searchCases = spec.search.cases();
-        validateCases(ds, buildPoints, searchCases, spec);
+        if (ds instanceof ByteDataSet) validateInt8Cases((ByteDataSet) ds, buildPoints, searchCases);
+        else validateCases((DataSet) ds, buildPoints, searchCases, spec);
         boolean success = false;
 
         // Always use a fresh temp directory for per-run artifacts
@@ -146,12 +152,16 @@ public class Grid {
         try {
             for (var build : buildPoints) {
                 for (var search : searchCases) {
+                    if (ds instanceof ByteDataSet) {
+                        runOneInt8Graph(INT8_FEATURES, build, search, (ByteDataSet) ds, workDir, benchmarks, listeners);
+                        continue;
+                    }
                     var features = spec.featuresFor(build, search);
                     if (build.indexType == null) {
-                        runOneGraph(cache, features, build, search, ds, workDir, benchmarks, listeners, artifacts);
+                        runOneGraph(cache, features, build, search, (DataSet) ds, workDir, benchmarks, listeners, artifacts);
                     } else {
                         for (var featureSet : features) {
-                            runOneGraph(cache, List.of(featureSet), build, search, ds, workDir, benchmarks, listeners, artifacts);
+                            runOneGraph(cache, List.of(featureSet), build, search, (DataSet) ds, workDir, benchmarks, listeners, artifacts);
                         }
                     }
                 }
@@ -203,6 +213,26 @@ public class Grid {
             // Use the same provider and source dimension as the configured projection.
             VectorizationProvider.getInstance().getVectorUtilSupport()
                     .prepareAshProjection(new float[1][ds.getDimension()]).forQueryScoring();
+        }
+    }
+
+    /** An int8 index stores its int8 vectors inline and scores them exactly. */
+    private static final List<Set<FeatureId>> INT8_FEATURES = List.of(EnumSet.of(FeatureId.INLINE_BYTE_VECTORS));
+
+    /** Int8 indexes are built on disk without compression, reranking, fused codes, streaming or the index cache. */
+    private static void validateInt8Cases(ByteDataSet ds, List<BuildConfig> builds, List<SearchConfig> searches) {
+        for (var build : builds) {
+            if (!"onDisk".equals(build.indexType) || build.streaming
+                    || (build.rerankingType != null && !"None".equals(build.rerankingType))) {
+                throw new IllegalArgumentException(ds.getName() + " is an int8 dataset: use construction.type onDisk, "
+                        + "reranking.type None and no streaming");
+            }
+        }
+        for (var search : searches) {
+            if ("queued".equals(search.queryExecution)
+                    && (long) search.resolvedRequestsPerWorker() * queryWorkerCountForMachine() > Integer.MAX_VALUE) {
+                throw new IllegalArgumentException("search.requestsPerWorker exceeds the queue limit at the selected worker count");
+            }
         }
     }
 
@@ -512,6 +542,92 @@ public class Grid {
         }
     }
 
+    /**
+     * Builds one int8 index per feature set and runs the benchmarks against it, as {@link #runOneGraph} does for
+     * float datasets. Int8 indexes have no compression, so each one is searched once per search worker count.
+     */
+    private static void runOneInt8Graph(List<? extends Set<FeatureId>> featureSets,
+                                        BuildConfig build,
+                                        SearchConfig search,
+                                        ByteDataSet ds,
+                                        Path workDirectory,
+                                        Supplier<List<QueryBenchmark>> benchmarks,
+                                        List<GridListener> listeners) throws IOException
+    {
+        var constructionMetrics = new ConstructionMetrics(true);
+        try (var diagnostics = new BenchmarkDiagnostics(getDiagnosticLevel())) {
+            diagnostics.startMonitoring("testDirectory", workDirectory);
+            diagnostics.capturePrePhaseSnapshot("Graph Build");
+            ConsoleSections.stage("Construction");
+            System.out.println("Index files: " + workDirectory.toAbsolutePath());
+            System.out.printf("%s: Dataset similarity function is %s%n", ds.getName(), ds.getSimilarityFunction());
+
+            var built = new Int8Build(workDirectory, constructionMetrics).build(featureSets, build, ds);
+            Double indexBuildTimeS = built.buildTimeS;
+            indexBuildTimes.put(ds.getName(), indexBuildTimeS);
+            var indexes = inConfiguredOrder(built.indexes, featureSets);
+            var evictedFiles = new HashSet<Path>();
+
+            diagnostics.capturePostPhaseSnapshot("Graph Build");
+            var buildSnapshot = diagnostics.getLatestSystemSnapshot();
+            diagnostics.printDiskStatistics("Graph Index Build");
+            System.out.printf(java.util.Locale.ROOT, "Index build time: %.1f s (graph %.1f s, flush %.1f s)%n%n",
+                    indexBuildTimeS, constructionMetrics.graphBuildTimeS, constructionMetrics.flushTimeS);
+            constructionMetrics.indexBuildTimeS = indexBuildTimeS;
+
+            try {
+                for (var entry : indexes.entrySet()) {
+                    var features = entry.getKey();
+                    var index = entry.getValue();
+                    constructionMetrics.indexFileSizeBytes = built.fileSize(features);
+                    var indexFile = built.files.get(features);
+                    if (measurement != null && measurement.evictIndex() && indexFile != null && evictedFiles.add(indexFile)) {
+                        evictFromPageCache(ds.getName(), indexFile);
+                    }
+                    var featureSetForIndex = ((OnDiskGraphIndex) index).getFeatureSet();
+                    constructionMetrics.resetSearch();
+                    System.out.format("%s: No search compressor configured, int8 vectors will be used for search%n",
+                            ds.getName());
+                    for (Integer workers : search.workerCounts()) {
+                        ConsoleSections.stage(workers == null ? "Search"
+                                : "Search: " + workers + (workers == 1 ? " worker" : " workers"));
+                        try (var cs = new ConfiguredSystem(ds, index, featureSetForIndex)) {
+                            if (search.compression != null) {
+                                cs.configureQueryExecution(search.queryExecution, search.queuedBatchSize(),
+                                        workers, search.resolvedRequestsPerWorker());
+                            }
+                            var ctx = new SearchContext(ds, build, search, features, featureSetForIndex, "None",
+                                    search.searchCompressors.get(0), "None", indexBuildTimeS,
+                                    built.fileSize(features), buildSnapshot, queryParameters(cs), null);
+                            testConfiguration(cs, ctx, constructionMetrics, workDirectory, benchmarks, listeners);
+                        } catch (Exception e) {
+                            throw new RuntimeException(e);
+                        }
+                    }
+                }
+                if (diagnostic_level > 0) {
+                    diagnostics.logSummary();
+                }
+            } finally {
+                // Close before deleting: a failed search must not leave files open or mapped.
+                for (var index : indexes.values()) {
+                    try {
+                        index.close();
+                    } catch (Exception e) {
+                        System.err.println("Cleanup Failed: Could not close index -> " + e.getMessage());
+                    }
+                }
+                for (var file : built.files.values()) {
+                    try {
+                        Files.deleteIfExists(file);
+                    } catch (IOException e) {
+                        System.err.println("Cleanup Failed: Could not delete " + file.getFileName() + " -> " + e.getMessage());
+                    }
+                }
+            }
+        }
+    }
+
     private static Map<String, Object> queryParameters(ConfiguredSystem cs) {
         Map<String, Object> queryParams = new LinkedHashMap<>();
         queryParams.put("executionMode", cs.usesQueuedExecution() ? "queued" : "direct");
@@ -612,11 +728,11 @@ public class Grid {
                                           Supplier<List<QueryBenchmark>> benchmarks,
                                           List<GridListener> listeners) {
         int queryRuns = 2;
-        System.out.format("%s: Using %s:%n", cs.ds.getName(), cs.index);
+        System.out.format("%s: Using %s:%n", cs.getDataSet().getName(), cs.index);
 
         // Listeners validate their selections before any benchmark runs.
         listeners.forEach(l -> l.onSearchStart(ctx));
-        QueryTester tester = new QueryTester(benchmarks.get(), testDirectory, cs.ds.getName());
+        QueryTester tester = new QueryTester(benchmarks.get(), testDirectory, cs.getDataSet().getName());
 
         for (var usePruning : ctx.search.usePruningGrid) {
             listeners.forEach(l -> l.onPruningStart(ctx, usePruning));
@@ -865,7 +981,10 @@ public class Grid {
     }
 
     public static class ConfiguredSystem implements AutoCloseable {
+        /** The float dataset, or null for an int8 system, which has {@link #byteDs}. */
         DataSet ds;
+        private final ByteDataSet byteDs;
+        private final QuerySet<?> queries;
         ImmutableGraphIndex index;
         CompressedVectors cv;
         Set<FeatureId> features;
@@ -984,12 +1103,33 @@ public class Grid {
             this.rerankingType = rerankingType;
             this.memoryReranker = memoryReranker;
             this.ds = ds;
+            this.byteDs = null;
             this.index = index;
             this.cv = cv;
             this.features = features;
             this.scoresFromIndex = FeatureProviders.anyMatch(features, FeatureProvider::providesApproximateScoring);
             // File-backed sources borrow scratch storage; concurrent scorers need separate views.
             this.exactVectors = ds.getBaseRavv().threadLocalSupplier();
+            this.queries = new FloatQuerySet(this, ds);
+        }
+
+        /** An int8 system: exact scoring of the int8 vectors stored inline in {@code index}, without compression. */
+        ConfiguredSystem(ByteDataSet ds, ImmutableGraphIndex index, Set<FeatureId> features) {
+            this.rerankingType = null;
+            this.memoryReranker = null;
+            this.ds = null;
+            this.byteDs = ds;
+            this.index = index;
+            this.cv = null;
+            this.features = features;
+            this.scoresFromIndex = false;
+            this.exactVectors = null;
+            this.queries = new Int8QuerySet(ds);
+        }
+
+        /** This system's queries and how to score them, in its dataset's vector type. */
+        public QuerySet<?> queries() {
+            return queries;
         }
 
         /** Top-K searches stop adaptively, reading scores as distances under the dataset's similarity function. */
@@ -1085,8 +1225,9 @@ public class Grid {
             return searchers.get();
         }
 
-        public DataSet getDataSet() {
-            return ds;
+        /** The dataset, float or int8. */
+        public BaseDataSet getDataSet() {
+            return ds != null ? ds : byteDs;
         }
 
         @Override

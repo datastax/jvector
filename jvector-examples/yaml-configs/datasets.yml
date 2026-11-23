@@ -40,3 +40,7 @@ regression-tests:
 #  - personahub-1m
 # - deep-image-96-angular # large files not yet supported
 # - gist-960-euclidean # large files not yet supported
+# Signed int8 datasets, searched with their own vectors. Name one on the command line to run it.
+#int8:
+#  - wikipedia-2023-11-en-mxbai-int8-1m
+#  - wiki-multilingual-v3-int8-1m

@@ -235,6 +235,47 @@ public final class VectorUtil {
     return impl.assembleAndSumPQ(data, subspaceCount, dataOffsets1, dataOffsetsOffset1, dataOffsets2, dataOffsetsOffset2, clusterCount);
   }
 
+  /**
+   * Returns the dot product of two signed int8 byte vectors.
+   *
+   * @throws IllegalArgumentException if the vectors' dimensions differ.
+   */
+  public static float dotProduct(ByteSequence<?> a, ByteSequence<?> b) {
+    if (a.length() != b.length()) {
+      throw new IllegalArgumentException("vector dimensions differ: " + a.length() + "!=" + b.length());
+    }
+    return impl.dotProduct(a, b);
+  }
+
+  /**
+   * Returns the sum of squared differences of two signed int8 byte vectors.
+   *
+   * @throws IllegalArgumentException if the vectors' dimensions differ.
+   */
+  public static float squareL2Distance(ByteSequence<?> a, ByteSequence<?> b) {
+    if (a.length() != b.length()) {
+      throw new IllegalArgumentException("vector dimensions differ: " + a.length() + "!=" + b.length());
+    }
+    return impl.squareDistance(a, b);
+  }
+
+  /**
+   * Returns the cosine similarity of two signed int8 byte vectors.
+   * <p>
+   * As with the float overload, zero vectors (all components zero) are not supported: their norm is zero,
+   * so the result is NaN. Callers must not pass zero vectors; this is checked with an assertion.
+   *
+   * @throws IllegalArgumentException if the vectors' dimensions differ.
+   */
+  public static float cosine(ByteSequence<?> a, ByteSequence<?> b) {
+    if (a.length() != b.length()) {
+      throw new IllegalArgumentException("vector dimensions differ: " + a.length() + "!=" + b.length());
+    }
+    float r = impl.cosine(a, b);
+    assert Float.isFinite(r) : String.format("cosine(%s, %s) = %s", a, b, r);
+    return r;
+  }
+
   public static int hammingDistance(long[] v1, long[] v2) {
     return impl.hammingDistance(v1, v2);
   }

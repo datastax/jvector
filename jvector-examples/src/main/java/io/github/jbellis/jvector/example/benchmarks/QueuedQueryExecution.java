@@ -37,15 +37,18 @@ import java.util.function.IntFunction;
  * The queued execution policy used by the standard BenchYAML benchmarks. It
  * supplies the same full passes and query sources as the calling benchmark;
  * warmup, sampling, GC policy and reporting remain in those benchmarks.
+ * Queries are of the system's vector type {@code Q}; only float queries are
+ * prepared in batches, since query preparation projects float vectors.
  */
-public final class QueuedQueryExecution implements AutoCloseable {
+public final class QueuedQueryExecution<Q> implements AutoCloseable {
     private static final QueryTimeRecorder NO_TIMING = nanos -> {};
     private final ConfiguredSystem system;
+    private final QuerySet<Q> queries;
     private final int topK, rerankK;
     private final boolean usePruning;
     private final QueryPreparer preparer;
-    private final BatchingExecutor<Request> execution;
-    private final ArrayBlockingQueue<Request> free;
+    private final BatchingExecutor<Request<Q>> execution;
+    private final ArrayBlockingQueue<Request<Q>> free;
     private LongArrayList measuredResponseTimes = new LongArrayList();
     private long[] initialHistogram;
     private boolean measuring;
@@ -56,20 +59,20 @@ public final class QueuedQueryExecution implements AutoCloseable {
         Rows(int count) { queries = new VectorFloat<?>[count]; states = new PreparedQuery[count]; }
     }
 
-    private static final class Request {
+    private static final class Request<Q> {
         final PreparedQuery state;
         final Semaphore completed = new Semaphore(0);
-        Pass pass;
+        Pass<Q> pass;
         int ordinal;
         long submittedAt;
-        VectorFloat<?> query;
+        Q query;
         SearchResult result;
         Throwable failure;
         Request(PreparedQuery state) { this.state = state; }
     }
 
-    public static final class Pass {
-        final IntFunction<VectorFloat<?>> inputs;
+    public static final class Pass<Q> {
+        final IntFunction<Q> inputs;
         final QueryTimeRecorder recorder;
         final CountDownLatch completed;
         final AtomicReference<Throwable> failure = new AtomicReference<>();
@@ -78,7 +81,7 @@ public final class QueuedQueryExecution implements AutoCloseable {
         public final SearchResult[] results;
         // Only validation passes allocate a reference result for each query.
         final SearchResult[] references;
-        Pass(int count, IntFunction<VectorFloat<?>> inputs, QueryTimeRecorder recorder, boolean capture, boolean validate) {
+        Pass(int count, IntFunction<Q> inputs, QueryTimeRecorder recorder, boolean capture, boolean validate) {
             this.inputs = inputs; this.recorder = recorder;
             completed = new CountDownLatch(count);
             responseTimes = new long[count];
@@ -88,10 +91,20 @@ public final class QueuedQueryExecution implements AutoCloseable {
         public long visited() { return visited.sum(); }
     }
 
-    public QueuedQueryExecution(ConfiguredSystem system, int topK, int rerankK, boolean usePruning) {
+    /** Queued execution of a float system's queries. */
+    public static QueuedQueryExecution<VectorFloat<?>> forFloatQueries(ConfiguredSystem system, int topK, int rerankK,
+                                                                      boolean usePruning) {
+        if (!(Objects.requireNonNull(system, "system").queries() instanceof FloatQuerySet))
+            throw new IllegalArgumentException("The system's queries are not float vectors");
+        return new QueuedQueryExecution<>(system, (FloatQuerySet) system.queries(), topK, rerankK, usePruning);
+    }
+
+    /** Queued execution of {@code queries}, which are {@code system}'s {@link ConfiguredSystem#queries()}. */
+    public QueuedQueryExecution(ConfiguredSystem system, QuerySet<Q> queries, int topK, int rerankK, boolean usePruning) {
         if (topK <= 0 || rerankK < topK)
             throw new IllegalArgumentException("Require 0 < topK <= rerankK");
         this.system = Objects.requireNonNull(system, "system");
+        this.queries = Objects.requireNonNull(queries, "queries");
         this.topK = topK; this.rerankK = rerankK; this.usePruning = usePruning;
         this.preparer = system.queryPreparer();
         int cores = system.queryWorkerCount();
@@ -101,16 +114,16 @@ public final class QueuedQueryExecution implements AutoCloseable {
         // (default one full batch of 8), never less than one batch.
         int capacity = system.queryQueueCapacity();
         free = new ArrayBlockingQueue<>(capacity);
-        for (int i = 0; i < capacity; i++) free.add(new Request(preparer == null ? null : preparer.newState()));
+        for (int i = 0; i < capacity; i++) free.add(new Request<>(preparer == null ? null : preparer.newState()));
         var rows = ThreadLocal.withInitial(() -> new Rows(batchSize));
         var workers = system.queryWorkers();
         execution = new BatchingExecutor<>(cores, capacity, batchSize, workers,
-                    new BatchingExecutor.Operation<Request>() {
-                public Object batchKey(Request request) {
+                    new BatchingExecutor.Operation<Request<Q>>() {
+                public Object batchKey(Request<Q> request) {
                     return preparer != null && preparer.supportsBatchPreparation() ? preparer : null;
                 }
-                public void prepareBatch(List<Request> requests) {
-                    for (Request request : requests)
+                public void prepareBatch(List<Request<Q>> requests) {
+                    for (Request<Q> request : requests)
                         if (request.pass != null) request.query = request.pass.inputs.apply(request.ordinal);
                     if (preparer == null) {
                         recordReferences(requests);
@@ -119,7 +132,7 @@ public final class QueuedQueryExecution implements AutoCloseable {
                     Rows buffers = rows.get();
                     try {
                         for (int i = 0; i < requests.size(); i++) {
-                            buffers.queries[i] = requests.get(i).query;
+                            buffers.queries[i] = queries.asFloat(requests.get(i).query);
                             buffers.states[i] = requests.get(i).state;
                         }
                         preparer.prepareBatch(buffers.queries, buffers.states, requests.size());
@@ -129,28 +142,28 @@ public final class QueuedQueryExecution implements AutoCloseable {
                         Arrays.fill(buffers.states, 0, requests.size(), null);
                     }
                 }
-                private void recordReferences(List<Request> requests) {
+                private void recordReferences(List<Request<Q>> requests) {
                     // Before publishing prepared work, search on the preparing
                     // thread with exactly the same numerical state. GEMV and
                     // GEMM can round differently; comparing against a separate
                     // singleton projection would conflate that with a race.
-                    Pass pass = requests.get(0).pass;
+                    Pass<Q> pass = requests.get(0).pass;
                     if (pass == null || pass.references == null) return;
-                    for (Request request : requests) {
+                    for (Request<Q> request : requests) {
                         request.pass.references[request.ordinal] = request.state == null
-                                ? QueryExecutor.executeQuery(system, topK, rerankK, usePruning, request.query)
+                                ? QueryExecutor.executeQuery(system, queries, topK, rerankK, usePruning, request.query)
                                 : QueryExecutor.executePreparedQuery(system, topK, rerankK, usePruning, request.state);
                     }
                 }
-                public void execute(Request request) {
+                public void execute(Request<Q> request) {
                     request.result = request.state == null
-                            ? QueryExecutor.executeQuery(system, topK, rerankK, usePruning, request.query)
+                            ? QueryExecutor.executeQuery(system, queries, topK, rerankK, usePruning, request.query)
                             : QueryExecutor.executePreparedQuery(system, topK, rerankK, usePruning, request.state);
                 }
-                public void complete(Request request, Throwable failure) {
+                public void complete(Request<Q> request, Throwable failure) {
                     long responseTime = System.nanoTime() - request.submittedAt;
                     request.failure = failure;
-                    Pass pass = request.pass;
+                    Pass<Q> pass = request.pass;
                     if (pass == null) { request.completed.release(); return; }
                     try {
                         if (failure == null) {
@@ -168,20 +181,20 @@ public final class QueuedQueryExecution implements AutoCloseable {
             });
     }
 
-    private Request acquire() {
+    private Request<Q> acquire() {
         boolean interrupted = false;
         for (;;) {
-            try { Request request = free.take(); if (interrupted) Thread.currentThread().interrupt(); return request; }
+            try { Request<Q> request = free.take(); if (interrupted) Thread.currentThread().interrupt(); return request; }
             catch (InterruptedException e) { interrupted = true; }
         }
     }
 
-    private void release(Request request) {
+    private void release(Request<Q> request) {
         request.query = null; request.result = null; request.failure = null; request.pass = null;
         free.add(request);
     }
 
-    private void submit(Request request) {
+    private void submit(Request<Q> request) {
         boolean accepted = false;
         try {
             accepted = execution.trySubmit(request);
@@ -192,7 +205,7 @@ public final class QueuedQueryExecution implements AutoCloseable {
         }
     }
 
-    public Pass runPass(int count, IntFunction<VectorFloat<?>> source, QueryTimeRecorder recorder, boolean capture) {
+    public Pass<Q> runPass(int count, IntFunction<Q> source, QueryTimeRecorder recorder, boolean capture) {
         return runPass(count, source, recorder, capture, false);
     }
 
@@ -201,9 +214,9 @@ public final class QueuedQueryExecution implements AutoCloseable {
      * the preparing thread and the executing thread. Runs outside measurement;
      * native numerical tests and AccuracyBenchmark check projection/recall.
      */
-    public void verifyConcurrentResults(int count, IntFunction<VectorFloat<?>> source) {
+    public void verifyConcurrentResults(int count, IntFunction<Q> source) {
         if (measuring) throw new IllegalStateException("Validation cannot run during measurement");
-        Pass pass = runPass(count, source, null, true, true);
+        Pass<Q> pass = runPass(count, source, null, true, true);
         for (int i = 0; i < count; i++) {
             if (!Arrays.equals(pass.references[i].getNodes(), pass.results[i].getNodes())
                     || pass.references[i].getVisitedCount() != pass.results[i].getVisitedCount())
@@ -211,14 +224,14 @@ public final class QueuedQueryExecution implements AutoCloseable {
         }
     }
 
-    private Pass runPass(int count, IntFunction<VectorFloat<?>> source,
+    private Pass<Q> runPass(int count, IntFunction<Q> source,
                          QueryTimeRecorder recorder, boolean capture, boolean validate) {
         if (count < 0) throw new IllegalArgumentException("Query count must be nonnegative");
         Objects.requireNonNull(source, "source");
-        Pass pass = new Pass(count, source, recorder == null ? NO_TIMING : recorder, capture, validate);
+        Pass<Q> pass = new Pass<>(count, source, recorder == null ? NO_TIMING : recorder, capture, validate);
         for (int i = 0; i < count; i++) {
             long submittedAt = System.nanoTime(); // Includes waiting for admission.
-            Request request = acquire();
+            Request<Q> request = acquire();
             request.pass = pass; request.ordinal = i; request.submittedAt = submittedAt;
             submit(request);
         }
@@ -234,10 +247,10 @@ public final class QueuedQueryExecution implements AutoCloseable {
     }
 
     /** One submitted request with normal queue/batch capacity; not a singleton setting. */
-    public SearchResult executeSingle(VectorFloat<?> query) {
+    public SearchResult executeSingle(Q query) {
         Objects.requireNonNull(query, "query");
         long submittedAt = System.nanoTime();
-        Request request = acquire();
+        Request<Q> request = acquire();
         request.pass = null; request.query = query; request.submittedAt = submittedAt;
         submit(request);
         request.completed.acquireUninterruptibly();

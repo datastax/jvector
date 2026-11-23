@@ -17,6 +17,7 @@
 package io.github.jbellis.jvector.example;
 
 import io.github.jbellis.jvector.graph.ImmutableGraphIndex;
+import io.github.jbellis.jvector.graph.RandomAccessByteVectorValues;
 import io.github.jbellis.jvector.graph.RandomAccessVectorValues;
 import io.github.jbellis.jvector.graph.disk.AbstractGraphIndexWriter;
 import io.github.jbellis.jvector.graph.disk.RandomAccessOnDiskGraphIndexWriter;
@@ -37,7 +38,9 @@ import java.util.function.Supplier;
 final class FeatureWriteContext {
     private final AbstractGraphIndexWriter.Builder<? extends RandomAccessOnDiskGraphIndexWriter, ?> writer;
     private final ImmutableGraphIndex graph;
+    // Exactly one of vectors and byteVectors is set, according to the dataset's element type.
     private final RandomAccessVectorValues vectors;
+    private final RandomAccessByteVectorValues byteVectors;
     // File-backed sources reuse scratch vectors; ordinal suppliers need a view per worker.
     private final Supplier<RandomAccessVectorValues> writerVectors;
     private final PQVectors buildPQ;
@@ -46,6 +49,7 @@ final class FeatureWriteContext {
     private final ConstructionMetrics metrics;
 
     private final Map<FeatureId, Function<VectorFloat<?>, Feature.State>> vectorSuppliers = new EnumMap<>(FeatureId.class);
+    private final Map<FeatureId, IntFunction<Feature.State>> ordinalSuppliers = new EnumMap<>(FeatureId.class);
     private final Map<FeatureId, Function<ImmutableGraphIndex.View, IntFunction<Feature.State>>> afterBuildSuppliers =
             new EnumMap<>(FeatureId.class);
 
@@ -69,16 +73,53 @@ final class FeatureWriteContext {
         this.writer = writer;
         this.graph = graph;
         this.vectors = vectors;
+        this.byteVectors = null;
         this.writerVectors = vectors.threadLocalSupplier();
         this.buildPQ = buildPQ;
         this.metrics = metrics;
     }
 
+    /** A context for an int8 dataset: no float vectors, no compressed build vectors, no metrics. */
+    FeatureWriteContext(AbstractGraphIndexWriter.Builder<? extends RandomAccessOnDiskGraphIndexWriter, ?> writer,
+                        ImmutableGraphIndex graph,
+                        RandomAccessByteVectorValues byteVectors) {
+        this.writer = writer;
+        this.graph = graph;
+        this.vectors = null;
+        this.byteVectors = byteVectors;
+        this.writerVectors = null;
+        this.buildPQ = null;
+        this.buildASH = null;
+        this.inputMean = null;
+        this.metrics = null;
+    }
+
     /** The graph being written; complete only for in-memory builds. */
     ImmutableGraphIndex graph() { return graph; }
 
-    /** The full-precision base vectors. */
-    RandomAccessVectorValues vectors() { return vectors; }
+    /**
+     * The full-precision base vectors.
+     *
+     * @throws IllegalStateException for an int8 dataset, whose features cannot be built from float vectors
+     */
+    RandomAccessVectorValues vectors() {
+        if (vectors == null) {
+            throw new IllegalStateException("This is an int8 dataset; the feature needs float vectors");
+        }
+        return vectors;
+    }
+
+    /**
+     * The int8 base vectors.
+     *
+     * @throws IllegalStateException for a float dataset
+     */
+    RandomAccessByteVectorValues byteVectors() {
+        if (byteVectors == null) {
+            throw new IllegalStateException("This is a float dataset; the feature needs int8 vectors");
+        }
+        return byteVectors;
+    }
 
     /** PQ-encoded build vectors, or null for full-precision and non-PQ builds. */
     PQVectors buildPQ() { return buildPQ; }
@@ -95,6 +136,11 @@ final class FeatureWriteContext {
      */
     void supplyFromVector(FeatureId id, Function<VectorFloat<?>, Feature.State> encode) {
         vectorSuppliers.put(id, encode);
+    }
+
+    /** Registers a feature whose per-node state is computed from the node's ordinal alone. */
+    void supplyByOrdinal(FeatureId id, IntFunction<Feature.State> supplier) {
+        ordinalSuppliers.put(id, supplier);
     }
 
     /** Registers a feature whose state needs the completed graph, such as fused neighbor codes. */
@@ -129,6 +175,7 @@ final class FeatureWriteContext {
             vectorSuppliers.forEach((id, supplier) ->
                     suppliers.put(id, ordinal -> supplier.apply(readVector.apply(ordinal))));
         }
+        suppliers.putAll(ordinalSuppliers);
         afterBuildSuppliers.forEach((id, supplier) -> suppliers.put(id, supplier.apply(view)));
         return suppliers;
     }

@@ -122,6 +122,30 @@ class NativeVectorUtilSupport extends PanamaVectorUtilSupport
     }
 
     @Override
+    public float dotProduct(ByteSequence<?> a, ByteSequence<?> b) {
+        return NativeSimdOps.dot_product_i8(
+                ((MemorySegmentByteSequence) a).get(), (long) a.offset(),
+                ((MemorySegmentByteSequence) b).get(), (long) b.offset(),
+                (long) a.length());
+    }
+
+    @Override
+    public float squareDistance(ByteSequence<?> a, ByteSequence<?> b) {
+        return NativeSimdOps.euclidean_i8(
+                ((MemorySegmentByteSequence) a).get(), (long) a.offset(),
+                ((MemorySegmentByteSequence) b).get(), (long) b.offset(),
+                (long) a.length());
+    }
+
+    @Override
+    public float cosine(ByteSequence<?> a, ByteSequence<?> b) {
+        return NativeSimdOps.cosine_i8(
+                ((MemorySegmentByteSequence) a).get(), (long) a.offset(),
+                ((MemorySegmentByteSequence) b).get(), (long) b.offset(),
+                (long) a.length());
+    }
+
+    @Override
     public AshProjection prepareAshProjection(float[][] matrix) {
         return NativeASHProjection.isAvailable()
                 ? NativeASHFP32BatchProjection.prepare(new NativeASHProjection(matrix)) : super.prepareAshProjection(matrix);

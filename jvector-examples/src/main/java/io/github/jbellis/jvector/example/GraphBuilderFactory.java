@@ -24,6 +24,7 @@ import io.github.jbellis.jvector.graph.disk.AbstractGraphIndexWriter;
 import io.github.jbellis.jvector.graph.disk.OnDiskGraphIndexWriter;
 import io.github.jbellis.jvector.graph.disk.OnDiskParallelGraphIndexWriter;
 import io.github.jbellis.jvector.graph.ImmutableGraphIndex;
+import io.github.jbellis.jvector.graph.RandomAccessByteVectorValues;
 import io.github.jbellis.jvector.graph.RandomAccessVectorValues;
 import io.github.jbellis.jvector.graph.disk.OrdinalMapper;
 import io.github.jbellis.jvector.graph.disk.RandomAccessOnDiskGraphIndexWriter;
@@ -33,6 +34,7 @@ import io.github.jbellis.jvector.quantization.ASHVectors;
 import io.github.jbellis.jvector.quantization.CompressedVectors;
 import io.github.jbellis.jvector.quantization.PQVectors;
 import io.github.jbellis.jvector.util.PhysicalCoreExecutor;
+import io.github.jbellis.jvector.vector.ByteVectorSimilarityFunction;
 import io.github.jbellis.jvector.vector.VectorSimilarityFunction;
 
 import java.io.FileNotFoundException;
@@ -53,6 +55,24 @@ final class GraphBuilderFactory {
                                               VectorSimilarityFunction similarity,
                                               BuildConfig build) {
         var bsp = BuildScoreProvider.randomAccessScoreProvider(vectors, similarity);
+        return new GraphIndexBuilder(bsp,
+                                     vectors.dimension(),
+                                     build.layerDegrees(),
+                                     build.efConstruction,
+                                     build.neighborOverflow,
+                                     build.alpha,
+                                     build.addHierarchy,
+                                     build.refineFinalGraph,
+                                     constructionPool(build),
+                                     hasCustomWorkers(build) ? FilteredForkJoinPool.createFilteredPool(build.workers)
+                                             : FilteredForkJoinPool.createFilteredPool());
+    }
+
+    /** A builder scoring with exact similarity over int8 vectors. */
+    static GraphIndexBuilder forByteVectors(RandomAccessByteVectorValues vectors,
+                                            ByteVectorSimilarityFunction similarity,
+                                            BuildConfig build) {
+        var bsp = BuildScoreProvider.byteVectorScoreProvider(vectors, similarity);
         return new GraphIndexBuilder(bsp,
                                      vectors.dimension(),
                                      build.layerDegrees(),

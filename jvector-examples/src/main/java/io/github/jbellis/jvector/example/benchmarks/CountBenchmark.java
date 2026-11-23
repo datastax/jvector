@@ -105,13 +105,36 @@ public class CountBenchmark extends AbstractQueryBenchmark {
         LongAdder nodesVisited = new LongAdder();
         LongAdder nodesExpanded = new LongAdder();
         LongAdder nodesExpandedBaseLayer = new LongAdder();
-        int totalQueries = cs.getDataSet().getQueryVectors().size();
+        int totalQueries = cs.queries().size();
 
-        try (QueuedQueryExecution queued = cs.usesQueuedExecution()
-                ? new QueuedQueryExecution(cs, topK, rerankK, usePruning) : null) {
+        count(cs, cs.queries(), topK, rerankK, usePruning, queryRuns, nodesVisited, nodesExpanded, nodesExpandedBaseLayer);
+
+        double avgVisited = nodesVisited.sum() / (double) (queryRuns * totalQueries);
+        double avgExpanded = nodesExpanded.sum() / (double) (queryRuns * totalQueries);
+        double avgBase = nodesExpandedBaseLayer.sum() / (double) (queryRuns * totalQueries);
+
+        var list = new ArrayList<Metric>();
+        if (computeAvgNodesVisited) {
+            list.add(Metric.of("search.count.avg_visited", "Avg Visited", formatAvgNodesVisited, avgVisited));
+        }
+        if (computeAvgNodesExpanded) {
+            list.add(Metric.of("search.count.avg_expanded", "Avg Expanded", formatAvgNodesExpanded, avgExpanded));
+        }
+        if (computeAvgNodesExpandedBaseLayer) {
+            list.add(Metric.of("search.count.avg_expanded_base_layer", "Avg Expanded Base Layer", formatAvgNodesExpandedBaseLayer, avgBase));
+        }
+        return list;
+    }
+
+    private static <Q> void count(ConfiguredSystem cs, QuerySet<Q> queries, int topK, int rerankK, boolean usePruning,
+                                  int queryRuns, LongAdder nodesVisited, LongAdder nodesExpanded,
+                                  LongAdder nodesExpandedBaseLayer) {
+        int totalQueries = queries.size();
+        try (QueuedQueryExecution<Q> queued = cs.usesQueuedExecution()
+                ? new QueuedQueryExecution<>(cs, queries, topK, rerankK, usePruning) : null) {
         for (int run = 0; run < queryRuns; run++) {
             if (queued != null) {
-                var pass = queued.runPass(totalQueries, cs.getDataSet().getQueryVectors()::get, null, true);
+                var pass = queued.runPass(totalQueries, queries::get, null, true);
                 for (SearchResult result : pass.results) {
                     nodesVisited.add(result.getVisitedCount());
                     nodesExpanded.add(result.getExpandedCount());
@@ -131,21 +154,5 @@ public class CountBenchmark extends AbstractQueryBenchmark {
         }
 
         }
-
-        double avgVisited = nodesVisited.sum() / (double) (queryRuns * totalQueries);
-        double avgExpanded = nodesExpanded.sum() / (double) (queryRuns * totalQueries);
-        double avgBase = nodesExpandedBaseLayer.sum() / (double) (queryRuns * totalQueries);
-
-        var list = new ArrayList<Metric>();
-        if (computeAvgNodesVisited) {
-            list.add(Metric.of("search.count.avg_visited", "Avg Visited", formatAvgNodesVisited, avgVisited));
-        }
-        if (computeAvgNodesExpanded) {
-            list.add(Metric.of("search.count.avg_expanded", "Avg Expanded", formatAvgNodesExpanded, avgExpanded));
-        }
-        if (computeAvgNodesExpandedBaseLayer) {
-            list.add(Metric.of("search.count.avg_expanded_base_layer", "Avg Expanded Base Layer", formatAvgNodesExpandedBaseLayer, avgBase));
-        }
-        return list;
     }
 }

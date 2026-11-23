@@ -56,7 +56,7 @@ public class ExecutionTimeBenchmark extends AbstractQueryBenchmark {
             boolean usePruning,
             int queryRuns) {
 
-        int totalQueries = cs.getDataSet().getQueryVectors().size();
+        int totalQueries = cs.queries().size();
         double totalRuntime = 0;
 
         for (int run = 0; run < queryRuns; run++) {

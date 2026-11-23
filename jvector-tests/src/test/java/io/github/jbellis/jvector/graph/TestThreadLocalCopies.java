@@ -17,8 +17,10 @@
 package io.github.jbellis.jvector.graph;
 
 import io.github.jbellis.jvector.graph.similarity.BuildScoreProvider;
+import io.github.jbellis.jvector.vector.ByteVectorSimilarityFunction;
 import io.github.jbellis.jvector.vector.VectorSimilarityFunction;
 import io.github.jbellis.jvector.vector.VectorizationProvider;
+import io.github.jbellis.jvector.vector.types.ByteSequence;
 import io.github.jbellis.jvector.vector.types.VectorFloat;
 import io.github.jbellis.jvector.vector.types.VectorTypeSupport;
 import org.junit.Test;
@@ -33,6 +35,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertSame;
 import static org.junit.Assert.assertThrows;
+import static org.junit.Assert.assertTrue;
 
 public class TestThreadLocalCopies {
     private static final VectorTypeSupport vts = VectorizationProvider.getInstance().getVectorTypeSupport();
@@ -263,6 +266,107 @@ public class TestThreadLocalCopies {
             assertThrows(RuntimeException.class, () -> builder.build(ravv));
             assertEquals("workers still reading after build() returned", 0, activeReads.get());
             assertEquals("copy closed during an active read", 0, readsAfterClose.get());
+        } finally {
+            pool.shutdownNow();
+        }
+    }
+
+    /** Shared int8 RAVV that counts the copies it makes and their close() calls; the source itself never counts. */
+    static class CloseTrackingByteRavv implements RandomAccessByteVectorValues, AutoCloseable {
+        static final int SIZE = 16;
+        private final AtomicInteger createdCount;
+        private final AtomicInteger closedCount;
+        private final boolean source;
+
+        CloseTrackingByteRavv(AtomicInteger createdCount, AtomicInteger closedCount, boolean source) {
+            this.createdCount = createdCount;
+            this.closedCount = closedCount;
+            this.source = source;
+        }
+
+        @Override
+        public int size() {
+            return SIZE;
+        }
+
+        @Override
+        public int dimension() {
+            return 2;
+        }
+
+        @Override
+        public ByteSequence<?> getVector(int nodeId) {
+            return byteVector(nodeId);
+        }
+
+        @Override
+        public boolean isValueShared() {
+            return true;
+        }
+
+        @Override
+        public RandomAccessByteVectorValues copy() {
+            createdCount.incrementAndGet();
+            return new CloseTrackingByteRavv(createdCount, closedCount, false);
+        }
+
+        @Override
+        public void close() {
+            if (!source) {
+                closedCount.incrementAndGet();
+            }
+        }
+    }
+
+    private static ByteSequence<?> byteVector(int node) {
+        var v = vts.createByteSequence(2);
+        v.set(0, (byte) node);
+        v.set(1, (byte) -node);
+        return v;
+    }
+
+    @Test
+    public void closingByteSupplierClosesAllThreadLocalCopies() throws Exception {
+        AtomicInteger closed = new AtomicInteger();
+        var supplier = new CloseTrackingByteRavv(new AtomicInteger(), closed, true).threadLocalSupplier();
+
+        ExecutorService pool = Executors.newFixedThreadPool(2);
+        try {
+            for (int i = 0; i < 2; i++) {
+                pool.submit(() -> supplier.get()).get();
+            }
+        }
+        finally {
+            pool.shutdown();
+            pool.awaitTermination(10, TimeUnit.SECONDS);
+        }
+
+        ((AutoCloseable) supplier).close();
+        assertEquals(2, closed.get());
+    }
+
+    @Test
+    public void byteBuildClosesItsThreadLocalCopies() throws Exception {
+        AtomicInteger created = new AtomicInteger();
+        AtomicInteger closed = new AtomicInteger();
+        var inMemory = new ArrayList<ByteSequence<?>>();
+        for (int i = 0; i < CloseTrackingByteRavv.SIZE; i++) {
+            inMemory.add(byteVector(i));
+        }
+        var bsp = BuildScoreProvider.byteVectorScoreProvider(new ListRandomAccessByteVectorValues(inMemory, 2),
+                                                             ByteVectorSimilarityFunction.EUCLIDEAN);
+        var pool = new ForkJoinPool(2);
+        try (var builder = GraphIndexBuilder.builder(bsp, 2, 8)
+                .withBeamWidth(16)
+                .withNeighborOverflow(1.2f)
+                .withAlpha(1.2f)
+                .withSimdExecutor(pool)
+                .withParallelExecutor(pool)
+                .build()) {
+            builder.build(new CloseTrackingByteRavv(created, closed, true));
+            assertEquals(CloseTrackingByteRavv.SIZE, builder.getGraph().size(0));
+            assertTrue("build() made no per-thread copies", created.get() > 0);
+            assertEquals("per-thread copies not closed after build()", created.get(), closed.get());
         } finally {
             pool.shutdownNow();
         }

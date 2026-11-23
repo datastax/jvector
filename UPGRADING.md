@@ -1,14 +1,18 @@
 # Upgrading from 4.0.x to 4.1.x
 
 ## On-disk format version 7
-- Version 7 of the on-disk graph format adds two features: fused ASH (`FeatureId.FUSED_ASH`), ASH codes
-  stored in the graph alongside each node's neighbors, and page alignment (`FeatureId.PAGE_ALIGNMENT`),
-  written only when a graph writer builder is given `withPageAlignment(pageBytes)`. It also stores the largest vector length that
-  adaptive dot-product stopping needs: one float at the end of each serialized PQ model, and of the
-  inline-vector and separated-vector feature headers. Otherwise a version 7 file has the version 6 layout.
-  ASH models (`AsymmetricHashing`, `ASHVectors`) also require version 7 or later when they are written or
-  loaded. A model stores its similarity and, for `EUCLIDEAN`, a scale unit (8 bytes in all); ASH models
-  written before these fields existed cannot be loaded.
+- Version 7 of the on-disk graph format adds three features: fused ASH (`FeatureId.FUSED_ASH`), ASH codes
+  stored in the graph alongside each node's neighbors; page alignment (`FeatureId.PAGE_ALIGNMENT`),
+  written only when a graph writer builder is given `withPageAlignment(pageBytes)`; and inline int8
+  vectors (`FeatureId.INLINE_BYTE_VECTORS`), each node's byte vector stored inline, one byte per
+  dimension. It also stores the largest vector length that adaptive dot-product stopping needs: one float
+  at the end of each serialized PQ model, and of the inline-vector and separated-vector feature headers.
+  The inline int8 header stores it too, as the largest length of the stored byte vectors; nothing reads it
+  yet, and int8 adaptive stopping, when added, must map it through int8 scores rather than the float rule.
+  Otherwise a version 7 file has the version 6 layout. ASH models (`AsymmetricHashing`, `ASHVectors`) also
+  require version 7 or later when they are written or loaded. A model stores its similarity and, for
+  `EUCLIDEAN`, a scale unit (8 bytes in all); ASH models written before these fields existed cannot be
+  loaded.
 - Dot-product searches over indexes and PQ models written before version 7 stop by the standard rule,
   since their largest vector length is unknown; rewriting them at version 7 does not change that for codes
   encoded before, so a PQ model loaded from an older format keeps it unknown.
@@ -17,11 +21,11 @@
 - To keep a rollback to 4.0.x possible, pass the version explicitly until every reader runs 4.1:
   `withVersion(6)` on graph writer builders and `write(out, 6)` for compressors and compressed vectors.
   Versions 6 and below still write inline vectors, NVQ, separated vectors and fused PQ exactly as before,
-  and 4.0.x reads them. A version 6 writer rejects fused ASH and page alignment, and ASH models reject
-  version 6.
+  and 4.0.x reads them. A version 6 writer rejects fused ASH, page alignment and inline int8 vectors, and
+  ASH models reject version 6.
 - `OnDiskGraphIndexCompactor` writes `CURRENT_VERSION` by default; pass `withVersion(6)` to keep a rollback
   to 4.0.x possible (its compressed sidecar is written at the same version). It does not compact page-aligned
-  indexes.
+  indexes or int8 indexes.
 
 ## New features
 - Asymmetric Hashing (ASH) quantization, stored separately or fused into the graph (format version 7), with

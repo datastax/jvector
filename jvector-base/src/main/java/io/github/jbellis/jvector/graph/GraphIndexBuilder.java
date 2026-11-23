@@ -32,7 +32,9 @@ import io.github.jbellis.jvector.quantization.BQVectors;
 import io.github.jbellis.jvector.quantization.PQVectors;
 import io.github.jbellis.jvector.quantization.ProductQuantization;
 import io.github.jbellis.jvector.util.*;
+import io.github.jbellis.jvector.vector.ByteVectorSimilarityFunction;
 import io.github.jbellis.jvector.vector.VectorSimilarityFunction;
+import io.github.jbellis.jvector.vector.types.ByteSequence;
 import io.github.jbellis.jvector.vector.types.VectorFloat;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -41,6 +43,7 @@ import java.io.Closeable;
 import java.io.IOException;
 import java.io.UncheckedIOException;
 import java.util.*;
+import java.util.function.IntConsumer;
 import java.util.function.Supplier;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentSkipListSet;
@@ -113,6 +116,11 @@ public class GraphIndexBuilder implements Closeable, Accountable {
             default:
                 throw new IllegalArgumentException("Unsupported build compression type: " + type);
         }
+    }
+
+    private static BuildScoreProvider getBuildScoreProvider(RandomAccessByteVectorValues vectorValues, ByteVectorSimilarityFunction similarityFunction) {
+        // Byte vectors do not support PQ/BQ build-time compression; always use the direct provider.
+        return BuildScoreProvider.byteVectorScoreProvider(vectorValues, similarityFunction);
     }
 
     /**
@@ -405,6 +413,31 @@ public class GraphIndexBuilder implements Closeable, Accountable {
      * @param M                  the maximum number of connections a node can have
      */
     public static Builder builder(RandomAccessVectorValues vectorValues, VectorSimilarityFunction similarityFunction, int M) {
+        return builder(vectorValues, similarityFunction, List.of(M));
+    }
+
+    /**
+     * Entry point for the fluent builder for int8 byte vectors, resolving the {@link BuildScoreProvider}
+     * from raw byte vectors via {@link BuildScoreProvider#byteVectorScoreProvider}.
+     *
+     * @param vectorValues       the int8 byte vectors whose relations are represented by the graph
+     * @param similarityFunction the byte-vector similarity function to score vectors with
+     * @param maxDegrees         the maximum number of connections a node can have in each layer; if fewer entries
+     *                           are specified than the number of layers, the last entry is used for all remaining layers.
+     */
+    public static Builder builder(RandomAccessByteVectorValues vectorValues, ByteVectorSimilarityFunction similarityFunction, List<Integer> maxDegrees) {
+        return new Builder(getBuildScoreProvider(vectorValues, similarityFunction), vectorValues.dimension(), maxDegrees);
+    }
+
+    /**
+     * Entry point for the fluent builder for int8 byte vectors, for the common case of a single
+     * (non-hierarchical) max degree.
+     *
+     * @param vectorValues       the int8 byte vectors whose relations are represented by the graph
+     * @param similarityFunction the byte-vector similarity function to score vectors with
+     * @param M                  the maximum number of connections a node can have
+     */
+    public static Builder builder(RandomAccessByteVectorValues vectorValues, ByteVectorSimilarityFunction similarityFunction, int M) {
         return builder(vectorValues, similarityFunction, List.of(M));
     }
 
@@ -702,8 +735,29 @@ public class GraphIndexBuilder implements Closeable, Accountable {
         return newBuilder;
     }
 
+    /**
+     * Retained for binary compatibility with callers compiled against the float-only signature.
+     * Equivalent to {@link #build(VectorValues)}.
+     */
     public ImmutableGraphIndex build(RandomAccessVectorValues ravv) {
-        addGraphNodesInParallel(simdExecutor, this, ravv, 0, ravv.size());
+        return build((VectorValues<?>) ravv);
+    }
+
+
+    /**
+     * Builds the graph from any {@link VectorValues} source — works for both
+     * {@link RandomAccessVectorValues} (float32) and {@link RandomAccessByteVectorValues} (int8).
+     * The score provider supplied at construction time determines how vectors are compared.
+     */
+    public ImmutableGraphIndex build(VectorValues<?> ravv) {
+        // Read the supplied vectors through per-thread views rather than assuming the score provider's match.
+        if (ravv instanceof RandomAccessVectorValues) {
+            addGraphNodesInParallel(simdExecutor, this, (RandomAccessVectorValues) ravv, 0, ravv.size());
+        } else if (ravv instanceof RandomAccessByteVectorValues) {
+            addGraphNodesInParallel(simdExecutor, this, (RandomAccessByteVectorValues) ravv, 0, ravv.size());
+        } else {
+            throw new IllegalArgumentException("Unsupported VectorValues type: " + ravv.getClass().getName());
+        }
         cleanup();
         return graph;
     }
@@ -716,6 +770,18 @@ public class GraphIndexBuilder implements Closeable, Accountable {
     private static void addGraphNodesInParallel(ForkJoinPool executor, GraphIndexBuilder builder,
                                                 RandomAccessVectorValues ravv, int start, int end) {
         var vv = ravv.threadLocalSupplier();
+        addGraphNodesInParallel(executor, vv, start, end, node -> builder.addGraphNode(node, vv.get().getVector(node)));
+    }
+
+    /** As above, for int8 sources. */
+    private static void addGraphNodesInParallel(ForkJoinPool executor, GraphIndexBuilder builder,
+                                                RandomAccessByteVectorValues ravv, int start, int end) {
+        var vv = ravv.threadLocalSupplier();
+        addGraphNodesInParallel(executor, vv, start, end, node -> builder.addGraphNode(node, vv.get().getVector(node)));
+    }
+
+    private static void addGraphNodesInParallel(ForkJoinPool executor, Supplier<?> vv, int start, int end,
+                                                IntConsumer addNode) {
         var workers = new ActiveWorkers();
         Throwable failure = null;
         try {
@@ -724,7 +790,7 @@ public class GraphIndexBuilder implements Closeable, Accountable {
                     return;
                 }
                 try {
-                    builder.addGraphNode(node, vv.get().getVector(node));
+                    addNode.accept(node);
                 } finally {
                     workers.exit();
                 }
@@ -738,7 +804,7 @@ public class GraphIndexBuilder implements Closeable, Accountable {
         }
     }
 
-    private static void closeThreadLocalSupplier(Supplier<RandomAccessVectorValues> supplier, Throwable failure) {
+    private static void closeThreadLocalSupplier(Supplier<?> supplier, Throwable failure) {
         if (!(supplier instanceof AutoCloseable)) {
             return;
         }
@@ -934,6 +1000,21 @@ public class GraphIndexBuilder implements Closeable, Accountable {
      * @return an estimate of the number of extra bytes used by the graph after adding the given node
      */
     public long addGraphNode(int node, VectorFloat<?> vector) {
+        var ssp = scoreProvider.searchProviderFor(vector);
+        return addGraphNode(node, ssp);
+    }
+
+    /**
+     * Inserts a node with the given int8 byte vector into the graph.
+     *
+     * @param node   the node ID to add
+     * @param vector the byte vector to add
+     * @return an estimate of the number of extra bytes used by the graph after adding the given node
+     * @throws UnsupportedOperationException if this builder was not constructed with a byte-vector score provider
+     * @throws IllegalArgumentException for a vector the similarity can't score, such as a zero vector under COSINE;
+     *         the graph is unchanged
+     */
+    public long addGraphNode(int node, ByteSequence<?> vector) {
         var ssp = scoreProvider.searchProviderFor(vector);
         return addGraphNode(node, ssp);
     }
