@@ -59,11 +59,34 @@ public class RemappedRandomAccessVectorValues implements RandomAccessVectorValue
 
     @Override
     public RandomAccessVectorValues copy() {
-        return new RemappedRandomAccessVectorValues(ravv.copy(), Arrays.copyOf(graphToRavvOrdMap, graphToRavvOrdMap.length));
+        var ravvCopy = ravv.copy();
+        var map = Arrays.copyOf(graphToRavvOrdMap, graphToRavvOrdMap.length);
+        // An un-shared RAVV may return itself from copy(); the copy must not own (and close) the source.
+        return ravvCopy == ravv ? new RemappedRandomAccessVectorValues(ravvCopy, map) : new OwnedCopy(ravvCopy, map);
     }
 
     @Override
     public void getVectorInto(int node, VectorFloat<?> result, int offset) {
         ravv.getVectorInto(graphToRavvOrdMap[node], result, offset);
+    }
+
+    /**
+     * A copy that owns its copy of the underlying RAVV, so closing it (for example, when the
+     * thread-local supplier that created it is closed) closes that underlying copy too.
+     */
+    private static final class OwnedCopy extends RemappedRandomAccessVectorValues implements AutoCloseable {
+        private final RandomAccessVectorValues ownedRavv;
+
+        OwnedCopy(RandomAccessVectorValues ownedRavv, int[] graphToRavvOrdMap) {
+            super(ownedRavv, graphToRavvOrdMap);
+            this.ownedRavv = ownedRavv;
+        }
+
+        @Override
+        public void close() throws Exception {
+            if (ownedRavv instanceof AutoCloseable) {
+                ((AutoCloseable) ownedRavv).close();
+            }
+        }
     }
 }
