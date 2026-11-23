@@ -10,7 +10,7 @@
       
       
       
-        <link rel="canonical" href="https://datastax.github.io/jvector/dev/release%20notes/4.1.0/812.bugfix/">
+        <link rel="canonical" href="https://datastax.github.io/jvector/dev/release%20notes/4.1.0-rc.1/709.feature/">
       
       
       
@@ -20,7 +20,7 @@
     
     
       
-        <title>812.bugfix - JVector</title>
+        <title>709.feature - JVector</title>
       
     
     
@@ -72,7 +72,7 @@
     <div data-md-component="skip">
       
         
-        <a href="#graphsearcher-returns-an-empty-result-for-topk-0" class="md-skip">
+        <a href="#native-int8-byte-vector-support" class="md-skip">
           Skip to content
         </a>
       
@@ -112,7 +112,7 @@
         <div class="md-header__topic" data-md-component="header-topic">
           <span class="md-ellipsis">
             
-              812.bugfix
+              709.feature
             
           </span>
         </div>
@@ -1547,9 +1547,9 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
-  <a href="#graphsearcher-returns-an-empty-result-for-topk-0" class="md-nav__link">
+  <a href="#native-int8-byte-vector-support" class="md-nav__link">
     <span class="md-ellipsis">
-      GraphSearcher Returns an Empty Result for topK == 0
+      Native Int8 (Byte) Vector Support
     </span>
   </a>
   
@@ -1571,7 +1571,7 @@
 
 
   
-    <a href="https://github.com/datastax/jvector/edit/main/docs/release notes/4.1.0/812.bugfix.md" title="Edit this page" class="md-content__button md-icon">
+    <a href="https://github.com/datastax/jvector/edit/main/docs/release notes/4.1.0-rc.1/709.feature.md" title="Edit this page" class="md-content__button md-icon">
       
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M10 20H6V4h7v5h5v3.1l2-2V8l-6-6H6c-1.1 0-2 .9-2 2v16c0 1.1.9 2 2 2h4zm10.2-7c.1 0 .3.1.4.2l1.3 1.3c.2.2.2.6 0 .8l-1 1-2.1-2.1 1-1c.1-.1.2-.2.4-.2m0 3.9L14.1 23H12v-2.1l6.1-6.1z"/></svg>
     </a>
@@ -1579,20 +1579,63 @@
   
 
 
-  <h1>812.bugfix</h1>
+  <h1>709.feature</h1>
 
-<h3 id="graphsearcher-returns-an-empty-result-for-topk-0"><code>GraphSearcher</code> Returns an Empty Result for <code>topK == 0</code><a class="headerlink" href="#graphsearcher-returns-an-empty-result-for-topk-0" title="Permanent link">&para;</a></h3>
-<p><strong>Description</strong></p>
-<p><code>GraphSearcher.search</code> with <code>topK == 0</code> read the empty results queues: with a reranker it threw a
-<code>NullPointerException</code> from <code>NodeQueue.rerank</code>, and with <code>rerankK == 0</code> it compared against and evicted stale heap
-slots, which could throw on a later <code>resume</code> or make the search depend on the previous query. <code>search</code> and <code>resume</code>
-now return an empty result without searching when <code>topK</code> (or <code>additionalK</code>) is 0, and <code>NodeQueue.rerank</code> sends every
-candidate to the unused pile when <code>topK</code> is 0. See <a href="https://github.com/datastax/jvector/issues/811">#811</a>.</p>
-<p><strong>How to Enable</strong></p>
-<p>No configuration is required.</p>
-<p><strong>Notes</strong></p>
-<p>Callers that short-circuit <code>k == 0</code> before calling <code>search</code> as a workaround can keep doing so; it is no longer
-necessary.</p>
+<h3 id="native-int8-byte-vector-support">Native Int8 (Byte) Vector Support<a class="headerlink" href="#native-int8-byte-vector-support" title="Permanent link">&para;</a></h3>
+<p><strong>Description</strong>
+JVector can now build, store and search signed int8 vectors natively, without converting them to float32.
+This is useful when an embedding model already emits int8 vectors, or when vectors have been scaled to
+int8 up front: they take 4x less space on disk and in memory than float32, and all scoring is done
+byte-by-byte. On 176,582 mixedbread-large int8 embeddings (1,024 dimensions), an int8 index matched the recall
+of a float32 index of the same vectors, with about 3.6x the queries per second, half the build time and a
+3.6x smaller file.</p>
+<ul>
+<li><code>RandomAccessByteVectorValues</code> (and <code>ListRandomAccessByteVectorValues</code>) provide random access to
+  <code>ByteSequence</code> vectors. It and <code>RandomAccessVectorValues</code> now share a common <code>VectorValues&lt;V&gt;</code>
+  interface, which also provides <code>getVectorInto(node, destination, offset)</code> for reading a
+  vector into a caller-owned buffer.</li>
+<li><code>ByteVectorSimilarityFunction</code> scores two int8 vectors: <code>EUCLIDEAN</code> is <code>1 / (1 + squaredL2)</code>,
+  <code>DOT_PRODUCT</code> is <code>dot &lt; 0 ? 1 / (1 - dot) : dot + 1</code>, and <code>COSINE</code> is <code>(1 + cosine) / 2</code>. The scores are
+  not normalised by dimension, so distinct integer distances stay distinct at high dimensions.
+  <code>DOT_PRODUCT</code> scores are positive but not bounded above by 1.</li>
+<li><code>GraphIndexBuilder.builder(RandomAccessByteVectorValues, ByteVectorSimilarityFunction, M)</code> builds a graph
+  from int8 vectors, and <code>GraphIndexBuilder.build(VectorValues&lt;?&gt;)</code> accepts either vector type.</li>
+<li>The <code>InlineByteVectors</code> on-disk feature (<code>FeatureId.INLINE_BYTE_VECTORS</code>) stores each vector as <code>dimension</code>
+  raw bytes. <code>OnDiskGraphIndex.View.byteVectorRerankerFor(...)</code> scores candidates directly from disk, and
+  <code>getByteVectorInto(...)</code> reads a vector into a reusable buffer.</li>
+<li>Int8 distance kernels (squared L2, dot product, cosine) are available in the default, Panama and native
+  SIMD implementations, and accumulate in integers so all execution paths return identical results.</li>
+<li><code>BenchYAML</code> and <code>AutoBenchYAML</code> support int8 datasets: mark a dataset with <code>is_int8: true</code> in
+  <code>dataset-metadata.yml</code>, and configure it with <code>construction.type: onDisk</code>, compression <code>None</code>,
+  <code>reranking.type: None</code> and <code>fusedGraph: [No]</code>, as the int8 configs in <code>index-parameters</code> do.
+  A runnable example is in <code>Int8Example</code> (<code>-Dtutorial=int8</code>).</li>
+</ul>
+<p><strong>How to Enable</strong>
+No configuration is required; the float32 APIs are unchanged. To use int8 vectors, build with the byte-vector
+builder and write the index with the <code>InlineByteVectors</code> feature:</p>
+<div class="highlight"><pre><span></span><code><span class="n">RandomAccessByteVectorValues</span><span class="w"> </span><span class="n">vectors</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="k">new</span><span class="w"> </span><span class="n">ListRandomAccessByteVectorValues</span><span class="p">(</span><span class="n">byteVectors</span><span class="p">,</span><span class="w"> </span><span class="n">dimension</span><span class="p">);</span>
+<span class="k">try</span><span class="w"> </span><span class="p">(</span><span class="kd">var</span><span class="w"> </span><span class="n">builder</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">GraphIndexBuilder</span><span class="p">.</span><span class="na">builder</span><span class="p">(</span><span class="n">vectors</span><span class="p">,</span><span class="w"> </span><span class="n">ByteVectorSimilarityFunction</span><span class="p">.</span><span class="na">EUCLIDEAN</span><span class="p">,</span><span class="w"> </span><span class="mi">32</span><span class="p">).</span><span class="na">build</span><span class="p">())</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="kd">var</span><span class="w"> </span><span class="n">graph</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">builder</span><span class="p">.</span><span class="na">build</span><span class="p">(</span><span class="n">vectors</span><span class="p">);</span>
+<span class="w">    </span><span class="k">try</span><span class="w"> </span><span class="p">(</span><span class="kd">var</span><span class="w"> </span><span class="n">writer</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">GraphIndexWriter</span><span class="p">.</span><span class="na">getBuilderFor</span><span class="p">(</span><span class="n">GraphIndexWriterTypes</span><span class="p">.</span><span class="na">RANDOM_ACCESS_PARALLEL</span><span class="p">,</span><span class="w"> </span><span class="n">graph</span><span class="p">,</span><span class="w"> </span><span class="n">path</span><span class="p">)</span>
+<span class="w">            </span><span class="p">.</span><span class="na">with</span><span class="p">(</span><span class="k">new</span><span class="w"> </span><span class="n">InlineByteVectors</span><span class="p">(</span><span class="n">dimension</span><span class="p">)).</span><span class="na">build</span><span class="p">())</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="n">writer</span><span class="p">.</span><span class="na">write</span><span class="p">(</span><span class="n">Map</span><span class="p">.</span><span class="na">of</span><span class="p">(</span><span class="n">FeatureId</span><span class="p">.</span><span class="na">INLINE_BYTE_VECTORS</span><span class="p">,</span><span class="w"> </span><span class="n">n</span><span class="w"> </span><span class="o">-&gt;</span><span class="w"> </span><span class="k">new</span><span class="w"> </span><span class="n">InlineByteVectors</span><span class="p">.</span><span class="na">State</span><span class="p">(</span><span class="n">vectors</span><span class="p">.</span><span class="na">getVector</span><span class="p">(</span><span class="n">n</span><span class="p">))));</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="p">}</span>
+</code></pre></div>
+<p><strong>Notes</strong>
+* The new interfaces and classes are marked <code>@Experimental</code> and the API may change in later releases.
+* Only signed int8 (-128..127) is supported. Unsigned uint8 data, such as conventional SIFT1B/BIGANN <code>.bvecs</code>
+  files, must be converted first; it is not detected, and reading it as signed silently changes distances.
+* Quantization and compression (ASH, PQ, BQ, NVQ, fused graphs) are not supported for int8 vectors. Traversal
+  already scores exactly, so a separate reranking step is not needed. <code>rerankK</code> still controls how much of the
+  graph is searched.
+* Zero vectors are not supported with <code>COSINE</code>, as with ASH: adding one to a graph or searching with one
+  throws <code>IllegalArgumentException</code>.
+* <code>OnDiskGraphIndexCompactor</code> does not compact int8 indexes; <code>AutoBenchYAML</code> skips its compaction benchmark for them.
+* Existing float32 callers keep working: <code>RandomAccessVectorValues.getVector</code> keeps its <code>VectorFloat&lt;?&gt;</code>
+  signature and <code>GraphIndexBuilder.build(RandomAccessVectorValues)</code> is retained as a forwarding overload.
+* Int8 indexes require on-disk format version 7 or later. JVector 4.0.x reads formats up to 6 and rejects
+  version 7 files; a version 6 writer rejects <code>INLINE_BYTE_VECTORS</code>.</p>
 
 
 

@@ -10,7 +10,7 @@
       
       
       
-        <link rel="canonical" href="https://datastax.github.io/jvector/dev/release%20notes/4.1.0/776.testing/">
+        <link rel="canonical" href="https://datastax.github.io/jvector/dev/release%20notes/4.1.0-rc.1/820.bugfix/">
       
       
       
@@ -20,7 +20,7 @@
     
     
       
-        <title>776.testing - JVector</title>
+        <title>820.bugfix - JVector</title>
       
     
     
@@ -72,7 +72,7 @@
     <div data-md-component="skip">
       
         
-        <a href="#modular-benchmark-harness-grid-refactor-for-benchyaml-and-autobenchyaml" class="md-skip">
+        <a href="#graphindexbuilder-uses-no-rerank-floor-in-the-layer-0-resume-and-improveconnections-is-tested" class="md-skip">
           Skip to content
         </a>
       
@@ -112,7 +112,7 @@
         <div class="md-header__topic" data-md-component="header-topic">
           <span class="md-ellipsis">
             
-              776.testing
+              820.bugfix
             
           </span>
         </div>
@@ -1547,9 +1547,9 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
-  <a href="#modular-benchmark-harness-grid-refactor-for-benchyaml-and-autobenchyaml" class="md-nav__link">
+  <a href="#graphindexbuilder-uses-no-rerank-floor-in-the-layer-0-resume-and-improveconnections-is-tested" class="md-nav__link">
     <span class="md-ellipsis">
-      Modular Benchmark Harness: Grid Refactor for BenchYAML and AutoBenchYAML
+      GraphIndexBuilder Uses No Rerank Floor in the Layer-0 Resume, and improveConnections Is Tested
     </span>
   </a>
   
@@ -1571,7 +1571,7 @@
 
 
   
-    <a href="https://github.com/datastax/jvector/edit/main/docs/release notes/4.1.0/776.testing.md" title="Edit this page" class="md-content__button md-icon">
+    <a href="https://github.com/datastax/jvector/edit/main/docs/release notes/4.1.0-rc.1/820.bugfix.md" title="Edit this page" class="md-content__button md-icon">
       
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M10 20H6V4h7v5h5v3.1l2-2V8l-6-6H6c-1.1 0-2 .9-2 2v16c0 1.1.9 2 2 2h4zm10.2-7c.1 0 .3.1.4.2l1.3 1.3c.2.2.2.6 0 .8l-1 1-2.1-2.1 1-1c.1-.1.2-.2.4-.2m0 3.9L14.1 23H12v-2.1l6.1-6.1z"/></svg>
     </a>
@@ -1579,235 +1579,21 @@
   
 
 
-  <h1>776.testing</h1>
+  <h1>820.bugfix</h1>
 
-<h3 id="modular-benchmark-harness-grid-refactor-for-benchyaml-and-autobenchyaml">Modular Benchmark Harness: Grid Refactor for BenchYAML and AutoBenchYAML<a class="headerlink" href="#modular-benchmark-harness-grid-refactor-for-benchyaml-and-autobenchyaml" title="Permanent link">&para;</a></h3>
-<p><strong>Description</strong>
-<code>Grid</code>, the engine behind <code>BenchYAML</code> and <code>AutoBenchYAML</code>, was refactored so that each benchmarking initiative can put its changes in its own files. Almost every core change also changed <code>Grid.java</code>, and with several initiatives in flight at once it had merge conflicts at nearly every release. The class is now a small orchestrator (692 lines, down from 1,395). Its extension points live in separate files in <code>io.github.jbellis.jvector.example</code>:</p>
-<table>
-<thead>
-<tr>
-<th>Concern</th>
-<th>Before</th>
-<th>Now</th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td>Two pipelines</td>
-<td><code>runAll</code> and <code>runAllAndCollectResults</code> were near-copies</td>
-<td>One pipeline; AutoBenchYAML adds a result collector</td>
-</tr>
-<tr>
-<td>Build parameters</td>
-<td>5–7 positional arguments threaded through every method</td>
-<td><code>BuildConfig</code> (one build point) and <code>SearchConfig</code> (the search sweep)</td>
-</tr>
-<tr>
-<td>Construction sweep</td>
-<td>Six hand-nested <code>for</code> loops</td>
-<td><code>GridSpec</code> with ordered <code>SweepDimension</code>s; <code>GridSpec.fromGrids(...)</code> sets the order, and <code>GridSpec.fromConfig(MultiConfig)</code> maps the YAML onto it</td>
-</tr>
-<tr>
-<td>Graph construction</td>
-<td>Inline <code>buildInMemory</code> / <code>buildOnDisk</code></td>
-<td><code>IndexBuildStrategy</code>: <code>InMemoryBuild</code>, <code>CompressedOnDiskBuild</code> (includes the index cache)</td>
-</tr>
-<tr>
-<td>Core builder/writer calls</td>
-<td>Spread through Grid</td>
-<td><code>GraphBuilderFactory</code> only</td>
-</tr>
-<tr>
-<td>On-disk features</td>
-<td>A <code>switch</code> on <code>FeatureId</code> plus <code>FUSED_PQ</code> checks in five other places</td>
-<td><code>FeatureProvider</code> per feature (<code>InlineVectorsProvider</code>, <code>NVQProvider</code>, <code>FusedPQProvider</code>), registered in <code>FeatureProviders</code></td>
-</tr>
-<tr>
-<td>Console, experiments.csv, AutoBench results</td>
-<td>Inline in <code>testConfiguration</code></td>
-<td><code>GridListener</code>s: <code>ConsoleReportListener</code>, <code>ExperimentsLogListener</code>, <code>BenchResultCollector</code></td>
-</tr>
-<tr>
-<td>Reported build parameters</td>
-<td>Listed separately by each output</td>
-<td><code>BuildConfig.reportedParameters()</code></td>
-</tr>
-</tbody>
-</table>
-<p>Each step was checked against the previous code on <code>lastfm-64-dot</code> by comparing <code>experiments.csv</code> rows, AutoBench <code>BenchResult</code> output, console tables, and the builds, cache hits and skip messages logged. Output matched except for the changes listed below.</p>
-<p><strong>How to Enable</strong>
-No configuration is required. Command lines, dataset YAML files (<code>yaml-configs/index-parameters/</code>), <code>run-config.yml</code>, and the experiments.csv schema (v1) are unchanged.</p>
-<p><strong>Running BenchYAML: what changes</strong></p>
-<ul>
-<li><strong>Unchanged:</strong> command line, YAML configs, <code>run-config.yml</code> selections, experiments.csv columns and values, console table columns.</li>
-<li><strong>Feature-set order is stable.</strong> Indexes are searched in the configured order. That is the <code>reranking</code> list order, with each <code>fusedGraph</code> value producing a full pass over it, e.g. <code>reranking: [NVQ, FP]</code> gives NVQ then FP. Previously the order of console blocks and experiments.csv rows changed between runs, because <code>EnumSet</code> hash codes come from identity hashes.</li>
-<li><strong>No stale search timings on fused rows.</strong> Fused-PQ indexes skip search compression, but they could report the previous index's <code>Search PQ encoding (s)</code>. They no longer do.</li>
-<li><strong>PQ codebooks are reused within a run.</strong> The in-memory compressor cache never hit, so every lookup reloaded the codebooks from <code>pq_cache</code> (one <code>codebooks loaded from</code> line each). Results are unchanged; repeat loads are gone.</li>
-<li><strong>NVQ compressors can be cached.</strong> <code>NVQParameters.idStringFor</code> no longer throws (same fix as #780), and cached compressors are now read back by the <code>CompressorParameters</code> that saved them (<code>loadCompressor</code>) instead of always as PQ, which would have returned a corrupt PQ or failed on the second run. Files still go in <code>pq_cache</code>; the load message is now <code>&lt;compressor&gt; loaded from &lt;file&gt;</code>.</li>
-<li><strong>Clearer errors for incomplete configs.</strong> A missing construction sweep field fails with its name, e.g. <code>No values to sweep for outDegree</code> or <code>construction.useSavedIndexIfExists must be set</code>, instead of a bare <code>NullPointerException</code>. The whole sweep is validated before the first build.</li>
-<li><strong>Features without a provider are rejected.</strong> A feature set containing a feature Grid cannot write (e.g. <code>SEPARATED_VECTORS</code>) fails when the <code>GridSpec</code> is built, with <code>Grid has no FeatureProvider for &lt;id&gt;</code>. Previously the index was built without that feature and the results were still labeled with it. YAML configs cannot produce such a feature set (<code>reranking</code> accepts only <code>FP</code> and <code>NVQ</code>), so this affects only harnesses that build feature sets in code.</li>
-<li><strong>Feature checks run before any file is written.</strong> "Bench looks for either NVQ_VECTORS or INLINE_VECTORS feature set for scoring compressed builds" and "FusedPQ requires PQ build compression with 256 clusters" now fail before any index writer is opened, so a failed run no longer leaves partial index files.</li>
-<li><strong>Console messages.</strong> In-memory builds now print <code>Skipping [INLINE_VECTORS, FUSED_PQ] when building in memory: it needs a compressed build</code>.</li>
-</ul>
-<p><strong>Running AutoBenchYAML: what changes</strong></p>
-<p>AutoBenchYAML now runs through the same pipeline as BenchYAML. Its command line (<code>--output</code>, <code>--config</code>, <code>--diag</code>, dataset patterns), output files (<code>&lt;output&gt;.csv</code>, <code>&lt;output&gt;.json</code>, checkpoint), and fixed regression benchmark set are unchanged.</p>
-<ul>
-<li><strong>One graph per build configuration.</strong> Each feature set is still written to, and searched in, its own index file. The difference is that the old path rebuilt the graph and rewrote every feature set's file for each feature set and each search compressor, then searched only one of them. With F feature sets and S search compressors (index cache off), it did F × S graph builds and F × F × S file writes; it now does 1 and F. The graph does not depend on the feature set (compressed builds score with the PQ/BQ build vectors), and search compression is not stored in the index, so the repeats only produced more random graphs with the same parameters.</li>
-<li><strong>Results to expect when comparing against an earlier run:</strong></li>
-<li><strong>CSV columns unchanged; Build Heap / Build Off-Heap values shift.</strong> The build memory snapshot is now taken right after the build, before search vectors are encoded. Expect one comparison cycle where these move.</li>
-<li><strong>Index Build Time.</strong> On earlier code this was the last of the redundant builds, each doing the same work as the single build now, so values are comparable with less run-to-run noise. When every index for a build config is loaded from the index cache, no build time is reported for it; earlier code reported the previous build config's time.</li>
-<li><strong>Within a build config, INLINE and NVQ rows search the same graph.</strong> Comparisons between feature sets then differ only in stored features and reranking, and <code>Avg Visited</code> matches between them.</li>
-<li><strong>Total run time drops</strong>, and off-heap memory stays flat because indexes are now closed after use, including when a search fails.</li>
-<li><strong>JSON (<code>&lt;output&gt;.json</code>):</strong></li>
-<li><strong>Parameter keys are unchanged.</strong> <code>buildCompressor</code> / <code>searchCompressor</code> remain lambda <code>toString()</code> values, which differ between runs; exclude them when diffing.</li>
-<li><strong>Existing metric keys are unchanged.</strong> Construction metrics are added when measured: <code>Index build time (s)</code>, <code>Index file size (MB)</code>, <code>Idx PQ compute (s)</code>, <code>Idx PQ encoding (s)</code>, <code>Idx NVQ compute (s)</code>, <code>Search PQ compute (s)</code>, <code>Search PQ encoding (s)</code>. <code>BenchmarkSummarizer</code> does not read these, so the CSV is unaffected.</li>
-<li><strong>Rows follow the configured feature-set order.</strong></li>
-<li><strong>Rows follow BenchYAML's sweep order.</strong> Construction parameters now vary as addHierarchy → refineFinalGraph → outDegree → neighborOverflow → efConstruction → build compression (first slowest), where AutoBench previously used M → efConstruction → neighborOverflow → addHierarchy → refineFinalGraph. Within each index, usePruning now varies slower than topK (previously the reverse). Parameter values per row are unchanged, so match rows by their <code>params</code> rather than position. The CSV is unaffected: <code>BenchmarkSummarizer</code> averages over rows, and the last row, whose Index Build Time it reports, is the same build config in both orders.</li>
-<li><strong>Console.</strong> AutoBenchYAML now prints the same per-configuration tables as BenchYAML.</li>
-<li><strong>Checkpoints.</strong> The <code>BenchResult</code> format is unchanged, so a checkpoint from an earlier build can be resumed. Datasets completed before the upgrade keep their earlier metrics (no construction metrics, earlier memory snapshot timing).</li>
-</ul>
-<p><strong>Updating the harnesses</strong></p>
-<p>Entry points (all callers in the repository have been migrated):</p>
-<div class="highlight"><pre><span></span><code><span class="c1">// BenchYAML, HelloVectorWorld</span>
-<span class="n">Grid</span><span class="p">.</span><span class="na">run</span><span class="p">(</span><span class="n">ds</span><span class="p">,</span><span class="w"> </span><span class="n">GridSpec</span><span class="p">.</span><span class="na">fromConfig</span><span class="p">(</span><span class="n">config</span><span class="p">),</span><span class="w"> </span><span class="n">artifacts</span><span class="p">);</span>
-
-<span class="c1">// AutoBenchYAML</span>
-<span class="n">List</span><span class="o">&lt;</span><span class="n">BenchResult</span><span class="o">&gt;</span><span class="w"> </span><span class="n">results</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">Grid</span><span class="p">.</span><span class="na">runAndCollectResults</span><span class="p">(</span><span class="n">ds</span><span class="p">,</span><span class="w"> </span><span class="n">GridSpec</span><span class="p">.</span><span class="na">fromConfig</span><span class="p">(</span><span class="n">config</span><span class="p">));</span>
-</code></pre></div>
-<table>
-<thead>
-<tr>
-<th>To add</th>
-<th>Change</th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td>A construction parameter</td>
-<td>A field and builder setter <strong>with a default</strong> in <code>BuildConfig</code>; its use, usually in <code>GraphBuilderFactory</code>; its field in <code>ConstructionParameters</code>. If swept, a parameter and one <code>sweep(...)</code> line in <code>GridSpec.fromGrids</code>, and the argument at its callers (<code>fromConfig</code>, <code>Bench</code>, and a single default value in the deprecated <code>runAllAndCollectResults</code>). To report it, one line in <code>BuildConfig.reportedParameters()</code> (it then appears in the console config block and AutoBench JSON params).</td>
-</tr>
-<tr>
-<td>An experiments.csv column for it</td>
-<td>Its name in <code>ExperimentsSchemaV1.BUILD_PARAMETER_COLUMNS</code>. This changes the versioned CSV schema, so it is deliberate, not automatic.</td>
-</tr>
-<tr>
-<td>A search parameter</td>
-<td>A field and builder setter in <code>SearchConfig</code>, and its loop in <code>Grid.testConfiguration</code>.</td>
-</tr>
-<tr>
-<td>An on-disk feature</td>
-<td>A new <code>FeatureProvider</code> file and one <code>register(...)</code> line in <code>FeatureProviders</code>.</td>
-</tr>
-<tr>
-<td>A report or output format</td>
-<td>A new <code>GridListener</code> file and one line where the entry point builds its listener list (<code>Grid.reportingListeners</code> or <code>Grid.runAndCollectResults</code>).</td>
-</tr>
-<tr>
-<td>Data for listeners</td>
-<td>A field on <code>SearchContext</code>, set where <code>Grid.runOneGraph</code> creates it.</td>
-</tr>
-</tbody>
-</table>
-<p>Example: a new swept construction parameter <code>myKnob</code>:</p>
-<div class="highlight"><pre><span></span><code><span class="c1">// BuildConfig: field, constructor assignment, and a builder setter with a default</span>
-<span class="kd">public</span><span class="w"> </span><span class="kd">final</span><span class="w"> </span><span class="kt">int</span><span class="w"> </span><span class="n">myKnob</span><span class="p">;</span>
-<span class="kd">private</span><span class="w"> </span><span class="kt">int</span><span class="w"> </span><span class="n">myKnob</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">4</span><span class="p">;</span>
-<span class="kd">public</span><span class="w"> </span><span class="n">Builder</span><span class="w"> </span><span class="nf">myKnob</span><span class="p">(</span><span class="kt">int</span><span class="w"> </span><span class="n">myKnob</span><span class="p">)</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="k">this</span><span class="p">.</span><span class="na">myKnob</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">myKnob</span><span class="p">;</span><span class="w"> </span><span class="k">return</span><span class="w"> </span><span class="k">this</span><span class="p">;</span><span class="w"> </span><span class="p">}</span>
-
-<span class="c1">// ConstructionParameters: the YAML field</span>
-<span class="kd">public</span><span class="w"> </span><span class="n">List</span><span class="o">&lt;</span><span class="n">Integer</span><span class="o">&gt;</span><span class="w"> </span><span class="n">myKnob</span><span class="p">;</span>
-
-<span class="c1">// GridSpec.fromGrids: a List&lt;Integer&gt; myKnobGrid parameter and its sweep. The position in the chain</span>
-<span class="c1">// sets its place in the output order; SweepDimension rejects a null list, so default it if the YAML</span>
-<span class="c1">// field is optional. Then pass construction.myKnob from fromConfig, and a grid from Bench.</span>
-<span class="p">.</span><span class="na">sweep</span><span class="p">(</span><span class="s">"myKnob"</span><span class="p">,</span><span class="w"> </span><span class="n">myKnobGrid</span><span class="p">,</span><span class="w"> </span><span class="n">BuildConfig</span><span class="p">.</span><span class="na">Builder</span><span class="p">::</span><span class="n">myKnob</span><span class="p">)</span>
-
-<span class="c1">// BuildConfig.reportedParameters(): show it in console and JSON results</span>
-<span class="n">params</span><span class="p">.</span><span class="na">put</span><span class="p">(</span><span class="s">"myKnob"</span><span class="p">,</span><span class="w"> </span><span class="n">myKnob</span><span class="p">);</span>
-
-<span class="c1">// GraphBuilderFactory: pass build.myKnob to the core builder</span>
-</code></pre></div>
-<p>Example: a new on-disk feature:</p>
-<div class="highlight"><pre><span></span><code><span class="kd">final</span><span class="w"> </span><span class="kd">class</span> <span class="nc">MyFeatureProvider</span><span class="w"> </span><span class="kd">implements</span><span class="w"> </span><span class="n">FeatureProvider</span><span class="w"> </span><span class="p">{</span>
-<span class="w">    </span><span class="kd">public</span><span class="w"> </span><span class="n">FeatureId</span><span class="w"> </span><span class="nf">id</span><span class="p">()</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="k">return</span><span class="w"> </span><span class="n">FeatureId</span><span class="p">.</span><span class="na">MY_FEATURE</span><span class="p">;</span><span class="w"> </span><span class="p">}</span>
-<span class="w">    </span><span class="kd">public</span><span class="w"> </span><span class="kt">void</span><span class="w"> </span><span class="nf">configure</span><span class="p">(</span><span class="n">FeatureWriteContext</span><span class="w"> </span><span class="n">ctx</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
-<span class="w">        </span><span class="n">ctx</span><span class="p">.</span><span class="na">add</span><span class="p">(</span><span class="k">new</span><span class="w"> </span><span class="n">MyFeature</span><span class="p">(</span><span class="n">ctx</span><span class="p">.</span><span class="na">vectors</span><span class="p">().</span><span class="na">dimension</span><span class="p">()));</span>
-<span class="w">        </span><span class="n">ctx</span><span class="p">.</span><span class="na">supplyFromVector</span><span class="p">(</span><span class="n">FeatureId</span><span class="p">.</span><span class="na">MY_FEATURE</span><span class="p">,</span><span class="w"> </span><span class="n">vector</span><span class="w"> </span><span class="o">-&gt;</span><span class="w"> </span><span class="k">new</span><span class="w"> </span><span class="n">MyFeature</span><span class="p">.</span><span class="na">State</span><span class="p">(</span><span class="n">vector</span><span class="p">));</span>
-<span class="w">    </span><span class="p">}</span>
-<span class="w">    </span><span class="c1">// Override supportsInMemoryBuild, providesRerankVectors, providesApproximateScoring or</span>
-<span class="w">    </span><span class="c1">// checkCompressedBuild if the defaults do not fit.</span>
-<span class="p">}</span>
-<span class="c1">// FeatureProviders: register(new MyFeatureProvider());</span>
-</code></pre></div>
-<p><strong>Porting in-flight branches that changed Grid</strong></p>
-<table>
-<thead>
-<tr>
-<th>Old location in <code>Grid.java</code></th>
-<th>New location</th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td><code>runAll(...)</code> overloads</td>
-<td>Removed (package-private); use <code>Grid.run(ds, spec, artifacts)</code></td>
-</tr>
-<tr>
-<td>Sweep loops in <code>runAll</code> / <code>runAllAndCollectResults</code></td>
-<td><code>GridSpec.fromGrids</code> and <code>GridSpec.buildPoints()</code></td>
-</tr>
-<tr>
-<td><code>runAllAndCollectResults</code> body</td>
-<td><code>Grid.runAndCollectResults</code>; the old method is a <code>@Deprecated</code> adapter</td>
-</tr>
-<tr>
-<td><code>buildInMemory</code></td>
-<td><code>InMemoryBuild</code></td>
-</tr>
-<tr>
-<td><code>buildOnDisk</code>, <code>writeInlineStates</code>, index-cache lookup in <code>runOneGraph</code></td>
-<td><code>CompressedOnDiskBuild</code></td>
-</tr>
-<tr>
-<td><code>new GraphIndexBuilder(...)</code>, <code>BuildScoreProvider.*</code>, writer builder setup</td>
-<td><code>GraphBuilderFactory</code></td>
-</tr>
-<tr>
-<td><code>builderWithSuppliers</code> <code>switch</code> cases</td>
-<td><code>InlineVectorsProvider</code>, <code>NVQProvider</code>, <code>FusedPQProvider</code></td>
-</tr>
-<tr>
-<td><code>FUSED_PQ</code> / <code>INLINE_VECTORS</code> / <code>NVQ_VECTORS</code> checks</td>
-<td><code>FeatureProvider</code> hooks</td>
-</tr>
-<tr>
-<td>Console table code in <code>testConfiguration</code></td>
-<td><code>ConsoleReportListener</code></td>
-</tr>
-<tr>
-<td><code>artifacts.logRow(...)</code> in <code>testConfiguration</code></td>
-<td><code>ExperimentsLogListener</code></td>
-</tr>
-<tr>
-<td><code>BenchResult</code> construction for AutoBench</td>
-<td><code>BenchResultCollector</code></td>
-</tr>
-<tr>
-<td><code>ConstructionMetrics</code>, <code>FinalWriteVectors</code> (nested classes)</td>
-<td>Their own files, unchanged</td>
-</tr>
-<tr>
-<td>AutoBench benchmark list</td>
-<td><code>Grid.regressionBenchmarks()</code></td>
-</tr>
-</tbody>
-</table>
-<p>Deprecated, still working: <code>Grid.runAllAndCollectResults(...)</code>, the positional <code>RunArtifacts.logRow(...)</code>, and the positional <code>ExperimentsSchemaV1.fixedValues(...)</code>. Use <code>Grid.runAndCollectResults</code>, and the overloads that take the build parameters as a map. <code>Grid.runOneGraph(...)</code> keeps its signature for the tests that call it.</p>
-<p><strong>Notes</strong>
-- Used internally by JVector benchmarking, no client impact. No core library code changed.
-- <code>TestBufferedGraphCompatibility</code> now compares search scores within <code>1e-6</code>. Panama's float reductions round differently before and after C2 compiles them, which made the test fail intermittently on machines without the native vector library (all macOS machines). CI builds the native library, so it was not affected.
-- New tests: <code>TestGridSpec</code> (sweep order against the old loop nest, empty and missing dimensions, YAML mapping) and <code>TestReportedParameters</code> (reported parameter names and order, experiments.csv columns).</p>
+<h3 id="graphindexbuilder-uses-no-rerank-floor-in-the-layer-0-resume-and-improveconnections-is-tested">GraphIndexBuilder Uses No Rerank Floor in the Layer-0 Resume, and <code>improveConnections</code> Is Tested<a class="headerlink" href="#graphindexbuilder-uses-no-rerank-floor-in-the-layer-0-resume-and-improveconnections-is-tested" title="Permanent link">&para;</a></h3>
+<p><strong>Description</strong></p>
+<p>Follow-up to <a href="https://github.com/datastax/jvector/pull/814">#814</a>. The layer-0 <code>resume</code> in
+<code>GraphIndexBuilder.addGraphNode</code> still passed a rerank floor of <code>0.0f</code>. A score provider with a reranker only reranks
+candidates at or above the floor, so with a custom provider and non-normalized <code>DOT_PRODUCT</code> vectors, a node
+dissimilar to everything got only its single best candidate as a neighbor. The floor is now <code>Float.NEGATIVE_INFINITY</code>.
+The built-in build score providers have no reranker and were not affected. A test now also covers <code>improveConnections</code>
+on an upper-layer node whose similarities are all negative. See <a href="https://github.com/datastax/jvector/issues/817">#817</a>.</p>
+<p><strong>How to Enable</strong></p>
+<p>No configuration is required.</p>
+<p><strong>Notes</strong></p>
+<p>Only builds with a custom <code>BuildScoreProvider</code> that supplies a reranker, and <code>DOT_PRODUCT</code> on non-normalized
+vectors, change.</p>
 
 
 

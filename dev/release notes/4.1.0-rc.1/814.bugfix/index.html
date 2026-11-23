@@ -10,7 +10,7 @@
       
       
       
-        <link rel="canonical" href="https://datastax.github.io/jvector/dev/release%20notes/4.1.0/715.bugfix/">
+        <link rel="canonical" href="https://datastax.github.io/jvector/dev/release%20notes/4.1.0-rc.1/814.bugfix/">
       
       
       
@@ -20,7 +20,7 @@
     
     
       
-        <title>715.bugfix - JVector</title>
+        <title>814.bugfix - JVector</title>
       
     
     
@@ -72,7 +72,7 @@
     <div data-md-component="skip">
       
         
-        <a href="#graphindexbuilder-closes-the-per-thread-vector-copies-it-creates" class="md-skip">
+        <a href="#graphindexbuilder-searches-with-no-score-floor-so-dot_product-vectors-dissimilar-to-everything-get-neighbors" class="md-skip">
           Skip to content
         </a>
       
@@ -112,7 +112,7 @@
         <div class="md-header__topic" data-md-component="header-topic">
           <span class="md-ellipsis">
             
-              715.bugfix
+              814.bugfix
             
           </span>
         </div>
@@ -1547,9 +1547,9 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
-  <a href="#graphindexbuilder-closes-the-per-thread-vector-copies-it-creates" class="md-nav__link">
+  <a href="#graphindexbuilder-searches-with-no-score-floor-so-dot_product-vectors-dissimilar-to-everything-get-neighbors" class="md-nav__link">
     <span class="md-ellipsis">
-      GraphIndexBuilder Closes the Per-Thread Vector Copies It Creates
+      GraphIndexBuilder Searches With No Score Floor, So DOT_PRODUCT Vectors Dissimilar to Everything Get Neighbors
     </span>
   </a>
   
@@ -1571,7 +1571,7 @@
 
 
   
-    <a href="https://github.com/datastax/jvector/edit/main/docs/release notes/4.1.0/715.bugfix.md" title="Edit this page" class="md-content__button md-icon">
+    <a href="https://github.com/datastax/jvector/edit/main/docs/release notes/4.1.0-rc.1/814.bugfix.md" title="Edit this page" class="md-content__button md-icon">
       
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M10 20H6V4h7v5h5v3.1l2-2V8l-6-6H6c-1.1 0-2 .9-2 2v16c0 1.1.9 2 2 2h4zm10.2-7c.1 0 .3.1.4.2l1.3 1.3c.2.2.2.6 0 .8l-1 1-2.1-2.1 1-1c.1-.1.2-.2.4-.2m0 3.9L14.1 23H12v-2.1l6.1-6.1z"/></svg>
     </a>
@@ -1579,24 +1579,22 @@
   
 
 
-  <h1>715.bugfix</h1>
+  <h1>814.bugfix</h1>
 
-<h3 id="graphindexbuilder-closes-the-per-thread-vector-copies-it-creates"><code>GraphIndexBuilder</code> Closes the Per-Thread Vector Copies It Creates<a class="headerlink" href="#graphindexbuilder-closes-the-per-thread-vector-copies-it-creates" title="Permanent link">&para;</a></h3>
+<h3 id="graphindexbuilder-searches-with-no-score-floor-so-dot_product-vectors-dissimilar-to-everything-get-neighbors">GraphIndexBuilder Searches With No Score Floor, So DOT_PRODUCT Vectors Dissimilar to Everything Get Neighbors<a class="headerlink" href="#graphindexbuilder-searches-with-no-score-floor-so-dot_product-vectors-dissimilar-to-everything-get-neighbors" title="Permanent link">&para;</a></h3>
 <p><strong>Description</strong></p>
-<p>For a shared <code>RandomAccessVectorValues</code> (one that reuses a buffer, such as a file-backed source),
-<code>threadLocalSupplier()</code> hands each thread its own <code>copy()</code>, but nothing could close those copies, so <code>AutoCloseable</code>
-copies (for example, ones holding a mapped file) stayed open. The supplier for shared sources is now <code>AutoCloseable</code>:
-closing it closes every <code>AutoCloseable</code> copy it created and clears the per-thread cache. <code>GraphIndexBuilder.build</code>
-and <code>buildAndMergeNewNodes</code> close their supplier when construction ends, and only after every parallel worker has
-stopped, even if one fails. Copies made by <code>RemappedRandomAccessVectorValues</code> now close their copy of the wrapped
-source, which is never closed itself. See <a href="https://github.com/datastax/jvector/issues/635">#635</a>.</p>
+<p><code>GraphIndexBuilder.addGraphNode</code> and <code>improveConnections</code> searched with a score threshold of <code>0.0f</code>. That accepts
+everything for <code>COSINE</code> and <code>EUCLIDEAN</code>, but <code>DOT_PRODUCT</code> scores are <code>(1 + dot) / 2</code>, which is negative for
+non-normalized vectors. Every candidate of a vector that is dissimilar to all the others was discarded, so it was
+inserted with no neighbors; if it was the entry node, the index was built without any edges and searches returned a
+single result. The builder now uses <code>Float.NEGATIVE_INFINITY</code>, as <code>GraphSearcher.internalSearch</code> already does. See
+<a href="https://github.com/datastax/jvector/issues/813">#813</a>.</p>
 <p><strong>How to Enable</strong></p>
-<p>No configuration is required.</p>
+<p>No configuration is required. <code>COSINE</code> and <code>EUCLIDEAN</code> builds are unchanged.</p>
 <p><strong>Notes</strong></p>
-<p>Code that calls <code>threadLocalSupplier()</code> itself can close the returned supplier when it is an <code>AutoCloseable</code> to
-release its copies; the supplier stays usable afterwards and makes new copies on demand. Un-shared sources still get a
-supplier that returns the source itself. Copies held by the exact-scoring build score providers are not yet closed;
-that is tracked in <a href="https://github.com/datastax/jvector/issues/764">#764</a>.</p>
+<p>On ordinary non-unit <code>DOT_PRODUCT</code> data recall did not change (20,000 x 128-dimension vectors, recall@10 1.0000 to
+0.9993 across four scalings, the same with and without the change). Non-normalized <code>DOT_PRODUCT</code> graphs can still be
+poorly connected for other reasons.</p>
 
 
 

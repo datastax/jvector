@@ -10,7 +10,7 @@
       
       
       
-        <link rel="canonical" href="https://datastax.github.io/jvector/dev/release%20notes/4.1.0/823.bugfix/">
+        <link rel="canonical" href="https://datastax.github.io/jvector/dev/release%20notes/4.1.0-rc.1/639.performance/">
       
       
       
@@ -20,7 +20,7 @@
     
     
       
-        <title>823.bugfix - JVector</title>
+        <title>639.performance - JVector</title>
       
     
     
@@ -72,7 +72,7 @@
     <div data-md-component="skip">
       
         
-        <a href="#neighboroverflow-values-such-as-13-and-14-no-longer-trip-an-assertion" class="md-skip">
+        <a href="#mutablepqvectors-updates-its-vector-count-without-a-capturing-lambda" class="md-skip">
           Skip to content
         </a>
       
@@ -112,7 +112,7 @@
         <div class="md-header__topic" data-md-component="header-topic">
           <span class="md-ellipsis">
             
-              823.bugfix
+              639.performance
             
           </span>
         </div>
@@ -1547,9 +1547,9 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
-  <a href="#neighboroverflow-values-such-as-13-and-14-no-longer-trip-an-assertion" class="md-nav__link">
+  <a href="#mutablepqvectors-updates-its-vector-count-without-a-capturing-lambda" class="md-nav__link">
     <span class="md-ellipsis">
-      neighborOverflow Values Such as 1.3 and 1.4 No Longer Trip an Assertion
+      MutablePQVectors Updates Its Vector Count Without a Capturing Lambda
     </span>
   </a>
   
@@ -1571,7 +1571,7 @@
 
 
   
-    <a href="https://github.com/datastax/jvector/edit/main/docs/release notes/4.1.0/823.bugfix.md" title="Edit this page" class="md-content__button md-icon">
+    <a href="https://github.com/datastax/jvector/edit/main/docs/release notes/4.1.0-rc.1/639.performance.md" title="Edit this page" class="md-content__button md-icon">
       
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M10 20H6V4h7v5h5v3.1l2-2V8l-6-6H6c-1.1 0-2 .9-2 2v16c0 1.1.9 2 2 2h4zm10.2-7c.1 0 .3.1.4.2l1.3 1.3c.2.2.2.6 0 .8l-1 1-2.1-2.1 1-1c.1-.1.2-.2.4-.2m0 3.9L14.1 23H12v-2.1l6.1-6.1z"/></svg>
     </a>
@@ -1579,22 +1579,18 @@
   
 
 
-  <h1>823.bugfix</h1>
+  <h1>639.performance</h1>
 
-<h3 id="neighboroverflow-values-such-as-13-and-14-no-longer-trip-an-assertion"><code>neighborOverflow</code> Values Such as 1.3 and 1.4 No Longer Trip an Assertion<a class="headerlink" href="#neighboroverflow-values-such-as-13-and-14-no-longer-trip-an-assertion" title="Permanent link">&para;</a></h3>
+<h3 id="mutablepqvectors-updates-its-vector-count-without-a-capturing-lambda"><code>MutablePQVectors</code> Updates Its Vector Count Without a Capturing Lambda<a class="headerlink" href="#mutablepqvectors-updates-its-vector-count-without-a-capturing-lambda" title="Permanent link">&para;</a></h3>
 <p><strong>Description</strong></p>
-<p>Inserting a backlink capped the neighbor list at <code>M * neighborOverflow</code> computed in <code>float</code>, while the neighbor
-arrays were sized from the same product computed in <code>double</code>. For overflow factors such as 1.3, 1.4, 1.8 and 1.9 the
-<code>float</code> product rounds up to the next integer for some <code>M</code> (for example 1.4 with <code>M</code> = 5, 10, 15, ...), so with
-assertions enabled the build failed with "could exceed max overflow degree", and without them a neighbor list could
-briefly hold one neighbor more than intended. Both now use the <code>double</code> product. See
-<a href="https://github.com/datastax/jvector/issues/822">#822</a>.</p>
-<p>A builder over an existing graph could also be given a larger <code>neighborOverflow</code> than the graph's arrays were sized
-for; the build then failed with "Cannot copy ... nodes to a smaller size". The cap now never exceeds the arrays' size.</p>
+<p><code>MutablePQVectors.encodeAndSet</code> and <code>setZero</code> raised the vector count with
+<code>updateAndGet(current -&gt; max(current, ordinal + 1))</code>, a lambda that captures <code>ordinal</code> and so may
+allocate on every call. They now use <code>accumulateAndGet(ordinal + 1, Math::max)</code>, which passes the
+value as an argument and needs no allocation. The result and its atomicity are unchanged. In JMH
+runs on JDK 22 and 25, the JIT already removed the old allocation once the code was warm, so
+<code>encodeAndSet</code> time and allocation are unchanged in steady state.</p>
 <p><strong>How to Enable</strong></p>
 <p>No configuration is required.</p>
-<p><strong>Notes</strong></p>
-<p>The default overflow of 1.2 is not affected.</p>
 
 
 

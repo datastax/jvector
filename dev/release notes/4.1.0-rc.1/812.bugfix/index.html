@@ -10,7 +10,7 @@
       
       
       
-        <link rel="canonical" href="https://datastax.github.io/jvector/dev/release%20notes/4.1.0/639.performance/">
+        <link rel="canonical" href="https://datastax.github.io/jvector/dev/release%20notes/4.1.0-rc.1/812.bugfix/">
       
       
       
@@ -20,7 +20,7 @@
     
     
       
-        <title>639.performance - JVector</title>
+        <title>812.bugfix - JVector</title>
       
     
     
@@ -72,7 +72,7 @@
     <div data-md-component="skip">
       
         
-        <a href="#mutablepqvectors-updates-its-vector-count-without-a-capturing-lambda" class="md-skip">
+        <a href="#graphsearcher-returns-an-empty-result-for-topk-0" class="md-skip">
           Skip to content
         </a>
       
@@ -112,7 +112,7 @@
         <div class="md-header__topic" data-md-component="header-topic">
           <span class="md-ellipsis">
             
-              639.performance
+              812.bugfix
             
           </span>
         </div>
@@ -1547,9 +1547,9 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
-  <a href="#mutablepqvectors-updates-its-vector-count-without-a-capturing-lambda" class="md-nav__link">
+  <a href="#graphsearcher-returns-an-empty-result-for-topk-0" class="md-nav__link">
     <span class="md-ellipsis">
-      MutablePQVectors Updates Its Vector Count Without a Capturing Lambda
+      GraphSearcher Returns an Empty Result for topK == 0
     </span>
   </a>
   
@@ -1571,7 +1571,7 @@
 
 
   
-    <a href="https://github.com/datastax/jvector/edit/main/docs/release notes/4.1.0/639.performance.md" title="Edit this page" class="md-content__button md-icon">
+    <a href="https://github.com/datastax/jvector/edit/main/docs/release notes/4.1.0-rc.1/812.bugfix.md" title="Edit this page" class="md-content__button md-icon">
       
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M10 20H6V4h7v5h5v3.1l2-2V8l-6-6H6c-1.1 0-2 .9-2 2v16c0 1.1.9 2 2 2h4zm10.2-7c.1 0 .3.1.4.2l1.3 1.3c.2.2.2.6 0 .8l-1 1-2.1-2.1 1-1c.1-.1.2-.2.4-.2m0 3.9L14.1 23H12v-2.1l6.1-6.1z"/></svg>
     </a>
@@ -1579,18 +1579,20 @@
   
 
 
-  <h1>639.performance</h1>
+  <h1>812.bugfix</h1>
 
-<h3 id="mutablepqvectors-updates-its-vector-count-without-a-capturing-lambda"><code>MutablePQVectors</code> Updates Its Vector Count Without a Capturing Lambda<a class="headerlink" href="#mutablepqvectors-updates-its-vector-count-without-a-capturing-lambda" title="Permanent link">&para;</a></h3>
+<h3 id="graphsearcher-returns-an-empty-result-for-topk-0"><code>GraphSearcher</code> Returns an Empty Result for <code>topK == 0</code><a class="headerlink" href="#graphsearcher-returns-an-empty-result-for-topk-0" title="Permanent link">&para;</a></h3>
 <p><strong>Description</strong></p>
-<p><code>MutablePQVectors.encodeAndSet</code> and <code>setZero</code> raised the vector count with
-<code>updateAndGet(current -&gt; max(current, ordinal + 1))</code>, a lambda that captures <code>ordinal</code> and so may
-allocate on every call. They now use <code>accumulateAndGet(ordinal + 1, Math::max)</code>, which passes the
-value as an argument and needs no allocation. The result and its atomicity are unchanged. In JMH
-runs on JDK 22 and 25, the JIT already removed the old allocation once the code was warm, so
-<code>encodeAndSet</code> time and allocation are unchanged in steady state.</p>
+<p><code>GraphSearcher.search</code> with <code>topK == 0</code> read the empty results queues: with a reranker it threw a
+<code>NullPointerException</code> from <code>NodeQueue.rerank</code>, and with <code>rerankK == 0</code> it compared against and evicted stale heap
+slots, which could throw on a later <code>resume</code> or make the search depend on the previous query. <code>search</code> and <code>resume</code>
+now return an empty result without searching when <code>topK</code> (or <code>additionalK</code>) is 0, and <code>NodeQueue.rerank</code> sends every
+candidate to the unused pile when <code>topK</code> is 0. See <a href="https://github.com/datastax/jvector/issues/811">#811</a>.</p>
 <p><strong>How to Enable</strong></p>
 <p>No configuration is required.</p>
+<p><strong>Notes</strong></p>
+<p>Callers that short-circuit <code>k == 0</code> before calling <code>search</code> as a workaround can keep doing so; it is no longer
+necessary.</p>
 
 
 
