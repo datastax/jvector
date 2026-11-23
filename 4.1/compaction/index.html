@@ -1,0 +1,2377 @@
+
+<!doctype html>
+<html lang="en" class="no-js">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+        <meta name="description" content="Java library for approximate nearest neighbor vector search with graph indexes.">
+      
+      
+      
+        <link rel="canonical" href="https://datastax.github.io/jvector/4.1/compaction/">
+      
+      
+        <link rel="prev" href="../larger-than-memory-indexes/">
+      
+      
+        <link rel="next" href="../batched-vector-access/">
+      
+      
+      <link rel="icon" href="../assets/images/favicon.png">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.6.14">
+    
+    
+      
+        <title>Compaction - JVector</title>
+      
+    
+    
+      <link rel="stylesheet" href="../assets/stylesheets/main.342714a4.min.css">
+      
+        
+        <link rel="stylesheet" href="../assets/stylesheets/palette.06af60db.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+        
+        
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Roboto:300,300i,400,400i,700,700i%7CRoboto+Mono:400,400i,700,700i&display=fallback">
+        <style>:root{--md-text-font:"Roboto";--md-code-font:"Roboto Mono"}</style>
+      
+    
+    
+    <script>__md_scope=new URL("..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+
+    
+    
+    
+  </head>
+  
+  
+    
+    
+      
+    
+    
+    
+    
+    <body dir="ltr" data-md-color-scheme="default" data-md-color-primary="indigo" data-md-color-accent="indigo">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#graph-index-compaction" class="md-skip">
+          Skip to content
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+    </div>
+    
+      <div data-md-color-scheme="default" data-md-component="outdated" hidden>
+        
+      </div>
+    
+    
+      
+
+  
+
+<header class="md-header md-header--shadow" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="Header">
+    <a href=".." title="JVector" class="md-header__button md-logo" aria-label="JVector" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            JVector
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              Compaction
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+      
+        <form class="md-header__option" data-md-component="palette">
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="(prefers-color-scheme: light)" data-md-color-scheme="default" data-md-color-primary="indigo" data-md-color-accent="indigo"  aria-label="Switch to dark mode"  type="radio" name="__palette" id="__palette_0">
+    
+      <label class="md-header__button md-icon" title="Switch to dark mode" for="__palette_1" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a4 4 0 0 0-4 4 4 4 0 0 0 4 4 4 4 0 0 0 4-4 4 4 0 0 0-4-4m0 10a6 6 0 0 1-6-6 6 6 0 0 1 6-6 6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="(prefers-color-scheme: dark)" data-md-color-scheme="slate" data-md-color-primary="indigo" data-md-color-accent="indigo"  aria-label="Switch to light mode"  type="radio" name="__palette" id="__palette_1">
+    
+      <label class="md-header__button md-icon" title="Switch to light mode" for="__palette_0" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 18c-.89 0-1.74-.2-2.5-.55C11.56 16.5 13 14.42 13 12s-1.44-4.5-3.5-5.45C10.26 6.2 11.11 6 12 6a6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+</form>
+      
+    
+    
+      <script>var palette=__md_get("__palette");if(palette&&palette.color){if("(prefers-color-scheme)"===palette.color.media){var media=matchMedia("(prefers-color-scheme: light)"),input=document.querySelector(media.matches?"[data-md-color-media='(prefers-color-scheme: light)']":"[data-md-color-media='(prefers-color-scheme: dark)']");palette.color.media=input.getAttribute("data-md-color-media"),palette.color.scheme=input.getAttribute("data-md-color-scheme"),palette.color.primary=input.getAttribute("data-md-color-primary"),palette.color.accent=input.getAttribute("data-md-color-accent")}for(var[key,value]of Object.entries(palette.color))document.body.setAttribute("data-md-color-"+key,value)}</script>
+    
+    
+    
+      
+      
+        <label class="md-header__button md-icon" for="__search">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        </label>
+        <div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" aria-label="Search" placeholder="Search" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <label class="md-search__icon md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+      </label>
+      <nav class="md-search__options" aria-label="Search">
+        
+        <button type="reset" class="md-search__icon md-icon" title="Clear" aria-label="Clear" tabindex="-1">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      </nav>
+      
+        <div class="md-search__suggest" data-md-component="search-suggest"></div>
+      
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix>
+        <div class="md-search-result" data-md-component="search-result">
+          <div class="md-search-result__meta">
+            Initializing search
+          </div>
+          <ol class="md-search-result__list" role="presentation"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+      
+    
+    
+      <div class="md-header__source">
+        <a href="https://github.com/datastax/jvector" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 6.7.2 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2024 Fonticons, Inc.--><path d="M439.55 236.05 244 40.45a28.87 28.87 0 0 0-40.81 0l-40.66 40.63 51.52 51.52c27.06-9.14 52.68 16.77 43.39 43.68l49.66 49.66c34.23-11.8 61.18 31 35.47 56.69-26.49 26.49-70.21-2.87-56-37.34L240.22 199v121.85c25.3 12.54 22.26 41.85 9.08 55a34.34 34.34 0 0 1-48.55 0c-17.57-17.6-11.07-46.91 11.25-56v-123c-20.8-8.51-24.6-30.74-18.64-45L142.57 101 8.45 235.14a28.86 28.86 0 0 0 0 40.81l195.61 195.6a28.86 28.86 0 0 0 40.8 0l194.69-194.69a28.86 28.86 0 0 0 0-40.81"/></svg>
+  </div>
+  <div class="md-source__repository">
+    datastax/jvector
+  </div>
+</a>
+      </div>
+    
+  </nav>
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+          
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+
+<nav class="md-nav md-nav--primary" aria-label="Navigation" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href=".." title="JVector" class="md-nav__button md-logo" aria-label="JVector" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    JVector
+  </label>
+  
+    <div class="md-nav__source">
+      <a href="https://github.com/datastax/jvector" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 6.7.2 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2024 Fonticons, Inc.--><path d="M439.55 236.05 244 40.45a28.87 28.87 0 0 0-40.81 0l-40.66 40.63 51.52 51.52c27.06-9.14 52.68 16.77 43.39 43.68l49.66 49.66c34.23-11.8 61.18 31 35.47 56.69-26.49 26.49-70.21-2.87-56-37.34L240.22 199v121.85c25.3 12.54 22.26 41.85 9.08 55a34.34 34.34 0 0 1-48.55 0c-17.57-17.6-11.07-46.91 11.25-56v-123c-20.8-8.51-24.6-30.74-18.64-45L142.57 101 8.45 235.14a28.86 28.86 0 0 0 0 40.81l195.61 195.6a28.86 28.86 0 0 0 40.8 0l194.69-194.69a28.86 28.86 0 0 0 0-40.81"/></svg>
+  </div>
+  <div class="md-source__repository">
+    datastax/jvector
+  </div>
+</a>
+    </div>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href=".." class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Home
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_2" >
+        
+          
+          <label class="md-nav__link" for="__nav_2" id="__nav_2_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    Getting started
+    
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_2_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_2">
+            <span class="md-nav__icon md-icon"></span>
+            Getting started
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../getting-started/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Quick start
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../building-and-installing/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Building and installing
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../tutorials/1-intro-tutorial/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Tutorial 1: Introduction
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../tutorials/2-disk-tutorial/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Tutorial 2: On-disk indexes
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../tutorials/3-larger-than-memory-tutorial/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Tutorial 3: Larger than memory
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+    
+  
+  
+  
+    
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--active md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3" checked>
+        
+          
+          <label class="md-nav__link" for="__nav_3" id="__nav_3_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    Guides
+    
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_3_label" aria-expanded="true">
+          <label class="md-nav__title" for="__nav_3">
+            <span class="md-nav__icon md-icon"></span>
+            Guides
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../choosing-an-index/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Choosing an index
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../graph-construction/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Graph construction
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../fused-and-separated/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Fused and separated layouts
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../tuning/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Tuning construction and search
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../sizing/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Memory and disk sizing
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../larger-than-memory-indexes/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Larger-than-memory indexes
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+    
+  
+  
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  
+  <span class="md-ellipsis">
+    Compaction
+    
+  </span>
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="./" class="md-nav__link md-nav__link--active">
+        
+  
+  
+  <span class="md-ellipsis">
+    Compaction
+    
+  </span>
+  
+
+      </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#overview" class="md-nav__link">
+    <span class="md-ellipsis">
+      Overview
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#usage" class="md-nav__link">
+    <span class="md-ellipsis">
+      Usage
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Usage">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#output-ordinals" class="md-nav__link">
+    <span class="md-ellipsis">
+      Output ordinals
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#output-format-version" class="md-nav__link">
+    <span class="md-ellipsis">
+      Output format version
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#handling-deleted-nodes" class="md-nav__link">
+    <span class="md-ellipsis">
+      Handling Deleted Nodes
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#compacting-into-several-outputs-sharding" class="md-nav__link">
+    <span class="md-ellipsis">
+      Compacting into several outputs (sharding)
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#algorithm" class="md-nav__link">
+    <span class="md-ellipsis">
+      Algorithm
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Algorithm">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#ordinal-assignment" class="md-nav__link">
+    <span class="md-ellipsis">
+      Ordinal assignment
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#pq-retraining" class="md-nav__link">
+    <span class="md-ellipsis">
+      PQ Retraining
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#neighbor-selection-per-node" class="md-nav__link">
+    <span class="md-ellipsis">
+      Neighbor Selection (per node)
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#cell-join" class="md-nav__link">
+    <span class="md-ellipsis">
+      Cell join
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#the-merge-store" class="md-nav__link">
+    <span class="md-ellipsis">
+      The merge store
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#wide-code" class="md-nav__link">
+    <span class="md-ellipsis">
+      Wide code
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#hierarchical-levels" class="md-nav__link">
+    <span class="md-ellipsis">
+      Hierarchical Levels
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#entry-node" class="md-nav__link">
+    <span class="md-ellipsis">
+      Entry Node
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#benchmarking" class="md-nav__link">
+    <span class="md-ellipsis">
+      Benchmarking
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Benchmarking">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#default-partition-and-compact-in-one-run" class="md-nav__link">
+    <span class="md-ellipsis">
+      Default: partition and compact in one run
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#measuring-the-heap-memory-footprint" class="md-nav__link">
+    <span class="md-ellipsis">
+      Measuring the heap memory footprint
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../batched-vector-access/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Batched input vector access
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../deferred-batch-writer/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Deferred batch serialization
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4" >
+        
+          
+          <label class="md-nav__link" for="__nav_4" id="__nav_4_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    Quantizers
+    
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_4_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_4">
+            <span class="md-nav__icon md-icon"></span>
+            Quantizers
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../pq/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Product quantization (PQ)
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    
+    
+    
+    
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4_2" >
+        
+          
+          <label class="md-nav__link" for="__nav_4_2" id="__nav_4_2_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    ASH (experimental)
+    
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_4_2_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_4_2">
+            <span class="md-nav__icon md-icon"></span>
+            ASH (experimental)
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../ash-configuration/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Configuration and defaults
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../ash-projection-precision/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Query-projection precision
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../ash-query-integration/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Integrating ASH queries
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../ash-performance/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Performance
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../nvq/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    NVQ (reranking)
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../bq/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Binary quantization (BQ)
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_5" >
+        
+          
+          <label class="md-nav__link" for="__nav_5" id="__nav_5_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    Benchmarking
+    
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_5_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_5">
+            <span class="md-nav__icon md-icon"></span>
+            Benchmarking
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../benchmarking/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Running benchmarks
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../benchyaml-guide/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    BenchYAML guide
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../ash-pq-benchmark/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Reproducing ASH versus PQ
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../vector-prefetch-benchmark/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Vector prefetching benchmark
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_6" >
+        
+          
+          <label class="md-nav__link" for="__nav_6" id="__nav_6_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    Design notes
+    
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_6_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_6">
+            <span class="md-nav__icon md-icon"></span>
+            Design notes
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../ash-query-batching-design/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    ASH query batching
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../native-ash-preparation/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Native ASH projection
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../ash-pca-native-svd/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    ASH PCA correctness
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../legacy/jvector-step-by-step/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    JVector step by step (legacy)
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_7" >
+        
+          
+          <label class="md-nav__link" for="__nav_7" id="__nav_7_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    Reference
+    
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_7_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_7">
+            <span class="md-nav__icon md-icon"></span>
+            Reference
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="https://javadoc.io/doc/io.github.jbellis/jvector" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    API reference (Javadoc)
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="https://github.com/datastax/jvector/blob/main/UPGRADING.md" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Upgrading
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="https://github.com/datastax/jvector/blob/main/CHANGELOG.md" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Changelog
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    
+    
+    
+    
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_7_4" >
+        
+          
+          <label class="md-nav__link" for="__nav_7_4" id="__nav_7_4_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    Release notes
+    
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_7_4_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_7_4">
+            <span class="md-nav__icon md-icon"></span>
+            Release notes
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../release%20notes/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    About release notes
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../release%20notes/4.0.2/4.0.2/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    4.0.2
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../release%20notes/4.0.1/4.0.1/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    4.0.1
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../release%20notes/4.0.0-RC.9/4.0.0-RC.9/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    4.0.0-RC.9
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../release%20notes/4.0.0-RC.8/4.0.0-RC.8/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    4.0.0-RC.8
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+              
+              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#overview" class="md-nav__link">
+    <span class="md-ellipsis">
+      Overview
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#usage" class="md-nav__link">
+    <span class="md-ellipsis">
+      Usage
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Usage">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#output-ordinals" class="md-nav__link">
+    <span class="md-ellipsis">
+      Output ordinals
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#output-format-version" class="md-nav__link">
+    <span class="md-ellipsis">
+      Output format version
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#handling-deleted-nodes" class="md-nav__link">
+    <span class="md-ellipsis">
+      Handling Deleted Nodes
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#compacting-into-several-outputs-sharding" class="md-nav__link">
+    <span class="md-ellipsis">
+      Compacting into several outputs (sharding)
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#algorithm" class="md-nav__link">
+    <span class="md-ellipsis">
+      Algorithm
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Algorithm">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#ordinal-assignment" class="md-nav__link">
+    <span class="md-ellipsis">
+      Ordinal assignment
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#pq-retraining" class="md-nav__link">
+    <span class="md-ellipsis">
+      PQ Retraining
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#neighbor-selection-per-node" class="md-nav__link">
+    <span class="md-ellipsis">
+      Neighbor Selection (per node)
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#cell-join" class="md-nav__link">
+    <span class="md-ellipsis">
+      Cell join
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#the-merge-store" class="md-nav__link">
+    <span class="md-ellipsis">
+      The merge store
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#wide-code" class="md-nav__link">
+    <span class="md-ellipsis">
+      Wide code
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#hierarchical-levels" class="md-nav__link">
+    <span class="md-ellipsis">
+      Hierarchical Levels
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#entry-node" class="md-nav__link">
+    <span class="md-ellipsis">
+      Entry Node
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#benchmarking" class="md-nav__link">
+    <span class="md-ellipsis">
+      Benchmarking
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Benchmarking">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#default-partition-and-compact-in-one-run" class="md-nav__link">
+    <span class="md-ellipsis">
+      Default: partition and compact in one run
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#measuring-the-heap-memory-footprint" class="md-nav__link">
+    <span class="md-ellipsis">
+      Measuring the heap memory footprint
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              <article class="md-content__inner md-typeset">
+                
+                  
+
+
+  
+    <a href="https://github.com/datastax/jvector/edit/main/docs/compaction.md" title="Edit this page" class="md-content__button md-icon">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M10 20H6V4h7v5h5v3.1l2-2V8l-6-6H6c-1.1 0-2 .9-2 2v16c0 1.1.9 2 2 2h4zm10.2-7c.1 0 .3.1.4.2l1.3 1.3c.2.2.2.6 0 .8l-1 1-2.1-2.1 1-1c.1-.1.2-.2.4-.2m0 3.9L14.1 23H12v-2.1l6.1-6.1z"/></svg>
+    </a>
+  
+  
+
+
+<h1 id="graph-index-compaction">Graph Index Compaction<a class="headerlink" href="#graph-index-compaction" title="Permanent link">&para;</a></h1>
+<p><code>OnDiskGraphIndexCompactor</code> merges multiple on-disk HNSW graph indexes into a single compacted index. This is useful in write-heavy workloads where data is continuously ingested into small segment indexes that accumulate over time; periodically compacting those segments into one larger index improves search throughput and recall without rebuilding from scratch.</p>
+<h2 id="overview">Overview<a class="headerlink" href="#overview" title="Permanent link">&para;</a></h2>
+<div class="highlight"><pre><span></span><code>source[0].index  ─┐
+source[1].index  ─┤──► OnDiskGraphIndexCompactor ──► compacted.index
+source[N].index  ─┘
+</code></pre></div>
+<p>Each source is an <code>OnDiskGraphIndex</code> with an associated <code>FixedBitSet</code> marking which of its nodes are live (not deleted). The compactor merges all live nodes into a single graph, assigns the output ordinals (dense over the live nodes, grouped by region), and retrains the Product Quantization codebook for outputs that carry one.</p>
+<h2 id="usage">Usage<a class="headerlink" href="#usage" title="Permanent link">&para;</a></h2>
+<div class="highlight"><pre><span></span><code><span class="n">List</span><span class="o">&lt;</span><span class="n">OnDiskGraphIndex</span><span class="o">&gt;</span><span class="w"> </span><span class="n">sources</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">List</span><span class="p">.</span><span class="na">of</span><span class="p">(</span><span class="n">index0</span><span class="p">,</span><span class="w"> </span><span class="n">index1</span><span class="p">,</span><span class="w"> </span><span class="n">index2</span><span class="p">);</span>
+
+<span class="c1">// Mark all nodes live (no deletions)</span>
+<span class="n">List</span><span class="o">&lt;</span><span class="n">FixedBitSet</span><span class="o">&gt;</span><span class="w"> </span><span class="n">liveNodes</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">sources</span><span class="p">.</span><span class="na">stream</span><span class="p">()</span>
+<span class="w">    </span><span class="p">.</span><span class="na">map</span><span class="p">(</span><span class="n">s</span><span class="w"> </span><span class="o">-&gt;</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="kd">var</span><span class="w"> </span><span class="n">bs</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="k">new</span><span class="w"> </span><span class="n">FixedBitSet</span><span class="p">(</span><span class="n">s</span><span class="p">.</span><span class="na">size</span><span class="p">());</span><span class="w"> </span><span class="n">bs</span><span class="p">.</span><span class="na">set</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span><span class="w"> </span><span class="n">s</span><span class="p">.</span><span class="na">size</span><span class="p">());</span><span class="w"> </span><span class="k">return</span><span class="w"> </span><span class="n">bs</span><span class="p">;</span><span class="w"> </span><span class="p">})</span>
+<span class="w">    </span><span class="p">.</span><span class="na">collect</span><span class="p">(</span><span class="n">toList</span><span class="p">());</span>
+
+<span class="kd">var</span><span class="w"> </span><span class="n">compactor</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="k">new</span><span class="w"> </span><span class="n">OnDiskGraphIndexCompactor</span><span class="p">(</span>
+<span class="w">    </span><span class="n">sources</span><span class="p">,</span><span class="w"> </span><span class="n">liveNodes</span><span class="p">,</span>
+<span class="w">    </span><span class="n">VectorSimilarityFunction</span><span class="p">.</span><span class="na">COSINE</span><span class="p">,</span>
+<span class="w">    </span><span class="cm">/* executor= */</span><span class="w"> </span><span class="kc">null</span><span class="w">                  </span><span class="c1">// null = use by default shared threadpool in compactor</span>
+<span class="p">);</span>
+
+<span class="n">compactor</span><span class="p">.</span><span class="na">compact</span><span class="p">(</span><span class="n">Path</span><span class="p">.</span><span class="na">of</span><span class="p">(</span><span class="s">"compacted.index"</span><span class="p">));</span>
+
+<span class="c1">// Where every source node landed, one mapper per source: oldToNew(i) is the output ordinal of</span>
+<span class="c1">// source node i, or OrdinalMapper.OMITTED for a deleted node.</span>
+<span class="n">List</span><span class="o">&lt;</span><span class="n">OrdinalMapper</span><span class="o">&gt;</span><span class="w"> </span><span class="n">mapping</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">compactor</span><span class="p">.</span><span class="na">ordinalMappers</span><span class="p">();</span>
+</code></pre></div>
+<h3 id="output-ordinals">Output ordinals<a class="headerlink" href="#output-ordinals" title="Permanent link">&para;</a></h3>
+<p>The compactor assigns the output ordinals; the caller does not choose them. Live nodes are numbered <code>0 .. live - 1</code>, sources in ascending-size order, and within a source by the region of the merged hierarchy each node descends to, so nodes that are close in vector space get adjacent ordinals: records are written sequentially, every cell's members are contiguous (the cell join below relies on this), and consecutive nodes explore the same neighbourhood of every target. Callers that keep external references to nodes (a row id to ordinal table, for instance) translate them through <code>ordinalMappers()</code> after <code>compact</code> returns.</p>
+<h3 id="output-format-version">Output format version<a class="headerlink" href="#output-format-version" title="Permanent link">&para;</a></h3>
+<p>The sources may be of any on-disk format version the reader supports (2 to 6); the compactor detects each source's version from its file. The output is written at <code>OnDiskGraphIndex.CURRENT_VERSION</code> unless <code>withVersion(int)</code> asks for another one, so by default a compaction also upgrades old sources. An output that carries fused PQ needs version 6, and one with upper layers version 4 or above; a version that cannot hold the output is rejected when <code>compact</code> starts. A sharded compaction writes every shard at the version of the compactor the session was opened on. A compressed sidecar written beside the graph (<code>compact(graphPath, compressedPath)</code>) serializes its merged compressor at the same version, so the two files always share one; a PQ with an anisotropic threshold needs version 3 or above.</p>
+<h3 id="handling-deleted-nodes">Handling Deleted Nodes<a class="headerlink" href="#handling-deleted-nodes" title="Permanent link">&para;</a></h3>
+<p>Deleted nodes are excluded from the output by marking them as <code>false</code> in the corresponding <code>FixedBitSet</code>; they get no output ordinal (<code>ordinalMappers()</code> reports <code>OrdinalMapper.OMITTED</code> for them).</p>
+<div class="highlight"><pre><span></span><code><span class="c1">// Example: every 5th node is deleted</span>
+<span class="n">FixedBitSet</span><span class="w"> </span><span class="n">live</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="k">new</span><span class="w"> </span><span class="n">FixedBitSet</span><span class="p">(</span><span class="n">source</span><span class="p">.</span><span class="na">size</span><span class="p">());</span>
+<span class="k">for</span><span class="w"> </span><span class="p">(</span><span class="kt">int</span><span class="w"> </span><span class="n">i</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">0</span><span class="p">;</span><span class="w"> </span><span class="n">i</span><span class="w"> </span><span class="o">&lt;</span><span class="w"> </span><span class="n">source</span><span class="p">.</span><span class="na">size</span><span class="p">();</span><span class="w"> </span><span class="n">i</span><span class="o">++</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="n">i</span><span class="w"> </span><span class="o">%</span><span class="w"> </span><span class="mi">5</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="mi">0</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="n">live</span><span class="p">.</span><span class="na">set</span><span class="p">(</span><span class="n">i</span><span class="p">);</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="p">}</span>
+</code></pre></div>
+<h3 id="compacting-into-several-outputs-sharding">Compacting into several outputs (sharding)<a class="headerlink" href="#compacting-into-several-outputs-sharding" title="Permanent link">&para;</a></h3>
+<p>A compaction that splits its output, such as one writing each token range to its own file, can run as N separate compactions, one per output, each over all the sources with only that output's nodes marked live. That repeats per output what does not depend on the output: every one of them trains the codebooks again, on its own slice. A sharded compaction session does it once: the compactor is built over everything that may be written, and each shard is merged by its own <code>compactShard</code> call, with that shard's nodes as the live set. The codebooks are trained by the first shard that needs them, on the live nodes of every shard together, and reused by the rest.</p>
+<div class="highlight"><pre><span></span><code><span class="c1">// liveNodes: the live nodes of ALL the shards together</span>
+<span class="kd">var</span><span class="w"> </span><span class="n">compactor</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="k">new</span><span class="w"> </span><span class="n">OnDiskGraphIndexCompactor</span><span class="p">(</span><span class="n">sources</span><span class="p">,</span><span class="w"> </span><span class="n">liveNodes</span><span class="p">,</span><span class="w"> </span><span class="n">VectorSimilarityFunction</span><span class="p">.</span><span class="na">COSINE</span><span class="p">,</span><span class="w"> </span><span class="kc">null</span><span class="p">);</span>
+<span class="kd">var</span><span class="w"> </span><span class="n">session</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">compactor</span><span class="p">.</span><span class="na">sharded</span><span class="p">();</span>
+
+<span class="c1">// shardNLiveNodes: per source, the nodes of shard N, a subset of liveNodes</span>
+<span class="n">List</span><span class="o">&lt;</span><span class="n">OrdinalMapper</span><span class="o">&gt;</span><span class="w"> </span><span class="n">shard0</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">session</span><span class="p">.</span><span class="na">compactShard</span><span class="p">(</span><span class="n">shard0LiveNodes</span><span class="p">,</span><span class="w"> </span><span class="n">output0</span><span class="p">);</span><span class="w">   </span><span class="c1">// shard0.get(s).oldToNew(n): ordinal of source s's node n in output0, or OMITTED</span>
+<span class="n">List</span><span class="o">&lt;</span><span class="n">OrdinalMapper</span><span class="o">&gt;</span><span class="w"> </span><span class="n">shard1</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">session</span><span class="p">.</span><span class="na">compactShard</span><span class="p">(</span><span class="n">shard1LiveNodes</span><span class="p">,</span><span class="w"> </span><span class="n">output1</span><span class="p">);</span><span class="w">   </span><span class="c1">// every shard has its own mapping</span>
+</code></pre></div>
+<p>Shards may become known one at a time (each output is closed as its rows arrive); the session does nothing until the first call. Sources that ship a compressed sidecar use the <code>compactShard</code> overload that also takes the compressed path. Each shard is otherwise an ordinary merge of its own nodes: its upper layers, cells, ordinals and merge store are its own, and its cost follows its node count. Since a shard holds a small part of every source, each source is sparse in it; see "Sparse sources" below.</p>
+<p>Measured on two 1M-node sources (1024 dimensions, cosine, degree 32) split into M shards by a hash of the row, total wall time and recall@10 over all shards (8 cores):</p>
+<table>
+<thead>
+<tr>
+<th>M</th>
+<th>one compaction per shard, retained same-source edges only</th>
+<th>one session, same-source join off</th>
+<th>one session</th>
+<th>rebuild of every shard</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>4</td>
+<td>454 s, 0.781</td>
+<td></td>
+<td>566 s, 0.825</td>
+<td>876 s, 0.836</td>
+</tr>
+<tr>
+<td>16</td>
+<td>981 s, 0.823</td>
+<td>300 s, 0.821</td>
+<td>567 s, 0.894</td>
+<td>946 s, 0.903</td>
+</tr>
+<tr>
+<td>64</td>
+<td>1203 s, 0.875</td>
+<td>335 s, 0.875</td>
+<td>627 s, 0.945</td>
+<td>886 s, 0.947</td>
+</tr>
+</tbody>
+</table>
+<p>Training once removes the growth with M (the two codebooks take 43 s once instead of about 14 s per shard at M = 64); the same-source join costs about as much again as the rest of the merge and brings the recall to within a point of a rebuild.</p>
+<h2 id="algorithm">Algorithm<a class="headerlink" href="#algorithm" title="Permanent link">&para;</a></h2>
+<h3 id="ordinal-assignment">Ordinal assignment<a class="headerlink" href="#ordinal-assignment" title="Permanent link">&para;</a></h3>
+<p>Each source assigns its own local ordinals. The compactor merges the upper layers first (see "Hierarchical Levels"), then builds the output mapping: sources in ascending-size order, and within a source by the level-1 node of the merged hierarchy each node descends to (an exact greedy descent through the merged upper layers, refined by a width-8 beam over level 1, keyed by a breadth-first walk position over the merged level-1 graph). When no source has an upper layer there are no cells, and level 0 falls back to the graph search.</p>
+<h3 id="pq-retraining">PQ Retraining<a class="headerlink" href="#pq-retraining" title="Permanent link">&para;</a></h3>
+<p>If the sources carry PQ (FusedPQ, or a compressed sidecar), the compactor retrains the Product Quantization codebook on the combined dataset and re-encodes every live node for the output. This is done by <code>PQRetrainer</code>, which
+performs <strong>balanced proportional sampling</strong> across all sources (up to <code>ProductQuantization.MAX_PQ_TRAINING_SET_SIZE</code> vectors total, at least 1000 per source). The merge itself does not run on these codes: whatever the sources carry, it runs on the vectors (see "The merge store" below), so the input type determines the output format and nothing else.</p>
+<h3 id="neighbor-selection-per-node">Neighbor Selection (per node)<a class="headerlink" href="#neighbor-selection-per-node" title="Permanent link">&para;</a></h3>
+<p>For each live node at each graph level, the compactor gathers a candidate neighbor pool and then applies diversity selection:</p>
+<p><strong>1. Gather from same source</strong> (<code>gatherFromSameSource</code>)\
+Iterate the node's existing neighbors in its source index. Filter out deleted nodes. Score each with the similarity function. No graph search — neighbors are already precomputed.</p>
+<p><strong>2. Gather from other sources</strong> (<code>gatherFromOtherSource</code>)\
+Keep the top <code>searchTopK</code> candidates per larger target, scored exactly: at level 0 through the cell join described below, at the upper levels through a graph search of the target. The graph search also stands in at level 0 for a node without a cell; when the target carries PQ codes the traversal scores through them and the top candidates are rescored exactly, otherwise the traversal is exact.</p>
+<div class="highlight"><pre><span></span><code>searchTopK  = max(2,  ceil(degree / numSources) * 4)
+</code></pre></div>
+<ul>
+<li><em>Level 0</em> uses pair-asymmetric cross-linking. Sources are processed smallest first, one source at a time. A node gathers candidates only from the sources <strong>larger</strong> than its own, through the <strong>cell join</strong>. Every candidate is also <em>offered back</em> to the node it found, with its exact score: since similarity is symmetric, the offer is exactly the candidate that node's own scan of the smaller source would have produced. Each node holds up to 16 offer slots, kept in a banded, spill-to-disk buffer so peak memory is independent of node count. When a source's turn comes, its nodes union the offers they received with their retained same-source edges and their own candidates before diversity selection. The largest source gathers nothing itself; a node of it that received no offers keeps its retained edges unchanged and skips selection entirely.</li>
+<li><em>Level L &gt; 0</em>: the compactor first descends greedily from the source's entry point through each level above L (one <code>searchOneLayer</code> call with topK=1 per level, feeding the result into the next via <code>setEntryPointsFromPreviousLayer()</code>), then performs the full beam search at level L. This mirrors standard HNSW construction and gives a much better starting point than jumping directly to level L from the global entry node.</li>
+</ul>
+<p><strong>Sparse sources: the same-source join</strong>\
+Step 1 keeps only the live neighbours, and nothing replaces the dead ones. That is the right economy while most of a source is live, since the source's own graph already holds its same-source edges. It fails when a source's live nodes are a minority, which is every source of a shard (a shard of M keeps 1/M of each): a node then keeps <code>degree × live fraction</code> of its same-source edges, and the output is close to bipartite between the sources. So in a sharded compaction a source with fewer than half of its nodes live is also searched for the node's own neighbours, exactly as another source is: at level 0 it is one more target of the cell walk (the largest source, which otherwise scans nothing, scans itself), at the upper levels and in merges without cells one more graph search. The node itself and the neighbours it retained are dropped from the result, and no reverse offers are made within a source, since every node of it runs the same scan. An ordinary <code>compact</code> never joins a source with itself, however many of its nodes are deleted: its cost and output are unchanged by this.</p>
+<p><strong>3. Diversity selection</strong> (Vamana-style)\
+Candidates are sorted by exact score (descending). The compactor selects up to <code>maxDegree</code> diverse neighbors using an adaptive alpha. At level 0 the pairwise comparisons between a candidate and the already-selected neighbours run on vectors decoded from the wide code (below), and the candidate's pruning threshold is recomputed against the node from the same decoded vector, so both sides of the inequality carry the same quantization bias; the ordering itself always uses the exact scores.</p>
+<div class="highlight"><pre><span></span><code>for alpha in [1.0, 1.2]:
+    for each candidate c (highest score first):
+        if c is already selected: skip
+        if ∀ selected neighbor j: similarity(c, j) ≤ score(c) × alpha:
+            select c
+    if |selected| == maxDegree: stop
+</code></pre></div>
+<h3 id="cell-join">Cell join<a class="headerlink" href="#cell-join" title="Permanent link">&para;</a></h3>
+<p>With an upper layer in any source, level-0 candidates come from a scan rather than a search. The output ordinals group every source's nodes by the level-1 node of the merged hierarchy they descend to, their <em>cell</em> — every source's level-1 nodes are cells, so the partition is as fine as the merged index's own level 1; each source's nodes of a cell form a contiguous ordinal range, so their vectors are contiguous in the merge store (the inverted lists of an IVF index whose centroids are the merged level-1 nodes). Level 0 is processed in ranges of consecutive ordinals: for each node of a range a width-64 beam over the merged level-1 graph, seeded at the node's own cell, picks its probe cells (at most 4,096 members per larger source, best cells first; the beam is wide because the merged cells are small, and it must rank enough of them to fill the budget); the range's (cell, node) pairs are then inverted so that each probed cell of each larger source is streamed once and every vector in it is scored against all the range's nodes that probe it (eight queries per pass, the queries kept in L1), keeping each node's best <code>searchTopK</code> by exact score. Survivors enter the unchanged pipeline (reverse offers, diversity, write). Nodes without a cell, and merges where no source has an upper layer, use the graph search.</p>
+<h3 id="the-merge-store">The merge store<a class="headerlink" href="#the-merge-store" title="Permanent link">&para;</a></h3>
+<p>Before level 0 is written, every live vector is copied once into a scratch region of the output file at its output ordinal (<code>4 × dimension</code> bytes per node; truncated away when the merge finishes). The cell scan streams it, and survivors, retained edges and offered candidates take their vectors from it, so no source record is read for a candidate during level 0 and every score the output is written from is exact. Outputs that carry PQ (FusedPQ, or a sidecar) get a second cache from the same pass holding the retrained codes by output ordinal: record writes copy neighbour codes from it instead of re-encoding per edge, and for sidecar sources (<code>compact(graphPath, compressedPath)</code>) it becomes the merged compressed vectors file.</p>
+<h3 id="wide-code">Wide code<a class="headerlink" href="#wide-code" title="Permanent link">&para;</a></h3>
+<p>The compactor also trains a product quantization with four dimensions per subspace (<code>max(8, dimension / 4)</code> subspaces of 256 centroids, capped at the dimension: 192 bytes per node at 768 dimensions) and encodes every live node into a third cache in the same pass. It serves one purpose: the pairwise diversity comparisons at level 0, where a candidate's vector is decoded from its code rather than read from the merge store, so a node's selection touches one row per candidate instead of one per (candidate, neighbour) pair. Candidate scores against the node stay exact. The coarser code also collapses near-duplicates onto one code, which the diversity rule then prunes, so the degree is spent on distinct neighbours; a finer two-dimensional code kept them apart and merged to lower recall.</p>
+<h3 id="hierarchical-levels">Hierarchical Levels<a class="headerlink" href="#hierarchical-levels" title="Permanent link">&para;</a></h3>
+<p>Level 0 (base layer) stores inline vectors, FusedPQ codes, and the neighbor list. Upper levels store only the neighbor list (plus PQ codes at level 1 for cross-level searching).</p>
+<p>The upper layers are merged before level 0: for each live upper-layer node the compactor keeps its retained same-source edges, adds candidates from a greedy descent and a beam search in every other source's upper layers, and diversity-selects the result. The merged lists are held in memory (a few per cent of the nodes) until the ordinals exist, and the merged level 1 — every source's level-1 nodes with their merged edges — is the cell hierarchy the ordinal assignment and the cell join run on. Its adjacency and the levels above it stay on the heap; the level-1 vectors (about 3 % of the dataset) are written once to a file beside the output and read through a read-only mapping, so they are page cache rather than a fixed heap cost. They are written after level 0.</p>
+<p>Processing is batched per source and run in parallel across sources using a <code>ForkJoinPool</code>. A backpressure window keeps at most <code>taskWindowSize</code> batches in-flight at once, bounding memory use.</p>
+<h3 id="entry-node">Entry Node<a class="headerlink" href="#entry-node" title="Permanent link">&para;</a></h3>
+<p>The output's max level is the highest level that still has a live node: a merged level that came out empty (a shard, or a heavily deleted source, can miss every node of the sources' top levels) is dropped. The entry node of the compacted graph is:
+1. The designated entry node of the first source that reaches the output's max level, if it is live.
+2. Otherwise, the first live node found at that level, scanning those sources in order.</p>
+<h2 id="benchmarking">Benchmarking<a class="headerlink" href="#benchmarking" title="Permanent link">&para;</a></h2>
+<p>Use <code>CompactorBenchmark</code> (in <code>benchmarks-jmh</code>) to measure compaction performance. See <code>benchmarks-jmh/src/main/java/io/github/jbellis/jvector/bench/CompactorBenchmark.md</code> for full instructions.</p>
+<h3 id="default-partition-and-compact-in-one-run">Default: partition and compact in one run<a class="headerlink" href="#default-partition-and-compact-in-one-run" title="Permanent link">&para;</a></h3>
+<p>Adjust <code>-Xmx</code> to fit the dataset in memory (e.g., 220g for large datasets).</p>
+<div class="highlight"><pre><span></span><code>java<span class="w"> </span>-Xmx220g<span class="w"> </span>--add-modules<span class="w"> </span>jdk.incubator.vector<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>-cp<span class="w"> </span>benchmarks-jmh/target/compactor-benchmark.jar<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>io.github.jbellis.jvector.bench.CompactorBenchmark<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>-p<span class="w"> </span><span class="nv">workloadMode</span><span class="o">=</span>PARTITION_AND_COMPACT<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>-p<span class="w"> </span><span class="nv">datasetNames</span><span class="o">=</span>&lt;dataset&gt;<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>-p<span class="w"> </span><span class="nv">numPartitions</span><span class="o">=</span><span class="m">4</span><span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>-p<span class="w"> </span><span class="nv">splitDistribution</span><span class="o">=</span>UNIFORM<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>-p<span class="w"> </span><span class="nv">indexPrecision</span><span class="o">=</span>FUSEDPQ<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>-wi<span class="w"> </span><span class="m">0</span><span class="w"> </span>-i<span class="w"> </span><span class="m">1</span><span class="w"> </span>-f<span class="w"> </span><span class="m">1</span>
+</code></pre></div>
+<h3 id="measuring-the-heap-memory-footprint">Measuring the heap memory footprint<a class="headerlink" href="#measuring-the-heap-memory-footprint" title="Permanent link">&para;</a></h3>
+<p>To measure compaction's true heap footprint — without the dataset occupying heap — run the two steps separately.</p>
+<blockquote>
+<p><strong>Note:</strong> <code>measureRecall</code> defaults to <code>true</code>. With the default, even <code>COMPACT</code> mode loads the dataset's query vectors and ground truth and runs a search after compacting, which adds heap usage. Set <code>-p measureRecall=false</code> so the heap reflects only the compactor itself.</p>
+</blockquote>
+<p><strong>Step 1: build partitions</strong> (dataset in memory, large heap required)</p>
+<div class="highlight"><pre><span></span><code>java<span class="w"> </span>-Xmx220g<span class="w"> </span>--add-modules<span class="w"> </span>jdk.incubator.vector<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>-cp<span class="w"> </span>benchmarks-jmh/target/compactor-benchmark.jar<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>io.github.jbellis.jvector.bench.CompactorBenchmark<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>-p<span class="w"> </span><span class="nv">workloadMode</span><span class="o">=</span>PARTITION<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>-p<span class="w"> </span><span class="nv">datasetNames</span><span class="o">=</span>&lt;dataset&gt;<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>-p<span class="w"> </span><span class="nv">numPartitions</span><span class="o">=</span><span class="m">4</span><span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>-p<span class="w"> </span><span class="nv">splitDistribution</span><span class="o">=</span>UNIFORM<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>-p<span class="w"> </span><span class="nv">indexPrecision</span><span class="o">=</span>FUSEDPQ<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>-wi<span class="w"> </span><span class="m">0</span><span class="w"> </span>-i<span class="w"> </span><span class="m">1</span><span class="w"> </span>-f<span class="w"> </span><span class="m">1</span>
+</code></pre></div>
+<p><strong>Step 2: compact only</strong> (dataset not loaded; use a small heap to measure the compactor's footprint)</p>
+<div class="highlight"><pre><span></span><code>java<span class="w"> </span>-Xmx5g<span class="w"> </span>--add-modules<span class="w"> </span>jdk.incubator.vector<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>-cp<span class="w"> </span>benchmarks-jmh/target/compactor-benchmark.jar<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>io.github.jbellis.jvector.bench.CompactorBenchmark<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>-p<span class="w"> </span><span class="nv">workloadMode</span><span class="o">=</span>COMPACT<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>-p<span class="w"> </span><span class="nv">measureRecall</span><span class="o">=</span><span class="nb">false</span><span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>-p<span class="w"> </span><span class="nv">datasetNames</span><span class="o">=</span>&lt;dataset&gt;<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>-p<span class="w"> </span><span class="nv">numPartitions</span><span class="o">=</span><span class="m">4</span><span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>-p<span class="w"> </span><span class="nv">splitDistribution</span><span class="o">=</span>UNIFORM<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>-p<span class="w"> </span><span class="nv">indexPrecision</span><span class="o">=</span>FUSEDPQ<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>-wi<span class="w"> </span><span class="m">0</span><span class="w"> </span>-i<span class="w"> </span><span class="m">1</span><span class="w"> </span>-f<span class="w"> </span><span class="m">1</span>
+</code></pre></div>
+<p><code>COMPACT</code> with <code>measureRecall=false</code> skips dataset loading entirely, so <code>-Xmx5g</code> is sufficient even for large datasets. This confirms that the compactor itself — not the dataset — drives heap usage.</p>
+<p>Key <code>workloadMode</code> values:</p>
+<table>
+<thead>
+<tr>
+<th>Mode</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>PARTITION_AND_COMPACT</code></td>
+<td><strong>(default)</strong> Build partitions, compact them</td>
+</tr>
+<tr>
+<td><code>PARTITION</code></td>
+<td>Build N partition indexes and exit; use before <code>COMPACT</code></td>
+</tr>
+<tr>
+<td><code>COMPACT</code></td>
+<td>Compact existing partitions</td>
+</tr>
+<tr>
+<td><code>BUILD</code></td>
+<td>Build one index over the full dataset</td>
+</tr>
+</tbody>
+</table>
+<p>Results are written as JSONL to <code>target/benchmark-results/compactor-*/compactor-results.jsonl</code>. The <code>durationMs</code> field records only the compaction time (not dataset loading or JVM startup). When <code>measureRecall=true</code>, each result also includes <code>recall</code>, <code>avgSearchLatencyMs</code>, and <code>p99SearchLatencyMs</code> from searching the compacted graph.</p>
+<p>Comparison against build-from-scratch (results averaged over three runs).</p>
+<ul>
+<li>Build from scratch: build with PQ, search using FusedPQ with FP reranking.</li>
+<li>Compaction: build source partitions with PQ, compact using FusedPQ with FP rescoring, search using FusedPQ with FP reranking. Source partitions are based on a Fibonacci distribution with 4 partitions.</li>
+</ul>
+<table>
+<thead>
+<tr>
+<th>Dataset</th>
+<th style="text-align: right;">Dim</th>
+<th style="text-align: right;">Build from Scratch</th>
+<th style="text-align: right;">Compaction</th>
+<th style="text-align: right;">Delta</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>cap-6M</td>
+<td style="text-align: right;">768</td>
+<td style="text-align: right;">0.626</td>
+<td style="text-align: right;">0.619</td>
+<td style="text-align: right;">-0.008</td>
+</tr>
+<tr>
+<td>cap-1M</td>
+<td style="text-align: right;">768</td>
+<td style="text-align: right;">0.656</td>
+<td style="text-align: right;">0.656</td>
+<td style="text-align: right;">0.000</td>
+</tr>
+<tr>
+<td>gecko-100k</td>
+<td style="text-align: right;">768</td>
+<td style="text-align: right;">0.690</td>
+<td style="text-align: right;">0.701</td>
+<td style="text-align: right;">+0.011</td>
+</tr>
+<tr>
+<td>e5-small-v2-100k</td>
+<td style="text-align: right;">384</td>
+<td style="text-align: right;">0.572</td>
+<td style="text-align: right;">0.586</td>
+<td style="text-align: right;">+0.014</td>
+</tr>
+<tr>
+<td>ada002-1M</td>
+<td style="text-align: right;">1536</td>
+<td style="text-align: right;">0.687</td>
+<td style="text-align: right;">0.703</td>
+<td style="text-align: right;">+0.016</td>
+</tr>
+<tr>
+<td>e5-base-v2-100k</td>
+<td style="text-align: right;">768</td>
+<td style="text-align: right;">0.676</td>
+<td style="text-align: right;">0.692</td>
+<td style="text-align: right;">+0.016</td>
+</tr>
+<tr>
+<td>cohere-english-v3-10M</td>
+<td style="text-align: right;">1024</td>
+<td style="text-align: right;">0.544</td>
+<td style="text-align: right;">0.561</td>
+<td style="text-align: right;">+0.017</td>
+</tr>
+<tr>
+<td>e5-large-v2-100k</td>
+<td style="text-align: right;">1024</td>
+<td style="text-align: right;">0.686</td>
+<td style="text-align: right;">0.703</td>
+<td style="text-align: right;">+0.017</td>
+</tr>
+<tr>
+<td>ada002-100k</td>
+<td style="text-align: right;">1536</td>
+<td style="text-align: right;">0.751</td>
+<td style="text-align: right;">0.769</td>
+<td style="text-align: right;">+0.018</td>
+</tr>
+<tr>
+<td>cohere-english-v3-1M</td>
+<td style="text-align: right;">1024</td>
+<td style="text-align: right;">0.593</td>
+<td style="text-align: right;">0.612</td>
+<td style="text-align: right;">+0.019</td>
+</tr>
+</tbody>
+</table>
+<h1 id="heap-memory-footprint">Heap memory footprint<a class="headerlink" href="#heap-memory-footprint" title="Permanent link">&para;</a></h1>
+<p>All datasets above can be compacted under <code>COMPACT</code> with <code>measureRecall=false</code> and <code>-Xmx5g</code>. In addition, compaction successfully scales to a dataset with 2560 dimensions and 10M vectors under the same heap constraint.</p>
+
+
+
+
+
+
+
+
+
+
+
+
+                
+              </article>
+            </div>
+          
+          
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+          <button type="button" class="md-top md-icon" data-md-component="top" hidden>
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M13 20h-2V8l-5.5 5.5-1.42-1.42L12 4.16l7.92 7.92-1.42 1.42L13 8z"/></svg>
+  Back to top
+</button>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+    
+      
+      <nav class="md-footer__inner md-grid" aria-label="Footer" >
+        
+          
+          <a href="../larger-than-memory-indexes/" class="md-footer__link md-footer__link--prev" aria-label="Previous: Larger-than-memory indexes">
+            <div class="md-footer__button md-icon">
+              
+              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+            </div>
+            <div class="md-footer__title">
+              <span class="md-footer__direction">
+                Previous
+              </span>
+              <div class="md-ellipsis">
+                Larger-than-memory indexes
+              </div>
+            </div>
+          </a>
+        
+        
+          
+          <a href="../batched-vector-access/" class="md-footer__link md-footer__link--next" aria-label="Next: Batched input vector access">
+            <div class="md-footer__title">
+              <span class="md-footer__direction">
+                Next
+              </span>
+              <div class="md-ellipsis">
+                Batched input vector access
+              </div>
+            </div>
+            <div class="md-footer__button md-icon">
+              
+              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M4 11v2h12l-5.5 5.5 1.42 1.42L19.84 12l-7.92-7.92L10.5 5.5 16 11z"/></svg>
+            </div>
+          </a>
+        
+      </nav>
+    
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+  
+    Made with
+    <a href="https://squidfunk.github.io/mkdocs-material/" target="_blank" rel="noopener">
+      Material for MkDocs
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+    
+    
+      
+      <script id="__config" type="application/json">{"base": "..", "features": ["navigation.sections", "navigation.top", "navigation.footer", "search.suggest", "search.highlight", "content.code.copy", "content.action.edit"], "search": "../assets/javascripts/workers/search.d50fe291.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": {"default": ["latest", "dev"], "provider": "mike"}}</script>
+    
+    
+      <script src="../assets/javascripts/bundle.13a4f30d.min.js"></script>
+      
+    
+  </body>
+</html>
