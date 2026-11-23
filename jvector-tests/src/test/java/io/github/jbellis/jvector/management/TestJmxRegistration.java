@@ -36,7 +36,7 @@ import static org.junit.Assert.assertTrue;
  * which defaults to JMX. This test verifies that, from an external JMX client's point of view
  * (JConsole, jmxterm, or a monitoring agent), nothing changed: the same {@link ObjectName}
  * is registered and attribute get/set round-trips against the live singleton, exactly as
- * documented in {@code docs/release notes/4.1.0/703.feature.md}.
+ * documented in {@code docs/release notes/4.0.1/703.feature.md}.
  *
  * <p>Assumes the default management backend (JMX) is active, i.e. that
  * {@code jvector.management.backend} has not been overridden away from {@code jmx}.

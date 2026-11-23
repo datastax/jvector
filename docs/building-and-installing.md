@@ -1,7 +1,7 @@
 # Building and installing JVector
 
 This guide covers two ways to get JVector: using a release from Maven Central, and building it
-from source for a particular platform and vector backend. ASH requires release 4.1.0 or later.
+from source for a particular platform and vector backend. ASH requires release 4.1.0-rc.1 or later.
 
 - [Vector backends](#vector-backends)
 - [Using a release from Maven Central](#using-a-release-from-maven-central)
@@ -37,14 +37,14 @@ Maven:
 <dependency>
   <groupId>io.github.jbellis</groupId>
   <artifactId>jvector</artifactId>
-  <version>4.1.0</version>
+  <version>4.1.0-rc.1</version>
 </dependency>
 ```
 
 Gradle (Kotlin DSL):
 
 ```kotlin
-implementation("io.github.jbellis:jvector:4.1.0")
+implementation("io.github.jbellis:jvector:4.1.0-rc.1")
 ```
 
 ### What the jar contains
