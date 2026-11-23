@@ -8,12 +8,12 @@ JVector is published to Maven Central as `io.github.jbellis:jvector`:
 <dependency>
   <groupId>io.github.jbellis</groupId>
   <artifactId>jvector</artifactId>
-  <version>4.1.0</version>
+  <version>4.1.0-rc.1</version>
 </dependency>
 ```
 
-With Gradle: `implementation("io.github.jbellis:jvector:4.1.0")`. The library runs on Java 11 and
-newer; ASH requires 4.1.0 or later.
+With Gradle: `implementation("io.github.jbellis:jvector:4.1.0-rc.1")`. The library runs on Java 11 and
+newer; ASH requires 4.1.0-rc.1 or later.
 
 ## Enable SIMD
 
