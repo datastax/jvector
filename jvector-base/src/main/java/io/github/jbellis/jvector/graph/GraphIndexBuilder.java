@@ -43,6 +43,8 @@ import java.io.Closeable;
 import java.io.IOException;
 import java.io.UncheckedIOException;
 import java.util.*;
+import java.util.function.IntConsumer;
+import java.util.function.Supplier;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentSkipListSet;
 import java.util.concurrent.ForkJoinPool;
@@ -748,31 +750,113 @@ public class GraphIndexBuilder implements Closeable, Accountable {
      * The score provider supplied at construction time determines how vectors are compared.
      */
     public ImmutableGraphIndex build(VectorValues<?> ravv) {
-        int size = ravv.size();
-
+        // Read the supplied vectors through per-thread views rather than assuming the score provider's match.
         if (ravv instanceof RandomAccessVectorValues) {
-            // Float sources may share (borrowed) vectors; read each through a per-thread view.
-            var vv = ((RandomAccessVectorValues) ravv).threadLocalSupplier();
-            simdExecutor.submit(() -> {
-                IntStream.range(0, size).parallel().forEach(node -> {
-                    addGraphNode(node, vv.get().getVector(node));
-                });
-            }).join();
+            addGraphNodesInParallel(simdExecutor, this, (RandomAccessVectorValues) ravv, 0, ravv.size());
         } else if (ravv instanceof RandomAccessByteVectorValues) {
-            // Same for int8 sources: read the supplied vectors rather than assuming the score provider's match.
-            var vv = ((RandomAccessByteVectorValues) ravv).threadLocalSupplier();
-            simdExecutor.submit(() -> {
-                IntStream.range(0, size).parallel().forEach(node -> {
-                    addGraphNode(node, vv.get().getVector(node));
-                });
-            }).join();
+            addGraphNodesInParallel(simdExecutor, this, (RandomAccessByteVectorValues) ravv, 0, ravv.size());
         } else {
             throw new IllegalArgumentException("Unsupported VectorValues type: " + ravv.getClass().getName());
         }
-
         cleanup();
         return graph;
     }
+
+    /**
+     * Adds nodes [start, end) in parallel using thread-local copies of ravv, then closes those copies.
+     * The copies are closed only after every worker has stopped using them, even if a worker throws
+     * and join() returns while sibling tasks are still running.
+     */
+    private static void addGraphNodesInParallel(ForkJoinPool executor, GraphIndexBuilder builder,
+                                                RandomAccessVectorValues ravv, int start, int end) {
+        var vv = ravv.threadLocalSupplier();
+        addGraphNodesInParallel(executor, vv, start, end, node -> builder.addGraphNode(node, vv.get().getVector(node)));
+    }
+
+    /** As above, for int8 sources. */
+    private static void addGraphNodesInParallel(ForkJoinPool executor, GraphIndexBuilder builder,
+                                                RandomAccessByteVectorValues ravv, int start, int end) {
+        var vv = ravv.threadLocalSupplier();
+        addGraphNodesInParallel(executor, vv, start, end, node -> builder.addGraphNode(node, vv.get().getVector(node)));
+    }
+
+    private static void addGraphNodesInParallel(ForkJoinPool executor, Supplier<?> vv, int start, int end,
+                                                IntConsumer addNode) {
+        var workers = new ActiveWorkers();
+        Throwable failure = null;
+        try {
+            executor.submit(() -> IntStream.range(start, end).parallel().forEach(node -> {
+                if (!workers.enter()) {
+                    return;
+                }
+                try {
+                    addNode.accept(node);
+                } finally {
+                    workers.exit();
+                }
+            })).join();
+        } catch (Throwable t) {
+            failure = t;
+            throw t;
+        } finally {
+            workers.stopAndAwait();
+            closeThreadLocalSupplier(vv, failure);
+        }
+    }
+
+    private static void closeThreadLocalSupplier(Supplier<?> supplier, Throwable failure) {
+        if (!(supplier instanceof AutoCloseable)) {
+            return;
+        }
+        try {
+            ((AutoCloseable) supplier).close();
+        } catch (Exception e) {
+            if (failure != null) {
+                failure.addSuppressed(e);
+            } else {
+                throw new RuntimeException(e);
+            }
+        }
+    }
+
+    /**
+     * Counts workers inside the parallel loop so cleanup can wait for them. Once stopped, workers
+     * that have not started yet skip their node instead of touching resources about to be closed.
+     */
+    private static final class ActiveWorkers {
+        private int active;
+        private boolean stopped;
+
+        synchronized boolean enter() {
+            if (stopped) {
+                return false;
+            }
+            active++;
+            return true;
+        }
+
+        synchronized void exit() {
+            if (--active == 0) {
+                notifyAll();
+            }
+        }
+
+        synchronized void stopAndAwait() {
+            stopped = true;
+            boolean interrupted = false;
+            while (active > 0) {
+                try {
+                    wait();
+                } catch (InterruptedException e) {
+                    interrupted = true;
+                }
+            }
+            if (interrupted) {
+                Thread.currentThread().interrupt();
+            }
+        }
+    }
+
     /**
      * Validates that the current entry node has been completely added.
      */
@@ -1418,12 +1502,8 @@ public class GraphIndexBuilder implements Closeable, Accountable {
                     .withParallelExecutor(parallelExecutor)
                     .build();
 
-            var vv = newVectors.threadLocalSupplier();
-
             // parallel graph construction from the merge documents Ids
-            simdExecutor.submit(() -> IntStream.range(startingNodeOffset, newVectors.size()).parallel().forEach(ord -> {
-                builder.addGraphNode(ord, vv.get().getVector(ord));
-            })).join();
+            addGraphNodesInParallel(simdExecutor, builder, newVectors, startingNodeOffset, newVectors.size());
 
             builder.cleanup();
             return builder.getGraph();

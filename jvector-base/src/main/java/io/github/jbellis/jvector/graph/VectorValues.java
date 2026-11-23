@@ -74,6 +74,12 @@ public interface VectorValues<V> {
 
     /**
      * Returns a supplier of thread-local copies of this instance.
+     * <p>
+     * For shared instances the returned supplier is {@link AutoCloseable}: closing it invokes
+     * close() on every AutoCloseable copy created so far and drops the per-thread cache.
+     * Callers that hold the supplier across a bounded operation should close it when done;
+     * heap-only copies are additionally collected once the supplier itself becomes
+     * unreachable.
      */
     @SuppressWarnings("unchecked")
     default Supplier<? extends VectorValues<V>> threadLocalSupplier() {
@@ -82,9 +88,30 @@ public interface VectorValues<V> {
         }
 
         if (this instanceof AutoCloseable) {
-            LOG.warning("VectorValues is shared and implements AutoCloseable; threadLocalSupplier() may lead to leaks");
+            LOG.warning("VectorValues is shared and implements AutoCloseable; close the supplier returned by threadLocalSupplier() to release per-thread copies");
         }
         var tl = ExplicitThreadLocal.withInitial(this::copy);
-        return tl::get;
+        return new ThreadLocalCopies<>(tl);
+    }
+
+    /**
+     * Thread-local supplier whose close() releases the per-thread copies.
+     */
+    final class ThreadLocalCopies<T> implements Supplier<T>, AutoCloseable {
+        private final ExplicitThreadLocal<T> tl;
+
+        ThreadLocalCopies(ExplicitThreadLocal<T> tl) {
+            this.tl = tl;
+        }
+
+        @Override
+        public T get() {
+            return tl.get();
+        }
+
+        @Override
+        public void close() throws Exception {
+            tl.close();
+        }
     }
 }
