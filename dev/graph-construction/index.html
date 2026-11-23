@@ -1761,6 +1761,12 @@ speed and memory.</p>
 <td>Exact scores; simplest</td>
 </tr>
 <tr>
+<td>Int8 vectors</td>
+<td><code>BuildScoreProvider.byteVectorScoreProvider</code> (or <code>builder(byteVectors, ByteVectorSimilarityFunction, M)</code>)</td>
+<td>The signed int8 vectors, one byte per dimension</td>
+<td>Exact scores; no compression. Write the index with the <code>InlineByteVectors</code> feature (format version 7)</td>
+</tr>
+<tr>
 <td>PQ codes</td>
 <td><code>BuildScoreProvider.pqBuildScoreProvider</code></td>
 <td>PQ codes</td>

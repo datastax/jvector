@@ -1925,7 +1925,10 @@ reranking optionally rescores the candidates.</p>
 <li><a href="https://github.com/datastax/jvector/tree/main/jvector-examples/yaml-configs/dataset-catalogs">Dataset catalogs</a> locate
   the base vectors, query vectors, and ground truth.
   <a href="https://github.com/datastax/jvector/blob/main/jvector-examples/yaml-configs/dataset-metadata.yml">Dataset metadata</a>
-  supplies the similarity function. Vector types come from the dataset.</li>
+  supplies the similarity function. Vector types come from the dataset.
+  A dataset marked <code>is_int8: true</code> holds signed int8 vectors (unsigned <code>.bvecs</code> data such as
+  SIFT1B must be converted first). Its cases use <code>type: onDisk</code>, compression <code>None</code>,
+  <code>reranking.type: None</code> and <code>fusedGraph: [No]</code>, as the int8 files in <code>index-parameters</code> do.</li>
 <li><a href="https://github.com/datastax/jvector/blob/main/jvector-examples/yaml-configs/run-config.yml">Run configuration</a> selects
   which measurements to compute, how to measure them, and which to display or
   log; see <a href="#run-configuration">Run configuration</a>.</li>

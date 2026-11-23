@@ -1847,7 +1847,9 @@ format version 7, which JVector 4.0.x cannot read; see <a href="https://github.c
 <h2 id="similarity">Similarity<a class="headerlink" href="#similarity" title="Permanent link">&para;</a></h2>
 <p>JVector supports <code>DOT_PRODUCT</code>, <code>COSINE</code> and <code>EUCLIDEAN</code>. An ASH model is trained for one
 similarity and saved with it; ASH does not require normalized vectors. See
-<a href="../ash-configuration/#similarity">ASH similarity</a>.</p>
+<a href="../ash-configuration/#similarity">ASH similarity</a>. Int8 indexes use <code>ByteVectorSimilarityFunction</code>,
+with the same three functions. Under <code>COSINE</code>, ASH and int8 indexes both reject a zero vector with
+<code>IllegalArgumentException</code> when it is added or used as a query.</p>
 
 
 
