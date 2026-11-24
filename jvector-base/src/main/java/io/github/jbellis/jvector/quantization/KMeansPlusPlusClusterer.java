@@ -104,6 +104,7 @@ public class KMeansPlusPlusClusterer {
         this.points = points;
         this.k = centroids.length() / points[0].length();
         this.centroids = centroids.copy();
+        assertFinite(this.centroids);
         this.anisotropicThreshold = anisotropicThreshold;
 
         centroidDenoms = new int[k];
@@ -213,10 +214,12 @@ public class KMeansPlusPlusClusterer {
     // This is broken out as a separate public method to allow implementing OPQ efficiently
     public int clusterOnceUnweighted() {
         updateCentroidsUnweighted();
+        assertFinite(centroids); // once per iteration, so tryClosestCentroid need not rescan centroids
         return updateAssignedPointsUnweighted();
     }
     public int clusterOnceAnisotropic() {
         updateCentroidsAnisotropic();
+        assertFinite(centroids); // once per iteration, so tryClosestCentroid need not rescan centroids
         return updateAssignedPointsAnisotropic();
     }
 
