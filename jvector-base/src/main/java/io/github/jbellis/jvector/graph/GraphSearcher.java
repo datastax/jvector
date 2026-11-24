@@ -488,9 +488,9 @@ public class GraphSearcher implements Closeable {
             if (adaptive) capScored.setMaxSize(capSize);
             expandBar = Float.NEGATIVE_INFINITY;
             adaptiveBar = adaptive;
-            // Decided once per layer: the per-neighbor path below must not touch the shared Bits.ALL (or the
-            // no-op tracker) on every call. Another worker's searcher can share its cache line, and the line
-            // traffic from that searcher's writes made whole JVMs ~15% slower with 8 concurrent workers.
+            // Resolved once per layer so the per-neighbor path does not read shared objects
+            // (Bits.ALL, the no-op tracker) or write searcher fields; this avoids false sharing
+            // between concurrent searchers.
             boolean acceptAll = acceptOrdsThisLayer instanceof Bits.MatchAllBits;
             if (trackBest) {
                 bestScored.setMaxSize(rerankK);
@@ -505,7 +505,6 @@ public class GraphSearcher implements Closeable {
             boolean tracking = !(scoreTracker instanceof ScoreTracker.NoOpTracker);
 
             var scoreFunction = scoreProvider.scoreFunction();
-            // Counts visits in this short-lived processor, not in a field of the long-lived searcher.
             var neighborProcessor = new ImmutableGraphIndex.NeighborProcessor() {
                 int visits;
 
