@@ -498,43 +498,37 @@ class NativeVectorUtilSupport extends PanamaVectorUtilSupport
 
     @Override
     public float squareDistance(VectorFloat<?> v1, VectorFloat<?> v2) {
-        return NativeSimdOps.euclidean_f32(((MemorySegmentVectorFloat) v1).get(), 0,
-                                          ((MemorySegmentVectorFloat) v2).get(), 0,
-                                          v1.length());
+        return squareDistance(v1, 0, v2, 0, v1.length());
     }
 
     @Override
     public float squareDistance(VectorFloat<?> v1, int v1offset, VectorFloat<?> v2, int v2offset, int length) {
-        return NativeSimdOps.euclidean_f32(((MemorySegmentVectorFloat) v1).get(), v1offset,
-                                          ((MemorySegmentVectorFloat) v2).get(), v2offset,
+        return NativeSimdOps.euclidean_f32(MemorySegment.ofArray(((MemorySegmentVectorFloat) v1).array()), v1offset,
+                                          MemorySegment.ofArray(((MemorySegmentVectorFloat) v2).array()), v2offset,
                                           length);
     }
 
     @Override
     public float cosine(VectorFloat<?> v1, VectorFloat<?> v2) {
-        return NativeSimdOps.cosine_f32(((MemorySegmentVectorFloat) v1).get(), 0,
-                                       ((MemorySegmentVectorFloat) v2).get(), 0,
-                                       v1.length());
+        return cosine(v1, 0, v2, 0, v1.length());
     }
 
     @Override
     public float cosine(VectorFloat<?> v1, int v1offset, VectorFloat<?> v2, int v2offset, int length) {
-        return NativeSimdOps.cosine_f32(((MemorySegmentVectorFloat) v1).get(), v1offset,
-                                       ((MemorySegmentVectorFloat) v2).get(), v2offset,
+        return NativeSimdOps.cosine_f32(MemorySegment.ofArray(((MemorySegmentVectorFloat) v1).array()), v1offset,
+                                       MemorySegment.ofArray(((MemorySegmentVectorFloat) v2).array()), v2offset,
                                        length);
     }
 
     @Override
     public float dotProduct(VectorFloat<?> v1, VectorFloat<?> v2) {
-        return NativeSimdOps.dot_product_f32(((MemorySegmentVectorFloat) v1).get(), 0,
-                                             ((MemorySegmentVectorFloat) v2).get(), 0,
-                                             v1.length());
+        return dotProduct(v1, 0, v2, 0, v1.length());
     }
 
     @Override
     public float dotProduct(VectorFloat<?> v1, int v1offset, VectorFloat<?> v2, int v2offset, int length) {
-        return NativeSimdOps.dot_product_f32(((MemorySegmentVectorFloat) v1).get(), v1offset,
-                                             ((MemorySegmentVectorFloat) v2).get(), v2offset,
+        return NativeSimdOps.dot_product_f32(MemorySegment.ofArray(((MemorySegmentVectorFloat) v1).array()), v1offset,
+                                             MemorySegment.ofArray(((MemorySegmentVectorFloat) v2).array()), v2offset,
                                              length);
     }
 
