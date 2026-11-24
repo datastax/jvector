@@ -488,9 +488,9 @@ public class GraphSearcher implements Closeable {
             if (adaptive) capScored.setMaxSize(capSize);
             expandBar = Float.NEGATIVE_INFINITY;
             adaptiveBar = adaptive;
-            // Resolved once per layer so the per-neighbor path does not read shared objects
-            // (Bits.ALL, the no-op tracker) or write searcher fields; this avoids false sharing
-            // between concurrent searchers.
+            // Resolved once per layer so the per-neighbor path does not read shared objects (Bits.ALL, the
+            // no-op tracker), and visits are counted locally rather than in a searcher field; this avoids
+            // false sharing between concurrent searchers.
             boolean acceptAll = acceptOrdsThisLayer instanceof Bits.MatchAllBits;
             if (trackBest) {
                 bestScored.setMaxSize(rerankK);
