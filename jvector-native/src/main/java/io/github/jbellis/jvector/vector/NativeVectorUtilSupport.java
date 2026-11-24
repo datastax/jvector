@@ -23,6 +23,7 @@ import java.util.Objects;
 import io.github.jbellis.jvector.quantization.ASHQueryProjection;
 import io.github.jbellis.jvector.vector.cnative.NativeSimdOps;
 import io.github.jbellis.jvector.vector.types.ByteSequence;
+import io.github.jbellis.jvector.vector.types.FloatArray;
 import io.github.jbellis.jvector.vector.types.VectorFloat;
 import jdk.incubator.vector.ByteVector;
 import jdk.incubator.vector.FloatVector;
@@ -313,7 +314,8 @@ class NativeVectorUtilSupport extends PanamaVectorUtilSupport
 
     @Override
     protected FloatVector fromVectorFloat(VectorSpecies<Float> SPEC, VectorFloat<?> vector, int offset) {
-        return FloatVector.fromMemorySegment(SPEC, ((MemorySegmentVectorFloat) vector).get(), vector.offset(offset), ByteOrder.LITTLE_ENDIAN);
+        // Read the backing array directly so Panama paths never materialize the MemorySegment view.
+        return FloatVector.fromArray(SPEC, ((FloatArray) vector).array(), offset);
     }
 
     @Override
@@ -325,7 +327,7 @@ class NativeVectorUtilSupport extends PanamaVectorUtilSupport
     protected void intoVectorFloat(FloatVector vector, VectorFloat<?> v, int offset) {
         // MemorySegmentVectorFloat is heap-backed: use its array store intrinsic directly.
         // This also avoids the intoMemorySegment compiler failure observed on JDK 22.
-        vector.intoArray(((MemorySegmentVectorFloat) v).array(), offset);
+        vector.intoArray(((FloatArray) v).array(), offset);
     }
 
     @Override
