@@ -35,10 +35,16 @@ final class ASHInt8Query {
     final byte[] digits;
     /** {@link #digits} widened to int, for the SIMD lane kernel. */
     final int[] wideDigits;
+    /** Sums {@link #laneDot} in SIMD when not null. */
+    final VectorUtilSupport laneBackend;
     float invScale;
     float center;
 
     ASHInt8Query(int quantizedDim, int bits) {
+        this(quantizedDim, bits, null);
+    }
+
+    ASHInt8Query(int quantizedDim, int bits, VectorUtilSupport laneBackend) {
         if (!AsymmetricHashing.usesOffsetBinaryCode(bits)) {
             throw new IllegalArgumentException("INT8 neighborhood queries require offset-binary codes; got " + bits);
         }
@@ -47,6 +53,7 @@ final class ASHInt8Query {
         this.units = FusedASHLayout.fieldUnits(quantizedDim);
         this.digits = new byte[units * 8];
         this.wideDigits = new int[units * 8];
+        this.laneBackend = laneBackend;
     }
 
     /** Quantizes {@code qProj[0, quantizedDim)}. A non-finite component makes every score NaN. */
@@ -79,10 +86,11 @@ final class ASHInt8Query {
 
     /**
      * The dot product of the query with one lane of a field-block neighborhood block, with the native
-     * kernel's arithmetic: an exact integer sum, then {@code (sum - center) * invScale}.
+     * kernel's arithmetic: an exact integer sum, then {@code (sum - center) * invScale}; in SIMD with
+     * {@link #laneBackend}.
      */
     float laneDot(byte[] block, int blockOffset, int lane, int blockSize) {
-        return laneDot(block, blockOffset, lane, blockSize, null);
+        return laneDot(block, blockOffset, lane, blockSize, laneBackend);
     }
 
     /** As {@link #laneDot(byte[], int, int, int)}, summed by {@code simd}'s kernel when it is not null. */
