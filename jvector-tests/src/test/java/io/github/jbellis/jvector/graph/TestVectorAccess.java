@@ -245,4 +245,29 @@ public class TestVectorAccess {
         } finally { pool.shutdown(); }
     }
 
+    @Test public void mappedPointScanVisitsEachPositionOnceWithItsOwnCopy() {
+        var vts = VectorizationProvider.getInstance().getVectorTypeSupport();
+        // A shared value written by every read: positions that shared one copy across threads would see other reads.
+        class SharedSource implements RandomAccessVectorValues {
+            final VectorFloat<?> value = vts.createFloatVector(1);
+            public int size() { return 2000; }
+            public int dimension() { return 1; }
+            public boolean isValueShared() { return true; }
+            public VectorFloat<?> getVector(int ordinal) { value.set(0, ordinal); return value; }
+            public RandomAccessVectorValues copy() { return new SharedSource(); }
+        }
+        var source = new SharedSource();
+        var pool = new ForkJoinPool(4);
+        try {
+            // Counts below, at, and above the parallelism, and one that does not divide evenly.
+            for (int count : new int[] {0, 1, 3, 4, 1003}) {
+                var visits = new java.util.concurrent.atomic.AtomicIntegerArray(count);
+                VectorAccess.forEach(source, count, i -> 2 * i + 1, pool, (position, vector) -> {
+                    assertEquals(2 * position + 1, vector.get(0), 0f);
+                    visits.incrementAndGet(position);
+                });
+                for (int i = 0; i < count; i++) assertEquals("count " + count + " position " + i, 1, visits.get(i));
+            }
+        } finally { pool.shutdown(); }
+    }
 }

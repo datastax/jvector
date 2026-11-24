@@ -166,13 +166,21 @@ public final class VectorAccess {
     public static void forEach(RandomAccessVectorValues source, int count, IntUnaryOperator mapping,
                                ForkJoinPool executor, VectorConsumer consumer) {
         if (count < 0) throw new IllegalArgumentException("Negative vector count");
+        int partitions = Math.min(count, executor.getParallelism());
         if (!(source instanceof BatchedVectorValues)) {
             var local = source.threadLocalSupplier();
-            executor.submit(() -> IntStream.range(0, count).parallel().forEach(i ->
-                    consumer.accept(i, local.get().getVector(mapping.applyAsInt(i))))).join();
+            // Loop per partition, not one stream callback per vector: the hot loop then sits in this lambda rather
+            // than in the JDK stream frame every IntStream.forEach shares. When that frame is compiled first, C2 can
+            // inline the consumer's vector kernels past its inlining limit, and JDK 21 then runs the Vector API's
+            // Java fallback instead of SIMD.
+            executor.submit(() -> IntStream.range(0, partitions).parallel().forEach(part -> {
+                var values = local.get();
+                int start = (int) ((long) part * count / partitions);
+                int end = (int) ((long) (part + 1) * count / partitions);
+                for (int i = start; i < end; i++) consumer.accept(i, values.getVector(mapping.applyAsInt(i)));
+            })).join();
             return;
         }
-        int partitions = Math.min(count, executor.getParallelism());
         executor.submit(() -> IntStream.range(0, partitions).parallel().forEach(part -> {
             int start = (int) ((long) part * count / partitions);
             int end = (int) ((long) (part + 1) * count / partitions);
