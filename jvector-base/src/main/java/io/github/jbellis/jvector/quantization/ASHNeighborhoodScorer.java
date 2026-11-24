@@ -114,8 +114,8 @@ public final class ASHNeighborhoodScorer {
         var backend = VectorizationProvider.getInstance().getVectorUtilSupport();
         if (FusedASHLayout.usesFieldBlocks(bits)) {
             // The LUT above still serves canonical scoring of upper-layer nodes.
-            // The query sums each lane in SIMD where the whole-neighborhood kernel does not apply. It holds the
-            // backend so score() stays unchanged: a larger score() made 2-bit neighborhoods about 2% slower.
+            // Without the whole-neighborhood kernel, the query sums each lane in SIMD. It holds the backend to keep
+            // score() small, which keeps 2-bit neighborhoods fast.
             this.int8Query = new ASHInt8Query(dimensions, bits,
                     kernel.isSimd() && backend.supportsAshOffsetBinaryInt8Dot() ? backend : null);
             this.int8Query.prepare(query.qProj);

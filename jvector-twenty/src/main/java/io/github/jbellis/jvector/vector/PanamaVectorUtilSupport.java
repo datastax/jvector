@@ -38,9 +38,8 @@ class PanamaVectorUtilSupport implements VectorUtilSupport {
     // which crashes or corrupts the heap. JDK 20 is past end of life, so ASH uses the
     // scalar kernels there. The constant folds away on later JDKs.
     private static final boolean ASH_SIMD = Runtime.version().feature() != 20;
-    // The prepared (gather-free) 2/4-bit projection dot, used by ASHScorer on JDK 25+, where it is faster than the
-    // register-decode kernel (Ice Lake: 86 vs 131 ns at 2 bits, d=384). JDK 22's C2 loses its vectors to the heap once
-    // it is inlined into a scorer, so earlier JDKs score with the register-decode kernel (ashProjectionDot).
+    // The prepared 2/4-bit projection dot, faster on JDK 25+. JDK 22's C2 loses its vectors to the heap once it is
+    // inlined into a scorer, so earlier JDKs use the register-decode kernel (ashProjectionDot).
     private static final boolean ASH_PREPARED_PROJECTION = Runtime.version().feature() >= 25;
     private static final VectorSpecies<Float> ASH_FLOATS = FloatVector.SPECIES_PREFERRED;
     private static final VectorSpecies<Integer> ASH_INTS = VectorSpecies.of(
@@ -56,8 +55,6 @@ class PanamaVectorUtilSupport implements VectorUtilSupport {
     private static final VectorSpecies<Float> ASH_SYM_FLOATS = VectorSpecies.of(float.class, ASH_SYM_BYTES.vectorShape());
     private static final VectorSpecies<Byte> ASH_SYM_BLOCK_BYTES = VectorSpecies.of(byte.class,
             jdk.incubator.vector.VectorShape.forBitSize(ASH_SYM_SHORTS.vectorBitSize() / 2));
-
-
 
     @Override
     public void ashSymmetricLutScore(byte[] codes, int groups, int stride, int lane, int count,
@@ -258,9 +255,8 @@ class PanamaVectorUtilSupport implements VectorUtilSupport {
             ASH_FLOATS.length() >= 8 ? ByteVector.SPECIES_128 : ASH_OB_BYTES;
     private static final VectorSpecies<Byte> ASH_OB_LOAD_WIDE =
             ASH_FLOATS.length() >= 16 ? ByteVector.SPECIES_256 : ASH_OB_LOAD;
-    // [bits][vector in step * lanes * 4 + byte]: window byte sources; [bits][vector in step * lanes + lane]: shifts
-    private static final int[][] ASH_OB_WINDOWS = new int[10][];
-    // The windows as shuffles, built once: creating them per call is not reliably compiled away on JDK 22.
+    // Per width: each lane's window bytes as shuffles, built once (JDK 22 does not reliably fold per-call shuffles),
+    // and each lane's shift
     @SuppressWarnings("unchecked")
     private static final VectorShuffle<Byte>[] ASH_OB_SHUFFLES = new VectorShuffle[10], ASH_OB_SHUFFLES_HI = new VectorShuffle[10];
     private static final int[][] ASH_OB_SHIFTS = new int[10][];
@@ -279,7 +275,6 @@ class PanamaVectorUtilSupport implements VectorUtilSupport {
                 shifts[field] = bit & 7;
             }
             assert (ASH_OB_STEP - 1) * bits / 8 + 1 < ashObLoad(bits).length() && lanes * ASH_OB_VECTORS == ASH_OB_STEP;
-            ASH_OB_WINDOWS[bits] = windows;
             ASH_OB_SHUFFLES[bits] = VectorShuffle.fromArray(ASH_OB_BYTES, windows, 0);
             if (ASH_OB_VECTORS == 2) ASH_OB_SHUFFLES_HI[bits] = VectorShuffle.fromArray(ASH_OB_BYTES, windows, 4 * lanes);
             ASH_OB_SHIFTS[bits] = shifts;
@@ -289,7 +284,6 @@ class PanamaVectorUtilSupport implements VectorUtilSupport {
     // INT8 field-block lane dot: one 8-field unit per 256-bit integer vector, windows as above.
     private static final VectorSpecies<Byte> ASH_UNIT_BYTES = ByteVector.SPECIES_256;
     private static final VectorSpecies<Integer> ASH_UNIT_INTS = IntVector.SPECIES_256;
-    private static final int[][] ASH_UNIT_WINDOWS = new int[10][];
     @SuppressWarnings("unchecked")
     private static final VectorShuffle<Byte>[] ASH_UNIT_SHUFFLES = new VectorShuffle[10];
     private static final int[][] ASH_UNIT_SHIFTS = new int[10][];
@@ -303,7 +297,6 @@ class PanamaVectorUtilSupport implements VectorUtilSupport {
                 for (int k = 0; k < 4; k++) windows[field * 4 + k] = Math.min(field * bits / 8 + k, 31);
                 shifts[field] = (field * bits) & 7;
             }
-            ASH_UNIT_WINDOWS[bits] = windows;
             ASH_UNIT_SHUFFLES[bits] = VectorShuffle.fromArray(ASH_UNIT_BYTES, windows, 0);
             ASH_UNIT_SHIFTS[bits] = shifts;
         }
@@ -323,9 +316,8 @@ class PanamaVectorUtilSupport implements VectorUtilSupport {
         var windows = ASH_UNIT_SHUFFLES[bits];
         var shifts = IntVector.fromArray(ASH_UNIT_INTS, ASH_UNIT_SHIFTS[bits], 0);
         int mask = (1 << bits) - 1;
-        // Exact: |digit * field| < 2^16, so 2^15 units fit an int lane, in any order. One copy of the vector
-        // operations, not an unrolled pair plus a tail loop: with three copies, some JVMs compiled a later one as
-        // heap-allocating calls, about 4x slower.
+        // Exact: |digit * field| < 2^16, so 2^15 units fit an int lane, in any order. Keep one copy of the vector
+        // operations: unrolled copies were sometimes compiled as heap-allocating calls.
         IntVector acc = IntVector.zero(ASH_UNIT_INTS);
         // Units whose 32-byte load stays inside the array
         int inPlace = Math.max(0, Math.min(units, Math.floorDiv(codes.length - offset - 32, unitStride) + 1));
@@ -396,9 +388,8 @@ class PanamaVectorUtilSupport implements VectorUtilSupport {
             var f0 = ((IntVector) w0.rearrange(windows).reinterpretAsInts())
                     .lanewise(VectorOperators.LSHR, shifts).and(mask);
             var v0 = ((FloatVector) f0.convert(VectorOperators.I2F, 0)).sub(center);
-            // Even and odd steps keep separate sums, in a fixed order wherever the code sits: the accumulators trade
-            // places every step. One copy of the decode, not an unrolled pair plus a tail loop, as in
-            // ashOffsetBinaryInt8Dot.
+            // Even and odd steps keep separate sums in a fixed order: the accumulators trade places every step.
+            // One copy of the decode, as in ashOffsetBinaryInt8Dot.
             var next = FloatVector.fromArray(ASH_FLOATS, query, step * lanes).fma(v0, a0);
             a0 = a1;
             a1 = next;
@@ -417,8 +408,7 @@ class PanamaVectorUtilSupport implements VectorUtilSupport {
         int mask = (1 << bits) - 1;
         float center = mask * 0.5f;
         int steps = dimensions / lanes;
-        // A code whose last load would pass the end of its array is copied once into a padded buffer, so every step
-        // loads in place and the loop is the same wherever the code is.
+        // Padded copy, as in ashOffsetBinaryDot1
         if (steps > 0 && codeOffset + (steps - 1) * stepBytes + load > code.length) {
             code = ashPaddedCopy(code, codeOffset, codeBytes, load);
             codeOffset = 0;
@@ -451,8 +441,7 @@ class PanamaVectorUtilSupport implements VectorUtilSupport {
         int mask = (1 << bits) - 1;
         float center = mask * 0.5f;
         int steps = dimensions / 8;
-        // A code whose last load would pass the end of its array is copied once into a padded buffer, so every step
-        // loads in place and the loop is the same wherever the code is.
+        // Padded copy, as in ashOffsetBinaryDot1
         if (steps > 0 && codeOffset + (steps - 1) * stepBytes + load > code.length) {
             code = ashPaddedCopy(code, codeOffset, codeBytes, load);
             codeOffset = 0;
@@ -495,8 +484,7 @@ class PanamaVectorUtilSupport implements VectorUtilSupport {
         var shifts = IntVector.fromArray(ASH_INTS, ASH_OB_SHIFTS[bits], 0);
         int magnitude = (1 << (bits - 1)) - 1, sign = bits - 1;
         int steps = dimensions / lanes;
-        // A code whose last load would pass the end of its array is copied once into a padded buffer, so every step
-        // loads in place and the loop is the same wherever the code is.
+        // Padded copy, as in ashOffsetBinaryDot1
         if (steps > 0 && codeOffset + (steps - 1) * stepBytes + load > code.length) {
             code = ashPaddedCopy(code, codeOffset, codeBytes, load);
             codeOffset = 0;
@@ -531,8 +519,7 @@ class PanamaVectorUtilSupport implements VectorUtilSupport {
         var shifts1 = IntVector.fromArray(ASH_INTS, ASH_OB_SHIFTS[bits], lanes);
         int magnitude = (1 << (bits - 1)) - 1, sign = bits - 1;
         int steps = dimensions / 8;
-        // A code whose last load would pass the end of its array is copied once into a padded buffer, so every step
-        // loads in place and the loop is the same wherever the code is.
+        // Padded copy, as in ashOffsetBinaryDot1
         if (steps > 0 && codeOffset + (steps - 1) * stepBytes + load > code.length) {
             code = ashPaddedCopy(code, codeOffset, codeBytes, load);
             codeOffset = 0;
@@ -721,7 +708,6 @@ class PanamaVectorUtilSupport implements VectorUtilSupport {
         return sum;
     }
 
-
     @Override
     public void ashLutScore(byte[] codes, int offset, int groups, int stride,
                             int lane, int count, float[] lut, float[] out, int outOffset) {
@@ -769,7 +755,6 @@ class PanamaVectorUtilSupport implements VectorUtilSupport {
     protected void intoByteSequence(ByteVector vector, ByteSequence<?> v, int offset, VectorMask<Byte> mask) {
         vector.intoArray(((ArrayByteSequence) v).get(), offset, mask);
     }
-
 
     @Override
     public float sum(VectorFloat<?> vector) {
@@ -918,7 +903,6 @@ class PanamaVectorUtilSupport implements VectorUtilSupport {
 
         return res;
     }
-
 
     float dotProduct256(VectorFloat<?> v1, int v1offset, VectorFloat<?> v2, int v2offset, int length) {
 
@@ -1215,7 +1199,6 @@ class PanamaVectorUtilSupport implements VectorUtilSupport {
 
         return res;
     }
-
 
     float squareDistance256(VectorFloat<?> v1, int v1offset, VectorFloat<?> v2, int v2offset, int length) {
         if (length == FloatVector.SPECIES_256.length())
@@ -1591,7 +1574,6 @@ class PanamaVectorUtilSupport implements VectorUtilSupport {
         FloatVector kvec = FloatVector.broadcast(FloatVector.SPECIES_256, k);
         FloatVector onevec = FloatVector.broadcast(FloatVector.SPECIES_256, 1);
         FloatVector twovec = FloatVector.broadcast(FloatVector.SPECIES_256, 0.5f);
-
 
         for (int i = 0; i + LANES <= M; i += LANES) {
 
@@ -2407,7 +2389,6 @@ class PanamaVectorUtilSupport implements VectorUtilSupport {
         var logisticBias = logisticNQT(minValue, scaledAlpha, scaledX0);
         var logisticScale = (logisticNQT(maxValue, scaledAlpha, scaledX0) - logisticBias) / 255;
 
-
         for (int i = 0; i < vectorizedLength; i += ByteVector.SPECIES_PREFERRED.length()) {
             var byteArr = fromByteSequence(ByteVector.SPECIES_PREFERRED, quantizedVector, i);
 
@@ -2970,8 +2951,8 @@ class PanamaVectorUtilSupport implements VectorUtilSupport {
      * is the same compiled or not; and unlike a lane-by-lane loop it stays in vector registers.
      */
     private static float addLanesPairwise(FloatVector v) {
-        // Straight-line steps with constant shuffles for up to 16 lanes: carried around a loop, the vector was
-        // sometimes compiled as heap-allocating calls, which made whole JVMs' scoring about 1.6x slower.
+        // Straight-line steps for up to 16 lanes: carried around a loop, the vector was sometimes compiled as
+        // heap-allocating calls.
         if (PAIRWISE_LANES > 16) {
             for (VectorShuffle<Float> rotation : PAIRWISE_ROTATIONS) v = v.add(v.rearrange(rotation));
             return v.lane(0);

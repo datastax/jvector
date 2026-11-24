@@ -304,9 +304,8 @@ public final class ASHScorer {
 
     /**
      * Offset-binary codes (3 and 5 to 9 bits): {@code scale * <Aq, code> + <q, mu_c> + offset}. The SIMD path
-     * decodes fields in registers (2-5x faster than the native LUT kernel on Ice Lake), or else sums the code's 4-bit
-     * groups through a query LUT prepared once per scorer; the scalar path decodes each field and is the independent
-     * reference.
+     * decodes fields in registers where the backend can, or else sums the code's 4-bit groups through a query LUT
+     * prepared once per scorer; the scalar path decodes each field and is the independent reference.
      */
     private CodeScorer genericMultibitDotProductScorer(QueryPrecompute qp, boolean simd) {
         final int d = qp.d;
