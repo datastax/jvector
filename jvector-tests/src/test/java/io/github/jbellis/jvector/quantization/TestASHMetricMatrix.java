@@ -386,12 +386,18 @@ public class TestASHMetricMatrix {
                                     for (int lane = 0; neighbors.hasNext(); lane++) {
                                         int n = neighbors.nextInt();
                                         float got = fused.similarityToNeighbor(origin, lane);
+                                        String at = where + " origin " + origin + " lane " + lane;
                                         if (FusedASHLayout.usesFieldBlocks(ash.bitsPerDimension)) {
+                                            // In the metric's own units: a squared distance's error does not
+                                            // depend on the distance, its similarity's does.
+                                            double error = Math.abs(raw(vsf, got) - raw(vsf, expected[n]));
                                             FIELD_BLOCK_ERRORS.merge(vsf + " bits=" + ash.bitsPerDimension,
-                                                    FIELD_BLOCK_ERROR * Math.abs(got - expected[n]) / tolerance, Math::max);
+                                                    FIELD_BLOCK_ERROR * error / tolerance, Math::max);
+                                            assertTrue(at + " expected " + expected[n] + " but was " + got,
+                                                    error <= tolerance);
+                                        } else {
+                                            assertEquals(at, expected[n], got, tolerance);
                                         }
-                                        assertEquals(where + " origin " + origin + " lane " + lane, expected[n],
-                                                got, tolerance);
                                     }
                                 }
                                 var scores = new DefaultSearchScoreProvider(fused, view.rerankerFor(q, vsf));
@@ -409,8 +415,9 @@ public class TestASHMetricMatrix {
     }
 
     /**
-     * 1, 2 and 4-bit neighborhoods use the FP32 LUT and agree to rounding. Field blocks score with an INT8-rounded
-     * query, whose error is a fraction of the spread of the scores.
+     * 1, 2 and 4-bit neighborhoods use the FP32 LUT and agree to rounding, in similarity units. Field blocks score
+     * with an INT8-rounded query, whose error is a fraction of the spread of the metric's own values (dot products,
+     * cosines or squared distances).
      */
     private static float fusedTolerance(VectorSimilarityFunction vsf, int bits, float[] expected) {
         if (!FusedASHLayout.usesFieldBlocks(bits)) {
@@ -419,9 +426,9 @@ public class TestASHMetricMatrix {
             return 2e-3f * max + 2e-3f;
         }
         double mean = 0, variance = 0;
-        for (float e : expected) mean += e;
+        for (float e : expected) mean += raw(vsf, e);
         mean /= expected.length;
-        for (float e : expected) variance += (e - mean) * (e - mean);
+        for (float e : expected) variance += (raw(vsf, e) - mean) * (raw(vsf, e) - mean);
         return (float) (FIELD_BLOCK_ERROR * Math.sqrt(variance / expected.length));
     }
 
