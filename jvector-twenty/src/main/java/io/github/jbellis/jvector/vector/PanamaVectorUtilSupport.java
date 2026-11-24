@@ -698,11 +698,15 @@ class PanamaVectorUtilSupport implements VectorUtilSupport {
     // One method per width with no vector-valued helpers, every slot decoded before any is accumulated.
     private static float ashPreparedDot2(float[] prepared, byte[] code, int codeOffset, int dimensions, int blocks) {
         int lanes = ASH_FLOATS.length(), loadBytes = ASH_BYTES.length();
-        // Blocks whose load stays inside the array; a code ending its array scores the rest in scalar code.
-        int inPlace = Math.max(0, Math.min(blocks, Math.floorDiv(code.length - codeOffset - loadBytes, lanes) + 1));
+        // A code whose last load would pass the end of its array is copied once into a padded buffer, so every block
+        // loads in place and the score does not depend on where the code sits.
+        if (blocks > 0 && codeOffset + (blocks - 1) * lanes + loadBytes > code.length) {
+            code = ashPaddedCopy(code, codeOffset, (dimensions + 3) / 4, loadBytes);
+            codeOffset = 0;
+        }
         FloatVector a0 = FloatVector.zero(ASH_FLOATS), a1 = FloatVector.zero(ASH_FLOATS);
         FloatVector a2 = FloatVector.zero(ASH_FLOATS), a3 = FloatVector.zero(ASH_FLOATS);
-        for (int block = 0, q = 0; block < inPlace; block++, q += 4 * lanes) {
+        for (int block = 0, q = 0; block < blocks; block++, q += 4 * lanes) {
             var packed = (IntVector) ByteVector.fromArray(ASH_BYTES, code, codeOffset + block * lanes)
                     .convertShape(VectorOperators.B2I, ASH_INTS, 0);
             var f0 = packed;
@@ -724,16 +728,20 @@ class PanamaVectorUtilSupport implements VectorUtilSupport {
         }
         // Fixed-order lane sum: the same score whether or not C2 has compiled this thread's copy yet.
         float sum = addLanesPairwise(a0.add(a1).add(a2.add(a3)));
-        return inPlace == blocks ? sum : sum + ashPreparedTail(prepared, code, codeOffset, dimensions, 2, inPlace, blocks);
+        return sum;
     }
 
     // One method per width with no vector-valued helpers, every slot decoded before any is accumulated.
     private static float ashPreparedDot4(float[] prepared, byte[] code, int codeOffset, int dimensions, int blocks) {
         int lanes = ASH_FLOATS.length(), loadBytes = ASH_BYTES.length();
-        // Blocks whose load stays inside the array; a code ending its array scores the rest in scalar code.
-        int inPlace = Math.max(0, Math.min(blocks, Math.floorDiv(code.length - codeOffset - loadBytes, lanes) + 1));
+        // A code whose last load would pass the end of its array is copied once into a padded buffer, so every block
+        // loads in place and the score does not depend on where the code sits.
+        if (blocks > 0 && codeOffset + (blocks - 1) * lanes + loadBytes > code.length) {
+            code = ashPaddedCopy(code, codeOffset, (dimensions + 1) / 2, loadBytes);
+            codeOffset = 0;
+        }
         FloatVector a0 = FloatVector.zero(ASH_FLOATS), a1 = FloatVector.zero(ASH_FLOATS);
-        for (int block = 0, q = 0; block < inPlace; block++, q += 2 * lanes) {
+        for (int block = 0, q = 0; block < blocks; block++, q += 2 * lanes) {
             var packed = (IntVector) ByteVector.fromArray(ASH_BYTES, code, codeOffset + block * lanes)
                     .convertShape(VectorOperators.B2I, ASH_INTS, 0);
             var f0 = packed;
@@ -747,26 +755,6 @@ class PanamaVectorUtilSupport implements VectorUtilSupport {
         }
         // Fixed-order lane sum: the same score whether or not C2 has compiled this thread's copy yet.
         float sum = addLanesPairwise(a0.add(a1));
-        return inPlace == blocks ? sum : sum + ashPreparedTail(prepared, code, codeOffset, dimensions, 4, inPlace, blocks);
-    }
-
-    /** Blocks {@code [first, blocks)} of a prepared projection dot, in scalar code: only a code ending its array. */
-    private static float ashPreparedTail(float[] prepared, byte[] code, int codeOffset, int dimensions, int bits,
-                                         int first, int blocks) {
-        int perByte = 8 / bits, lanes = ASH_FLOATS.length(), blockDims = lanes * perByte, sign = 1 << (bits - 1);
-        float sum = 0;
-        for (int block = first; block < blocks; block++) {
-            for (int lane = 0; lane < lanes; lane++) {
-                int base = block * blockDims + lane * perByte;
-                if (base >= dimensions) break;
-                int b = code[codeOffset + block * lanes + lane] & 255;
-                for (int slot = 0; slot < perByte && base + slot < dimensions; slot++) {
-                    int field = b >>> (slot * bits);
-                    float magnitude = (field & (sign - 1)) + 0.5f;
-                    sum += prepared[block * blockDims + slot * lanes + lane] * ((field & sign) == 0 ? -magnitude : magnitude);
-                }
-            }
-        }
         return sum;
     }
 

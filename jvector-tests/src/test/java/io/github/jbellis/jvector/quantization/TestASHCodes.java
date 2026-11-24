@@ -241,6 +241,12 @@ public class TestASHCodes {
                     float direct = vu.ashProjectionDot(query, a, dims, bits);
                     assertEquals(where, direct, vu.ashProjectionDot(query, aPage, aOff, dims, bits),
                             1e-5f * Math.max(1f, Math.abs(direct)));
+                    // The prepared kernel scores a code the same wherever it sits, including at the end of its array.
+                    float[] prepared = vu.ashPrepareProjectionQuery(query, dims, bits);
+                    if (prepared != null) {
+                        assertEquals(where, Float.floatToIntBits(vu.ashProjectionDotPrepared(prepared, a, 0, dims, bits)),
+                                Float.floatToIntBits(vu.ashProjectionDotPrepared(prepared, aPage, aOff, dims, bits)));
+                    }
                     float tuned = vu.ashProjectionDotTuned(query, a, dims, bits);
                     assertEquals(where, tuned, vu.ashProjectionDotTuned(query, aPage, aOff, dims, bits),
                             1e-5f * Math.max(1f, Math.abs(tuned)));
