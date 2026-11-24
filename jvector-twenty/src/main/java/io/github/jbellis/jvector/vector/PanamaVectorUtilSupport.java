@@ -53,8 +53,10 @@ class PanamaVectorUtilSupport implements VectorUtilSupport {
     private static final VectorSpecies<Short> ASH_SYM_SHORTS = VectorSpecies.of(short.class, ASH_SYM_BYTES.vectorShape());
     private static final VectorSpecies<Integer> ASH_SYM_INTS = VectorSpecies.of(int.class, ASH_SYM_BYTES.vectorShape());
     private static final VectorSpecies<Float> ASH_SYM_FLOATS = VectorSpecies.of(float.class, ASH_SYM_BYTES.vectorShape());
+    // Symmetric kernels need at least 128-bit vectors; narrower shapes score in Java.
+    private static final boolean ASH_SYM_SIMD = ASH_SYM_SHORTS.vectorBitSize() >= 128;
     private static final VectorSpecies<Byte> ASH_SYM_BLOCK_BYTES = VectorSpecies.of(byte.class,
-            jdk.incubator.vector.VectorShape.forBitSize(ASH_SYM_SHORTS.vectorBitSize() / 2));
+            jdk.incubator.vector.VectorShape.forBitSize(Math.max(64, ASH_SYM_SHORTS.vectorBitSize() / 2)));
 
     @Override
     public void ashSymmetricLutScore(byte[] codes, int groups, int stride, int lane, int count,
@@ -98,7 +100,7 @@ class PanamaVectorUtilSupport implements VectorUtilSupport {
     }
 
     @Override
-    public boolean supportsAshSymmetricScoring() { return ASH_SIMD; }
+    public boolean supportsAshSymmetricScoring() { return ASH_SIMD && ASH_SYM_SIMD; }
 
     @Override
     public float ashSymmetricDot(long[] aBits, byte[] aCodes, long[] bBits, byte[] bCodes,
@@ -114,7 +116,7 @@ class PanamaVectorUtilSupport implements VectorUtilSupport {
     }
 
     @Override
-    public boolean supportsAshSymmetricDotAt() { return ASH_SIMD; }
+    public boolean supportsAshSymmetricDotAt() { return ASH_SIMD && ASH_SYM_SIMD; }
 
     @Override
     public float ashSymmetricDotAt(byte[] aCodes, int aOffset, byte[] bCodes, int bOffset,
@@ -249,8 +251,8 @@ class PanamaVectorUtilSupport implements VectorUtilSupport {
         if (aOff < 0 || bOff < 0 || aOff + codeBytes > a.length || bOff + codeBytes > b.length)
             throw new IndexOutOfBoundsException("ASH code array ranges");
         int lanes = ASH_FLOATS.length(), m = (1 << bits) - 1;
-        // Four-lane CPUs decode in Java; 32-byte loads serve every width.
-        int steps = lanes >= 8 ? dimensions / lanes : 0, stepBytes = lanes * bits / 8, load = ASH_OB_LOAD_WIDE.length();
+        // Four-lane and other untabled shapes decode in Java; 32-byte loads serve every width.
+        int steps = ASH_OB_SIMD && lanes >= 8 ? dimensions / lanes : 0, stepBytes = lanes * bits / 8, load = ASH_OB_LOAD_WIDE.length();
         long products = 0, fieldSums = 0;
         if (steps > 0) {
             int last = (steps - 1) * stepBytes + load;
@@ -309,6 +311,9 @@ class PanamaVectorUtilSupport implements VectorUtilSupport {
     // float lane takes the little-endian 32-bit window starting at the byte that holds its field's first bit, shifts the
     // field down and masks it; a field ends at most 16 bits into its window.
     private static final VectorSpecies<Byte> ASH_OB_BYTES = VectorSpecies.of(byte.class, ASH_FLOATS.vectorShape());
+    // The decode tables cover 4, 8 and 16 float lanes; other vector shapes score these codes in Java.
+    private static final boolean ASH_OB_SIMD =
+            ASH_FLOATS.length() == 4 || ASH_FLOATS.length() == 8 || ASH_FLOATS.length() == 16;
     private static final int ASH_OB_STEP = Math.max(8, ASH_FLOATS.length());
     private static final int ASH_OB_VECTORS = ASH_OB_STEP / ASH_FLOATS.length();
     // With 8 or more lanes a step loads only the bytes its fields span, widened in registers: 16 bytes, or 32 for 8 and
@@ -328,7 +333,7 @@ class PanamaVectorUtilSupport implements VectorUtilSupport {
 
     static {
         int lanes = ASH_FLOATS.length();
-        for (int bits = 2; bits <= 9; bits++) {
+        for (int bits = 2; ASH_OB_SIMD && bits <= 9; bits++) {
             int[] windows = new int[ASH_OB_STEP * 4], shifts = new int[ASH_OB_STEP];
             for (int field = 0; field < ASH_OB_STEP; field++) {
                 int bit = field * bits;
@@ -412,7 +417,7 @@ class PanamaVectorUtilSupport implements VectorUtilSupport {
     }
 
     @Override
-    public boolean supportsAshOffsetBinaryDot() { return ASH_SIMD && PanamaASHKernels.supported(); }
+    public boolean supportsAshOffsetBinaryDot() { return ASH_SIMD && ASH_OB_SIMD && PanamaASHKernels.supported(); }
 
     @Override
     public float ashOffsetBinaryDot(float[] query, byte[] code, int codeOffset, int dimensions, int bits) {
@@ -652,7 +657,7 @@ class PanamaVectorUtilSupport implements VectorUtilSupport {
 
     @Override
     public float ashProjectionDot(float[] query, byte[] code, int codeOffset, int dimensions, int bitsPerDimension) {
-        if (!supportsAshProjectionScoring()) {
+        if (!ASH_OB_SIMD || !supportsAshProjectionScoring()) {
             return VectorUtilSupport.super.ashProjectionDot(query, code, codeOffset, dimensions, bitsPerDimension);
         }
         if (bitsPerDimension != 2 && bitsPerDimension != 4) {
