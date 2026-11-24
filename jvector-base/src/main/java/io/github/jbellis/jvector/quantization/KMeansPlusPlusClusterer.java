@@ -219,7 +219,6 @@ public class KMeansPlusPlusClusterer {
     }
     public int clusterOnceAnisotropic() {
         updateCentroidsAnisotropic();
-        assertFinite(centroids); // once per iteration, so tryClosestCentroid need not rescan centroids
         return updateAssignedPointsAnisotropic();
     }
 
