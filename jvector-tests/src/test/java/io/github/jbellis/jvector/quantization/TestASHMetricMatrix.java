@@ -20,6 +20,7 @@ import io.github.jbellis.jvector.disk.ByteBufferReader;
 import io.github.jbellis.jvector.disk.SimpleMappedReader;
 import io.github.jbellis.jvector.graph.GraphIndexBuilder;
 import io.github.jbellis.jvector.graph.GraphSearcher;
+import io.github.jbellis.jvector.graph.SearchResult;
 import io.github.jbellis.jvector.graph.ListRandomAccessVectorValues;
 import io.github.jbellis.jvector.graph.MockVectorValues;
 import io.github.jbellis.jvector.graph.ImmutableGraphIndex;
@@ -401,7 +402,16 @@ public class TestASHMetricMatrix {
                                     }
                                 }
                                 var scores = new DefaultSearchScoreProvider(fused, view.rerankerFor(q, vsf));
-                                hits += hits(vsf, data, q, searcher.search(scores, 10, 40, 0f, 0f, Bits.ALL));
+                                var result = searcher.search(scores, 10, 40, 0f, 0f, Bits.ALL);
+                                hits += hits(vsf, data, q, result);
+                                // A score function from another view finds the same neighbors.
+                                try (var other = (OnDiskGraphIndex.View) disk.getView()) {
+                                    var elsewhere = new DefaultSearchScoreProvider(
+                                            other.approximateScoreFunctionFor(q, vsf), other.rerankerFor(q, vsf));
+                                    var again = searcher.search(elsewhere, 10, 40, 0f, 0f, Bits.ALL);
+                                    assertArrayEquals(where + " score function from another view",
+                                            nodes(result), nodes(again));
+                                }
                             }
                         }
                         checkRecall(where + " fused search", hits, queries.length, ash.bitsPerDimension);
@@ -460,6 +470,10 @@ public class TestASHMetricMatrix {
         int hits = 0;
         for (var ns : result.getNodes()) if (expected.contains(ns.node)) hits++;
         return hits;
+    }
+
+    private static int[] nodes(SearchResult result) {
+        return Arrays.stream(result.getNodes()).mapToInt(ns -> ns.node).toArray();
     }
 
     /** A reranked search of a 500-node graph with beam 40 finds most of the exact top 10; 37-dimension 1 and 2-bit codes less. */
