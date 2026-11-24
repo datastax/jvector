@@ -101,9 +101,13 @@ public class TestGraphIndexFormatFactory extends RandomizedTest {
             assertEquals("version " + version + " footer usage", version >= 5, format.usesFooter());
         }
 
+        // v6 adds FUSED_PQ
+        var v6Features = EnumSet.copyOf(nonFused);
+        v6Features.add(FeatureId.FUSED_PQ);
         var v6 = GraphIndexFormatFactory.forVersion(6);
         assertTrue(v6.supportsMultiLayer());
         assertTrue(v6.usesFooter());
+        assertTrue(v6.supportsFusedFeatures());
         assertTrue(v6.supportsFeature(FeatureId.FUSED_PQ));
         assertFalse(v6.supportsFeature(FeatureId.FUSED_ASH));
         assertFalse(v6.supportsFeature(FeatureId.PAGE_ALIGNMENT));

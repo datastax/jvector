@@ -19,7 +19,7 @@ package io.github.jbellis.jvector.example;
 import io.github.jbellis.jvector.example.benchmarks.datasets.DataSet;
 import io.github.jbellis.jvector.example.util.CompressorParameters;
 import io.github.jbellis.jvector.graph.GraphIndexBuilder;
-import io.github.jbellis.jvector.graph.ImmutableGraphIndex;
+import io.github.jbellis.jvector.graph.GraphIndex;
 import io.github.jbellis.jvector.graph.StreamingASHIndex;
 import io.github.jbellis.jvector.graph.disk.feature.FeatureId;
 import io.github.jbellis.jvector.graph.similarity.BuildScoreProvider;
@@ -61,7 +61,7 @@ final class StreamingBuild implements IndexBuildStrategy {
         long start = System.nanoTime();
         var index = stream(build, ds, params, model);
         double buildS = (System.nanoTime() - start) / 1e9;
-        Map<Set<FeatureId>, ImmutableGraphIndex> indexes = Map.of(Set.of(), index.graph());
+        Map<Set<FeatureId>, GraphIndex> indexes = Map.of(Set.of(), index.graph());
         return new BuiltIndexes(indexes, Map.of(), buildS, Map.of(Set.of(), StoredCodes.Loaded.built(index.codes())));
     }
 

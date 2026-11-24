@@ -17,7 +17,7 @@
 package io.github.jbellis.jvector.example;
 
 import io.github.jbellis.jvector.example.benchmarks.datasets.DataSet;
-import io.github.jbellis.jvector.graph.ImmutableGraphIndex;
+import io.github.jbellis.jvector.graph.GraphIndex;
 import io.github.jbellis.jvector.graph.disk.feature.FeatureId;
 
 import java.io.IOException;
@@ -33,7 +33,7 @@ interface IndexBuildStrategy {
 
     /** The loaded indexes, keyed by feature set; the caller closes them. */
     final class BuiltIndexes {
-        final Map<Set<FeatureId>, ImmutableGraphIndex> indexes;
+        final Map<Set<FeatureId>, GraphIndex> indexes;
         /** The file each on-disk index was loaded from; empty for in-memory indexes. */
         final Map<Set<FeatureId>, Path> files;
         /** Seconds spent building, or null if every index was loaded from the cache. */
@@ -41,11 +41,11 @@ interface IndexBuildStrategy {
         /** Traversal codes stored with an index that does not fuse them, loaded when the index was opened. */
         final Map<Set<FeatureId>, StoredCodes.Loaded> storedCodes;
 
-        BuiltIndexes(Map<Set<FeatureId>, ImmutableGraphIndex> indexes, Map<Set<FeatureId>, Path> files, Double buildTimeS) {
+        BuiltIndexes(Map<Set<FeatureId>, GraphIndex> indexes, Map<Set<FeatureId>, Path> files, Double buildTimeS) {
             this(indexes, files, buildTimeS, Map.of());
         }
 
-        BuiltIndexes(Map<Set<FeatureId>, ImmutableGraphIndex> indexes, Map<Set<FeatureId>, Path> files, Double buildTimeS,
+        BuiltIndexes(Map<Set<FeatureId>, GraphIndex> indexes, Map<Set<FeatureId>, Path> files, Double buildTimeS,
                      Map<Set<FeatureId>, StoredCodes.Loaded> storedCodes) {
             this.indexes = indexes;
             this.files = files;

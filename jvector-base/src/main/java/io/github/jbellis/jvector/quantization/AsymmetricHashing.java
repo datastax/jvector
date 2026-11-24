@@ -73,7 +73,7 @@ public class AsymmetricHashing implements VectorCompressor<AsymmetricHashing.Qua
     private static final int TRAINING_ITERS = 25;
 
     /** Default number of stored bits per projected dimension. */
-    private static final int DEFAULT_BITS_PER_DIMENSION = 2;
+    public static final int DEFAULT_BITS_PER_DIMENSION = 2;
 
     // Physical header size, reflecting actual stored fields:
     //  - scale: fp16 (16 bits), where scale = ||x − μ|| / ||code||

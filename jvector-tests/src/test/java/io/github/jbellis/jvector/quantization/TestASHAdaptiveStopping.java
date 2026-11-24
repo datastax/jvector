@@ -19,7 +19,7 @@ package io.github.jbellis.jvector.quantization;
 import io.github.jbellis.jvector.TestUtil;
 import io.github.jbellis.jvector.graph.GraphIndexBuilder;
 import io.github.jbellis.jvector.graph.GraphSearcher;
-import io.github.jbellis.jvector.graph.ImmutableGraphIndex;
+import io.github.jbellis.jvector.graph.GraphIndex;
 import io.github.jbellis.jvector.graph.MockVectorValues;
 import io.github.jbellis.jvector.graph.SearchResult;
 import io.github.jbellis.jvector.graph.similarity.BuildScoreProvider;
@@ -62,7 +62,7 @@ public class TestASHAdaptiveStopping {
         try (var builder = new GraphIndexBuilder(bsp, dimension, 16, 50, 1.2f, 1.2f, true, true)) {
             for (int i = 0; i < count; i++) builder.addGraphNode(i, input[i]);
             builder.cleanup();
-            ImmutableGraphIndex graph = builder.getGraph();
+            GraphIndex graph = builder.getGraph();
             for (int q = 0; q < 20; q++) {
                 var query = TestUtil.randomVector(random, dimension);
                 VectorUtil.l2normalize(query);
@@ -86,7 +86,7 @@ public class TestASHAdaptiveStopping {
         }
     }
 
-    private static SearchResult search(ImmutableGraphIndex graph, SearchScoreProvider provider, boolean adaptive)
+    private static SearchResult search(GraphIndex graph, SearchScoreProvider provider, boolean adaptive)
             throws Exception {
         try (var searcher = new GraphSearcher(graph)) {
             searcher.useAdaptiveTermination(adaptive);

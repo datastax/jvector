@@ -18,7 +18,7 @@ package io.github.jbellis.jvector.example.benchmarks;
 
 import io.github.jbellis.jvector.example.Grid.ConfiguredSystem;
 import io.github.jbellis.jvector.example.benchmarks.datasets.DataSet;
-import io.github.jbellis.jvector.graph.ImmutableGraphIndex;
+import io.github.jbellis.jvector.graph.GraphIndex;
 import io.github.jbellis.jvector.graph.similarity.SearchScoreProvider;
 import io.github.jbellis.jvector.vector.VectorUtil;
 import io.github.jbellis.jvector.vector.VectorizationProvider;
@@ -87,7 +87,7 @@ public final class FloatQuerySet implements QuerySet<VectorFloat<?>> {
     }
 
     @Override
-    public SearchScoreProvider scoreProviderFor(VectorFloat<?> query, ImmutableGraphIndex.View view) {
+    public SearchScoreProvider scoreProviderFor(VectorFloat<?> query, GraphIndex.View view) {
         return system.scoreProviderFor(query, view);
     }
 

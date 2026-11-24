@@ -37,7 +37,7 @@ import io.github.jbellis.jvector.example.reporting.RunArtifacts;
 import io.github.jbellis.jvector.example.util.CompressorParameters;
 import io.github.jbellis.jvector.example.util.OnDiskGraphIndexCache;
 import io.github.jbellis.jvector.management.GraphIndexBuilderConfig;
-import io.github.jbellis.jvector.graph.ImmutableGraphIndex;
+import io.github.jbellis.jvector.graph.GraphIndex;
 import io.github.jbellis.jvector.graph.GraphSearcher;
 import io.github.jbellis.jvector.graph.RandomAccessVectorValues;
 import io.github.jbellis.jvector.graph.disk.*;
@@ -706,9 +706,9 @@ public class Grid {
      * The built indexes in the order their feature sets were configured, so output order is the same on
      * every run. EnumSet hash codes come from identity hashes, so HashMap order over them varies by JVM.
      */
-    private static Map<Set<FeatureId>, ImmutableGraphIndex> inConfiguredOrder(
-            Map<Set<FeatureId>, ImmutableGraphIndex> built, List<? extends Set<FeatureId>> featureSets) {
-        Map<Set<FeatureId>, ImmutableGraphIndex> ordered = new LinkedHashMap<>();
+    private static Map<Set<FeatureId>, GraphIndex> inConfiguredOrder(
+            Map<Set<FeatureId>, GraphIndex> built, List<? extends Set<FeatureId>> featureSets) {
+        Map<Set<FeatureId>, GraphIndex> ordered = new LinkedHashMap<>();
         for (var features : featureSets) {
             var index = built.get(features);
             if (index != null) {
@@ -985,7 +985,7 @@ public class Grid {
         DataSet ds;
         private final ByteDataSet byteDs;
         private final QuerySet<?> queries;
-        ImmutableGraphIndex index;
+        GraphIndex index;
         CompressedVectors cv;
         Set<FeatureId> features;
         private final Supplier<RandomAccessVectorValues> exactVectors;
@@ -1076,8 +1076,8 @@ public class Grid {
 
         /** The score provider for a query prepared by {@link #queryPreparer}. */
         public SearchScoreProvider scoreProviderFor(io.github.jbellis.jvector.graph.similarity.PreparedQuery prepared,
-                                                    ImmutableGraphIndex.View view) {
-            if (!preparedFromCodes) return ((ImmutableGraphIndex.ScoringView) view).scoreProviderFor(prepared, true);
+                                                    GraphIndex.View view) {
+            if (!preparedFromCodes) return ((GraphIndex.ScoringView) view).scoreProviderFor(prepared, true);
             var query = prepared.queryVector();
             return rerankingType != null ? configuredScorer(query, prepared, view) : scoreProviderFor(query, prepared, view);
         }
@@ -1094,11 +1094,11 @@ public class Grid {
             return searcher;
         });
 
-        ConfiguredSystem(DataSet ds, ImmutableGraphIndex index, CompressedVectors cv, Set<FeatureId> features) {
+        ConfiguredSystem(DataSet ds, GraphIndex index, CompressedVectors cv, Set<FeatureId> features) {
             this(ds, index, cv, features, null, null);
         }
 
-        ConfiguredSystem(DataSet ds, ImmutableGraphIndex index, CompressedVectors cv, Set<FeatureId> features,
+        ConfiguredSystem(DataSet ds, GraphIndex index, CompressedVectors cv, Set<FeatureId> features,
                          String rerankingType, NVQVectors memoryReranker) {
             this.rerankingType = rerankingType;
             this.memoryReranker = memoryReranker;
@@ -1114,7 +1114,7 @@ public class Grid {
         }
 
         /** An int8 system: exact scoring of the int8 vectors stored inline in {@code index}, without compression. */
-        ConfiguredSystem(ByteDataSet ds, ImmutableGraphIndex index, Set<FeatureId> features) {
+        ConfiguredSystem(ByteDataSet ds, GraphIndex index, Set<FeatureId> features) {
             this.rerankingType = null;
             this.memoryReranker = null;
             this.ds = null;
@@ -1158,7 +1158,7 @@ public class Grid {
             return null;
         }
 
-        public SearchScoreProvider scoreProviderFor(VectorFloat<?> queryVector, ImmutableGraphIndex.View view) {
+        public SearchScoreProvider scoreProviderFor(VectorFloat<?> queryVector, GraphIndex.View view) {
             return rerankingType != null ? configuredScorer(queryVector, null, view) : scoreProviderFor(queryVector, null, view);
         }
 
@@ -1172,8 +1172,8 @@ public class Grid {
 
         private SearchScoreProvider scoreProviderFor(VectorFloat<?> queryVector,
                                                      io.github.jbellis.jvector.graph.similarity.PreparedQuery prepared,
-                                                     ImmutableGraphIndex.View view) {
-            var scoringView = (ImmutableGraphIndex.ScoringView) view;
+                                                     GraphIndex.View view) {
+            var scoringView = (GraphIndex.ScoringView) view;
             ScoreFunction.ApproximateScoreFunction asf;
             if (scoresFromIndex) {
                 asf = scoringView.approximateScoreFunctionFor(queryVector, ds.getSimilarityFunction());
@@ -1192,7 +1192,7 @@ public class Grid {
 
         private SearchScoreProvider configuredScorer(VectorFloat<?> query,
                                                      io.github.jbellis.jvector.graph.similarity.PreparedQuery prepared,
-                                                     ImmutableGraphIndex.View view) {
+                                                     GraphIndex.View view) {
             var similarity = ds.getSimilarityFunction();
             var diskView = view instanceof OnDiskGraphIndex.View ? (OnDiskGraphIndex.View) view : null;
             ScoreFunction score;

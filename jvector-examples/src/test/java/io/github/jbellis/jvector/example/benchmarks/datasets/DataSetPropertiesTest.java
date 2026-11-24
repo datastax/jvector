@@ -384,6 +384,7 @@ public class DataSetPropertiesTest {
         var reader = DataSetMetadataReader.load();
         var props = reader.getProperties("ada002-100k");
         assertTrue(props.isPresent(), "ada002-100k should be in the production metadata file");
+        // Normalized embedding datasets are tagged DOT_PRODUCT (equivalent ranking to COSINE), which ASH requires
         assertEquals(VectorSimilarityFunction.DOT_PRODUCT, props.get().similarityFunction().orElse(null));
     }
 

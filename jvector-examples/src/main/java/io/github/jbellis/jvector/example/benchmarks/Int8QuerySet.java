@@ -17,7 +17,7 @@
 package io.github.jbellis.jvector.example.benchmarks;
 
 import io.github.jbellis.jvector.example.benchmarks.datasets.ByteDataSet;
-import io.github.jbellis.jvector.graph.ImmutableGraphIndex;
+import io.github.jbellis.jvector.graph.GraphIndex;
 import io.github.jbellis.jvector.graph.disk.OnDiskGraphIndex;
 import io.github.jbellis.jvector.graph.similarity.DefaultSearchScoreProvider;
 import io.github.jbellis.jvector.graph.similarity.SearchScoreProvider;
@@ -83,7 +83,7 @@ public final class Int8QuerySet implements QuerySet<ByteSequence<?>> {
     }
 
     @Override
-    public SearchScoreProvider scoreProviderFor(ByteSequence<?> query, ImmutableGraphIndex.View view) {
+    public SearchScoreProvider scoreProviderFor(ByteSequence<?> query, GraphIndex.View view) {
         if (!(view instanceof OnDiskGraphIndex.View)) {
             throw new IllegalStateException("Int8 queries are scored against an on-disk index with inline int8 vectors");
         }

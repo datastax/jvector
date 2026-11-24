@@ -21,7 +21,7 @@ import io.github.jbellis.jvector.disk.SimpleMappedReader;
 import io.github.jbellis.jvector.graph.disk.CommonHeader;
 import io.github.jbellis.jvector.graph.disk.OnDiskGraphIndex;
 import io.github.jbellis.jvector.graph.disk.OnDiskGraphIndexWriter;
-import io.github.jbellis.jvector.graph.ImmutableGraphIndex;
+import io.github.jbellis.jvector.graph.GraphIndex;
 import io.github.jbellis.jvector.graph.disk.feature.Feature;
 import io.github.jbellis.jvector.graph.disk.feature.FeatureId;
 import io.github.jbellis.jvector.graph.disk.feature.FusedASH;
@@ -410,7 +410,7 @@ public class TestRetainedMemoryAccounting {
             int count = Math.max(1, shape[0] >>> Math.min(level, 30));
             layers.add(new CommonHeader.LayerInfo(count, Math.min(shape[1], count - 1)));
         }
-        ImmutableGraphIndex graph = shape[0] == 0 ? new TestUtil.EmptyGraphIndex(dimension, new Random(7381))
+        GraphIndex graph = shape[0] == 0 ? new TestUtil.EmptyGraphIndex(dimension, new Random(7381))
                 : new TestUtil.RandomlyConnectedGraphIndex(layers, new Random(7381));
         var types = VectorizationProvider.getInstance().getVectorTypeSupport();
         var vector = types.createFloatVector(dimension);

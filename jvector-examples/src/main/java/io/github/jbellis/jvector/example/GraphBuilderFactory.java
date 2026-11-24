@@ -23,7 +23,7 @@ import io.github.jbellis.jvector.graph.VectorAccess;
 import io.github.jbellis.jvector.graph.disk.AbstractGraphIndexWriter;
 import io.github.jbellis.jvector.graph.disk.OnDiskGraphIndexWriter;
 import io.github.jbellis.jvector.graph.disk.OnDiskParallelGraphIndexWriter;
-import io.github.jbellis.jvector.graph.ImmutableGraphIndex;
+import io.github.jbellis.jvector.graph.GraphIndex;
 import io.github.jbellis.jvector.graph.RandomAccessByteVectorValues;
 import io.github.jbellis.jvector.graph.RandomAccessVectorValues;
 import io.github.jbellis.jvector.graph.disk.OrdinalMapper;
@@ -154,7 +154,7 @@ final class GraphBuilderFactory {
     }
 
     /** Builds and cleans up the topology before any disk features are written. */
-    static ImmutableGraphIndex buildGraph(DataSet ds, BuildConfig build, CompressedVectors encoded) throws IOException {
+    static GraphIndex buildGraph(DataSet ds, BuildConfig build, CompressedVectors encoded) throws IOException {
         var vectors = ds.getBaseRavv();
         var similarity = ds.getSimilarityFunction();
         if (encoded == null) {
@@ -195,13 +195,13 @@ final class GraphBuilderFactory {
     }
 
     static AbstractGraphIndexWriter.Builder<? extends RandomAccessOnDiskGraphIndexWriter, ?> writerBuilder(
-            ImmutableGraphIndex graph, Path outPath, int size, String mode) throws FileNotFoundException {
+            GraphIndex graph, Path outPath, int size, String mode) throws FileNotFoundException {
         return writerBuilder(graph, outPath, size, mode, PhysicalCoreExecutor.getPhysicalCoreCount());
     }
 
     /** As above, with {@code threads} parallel writer workers. */
     static AbstractGraphIndexWriter.Builder<? extends RandomAccessOnDiskGraphIndexWriter, ?> writerBuilder(
-            ImmutableGraphIndex graph, Path outPath, int size, String mode, int threads) throws FileNotFoundException {
+            GraphIndex graph, Path outPath, int size, String mode, int threads) throws FileNotFoundException {
         if (mode == null) return writerBuilder(graph, outPath, size);
         AbstractGraphIndexWriter.Builder<? extends RandomAccessOnDiskGraphIndexWriter, ?> builder;
         if ("sequential".equals(mode)) {
@@ -217,7 +217,7 @@ final class GraphBuilderFactory {
     }
 
     /** A writer builder with identity ordinals and one parallel worker per physical core. */
-    static RandomAccessOnDiskGraphIndexWriter.Builder writerBuilder(ImmutableGraphIndex graph, Path outPath, int size)
+    static RandomAccessOnDiskGraphIndexWriter.Builder writerBuilder(GraphIndex graph, Path outPath, int size)
             throws FileNotFoundException {
         var builder = new RandomAccessOnDiskGraphIndexWriter.Builder(graph, outPath);
         builder.withMapper(new OrdinalMapper.IdentityMapper(size - 1));

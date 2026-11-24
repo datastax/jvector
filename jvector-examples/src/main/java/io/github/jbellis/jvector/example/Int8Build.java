@@ -19,7 +19,7 @@ package io.github.jbellis.jvector.example;
 import io.github.jbellis.jvector.disk.ReaderSupplierFactory;
 import io.github.jbellis.jvector.example.IndexBuildStrategy.BuiltIndexes;
 import io.github.jbellis.jvector.example.benchmarks.datasets.ByteDataSet;
-import io.github.jbellis.jvector.graph.ImmutableGraphIndex;
+import io.github.jbellis.jvector.graph.GraphIndex;
 import io.github.jbellis.jvector.graph.disk.OnDiskGraphIndex;
 import io.github.jbellis.jvector.graph.disk.feature.FeatureId;
 
@@ -56,7 +56,7 @@ final class Int8Build {
             System.out.format("  L%d: %d nodes, %.2f avg degree%n", i, graph.size(i), graph.getAverageDegree(i));
         }
 
-        Map<Set<FeatureId>, ImmutableGraphIndex> indexes = new LinkedHashMap<>();
+        Map<Set<FeatureId>, GraphIndex> indexes = new LinkedHashMap<>();
         Map<Set<FeatureId>, Path> files = new LinkedHashMap<>();
         double flushSeconds = 0;
         int n = 0;

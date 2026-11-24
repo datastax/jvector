@@ -68,3 +68,5 @@ results.csv
 
 ### Benchmark server profiles (machine-specific) ###
 jvector-examples/bench-profiles/local/
+
+design-notes/*

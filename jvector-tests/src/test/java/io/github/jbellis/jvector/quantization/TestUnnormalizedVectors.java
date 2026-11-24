@@ -17,7 +17,7 @@ package io.github.jbellis.jvector.quantization;
 
 import io.github.jbellis.jvector.graph.GraphIndexBuilder;
 import io.github.jbellis.jvector.graph.GraphSearcher;
-import io.github.jbellis.jvector.graph.ImmutableGraphIndex;
+import io.github.jbellis.jvector.graph.GraphIndex;
 import io.github.jbellis.jvector.graph.ListRandomAccessVectorValues;
 import io.github.jbellis.jvector.graph.similarity.BuildScoreProvider;
 import io.github.jbellis.jvector.graph.similarity.DefaultSearchScoreProvider;
@@ -185,7 +185,7 @@ public class TestUnnormalizedVectors {
                                   java.util.function.Function<VectorFloat<?>, ScoreFunction> scorerFor) {
         List<Set<Integer>> scan = new ArrayList<>(), graphResults = new ArrayList<>(), adaptiveResults = new ArrayList<>();
         int changed = 0;
-        ImmutableGraphIndex graph;
+        GraphIndex graph;
         try (var builder = new GraphIndexBuilder(bsp, DIM, 16, 100, 1.2f, 1.2f, false)) {
             graph = builder.build(ravv);
         } catch (Exception e) {
