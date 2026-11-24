@@ -48,6 +48,10 @@
 - JVector sets the native BLAS thread count for ASH training: one thread by default, or the size of the
   executor passed to `AsymmetricHashing.initialize(..., ForkJoinPool executor)`.
 
+## Behavior changes
+- `ramBytesUsed()` now counts caches created after loading, so its value can grow while an index is open;
+  see [Retained memory accounting](docs/retained-memory-accounting.md).
+
 # Upgrading from 3.0.x to 4.0.x
 
 ## New features
