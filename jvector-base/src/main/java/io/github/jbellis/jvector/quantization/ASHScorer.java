@@ -21,6 +21,7 @@ import io.github.jbellis.jvector.vector.VectorizationProvider;
 
 import io.github.jbellis.jvector.vector.VectorSimilarityFunction;
 import io.github.jbellis.jvector.vector.VectorUtil;
+import io.github.jbellis.jvector.vector.VectorUtilSupport;
 import io.github.jbellis.jvector.vector.types.VectorFloat;
 
 /**
@@ -158,15 +159,28 @@ public final class ASHScorer {
         // Two coordinates share each 2-bit LUT entry. Four-bit codes instead
         // use the backend's contiguous projection dot, avoiding a 16x larger table.
         // Offset-binary codes decode faster in registers than through the LUT, where the backend can.
-        if ((ash.bitsPerDimension == 2 || (AsymmetricHashing.usesOffsetBinaryCode(ash.bitsPerDimension)
-                        && !backend.supportsAshOffsetBinaryDot()))
-                && mode != ASHVectors.AshSingleKernel.SCALAR
-                && backend.supportsAshCanonicalLutScoring()) {
+        if (directScoringReadsLut(ash.bitsPerDimension, mode, backend)) {
             int groups = FusedASHLayout.codeGroups(qp.d, ash.bitsPerDimension);
             return v -> v.scale * backend.ashCanonicalLutDot(v.extraBits, groups, lut)
                     + qp.dotQMuByLandmark[v.landmark & 255] + v.offset;
         }
         return scoreFunctionFor(qp);
+    }
+
+    /** Whether {@link #scoreFunctionFor(QueryPrecompute, float[])} scores direct nodes through the query table. */
+    private static boolean directScoringReadsLut(int bits, ASHVectors.AshSingleKernel mode, VectorUtilSupport backend) {
+        return (bits == 2 || (AsymmetricHashing.usesOffsetBinaryCode(bits) && !backend.supportsAshOffsetBinaryDot()))
+                && mode != ASHVectors.AshSingleKernel.SCALAR && backend.supportsAshCanonicalLutScoring();
+    }
+
+    /**
+     * Whether anything reads a query's nibble table at this width: fused neighborhoods at 1, 2 and 4 bits, and
+     * direct-node scoring of offset-binary codes (3 and 5 to 9 bits) on a backend that has no other SIMD kernel.
+     */
+    static boolean readsQueryLut(int bitsPerDimension) {
+        return !AsymmetricHashing.usesOffsetBinaryCode(bitsPerDimension)
+                || directScoringReadsLut(bitsPerDimension, ASHVectors.AshSingleKernel.fromProperty(),
+                        VectorizationProvider.getInstance().getVectorUtilSupport());
     }
 
     /** Prepared encoded-query state; uses the same arithmetic as the raw-query scorer. */

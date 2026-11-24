@@ -109,11 +109,13 @@ public final class ASHNeighborhoodScorer {
         if (reusableLut != null && reusableLut.length != lutSize) {
             throw new IllegalArgumentException("LUT size does not match the ASH model");
         }
-        this.lut = reusableLut == null ? new float[lutSize] : reusableLut;
-        if (!alreadyPrepared) FusedASHLayout.buildQueryLut(query.qProj, dimensions, bits, lut);
+        // Built only where something reads it; a prepared table arrives built.
+        boolean readsLut = ASHScorer.readsQueryLut(bits);
+        this.lut = !readsLut ? null : reusableLut != null ? reusableLut : new float[lutSize];
+        if (readsLut && (!alreadyPrepared || reusableLut == null)) FusedASHLayout.buildQueryLut(query.qProj, dimensions, bits, lut);
         var backend = VectorizationProvider.getInstance().getVectorUtilSupport();
         if (FusedASHLayout.usesFieldBlocks(bits)) {
-            // The LUT above still serves canonical scoring of upper-layer nodes.
+            // The LUT, where built, serves direct scoring of upper-layer nodes.
             // Without the whole-neighborhood kernel, the query sums each lane in SIMD. It holds the backend to keep
             // score() small, which keeps 2-bit neighborhoods fast.
             this.int8Query = new ASHInt8Query(dimensions, bits,
@@ -200,6 +202,6 @@ public final class ASHNeighborhoodScorer {
         return "ASHNeighborhoodScorer[" + implementation + ", blockSize=" + blockSize + ", capacity=" + maxDegree + "]";
     }
 
-    /** Query-lifetime table shared with canonical direct-node scoring. */
+    /** Query-lifetime table shared with canonical direct-node scoring; null where nothing reads it. */
     float[] queryLut() { return lut; }
 }
