@@ -33,6 +33,8 @@ final class ASHInt8Query {
     final int units;
     /** The rounded query, {@code units * 8} entries; zero past {@code quantizedDim}. */
     final byte[] digits;
+    /** {@link #digits} widened to int, for the SIMD lane kernel. */
+    final int[] wideDigits;
     float invScale;
     float center;
 
@@ -44,6 +46,7 @@ final class ASHInt8Query {
         this.bits = bits;
         this.units = FusedASHLayout.fieldUnits(quantizedDim);
         this.digits = new byte[units * 8];
+        this.wideDigits = new int[units * 8];
     }
 
     /** Quantizes {@code qProj[0, quantizedDim)}. A non-finite component makes every score NaN. */
@@ -51,6 +54,7 @@ final class ASHInt8Query {
         float max = 0f;
         for (int j = 0; j < quantizedDim; j++) max = Math.max(max, Math.abs(qProj[j]));
         java.util.Arrays.fill(digits, (byte) 0);
+        java.util.Arrays.fill(wideDigits, 0);
         if (!Float.isFinite(max)) {
             invScale = Float.NaN;
             center = 0f;
@@ -66,6 +70,7 @@ final class ASHInt8Query {
         for (int j = 0; j < quantizedDim; j++) {
             int q = Math.max(-127, Math.min(127, Math.round(qProj[j] * scale)));
             digits[j] = (byte) q;
+            wideDigits[j] = q;
             sum += q;
         }
         invScale = max / 127f;
@@ -84,7 +89,7 @@ final class ASHInt8Query {
     float laneDot(byte[] block, int blockOffset, int lane, int blockSize, VectorUtilSupport simd) {
         int b = bits;
         if (simd != null) {
-            long dot = simd.ashOffsetBinaryInt8Dot(block, blockOffset + lane * b, blockSize * b, units, b, digits);
+            long dot = simd.ashOffsetBinaryInt8Dot(block, blockOffset + lane * b, blockSize * b, units, b, wideDigits);
             return ((float) dot - center) * invScale;
         }
         long dot = 0;

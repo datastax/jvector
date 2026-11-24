@@ -314,7 +314,7 @@ class PanamaVectorUtilSupport implements VectorUtilSupport {
     public boolean supportsAshOffsetBinaryInt8Dot() { return ASH_SIMD && ASH_FLOATS.length() >= 8; }
 
     @Override
-    public long ashOffsetBinaryInt8Dot(byte[] codes, int offset, int unitStride, int units, int bits, byte[] digits) {
+    public long ashOffsetBinaryInt8Dot(byte[] codes, int offset, int unitStride, int units, int bits, int[] digits) {
         if (bits < 3 || bits > 9 || bits == 4) {
             throw new IllegalArgumentException("Offset-binary codes have 3 or 5 to 9 bits per dimension, got " + bits);
         }
@@ -323,25 +323,13 @@ class PanamaVectorUtilSupport implements VectorUtilSupport {
         var windows = ASH_UNIT_SHUFFLES[bits];
         var shifts = IntVector.fromArray(ASH_UNIT_INTS, ASH_UNIT_SHIFTS[bits], 0);
         int mask = (1 << bits) - 1;
-        // Exact: |digit * field| < 2^16, so 2^15 units fit an int lane
-        IntVector a0 = IntVector.zero(ASH_UNIT_INTS), a1 = IntVector.zero(ASH_UNIT_INTS);
-        int unit = 0, at = offset;
+        // Exact: |digit * field| < 2^16, so 2^15 units fit an int lane, in any order. One copy of the vector
+        // operations, not an unrolled pair plus a tail loop: with three copies, some JVMs compiled a later one as
+        // heap-allocating calls, about 4x slower.
+        IntVector acc = IntVector.zero(ASH_UNIT_INTS);
         // Units whose 32-byte load stays inside the array
         int inPlace = Math.max(0, Math.min(units, Math.floorDiv(codes.length - offset - 32, unitStride) + 1));
-        for (; unit + 1 < inPlace; unit += 2, at += 2 * unitStride) {
-            var f0 = ((IntVector) ByteVector.fromArray(ASH_UNIT_BYTES, codes, at).rearrange(windows)
-                    .reinterpretAsInts())
-                    .lanewise(VectorOperators.LSHR, shifts).and(mask);
-            var f1 = ((IntVector) ByteVector.fromArray(ASH_UNIT_BYTES, codes, at + unitStride).rearrange(windows)
-                    .reinterpretAsInts()).lanewise(VectorOperators.LSHR, shifts).and(mask);
-            var q0 = (IntVector) ByteVector.fromArray(ByteVector.SPECIES_64, digits, unit * 8)
-                    .convertShape(VectorOperators.B2I, ASH_UNIT_INTS, 0);
-            var q1 = (IntVector) ByteVector.fromArray(ByteVector.SPECIES_64, digits, unit * 8 + 8)
-                    .convertShape(VectorOperators.B2I, ASH_UNIT_INTS, 0);
-            a0 = a0.add(f0.mul(q0));
-            a1 = a1.add(f1.mul(q1));
-        }
-        for (; unit < units; unit++, at += unitStride) {
+        for (int unit = 0, at = offset; unit < units; unit++, at += unitStride) {
             byte[] source = codes;
             int from = at;
             if (unit >= inPlace) {
@@ -349,14 +337,11 @@ class PanamaVectorUtilSupport implements VectorUtilSupport {
                 System.arraycopy(codes, at, source, 0, bits);
                 from = 0;
             }
-            var f0 = ((IntVector) ByteVector.fromArray(ASH_UNIT_BYTES, source, from).rearrange(windows)
-                    .reinterpretAsInts())
+            var fields = ByteVector.fromArray(ASH_UNIT_BYTES, source, from).rearrange(windows).reinterpretAsInts()
                     .lanewise(VectorOperators.LSHR, shifts).and(mask);
-            var q0 = (IntVector) ByteVector.fromArray(ByteVector.SPECIES_64, digits, unit * 8)
-                    .convertShape(VectorOperators.B2I, ASH_UNIT_INTS, 0);
-            a0 = a0.add(f0.mul(q0));
+            acc = acc.add(fields.mul(IntVector.fromArray(ASH_UNIT_INTS, digits, unit * 8)));
         }
-        return a0.add(a1).reduceLanes(VectorOperators.ADD);
+        return acc.reduceLanes(VectorOperators.ADD);
     }
 
     /** {@code code[offset, offset + bytes)} at the start of this thread's buffer, followed by {@code load} or more bytes. */
@@ -405,30 +390,18 @@ class PanamaVectorUtilSupport implements VectorUtilSupport {
             codeOffset = 0;
         }
         FloatVector a0 = FloatVector.zero(ASH_FLOATS), a1 = FloatVector.zero(ASH_FLOATS);
-        int step = 0, at = codeOffset;
-        // Pairs of steps into two accumulators
-        for (; step + 1 < steps; step += 2, at += 2 * stepBytes) {
-            var w0 = (ByteVector) ByteVector.fromArray(ASH_OB_LOAD, code, at).reinterpretShape(ASH_OB_BYTES, 0);
-            var f0 = ((IntVector) w0.rearrange(windows).reinterpretAsInts())
-                    .lanewise(VectorOperators.LSHR, shifts).and(mask);
-            var w1 = (ByteVector) ByteVector.fromArray(ASH_OB_LOAD, code, at + stepBytes)
-                    .reinterpretShape(ASH_OB_BYTES, 0);
-            var f1 = ((IntVector) w1.rearrange(windows).reinterpretAsInts())
-                    .lanewise(VectorOperators.LSHR, shifts).and(mask);
-            var v0 = ((FloatVector) f0.convert(VectorOperators.I2F, 0)).sub(center);
-            var v1 = ((FloatVector) f1.convert(VectorOperators.I2F, 0)).sub(center);
-            a0 = FloatVector.fromArray(ASH_FLOATS, query, step * lanes).fma(v0, a0);
-            a1 = FloatVector.fromArray(ASH_FLOATS, query, (step + 1) * lanes).fma(v1, a1);
-        }
-        for (; step < steps; step++, at += stepBytes) {
+        int at = codeOffset;
+        for (int step = 0; step < steps; step++, at += stepBytes) {
             var w0 = (ByteVector) ByteVector.fromArray(ASH_OB_LOAD, code, at).reinterpretShape(ASH_OB_BYTES, 0);
             var f0 = ((IntVector) w0.rearrange(windows).reinterpretAsInts())
                     .lanewise(VectorOperators.LSHR, shifts).and(mask);
             var v0 = ((FloatVector) f0.convert(VectorOperators.I2F, 0)).sub(center);
-            // The accumulator follows the step, not where the code sits: the same code scores the same bits anywhere.
-            var q0 = FloatVector.fromArray(ASH_FLOATS, query, step * lanes);
-            if ((step & 1) == 0) a0 = q0.fma(v0, a0);
-            else a1 = q0.fma(v0, a1);
+            // Even and odd steps keep separate sums, in a fixed order wherever the code sits: the accumulators trade
+            // places every step. One copy of the decode, not an unrolled pair plus a tail loop, as in
+            // ashOffsetBinaryInt8Dot.
+            var next = FloatVector.fromArray(ASH_FLOATS, query, step * lanes).fma(v0, a0);
+            a0 = a1;
+            a1 = next;
         }
         // Fixed-order lane sum: the same score whether or not C2 has compiled this thread's copy yet.
         float sum = addLanesPairwise(a0.add(a1));
@@ -451,30 +424,16 @@ class PanamaVectorUtilSupport implements VectorUtilSupport {
             codeOffset = 0;
         }
         FloatVector a0 = FloatVector.zero(ASH_FLOATS), a1 = FloatVector.zero(ASH_FLOATS);
-        int step = 0, at = codeOffset;
-        // Pairs of steps into two accumulators
-        for (; step + 1 < steps; step += 2, at += 2 * stepBytes) {
-            var w0 = (ByteVector) ByteVector.fromArray(ASH_OB_LOAD_WIDE, code, at).reinterpretShape(ASH_OB_BYTES, 0);
-            var f0 = ((IntVector) w0.rearrange(windows).reinterpretAsInts())
-                    .lanewise(VectorOperators.LSHR, shifts).and(mask);
-            var w1 = (ByteVector) ByteVector.fromArray(ASH_OB_LOAD_WIDE, code, at + stepBytes)
-                    .reinterpretShape(ASH_OB_BYTES, 0);
-            var f1 = ((IntVector) w1.rearrange(windows).reinterpretAsInts())
-                    .lanewise(VectorOperators.LSHR, shifts).and(mask);
-            var v0 = ((FloatVector) f0.convert(VectorOperators.I2F, 0)).sub(center);
-            var v1 = ((FloatVector) f1.convert(VectorOperators.I2F, 0)).sub(center);
-            a0 = FloatVector.fromArray(ASH_FLOATS, query, step * lanes).fma(v0, a0);
-            a1 = FloatVector.fromArray(ASH_FLOATS, query, (step + 1) * lanes).fma(v1, a1);
-        }
-        for (; step < steps; step++, at += stepBytes) {
+        int at = codeOffset;
+        for (int step = 0; step < steps; step++, at += stepBytes) {
             var w0 = (ByteVector) ByteVector.fromArray(ASH_OB_LOAD_WIDE, code, at).reinterpretShape(ASH_OB_BYTES, 0);
             var f0 = ((IntVector) w0.rearrange(windows).reinterpretAsInts())
                     .lanewise(VectorOperators.LSHR, shifts).and(mask);
             var v0 = ((FloatVector) f0.convert(VectorOperators.I2F, 0)).sub(center);
-            // The accumulator follows the step, not where the code sits: the same code scores the same bits anywhere.
-            var q0 = FloatVector.fromArray(ASH_FLOATS, query, step * lanes);
-            if ((step & 1) == 0) a0 = q0.fma(v0, a0);
-            else a1 = q0.fma(v0, a1);
+            // Separate even and odd sums, as in ashOffsetBinaryDot1
+            var next = FloatVector.fromArray(ASH_FLOATS, query, step * lanes).fma(v0, a0);
+            a0 = a1;
+            a1 = next;
         }
         // Fixed-order lane sum: the same score whether or not C2 has compiled this thread's copy yet.
         float sum = addLanesPairwise(a0.add(a1));
@@ -543,35 +502,19 @@ class PanamaVectorUtilSupport implements VectorUtilSupport {
             codeOffset = 0;
         }
         FloatVector a0 = FloatVector.zero(ASH_FLOATS), a1 = FloatVector.zero(ASH_FLOATS);
-        int step = 0, at = codeOffset;
-        for (; step + 1 < steps; step += 2, at += 2 * stepBytes) {
+        int at = codeOffset;
+        for (int step = 0; step < steps; step++, at += stepBytes) {
             var w0 = (ByteVector) ByteVector.fromArray(ASH_OB_LOAD, code, at).reinterpretShape(ASH_OB_BYTES, 0);
             var f0 = ((IntVector) w0.rearrange(windows).reinterpretAsInts())
                     .lanewise(VectorOperators.LSHR, shifts);
-            var w1 = (ByteVector) ByteVector.fromArray(ASH_OB_LOAD, code, at + stepBytes)
-                    .reinterpretShape(ASH_OB_BYTES, 0);
-            var f1 = ((IntVector) w1.rearrange(windows).reinterpretAsInts()).lanewise(VectorOperators.LSHR, shifts);
             // t = 0 for a positive field, -1 for a negative one; (m ^ t) - t negates m when t = -1.
             var t0 = f0.lanewise(VectorOperators.LSHR, sign).and(1).sub(1);
-            var t1 = f1.lanewise(VectorOperators.LSHR, sign).and(1).sub(1);
-            var m0 = f0.and(magnitude).lanewise(VectorOperators.LSHL, 1).add(1);
-            var m1 = f1.and(magnitude).lanewise(VectorOperators.LSHL, 1).add(1);
-            var v0 = (FloatVector) m0.lanewise(VectorOperators.XOR, t0).sub(t0).convert(VectorOperators.I2F, 0);
-            var v1 = (FloatVector) m1.lanewise(VectorOperators.XOR, t1).sub(t1).convert(VectorOperators.I2F, 0);
-            a0 = FloatVector.fromArray(ASH_FLOATS, query, step * lanes).fma(v0, a0);
-            a1 = FloatVector.fromArray(ASH_FLOATS, query, (step + 1) * lanes).fma(v1, a1);
-        }
-        for (; step < steps; step++, at += stepBytes) {
-            var w0 = (ByteVector) ByteVector.fromArray(ASH_OB_LOAD, code, at).reinterpretShape(ASH_OB_BYTES, 0);
-            var f0 = ((IntVector) w0.rearrange(windows).reinterpretAsInts())
-                    .lanewise(VectorOperators.LSHR, shifts);
-            var t0 = f0.lanewise(VectorOperators.LSHR, sign).and(1).sub(1);
             var m0 = f0.and(magnitude).lanewise(VectorOperators.LSHL, 1).add(1);
             var v0 = (FloatVector) m0.lanewise(VectorOperators.XOR, t0).sub(t0).convert(VectorOperators.I2F, 0);
-            // The accumulator follows the step, not where the code sits: the same code scores the same bits anywhere.
-            var q0 = FloatVector.fromArray(ASH_FLOATS, query, step * lanes);
-            if ((step & 1) == 0) a0 = q0.fma(v0, a0);
-            else a1 = q0.fma(v0, a1);
+            // Separate even and odd sums, as in ashOffsetBinaryDot1
+            var next = FloatVector.fromArray(ASH_FLOATS, query, step * lanes).fma(v0, a0);
+            a0 = a1;
+            a1 = next;
         }
         // Fixed-order lane sum: the same score whether or not C2 has compiled this thread's copy yet.
         float sum = addLanesPairwise(a0.add(a1));
@@ -3002,6 +2945,13 @@ class PanamaVectorUtilSupport implements VectorUtilSupport {
 
     // Shuffles that rotate SPECIES_PREFERRED by half, a quarter, ... of its lanes, for addLanesPairwise.
     private static final VectorShuffle<Float>[] PAIRWISE_ROTATIONS = pairwiseRotations();
+    private static final int PAIRWISE_LANES = FloatVector.SPECIES_PREFERRED.length();
+    private static final VectorShuffle<Float> ROTATE_8 = pairwiseRotation(8), ROTATE_4 = pairwiseRotation(4),
+            ROTATE_2 = pairwiseRotation(2), ROTATE_1 = pairwiseRotation(1);
+
+    private static VectorShuffle<Float> pairwiseRotation(int lanes) {
+        return lanes < PAIRWISE_LANES ? VectorShuffle.iota(FloatVector.SPECIES_PREFERRED, lanes, 1, true) : null;
+    }
 
     @SuppressWarnings("unchecked")
     private static VectorShuffle<Float>[] pairwiseRotations() {
@@ -3020,8 +2970,16 @@ class PanamaVectorUtilSupport implements VectorUtilSupport {
      * is the same compiled or not; and unlike a lane-by-lane loop it stays in vector registers.
      */
     private static float addLanesPairwise(FloatVector v) {
-        for (VectorShuffle<Float> rotation : PAIRWISE_ROTATIONS) v = v.add(v.rearrange(rotation));
-        return v.lane(0);
+        // Straight-line steps with constant shuffles for up to 16 lanes: carried around a loop, the vector was
+        // sometimes compiled as heap-allocating calls, which made whole JVMs' scoring about 1.6x slower.
+        if (PAIRWISE_LANES > 16) {
+            for (VectorShuffle<Float> rotation : PAIRWISE_ROTATIONS) v = v.add(v.rearrange(rotation));
+            return v.lane(0);
+        }
+        if (PAIRWISE_LANES > 8) v = v.add(v.rearrange(ROTATE_8));
+        if (PAIRWISE_LANES > 4) v = v.add(v.rearrange(ROTATE_4));
+        if (PAIRWISE_LANES > 2) v = v.add(v.rearrange(ROTATE_2));
+        return v.add(v.rearrange(ROTATE_1)).lane(0);
     }
 
     @Override

@@ -110,8 +110,8 @@ class PanamaASHOffsetBinaryDotTest {
         Random random = new Random(1201);
         for (int bits : WIDTHS) {
             for (int units : new int[] {1, 2, 3, 5, 48, 97}) {
-                byte[] digits = new byte[units * 8];
-                for (int i = 0; i < digits.length; i++) digits[i] = (byte) (random.nextInt(255) - 127);
+                int[] digits = new int[units * 8];
+                for (int i = 0; i < digits.length; i++) digits[i] = random.nextInt(255) - 127;
                 for (int blockSize : new int[] {8, 16, 32}) {
                     int stride = blockSize * bits;
                     byte[] block = new byte[units * stride];

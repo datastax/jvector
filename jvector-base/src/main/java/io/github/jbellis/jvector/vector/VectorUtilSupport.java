@@ -156,10 +156,10 @@ public interface VectorUtilSupport {
   /**
    * Exact integer dot product of an INT8 query with one lane of a FusedASH field-block neighborhood (3 and 5 to 9
    * bits): unit {@code u} holds 8 unsigned {@code bits}-bit fields in {@code bits} bytes at
-   * {@code offset + u * unitStride}, and {@code digits[u * 8 + k]} multiplies field {@code k}. Requires
+   * {@code offset + u * unitStride}, and {@code digits[u * 8 + k]} (an INT8 value) multiplies field {@code k}. Requires
    * {@link #supportsAshOffsetBinaryInt8Dot()}.
    */
-  default long ashOffsetBinaryInt8Dot(byte[] codes, int offset, int unitStride, int units, int bits, byte[] digits) {
+  default long ashOffsetBinaryInt8Dot(byte[] codes, int offset, int unitStride, int units, int bits, int[] digits) {
     throw new UnsupportedOperationException("Offset-binary INT8 ASH SIMD is unavailable on this backend");
   }
 
