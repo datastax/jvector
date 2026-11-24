@@ -99,6 +99,19 @@ class NativeVectorUtilSupport extends PanamaVectorUtilSupport
     @Override
     public boolean tryUpdateKMeansDistances(VectorFloat<?>[] points, VectorFloat<?> centroid,
                                            VectorFloat<?> minima, VectorFloat<?> scratch) {
+        if (tryVectorKMeansUpdate(points, centroid, minima, scratch)) return true;
+        // Other dimensions: score in Java. The caller's generic loop would make one native call per
+        // point, and for small PQ subspaces each call costs more than the distance it computes.
+        for (int i = 0; i < points.length; i++) {
+            scratch.set(i, super.squareDistance(points[i], 0, centroid, 0, centroid.length()));
+        }
+        super.minInPlace(minima, scratch);
+        return true;
+    }
+
+    /** The dedicated 8-float update for this JVM's vector width; false, leaving outputs alone, when it can't run. */
+    boolean tryVectorKMeansUpdate(VectorFloat<?>[] points, VectorFloat<?> centroid,
+                                  VectorFloat<?> minima, VectorFloat<?> scratch) {
         return NativeKMeansInitialization.update(points, centroid, minima, scratch);
     }
 
