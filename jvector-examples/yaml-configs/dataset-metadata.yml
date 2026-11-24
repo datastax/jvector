@@ -16,92 +16,101 @@
 # relevant loader code.
 
 ada002-100k:
-  similarity_function: COSINE
+  similarity_function: DOT_PRODUCT
   load_behavior: NO_SCRUB
 ada002-1M:
-  similarity_function: COSINE
+  similarity_function: DOT_PRODUCT
   load_behavior: NO_SCRUB
 cap-1M:
-  similarity_function: COSINE
+  similarity_function: DOT_PRODUCT
   load_behavior: NO_SCRUB
 cap-6M:
-  similarity_function: COSINE
+  similarity_function: DOT_PRODUCT
   load_behavior: NO_SCRUB
 cohere-english-v3-100k:
-  similarity_function: COSINE
+  similarity_function: DOT_PRODUCT
   load_behavior: NO_SCRUB
 cohere-english-v3-1M:
-  similarity_function: COSINE
+  similarity_function: DOT_PRODUCT
   load_behavior: NO_SCRUB
 cohere-english-v3-10M:
-  similarity_function: COSINE
+  similarity_function: DOT_PRODUCT
   load_behavior: NO_SCRUB
 colbert-1M:
-  similarity_function: COSINE
+  similarity_function: DOT_PRODUCT
   load_behavior: NO_SCRUB
 colbert-10M:
-  similarity_function: COSINE
+  similarity_function: DOT_PRODUCT
   load_behavior: NO_SCRUB
 degen-200k:
-  similarity_function: COSINE
+  similarity_function: DOT_PRODUCT
   load_behavior: NO_SCRUB
 dpr-1M:
-  similarity_function: COSINE
+  similarity_function: DOT_PRODUCT
   load_behavior: NO_SCRUB
 dpr-10M:
-  similarity_function: COSINE
-  load_behavior: NO_SCRUB
-dpr-gemma-1m:
-  similarity_function: COSINE
+  similarity_function: DOT_PRODUCT
   load_behavior: NO_SCRUB
 dpr-gemma-10m:
-  similarity_function: COSINE
+  similarity_function: DOT_PRODUCT
   load_behavior: NO_SCRUB
 e5-small-v2-100k:
-  similarity_function: COSINE
+  similarity_function: DOT_PRODUCT
   load_behavior: NO_SCRUB
 e5-base-v2-100k:
-  similarity_function: COSINE
+  similarity_function: DOT_PRODUCT
   load_behavior: NO_SCRUB
 e5-large-v2-100k:
-  similarity_function: COSINE
+  similarity_function: DOT_PRODUCT
   load_behavior: NO_SCRUB
 gecko-100k:
-  similarity_function: COSINE
+  similarity_function: DOT_PRODUCT
   load_behavior: NO_SCRUB
 nv-qa-v4-100k:
-  similarity_function: COSINE
+  similarity_function: DOT_PRODUCT
   load_behavior: NO_SCRUB
 openai-v3-small-1536-100k:
-  similarity_function: COSINE
+  similarity_function: DOT_PRODUCT
   load_behavior: NO_SCRUB
 openai-v3-large-3072-100k:
-  similarity_function: COSINE
+  similarity_function: DOT_PRODUCT
   load_behavior: NO_SCRUB
 openai-v3-large-1536-100k:
-  similarity_function: COSINE
+  similarity_function: DOT_PRODUCT
   load_behavior: NO_SCRUB
 # ann-benchmarks
 glove-25-angular:
-  similarity_function: COSINE
+  similarity_function: DOT_PRODUCT
   load_behavior: NO_SCRUB
 glove-50-angular:
-  similarity_function: COSINE
+  similarity_function: DOT_PRODUCT
   load_behavior: NO_SCRUB
 lastfm-64-dot:
   similarity_function: DOT_PRODUCT
   load_behavior: NO_SCRUB
 glove-100-angular:
-  similarity_function: COSINE
+  similarity_function: DOT_PRODUCT
   load_behavior: NO_SCRUB
 glove-200-angular:
-  similarity_function: COSINE
+  similarity_function: DOT_PRODUCT
   load_behavior: NO_SCRUB
 nytimes-256-angular:
-  similarity_function: COSINE
+  similarity_function: DOT_PRODUCT
   load_behavior: NO_SCRUB
 sift-128-euclidean:
   similarity_function: EUCLIDEAN
+  load_behavior: NO_SCRUB
+dpr-gemma-1m:
+  similarity_function: DOT_PRODUCT
+  load_behavior: NO_SCRUB
+mpnet-1m:
+  similarity_function: DOT_PRODUCT
+  load_behavior: NO_SCRUB
+tahoe-x1-1m:
+  similarity_function: DOT_PRODUCT
+  load_behavior: NO_SCRUB
+personahub-1m:
+  similarity_function: DOT_PRODUCT
   load_behavior: NO_SCRUB
 openai-3072-1m:
   similarity_function: DOT_PRODUCT
@@ -109,3 +118,37 @@ openai-3072-1m:
 openai-1536-1m:
   similarity_function: DOT_PRODUCT
   load_behavior: NO_SCRUB
+cap-10M:
+  similarity_function: DOT_PRODUCT
+  load_behavior: NO_SCRUB
+
+cohere-10M:
+  similarity_function: DOT_PRODUCT
+  load_behavior: NO_SCRUB
+
+esmc-600-1m:
+  similarity_function: DOT_PRODUCT
+  load_behavior: NO_SCRUB
+
+esmc-600-6m:
+  similarity_function: DOT_PRODUCT
+  load_behavior: NO_SCRUB
+
+mpnet-10m:
+  similarity_function: DOT_PRODUCT
+  load_behavior: NO_SCRUB
+
+# is_int8: true means the vectors are SIGNED int8 (-128..127). Unsigned uint8 .bvecs data
+# (e.g. conventional SIFT1B/BIGANN files, 0..255) is not supported and would be silently misread.
+sift1m-128-euclidean-int8:
+  similarity_function: EUCLIDEAN
+  load_behavior: NO_SCRUB
+  is_int8: true
+wikipedia-2023-11-en-mxbai-int8-1m:
+  similarity_function: DOT_PRODUCT
+  load_behavior: NO_SCRUB
+  is_int8: true
+wiki-multilingual-v3-int8-1m:
+  similarity_function: DOT_PRODUCT
+  load_behavior: NO_SCRUB
+  is_int8: true

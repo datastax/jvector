@@ -49,9 +49,9 @@ import java.util.function.Supplier;
 /// @see DataSetLoader
 /// @see DataSets
 public class DataSetInfo implements DataSetProperties {
-    private final Supplier<DataSet> loader;
+    private final Supplier<? extends BaseDataSet> loader;
     private final DataSetProperties baseProperties;
-    private volatile DataSet cached;
+    private volatile BaseDataSet cached;
 
     /// Creates a new dataset info handle.
     ///
@@ -61,7 +61,7 @@ public class DataSetInfo implements DataSetProperties {
     ///
     /// @param baseProperties     the dataset properties (name, similarity function, etc.)
     /// @param loader             a supplier that performs the deferred load; invoked at most once
-    public DataSetInfo(DataSetProperties baseProperties, Supplier<DataSet> loader) {
+    public DataSetInfo(DataSetProperties baseProperties, Supplier<? extends BaseDataSet> loader) {
         this.baseProperties = baseProperties;
         this.loader = loader;
     }
@@ -114,7 +114,7 @@ public class DataSetInfo implements DataSetProperties {
         return baseProperties.isDuplicateVectorFree();
     }
 
-    /// Returns the fully loaded and scrubbed {@link DataSet}.
+    /// Returns the fully loaded and scrubbed float {@link DataSet}.
     ///
     /// On the first invocation this triggers the deferred load pipeline, which may involve
     /// reading large vector files from disk, deduplication, zero-vector removal, and
@@ -124,7 +124,18 @@ public class DataSetInfo implements DataSetProperties {
     /// completes, after which all callers share the same cached instance.
     ///
     /// @return the ready-to-use {@link DataSet}
+    /// @throws IllegalStateException if this is an int8 dataset; use {@link #getBaseDataSet()}
     public DataSet getDataSet() {
+        var ds = getBaseDataSet();
+        if (!(ds instanceof DataSet)) {
+            throw new IllegalStateException(ds.getName() + " is an int8 dataset; load it with getBaseDataSet()");
+        }
+        return (DataSet) ds;
+    }
+
+    /// Returns the loaded dataset whatever its vector type: a float {@link DataSet} or an int8 {@link ByteDataSet}.
+    /// Loads it as {@link #getDataSet()} does.
+    public BaseDataSet getBaseDataSet() {
         if (cached == null) {
             synchronized (this) {
                 if (cached == null) {

@@ -99,6 +99,11 @@ public final class SidecarCompactionStrategy extends QuantizationCompactionStrat
     }
 
     @Override
+    public void adoptCompressor(VectorCompressor<?> trained) {
+        this.retrainedCompressor = java.util.Objects.requireNonNull(trained, "trained");
+    }
+
+    @Override
     public VectorCompressor<?> compressor() {
         return retrainedCompressor;
     }
@@ -158,7 +163,7 @@ public final class SidecarCompactionStrategy extends QuantizationCompactionStrat
                 codeCache != null ? ", from pre-encode cache" : "");
 
         try (var out = new BufferedRandomAccessWriter(compressedPath)) {
-            formatHandle.writeSidecarHeader(out, retrainedCompressor, count);
+            formatHandle.writeSidecarHeader(out, retrainedCompressor, count, ctx.version);
 
             int parallelism = Math.max(ctx.taskWindowSize, 1);
             for (int batchStart = 0; batchStart < chunkCount; batchStart += parallelism) {

@@ -1,38 +1,52 @@
-# Run-level controls for BenchYAML (applies to the whole invocation)
+# BenchYAML run configuration: which benchmarks to compute, how to measure them, and what to report.
+# This default suits a first run on a small dataset: a minute or two, one short console table, no files written.
+# Select another file with -Djvector.bench.runConfig=<path>; see docs/benchyaml-guide.md.
 yamlSchemaVersion: 1
-onDiskIndexVersion: 6
+onDiskIndexVersion: 7   # On-disk format to write; 7 adds fused ASH graphs and page alignment
 
-# Benchmark stats to compute
+# Benchmarks to compute and the stats from each
 benchmarks:
-  throughput: [ AVG ]   # additional options: [AVG, MEDIAN, MAX]
-  latency:    [ AVG ]   # [AVG, STD, P999]
-  count:      [ visited ]  # [visited, expanded, expanded base layer]
-  accuracy:   [ recall ]   # [recall, MAP]
+  throughput: [ AVG ]        # Queries per second, concurrent       [AVG, MEDIAN, MAX]
+# latency:    [ AVG ]        # Milliseconds per query, one at a time [AVG, STD, P999]; slower: runs every
+                             # query serially several times per case
+  count:      [ visited ]    # Nodes per query           [visited, expanded, expanded base layer]
+  accuracy:   [ recall ]     # Recall@K against ground truth        [recall, MAP]
 
-# Console display (omit/leave blank to print all computed outputs)
+# How benchmarks run. Omit the section, or any setting, for the defaults shown.
+#measurement:
+#  evictIndex: false         # Drop each on-disk index from the page cache before its first search (Linux)
+#  throughput:
+#    warmup: random          # Warmup queries: random | base (vectors sampled from the dataset) | none
+#    warmupPasses: 3         # Warmup passes over the query count
+#    untilCompiled: false    # Keep warming, up to 10 passes, until a pass compiles little JIT code
+#    passes: 3               # Timed passes; the stats summarize them
+#    minSeconds: 1.0         # A timed pass repeats the queries until it has run this long; 0 runs them once
+
+# Console table: the columns to print
 console:
   benchmarks:
-    throughput: [ AVG ]   # [AVG, MEDIAN, MAX]
-    latency:    [ AVG ]   # [AVG, STD, P999]
-    count:      [ visited ]  # [visited, expanded, expanded base layer]
-    accuracy:   [ recall ]   # [recall, MAP]
+    throughput: [ AVG ]
+    count:      [ visited ]
+    accuracy:   [ recall ]
   metrics:
-    system: [ max_heap_mb, max_offheap_mb ] # [ max_heap_mb, max_offheap_mb ]
-#    disk: total_file_size_mb # [ total_file_size_mb, file_count ]
-#    construction: index_build_time_s # [ index_build_time_s, index_quant_time_s, search_quant_time_s ]
+    construction: [ index_build_time_s ]
+#   Other metrics, by category:
+#   system:       [ max_heap_mb, max_offheap_mb ]
+#   disk:         [ total_file_size_mb, file_count ]
+#   construction: [ index_build_time_s, graph_build_time_s, flush_time_s, reopen_time_s,
+#                   index_quant_time_s, search_quant_time_s ]
+#   execution:    [ response_mean_ms, response_p50_ms, response_p95_ms, response_p99_ms, response_p999_ms,
+#                   mean_batch_size, page_reads_per_query ]   # From the throughput benchmark's timed passes
 
-# Experiments CSV logging (selection + run metadata)
+# Experiments CSV: uncomment to write one row per measured configuration
 #logging:
-#  dir: logging # set as desired
-#  jvectorRef: "no-tag"   # tag or git sha (recommended)
-#  runId: "my-experiment-{ts}"   # optional; template with {ts} (UTC timestamp). Default: "{ts}"
-#  type: csv # only csv is presently supported
+#  dir: logging              # Directory for experiments.csv, relative to the working directory
+#  jvectorRef: "no-tag"      # Tag or git SHA recorded with each row (recommended)
+#  runId: "my-experiment-{ts}"  # Optional; {ts} is a UTC timestamp. Default: "{ts}"
+#  type: csv                 # Only csv is supported
 #  benchmarks:
-#    throughput: [ AVG ] # [AVG, MEDIAN, MAX]
-#    latency: [ AVG ] # [ AVG, STD, P999 ]
-#    count: [ visited ] # [ visited, expanded, expanded base layer ]
-#    accuracy: [ recall ] # [ recall, MAP ]
+#    throughput: [ AVG ]
+#    count:      [ visited ]
+#    accuracy:   [ recall ]
 #  metrics:
-#    system: [ max_heap_mb ] # [ max_heap_mb, max_offheap_mb ]
-#    disk: [ total_file_size_mb, file_count ] # [ total_file_size_mb, file_count ]
-#    construction: [ index_build_time_s ] # [ index_build_time_s, index_quant_time_s, search_quant_time_s ]
+#    construction: [ index_build_time_s ]

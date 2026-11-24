@@ -92,7 +92,12 @@ public abstract class VectorizationProvider {
           try {
             return (VectorizationProvider) Class.forName("io.github.jbellis.jvector.vector.NativeVectorizationProvider").getConstructor().newInstance();
           } catch (Throwable e) {
-            throw new RuntimeException("Failed to load forced NativeVectorizationProvider", e);
+            Throwable cause = e instanceof InvocationTargetException && e.getCause() != null ? e.getCause() : e;
+            String reason = String.valueOf(cause.getMessage() != null ? cause.getMessage() : cause)
+                .replaceAll("[.\\s]+$", "");
+            throw new RuntimeException("Failed to load forced NativeVectorizationProvider: " + reason
+                + ". It needs Java 22+ on Linux x86-64 or AArch64; remove jvector.vectorization_provider"
+                + " to let JVector choose.", e);
           }
         default:
           throw new IllegalArgumentException("Unknown vectorization provider: " + forcedProvider);

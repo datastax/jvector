@@ -31,7 +31,7 @@
 
 // Tier names in ascending capability order — index is ordinal (mirrors Java).
 static const std::vector<std::string> kIsaTiers = {
-    "sse42", "avx2", "avx3", "avx3_dl", "avx3_spr"
+    "sse42", "avx2", "avx3", "avx3_vnni", "avx3_dl", "avx3_spr"
 };
 
 static int tier_index(const std::string& name)
@@ -53,6 +53,11 @@ static bool has_avx3(const std::unordered_set<std::string>& f)
     return f.count("avx512f")  && f.count("avx512bw")
         && f.count("avx512cd") && f.count("avx512dq")
         && f.count("avx512vl");
+}
+
+static bool has_avx3_vnni(const std::unordered_set<std::string>& f)
+{
+    return has_avx3(f) && f.count("avx512_vnni");
 }
 
 static bool has_avx3_dl(const std::unordered_set<std::string>& f)
@@ -78,6 +83,7 @@ static std::string expected_isa(const std::unordered_set<std::string>& flags,
     std::string best;
     if      (has_avx3_spr(flags)) best = "avx3_spr";
     else if (has_avx3_dl(flags))  best = "avx3_dl";
+    else if (has_avx3_vnni(flags)) best = "avx3_vnni";
     else if (has_avx3(flags))     best = "avx3";
     else if (flags.count("avx2")) best = "avx2";
     else                          best = "sse42";
@@ -179,6 +185,30 @@ TEST_F(CpuFeaturesTest, Avx3Detection)
         EXPECT_LT(tier_index(s_active), tier_index("avx3"))
             << "Expected below AVX3 when avx512 baseline flags absent, got: " << s_active;
     }
+}
+
+// AVX3_VNNI tier is selected when avx512_vnni is present on top of AVX3.
+TEST_F(CpuFeaturesTest, Avx3VnniDetection)
+{
+    SKIP_IF_UNAVAILABLE();
+    bool cpu_has_avx3_vnni = has_avx3_vnni(s_flags);
+
+    if (cpu_has_avx3_vnni && !isCappedBelow("avx3_vnni")) {
+        EXPECT_GE(tier_index(s_active), tier_index("avx3_vnni"))
+            << "Expected AVX3_VNNI or higher when avx512_vnni is present, got: " << s_active;
+    } else if (!cpu_has_avx3_vnni) {
+        EXPECT_LT(tier_index(s_active), tier_index("avx3_vnni"))
+            << "Expected below AVX3_VNNI when avx512_vnni is absent, got: " << s_active;
+    }
+}
+
+// The VNNI INT8 projection kernel is used exactly on the VNNI tiers, so a cap at
+// avx3 or below turns it off even on a CPU with AVX-512 VNNI.
+TEST_F(CpuFeaturesTest, VnniKernelFollowsTheTier)
+{
+    bool vnni_tier = tier_index(s_active) >= tier_index("avx3_vnni");
+    EXPECT_EQ(ash_project_i8_available(), vnni_tier ? 1 : 0)
+        << "active_isa=" << s_active << " JVECTOR_MAX_ISA=" << (s_cap.empty() ? "(unset)" : s_cap);
 }
 
 // AVX3_DL tier is selected when all ICX flags are present on top of AVX3.

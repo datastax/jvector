@@ -21,9 +21,12 @@ import io.github.jbellis.jvector.example.util.BenchmarkSummarizer;
 import io.github.jbellis.jvector.example.util.BenchmarkSummarizer.SummaryStats;
 import io.github.jbellis.jvector.example.util.CheckpointManager;
 import io.github.jbellis.jvector.example.benchmarks.datasets.BaseVectorLoading;
+import io.github.jbellis.jvector.example.benchmarks.datasets.ByteDataSet;
+import io.github.jbellis.jvector.example.benchmarks.datasets.DataSet;
 import io.github.jbellis.jvector.example.benchmarks.datasets.DataSets;
 import io.github.jbellis.jvector.example.yaml.DatasetCollection;
 import io.github.jbellis.jvector.example.yaml.MultiConfig;
+import io.github.jbellis.jvector.example.yaml.SearchParameters;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -52,9 +55,15 @@ import java.util.LinkedHashMap;
  */
 public class AutoBenchYAML {
     private static final Logger logger = LoggerFactory.getLogger(AutoBenchYAML.class);
-    private static final String REGRESSION_TEST_KEY = "regression-tests";
+    private static final String REGRESSION_TEST_KEY = DatasetCollection.REGRESSION_TESTS;
 
     public static void main(String[] args) throws IOException {
+        try (var projectionSetting = new SearchParameters.AshQueryProjectionSetting()) {
+            run(args, projectionSetting);
+        }
+    }
+
+    private static void run(String[] args, SearchParameters.AshQueryProjectionSetting projectionSetting) throws IOException {
         // Check for --output argument (required for this class)
         String outputPath = null;
         for (int i = 0; i < args.length - 1; i++) {
@@ -114,53 +123,41 @@ public class AutoBenchYAML {
         // Add results from checkpoint if present
         results.addAll(checkpointManager.getCompletedResults());
 
-        // Process datasets from regex patterns
-        if (!datasetNames.isEmpty()) {
-            for (var datasetName : datasetNames) {
-                // Skip already completed datasets
-                if (checkpointManager.isDatasetCompleted(datasetName)) {
-                    logger.info("Skipping already completed dataset: {}", datasetName);
-                    continue;
-                }
+        // Resolve the process-wide ASH projection before any regression builds start.
+        var configs = new LinkedHashMap<String, MultiConfig>();
+        for (var datasetName : datasetNames) {
+            if (checkpointManager.isDatasetCompleted(datasetName)) {
+                logger.info("Skipping already completed dataset: {}", datasetName);
+                continue;
+            }
+            try {
+                var name = datasetName.endsWith(".hdf5")
+                        ? datasetName.substring(0, datasetName.length() - ".hdf5".length()) : datasetName;
+                var config = finalConfigPath == null ? MultiConfig.getDefaultConfig(name) : MultiConfig.getConfig(finalConfigPath);
+                if (finalConfigPath == null || config.dataset == null || config.dataset.isEmpty()) config.dataset = name;
+                configs.put(datasetName, config);
+            } catch (Exception e) {
+                logger.error("Exception while processing dataset {}", datasetName, e);
+            }
+        }
+        projectionSetting.apply(configs.values().stream().filter(MultiConfig::usesSchema3).collect(Collectors.toList()));
 
+        if (!configs.isEmpty()) {
+            for (var entry : configs.entrySet()) {
+                var datasetName = entry.getKey();
+                var config = entry.getValue();
                 try {
-                    String normalizedDatasetName = datasetName;
-                    if (normalizedDatasetName.endsWith(".hdf5")) {
-                        normalizedDatasetName = normalizedDatasetName.substring(0, normalizedDatasetName.length() - ".hdf5".length());
-                    }
-
-                    MultiConfig config;
-                    if (finalConfigPath != null) {
-                        config = MultiConfig.getConfig(finalConfigPath);
-                        // Override dataset name if not specified in custom config
-                        if (config.dataset == null || config.dataset.isEmpty()) {
-                            config.dataset = normalizedDatasetName;
-                        }
-                    } else {
-                        config = MultiConfig.getDefaultConfig(normalizedDatasetName);
-                        config.dataset = normalizedDatasetName;
-                    }
                     logger.info("Using configuration: {}", config);
                     var loading = BaseVectorLoading.forBenchmark(config);
 
                     logger.info("Loading dataset: {}", datasetName);
                     try (var ds = DataSets.loadDataSet(datasetName, loading).orElseThrow(
                             () -> new RuntimeException("Dataset " + datasetName + " not found")
-                    ).getDataSet()) {
-                        logger.info("Dataset loaded: {} with {} vectors", datasetName, ds.getBaseVectors().size());
+                    ).getBaseDataSet()) {
+                        logger.info("Dataset loaded: {} with {} vectors", datasetName, ds.size());
+                        if (ds instanceof ByteDataSet) config.validateForInt8Dataset();
 
-                        List<BenchResult> datasetResults = Grid.runAllAndCollectResults(ds,
-                                config.construction.useSavedIndexIfExists,
-                                config.construction.outDegree,
-                                config.construction.efConstruction,
-                                config.construction.neighborOverflow,
-                                config.construction.addHierarchy,
-                                config.construction.refineFinalGraph,
-                                config.construction.getFeatureSets(),
-                                config.construction.getCompressorParameters(),
-                                config.search.getCompressorParameters(),
-                                config.search.topKOverquery,
-                                config.search.useSearchPruning);
+                        List<BenchResult> datasetResults = Grid.runAndCollectResults(ds, GridSpec.fromConfig(config));
                         results.addAll(datasetResults);
 
                         logger.info("Benchmark completed for dataset: {}", datasetName);
@@ -168,7 +165,9 @@ public class AutoBenchYAML {
                         checkpointManager.markDatasetCompleted(datasetName, datasetResults);
 
                         // Compaction regression is opt-in; failures remain non-fatal.
-                        if (config.isCompactionEnabled()) {
+                        if (config.isCompactionEnabled() && ds instanceof ByteDataSet) {
+                            logger.info("Skipping compaction benchmark for dataset: {} (int8 indexes are not compacted)", datasetName);
+                        } else if (config.isCompactionEnabled()) {
                             try {
                                 logger.info("Running compaction benchmark for dataset: {}", datasetName);
                                 List<BenchResult> datasetCompactionResults;
@@ -180,7 +179,7 @@ public class AutoBenchYAML {
                                         datasetCompactionResults = CompactionBench.run(resident);
                                     }
                                 } else {
-                                    datasetCompactionResults = CompactionBench.run(ds);
+                                    datasetCompactionResults = CompactionBench.run((DataSet) ds);
                                 }
                                 compactionResults.addAll(datasetCompactionResults);
                                 logger.info("Compaction benchmark completed for dataset: {} ({} configs)",

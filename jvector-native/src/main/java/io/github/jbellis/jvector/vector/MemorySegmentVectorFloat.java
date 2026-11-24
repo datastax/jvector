@@ -31,6 +31,14 @@ import java.util.Objects;
  */
 final public class MemorySegmentVectorFloat implements VectorFloat<MemorySegment>, FloatArray
 {
+    private static final long SHALLOW_BYTES = RamUsageEstimator.shallowSizeOfInstance(MemorySegmentVectorFloat.class);
+    /** A heap float-array segment and its keep-alive scope, created on first native access. */
+    private static final long VIEW_BYTES;
+    static {
+        var probe = MemorySegment.ofArray(new float[0]);
+        VIEW_BYTES = RamUsageEstimator.shallowSizeOf(probe) + RamUsageEstimator.shallowSizeOf(probe.scope());
+    }
+
     private final float[] data;
     // Plain (non-volatile) cache: racing threads may each create a view, but heap segments have
     // only final fields, so any published reference is fully constructed and addresses the same
@@ -53,9 +61,9 @@ final public class MemorySegmentVectorFloat implements VectorFloat<MemorySegment
     @Override
     public long ramBytesUsed()
     {
-        int OH_BYTES = RamUsageEstimator.NUM_BYTES_OBJECT_HEADER;
-        int REF_BYTES = RamUsageEstimator.NUM_BYTES_OBJECT_REF;
-        return OH_BYTES + 2L * REF_BYTES + (long) length() * Float.BYTES;
+        // The float array, plus its segment view once native access has created one.
+        return SHALLOW_BYTES + RamUsageEstimator.sizeOfArray(data.length, Float.BYTES)
+                + (segment != null ? VIEW_BYTES : 0);
     }
 
     @Override

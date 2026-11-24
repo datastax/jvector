@@ -35,6 +35,31 @@ import java.util.function.IntFunction;
 import static org.junit.Assert.*;
 
 public class TestBufferedGraphCompatibility {
+    /// Panama float reductions may round differently before and after C2 compiles them, so identical
+    /// files can score a node a few ULPs apart within one JVM. Scores are in [0, 1].
+    private static final float SCORE_TOLERANCE = 1e-6f;
+
+    /// The fields compared by SearchResult.equals, since SearchResult has no toString.
+    private static String describe(SearchResult r) {
+        return "nodes=" + Arrays.toString(r.getNodes()) + ", visited=" + r.getVisitedCount()
+                + ", reranked=" + r.getRerankedCount() + ", worstApproximate=" + r.getWorstApproximateScoreInTopK();
+    }
+
+    /// Same nodes in the same order and the same search work; scores equal within SCORE_TOLERANCE.
+    private static void assertSameAnswer(String context, SearchResult expected, SearchResult actual) {
+        String message = context + "\n  expected: " + describe(expected) + "\n  actual:   " + describe(actual);
+        var expectedNodes = expected.getNodes();
+        var actualNodes = actual.getNodes();
+        assertEquals(message, expectedNodes.length, actualNodes.length);
+        for (int i = 0; i < expectedNodes.length; i++) {
+            assertEquals(message, expectedNodes[i].node, actualNodes[i].node);
+            assertEquals(message, expectedNodes[i].score, actualNodes[i].score, SCORE_TOLERANCE);
+        }
+        assertEquals(message, expected.getVisitedCount(), actual.getVisitedCount());
+        assertEquals(message, expected.getRerankedCount(), actual.getRerankedCount());
+        assertEquals(message, expected.getWorstApproximateScoreInTopK(), actual.getWorstApproximateScoreInTopK(), SCORE_TOLERANCE);
+    }
+
     /// Every level's adjacency, one "level node: neighbors" line per node in node order.
     private static List<String> adjacency(ImmutableGraphIndex graph) throws Exception {
         var lines = new ArrayList<String>();
@@ -141,7 +166,9 @@ public class TestBufferedGraphCompatibility {
                                                                 : new DefaultSearchScoreProvider(reranker);
                                                         var answer = searcher.search(scores, 10, Bits.ALL);
                                                         if (expectedAnswer == null) expectedAnswer = answer;
-                                                        else assertEquals(expectedAnswer, answer);
+                                                        else assertSameAnswer("dimension=" + dimension + ", build=" + (mode == 0 ? "exact" : mode == 1 ? "PQ" : "BQ")
+                                                                        + ", metric=" + metric + ", refine=" + refine + ", fused=" + fused + ", quantized=" + quantized,
+                                                                expectedAnswer, answer);
                                                     }
                                                 } finally { Files.delete(graphFile); }
                                             }

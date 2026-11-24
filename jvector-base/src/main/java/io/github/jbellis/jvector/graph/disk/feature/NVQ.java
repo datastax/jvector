@@ -23,6 +23,7 @@ import io.github.jbellis.jvector.graph.disk.OnDiskGraphIndex;
 import io.github.jbellis.jvector.graph.similarity.ScoreFunction;
 import io.github.jbellis.jvector.quantization.NVQScorer;
 import io.github.jbellis.jvector.quantization.NVQuantization;
+import io.github.jbellis.jvector.util.RamUsageEstimator;
 import io.github.jbellis.jvector.quantization.NVQuantization.QuantizedVector;
 import io.github.jbellis.jvector.vector.VectorSimilarityFunction;
 import io.github.jbellis.jvector.vector.types.VectorFloat;
@@ -50,6 +51,11 @@ public class NVQ extends AbstractFeature {
     }
 
     @Override
+    public long ramBytesUsed() {
+        return RamUsageEstimator.shallowSizeOf(this) + RamUsageEstimator.shallowSizeOf(scorer) + nvq.ramBytesUsed();
+    }
+
+    @Override
     public int headerSize() {
         return nvq.compressorSize();
     }
@@ -69,9 +75,15 @@ public class NVQ extends AbstractFeature {
         }
     }
 
+    @Deprecated
     @Override
     public void writeHeader(IndexWriter out) throws IOException {
-        nvq.write(out, OnDiskGraphIndex.CURRENT_VERSION);
+        writeHeader(out, OnDiskGraphIndex.CURRENT_VERSION);
+    }
+
+    @Override
+    public void writeHeader(IndexWriter out, int version) throws IOException {
+        nvq.write(out, version);
     }
 
     @Override

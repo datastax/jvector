@@ -15,7 +15,7 @@
  */
 
 // Runtime SIMD dispatch: selects the best available ISA tier at startup.
-// x86-64 tiers (descending): AVX3_SPR, AVX3_DL, AVX3, AVX2, SSE42.
+// x86-64 tiers (descending): AVX3_SPR, AVX3_DL, AVX3_VNNI, AVX3, AVX2, SSE42.
 //   SSE42 is the x86-64 baseline — assumed always available, no CPUID check.
 // AArch64 tiers (descending): SVE2 (HWY_SVE2), SVE (HWY_SVE), NEON.
 //   SVE/SVE2 are scalable targets (HWY_HAVE_SCALABLE=1): Lanes() is runtime.
@@ -41,13 +41,14 @@ namespace {
 // Unset (INT_MAX) means "no override; use best available CPU capability"
 // and must be greater than every named tier so that all guards pass.
 #if JV_ARCH_X86_64
-enum class MaxIsa { SSE42 = 0, AVX2 = 1, AVX3 = 2, AVX3_DL = 3, AVX3_SPR = 4,
+enum class MaxIsa { SSE42 = 0, AVX2 = 1, AVX3 = 2, AVX3_VNNI = 3, AVX3_DL = 4, AVX3_SPR = 5,
                     Unset = INT_MAX };
 static_assert(
-    (int)MaxIsa::SSE42      < (int)MaxIsa::AVX2
-    && (int)MaxIsa::AVX2    < (int)MaxIsa::AVX3
-    && (int)MaxIsa::AVX3    < (int)MaxIsa::AVX3_DL
-    && (int)MaxIsa::AVX3_DL < (int)MaxIsa::AVX3_SPR
+    (int)MaxIsa::SSE42        < (int)MaxIsa::AVX2
+    && (int)MaxIsa::AVX2      < (int)MaxIsa::AVX3
+    && (int)MaxIsa::AVX3      < (int)MaxIsa::AVX3_VNNI
+    && (int)MaxIsa::AVX3_VNNI < (int)MaxIsa::AVX3_DL
+    && (int)MaxIsa::AVX3_DL   < (int)MaxIsa::AVX3_SPR
     && (int)MaxIsa::AVX3_SPR < (int)MaxIsa::Unset,
     "MaxIsa values must be in strict ascending capability order with Unset at the top");
 #elif JV_ARCH_AARCH64
@@ -63,16 +64,17 @@ static_assert(
 // Reads the JVECTOR_MAX_ISA environment variable and maps it to a MaxIsa
 // value.  This lets callers cap the ISA at runtime without recompiling —
 // useful for benchmarking or working around CPU errata.
-// x86-64 values (case-sensitive): "avx3_spr", "avx3_dl", "avx3", "avx2", "sse42".
+// x86-64 values (case-sensitive): "avx3_spr", "avx3_dl", "avx3_vnni", "avx3", "avx2", "sse42".
 // AArch64 values (case-sensitive): "sve2", "sve", "neon".
 static MaxIsa read_max_isa() noexcept
 {
     const char *val = std::getenv("JVECTOR_MAX_ISA");
     if (!val) return MaxIsa::Unset;
 #if JV_ARCH_X86_64
-    if (std::strcmp(val, "avx3_spr") == 0) return MaxIsa::AVX3_SPR;
-    if (std::strcmp(val, "avx3_dl")  == 0) return MaxIsa::AVX3_DL;
-    if (std::strcmp(val, "avx3")     == 0) return MaxIsa::AVX3;
+    if (std::strcmp(val, "avx3_spr")  == 0) return MaxIsa::AVX3_SPR;
+    if (std::strcmp(val, "avx3_dl")   == 0) return MaxIsa::AVX3_DL;
+    if (std::strcmp(val, "avx3_vnni") == 0) return MaxIsa::AVX3_VNNI;
+    if (std::strcmp(val, "avx3")      == 0) return MaxIsa::AVX3;
     if (std::strcmp(val, "avx2")     == 0) return MaxIsa::AVX2;
     if (std::strcmp(val, "sse42")    == 0) return MaxIsa::SSE42;
 #elif JV_ARCH_AARCH64
@@ -107,19 +109,38 @@ static const KernelVTable AVX3_vtable = {
 };
 #undef KERNEL_ENTRY
 
-// AVX3_DL (Ice Lake) inherits all slots from AVX3 unchanged for now.
+// AVX3_DL inherits AVX3 and uses native popcount/byte-dot for ASH pairs and VNNI for int8 similarity.
 // To override a slot: t.kernel_name = AVX3_DL::kernel_name;
 // The implementation must exist in jvector_avx3_dl_kernels.cpp.
 static const KernelVTable AVX3_DL_vtable = []() {
     KernelVTable t = AVX3_vtable;
+    t.ash_symmetric_dot = AVX3_DL::ash_symmetric_dot;
+    t.ash_symmetric_dot_rows = AVX3_DL::ash_symmetric_dot_rows;
+    t.ash_score_neighborhood_i8_c1 = AVX3_DL::ash_score_neighborhood_i8_c1;
+    t.ash_score_neighborhood_i8_c1_euclidean = AVX3_DL::ash_score_neighborhood_i8_c1_euclidean;
+    t.ash_project_i8_available = AVX3_DL::ash_project_i8_available;
+    t.ash_project_batch_i8 = AVX3_DL::ash_project_batch_i8;
+    t.dot_product_i8 = AVX3_DL::dot_product_i8;
+    t.euclidean_i8   = AVX3_DL::euclidean_i8;
+    t.cosine_i8      = AVX3_DL::cosine_i8;
     return t;
 }();
 
-// AVX3_SPR (Sapphire Rapids) inherits all slots from AVX3_DL unchanged for now.
+// AVX3_SPR (Sapphire Rapids) inherits the AVX3_DL slots; INT8 projection uses 512-bit tiles.
 // To override a slot: t.kernel_name = AVX3_SPR::kernel_name;
 // The implementation must exist in jvector_avx3_spr_kernels.cpp.
 static const KernelVTable AVX3_SPR_vtable = []() {
     KernelVTable t = AVX3_DL_vtable;   // inherits DL overrides automatically
+    t.ash_project_batch_i8 = AVX3_SPR::ash_project_batch_i8;
+    return t;
+}();
+
+// AVX3 with AVX-512 VNNI (Cascade Lake, Cooper Lake): the AVX3 slots, plus INT8 projection.
+// The implementation exists in jvector_avx3_vnni_kernels.cpp.
+static const KernelVTable AVX3_VNNI_vtable = []() {
+    KernelVTable t = AVX3_vtable;
+    t.ash_project_i8_available = AVX3_VNNI::ash_project_i8_available;
+    t.ash_project_batch_i8 = AVX3_VNNI::ash_project_batch_i8;
     return t;
 }();
 
@@ -190,22 +211,25 @@ static DispatchResult dispatch_kernels() noexcept
     // Capture the recognised env-var string (or nullptr) for later retrieval.
     const char *env_str = nullptr;
 #if JV_ARCH_X86_64
-    if (max_isa == MaxIsa::AVX3_SPR)     env_str = "avx3_spr";
-    else if (max_isa == MaxIsa::AVX3_DL) env_str = "avx3_dl";
-    else if (max_isa == MaxIsa::AVX3)    env_str = "avx3";
-    else if (max_isa == MaxIsa::AVX2)    env_str = "avx2";
-    else if (max_isa == MaxIsa::SSE42)   env_str = "sse42";
+    if (max_isa == MaxIsa::AVX3_SPR)       env_str = "avx3_spr";
+    else if (max_isa == MaxIsa::AVX3_DL)   env_str = "avx3_dl";
+    else if (max_isa == MaxIsa::AVX3_VNNI) env_str = "avx3_vnni";
+    else if (max_isa == MaxIsa::AVX3)      env_str = "avx3";
+    else if (max_isa == MaxIsa::AVX2)      env_str = "avx2";
+    else if (max_isa == MaxIsa::SSE42)     env_str = "sse42";
 
     // Select the highest tier the CPU supports and the cap allows.
     // max_isa > MaxIsa::X means "user has not capped at X or below".
     // Adding a new tier above AVX3_SPR only requires one new if at the top.
-    if (max_isa > MaxIsa::AVX3_DL && has(CpuFeature::AVX3_SPR))
+    if (max_isa > MaxIsa::AVX3_DL   && has(CpuFeature::AVX3_SPR))
         return { AVX3_SPR_vtable, MaxIsa::AVX3_SPR, env_str };
-    if (max_isa > MaxIsa::AVX3    && has(CpuFeature::AVX3_DL))
+    if (max_isa > MaxIsa::AVX3_VNNI && has(CpuFeature::AVX3_DL))
         return { AVX3_DL_vtable, MaxIsa::AVX3_DL, env_str };
-    if (max_isa > MaxIsa::AVX2    && has(CpuFeature::AVX3))
+    if (max_isa > MaxIsa::AVX3      && has(CpuFeature::AVX3) && has(CpuFeature::AVX512_VNNI))
+        return { AVX3_VNNI_vtable, MaxIsa::AVX3_VNNI, env_str };
+    if (max_isa > MaxIsa::AVX2      && has(CpuFeature::AVX3))
         return { AVX3_vtable, MaxIsa::AVX3, env_str };
-    if (max_isa > MaxIsa::SSE42   && has(CpuFeature::AVX2))
+    if (max_isa > MaxIsa::SSE42     && has(CpuFeature::AVX2))
         return { AVX2_vtable, MaxIsa::AVX2, env_str };
     // SSE42 is the x86-64 baseline — assumed always present, no CPUID check.
     return { SSE42_vtable, MaxIsa::SSE42, env_str };
@@ -283,8 +307,9 @@ const char *jvector_simd_get_active_isa()
     switch (active_isa) {
 #if JV_ARCH_X86_64
         case MaxIsa::AVX3_SPR: return "avx3_spr";
-        case MaxIsa::AVX3_DL:  return "avx3_dl";
-        case MaxIsa::AVX3:     return "avx3";
+        case MaxIsa::AVX3_DL:   return "avx3_dl";
+        case MaxIsa::AVX3_VNNI: return "avx3_vnni";
+        case MaxIsa::AVX3:      return "avx3";
         case MaxIsa::AVX2:     return "avx2";
         case MaxIsa::SSE42:    return "sse42";
 #elif JV_ARCH_AARCH64

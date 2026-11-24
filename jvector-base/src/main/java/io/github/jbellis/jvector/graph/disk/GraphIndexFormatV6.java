@@ -26,6 +26,7 @@ import java.io.IOException;
 import java.util.EnumMap;
 import java.util.LinkedHashMap;
 import java.util.Map;
+import java.util.Set;
 import java.util.function.IntFunction;
 import java.util.stream.Collectors;
 
@@ -44,7 +45,12 @@ class GraphIndexFormatV6 extends GraphIndexFormatV5 {
 
     /** Creates the singleton format for version 6. */
     GraphIndexFormatV6() {
-        super(6, allFeatures());
+        this(6, allFeatures());
+    }
+
+    /** Allows later feature extensions to reuse the V6 record and hierarchy layout. */
+    protected GraphIndexFormatV6(int version, Set<FeatureId> supportedFeatures) {
+        super(version, supportedFeatures);
     }
 
     /** Places fused features last so non-fused inline features occupy a contiguous prefix. */
@@ -112,7 +118,7 @@ class GraphIndexFormatV6 extends GraphIndexFormatV5 {
         for (var featureId : features.keySet()) {
             out.writeInt(featureId.ordinal());
             Feature feature = features.get(featureId);
-            feature.writeHeader(out);
+            feature.writeHeader(out, getVersion());
         }
     }
 
@@ -122,7 +128,7 @@ class GraphIndexFormatV6 extends GraphIndexFormatV5 {
         // In V6, this accounts for the number of features and the ordinal of each feature
         size += Integer.BYTES + features.size() * Integer.BYTES;
 
-        size += features.values().stream().mapToInt(Feature::headerSize).sum();
+        size += features.values().stream().mapToInt(f -> f.headerSize(getVersion())).sum();
 
         return size;
     }

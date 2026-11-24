@@ -39,6 +39,7 @@ public interface FusedFeature extends Feature {
 
     void writeSourceFeature(IndexWriter out, State state) throws IOException;
 
+    /** Retained source-object bytes, including its buffers but excluding the shared compressor. */
     interface InlineSource extends Accountable {}
 
     InlineSource loadSourceFeature(RandomAccessReader in) throws IOException;
