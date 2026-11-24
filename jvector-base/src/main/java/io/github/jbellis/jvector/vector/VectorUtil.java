@@ -104,6 +104,8 @@ public final class VectorUtil {
    * when unsupported, allowing callers to retain their existing Java scan.
    * Equal distances retain the first centroid. No distance array is allocated.
    * Callers must supply finite centroids; with assertions enabled, the selected distance is checked.
+   * Unlike the callers' fallback loops, which assert every distance, this does not fail when finite
+   * inputs overflow to an infinite distance for a centroid that is not selected.
    */
   public static int tryClosestCentroid(VectorFloat<?> point, int pointOffset,
                                     VectorFloat<?> centroids, int centroidCount, int dimension) {
