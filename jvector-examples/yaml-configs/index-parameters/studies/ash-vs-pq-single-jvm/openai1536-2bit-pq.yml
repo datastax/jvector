@@ -6,7 +6,7 @@
 # overquery 1), so every query is new to the JVM. The index settings match
 # studies/ash-vs-pq.
 yamlSchemaVersion: 3
-onDiskIndexVersion: 7
+onDiskIndexVersion: 8
 dataset: openai-1536-1m
 
 construction:

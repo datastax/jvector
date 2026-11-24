@@ -180,7 +180,7 @@ public class GraphIndexBuilder implements Closeable, Accountable {
             return BuildScoreProvider.pqBuildScoreProvider(similarityFunction, (PQVectors) compressed);
         }
         if (compressed instanceof BQVectors) {
-            return BuildScoreProvider.bqBuildScoreProvider((BQVectors) compressed);
+            return BuildScoreProvider.bqBuildScoreProvider((BQVectors) compressed, similarityFunction);
         }
         if (compressed instanceof ASHVectors) {
             return BuildScoreProvider.ashBuildScoreProvider((ASHVectors) compressed);

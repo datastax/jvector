@@ -1,7 +1,7 @@
 # openai-3072-1m (3072 dimensions): in-memory graph built and searched with 1-bit BQ codes,
 # then rescored with full-precision vectors. BQ suits very high-dimensional embeddings.
 yamlSchemaVersion: 3
-onDiskIndexVersion: 7
+onDiskIndexVersion: 8
 
 dataset: openai-3072-1m
 

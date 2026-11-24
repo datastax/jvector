@@ -1,6 +1,6 @@
 # ASH configuration for DOT_PRODUCT datasets only.
 yamlSchemaVersion: 3
-onDiskIndexVersion: 7
+onDiskIndexVersion: 8
 
 dataset: cohere-english-v3-1M
 useDatasetPrefetching: false

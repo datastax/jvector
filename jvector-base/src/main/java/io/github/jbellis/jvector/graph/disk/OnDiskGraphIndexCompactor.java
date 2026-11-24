@@ -343,12 +343,27 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
         // 0..live-1), so the extent is known before the mapping itself exists.
         maxOrdinal = numTotalNodes - 1;
         this.similarityFunction = similarityFunction;
+        warnOnSimilarityMismatch(sources, similarityFunction);
+    }
+
+    // The output records the compactor's function (format version 8 and above). A source that recorded a
+    // different one was built for another function, and its edges were chosen by it; compacting it anyway is
+    // what earlier releases did, so this warns rather than refuses.
+    private static void warnOnSimilarityMismatch(List<OnDiskGraphIndex> sources, VectorSimilarityFunction similarityFunction) {
+        for (int s = 0; s < sources.size(); s++) {
+            var recorded = sources.get(s).similarityFunction();
+            if (recorded.isPresent() && recorded.get() != similarityFunction) {
+                log.warn("Source {} was built with {} similarity, but the compactor uses {}; the output records {}",
+                        s, recorded.get(), similarityFunction, similarityFunction);
+            }
+        }
     }
 
     /**
      * Sets the on-disk format version of the output; the default is {@link OnDiskGraphIndex#CURRENT_VERSION}.
      * The sources may be of any version the reader supports, and the output is written at this one.
-     * An output that carries fused PQ needs version 6; one with upper layers needs version 4 or above.
+     * An output that carries fused PQ needs version 6 or above; one with upper layers needs version 4 or above.
+     * From version 8 the output records this compactor's similarity function.
      * A compressed sidecar written beside the graph ({@link #compact(Path, Path)}) serializes its merged
      * compressor at the same version; a PQ with an anisotropic threshold needs version 3 or above there.
      *
@@ -943,7 +958,8 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
 
         log.info("Writing compacted graph : {} total nodes, maxOrdinal={}, dimension={}, degree={}",
                 numTotalNodes, maxOrdinal, dimension, maxDegrees.get(0));
-        try (CompactWriter writer = new CompactWriter(outputPath, version, maxOrdinal, numTotalNodes, 0, layerInfo, entryNode, dimension, maxDegrees, outputFusedFeature)) {
+        try (CompactWriter writer = new CompactWriter(outputPath, version, maxOrdinal, numTotalNodes, 0, layerInfo, entryNode, dimension, maxDegrees, outputFusedFeature,
+                RecordedSimilarity.of(similarityFunction))) {
             // Header has to be written first so the writer's position is past the header
             // before any strategy that mmaps past the projected end of the output runs.
             writer.writeHeader();

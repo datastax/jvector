@@ -32,6 +32,7 @@ import io.github.jbellis.jvector.vector.VectorizationProvider;
 import io.github.jbellis.jvector.vector.types.ByteSequence;
 import io.github.jbellis.jvector.vector.types.VectorFloat;
 import io.github.jbellis.jvector.vector.types.VectorTypeSupport;
+import java.util.Optional;
 import java.util.function.Supplier;
 
 /**
@@ -113,6 +114,28 @@ public interface BuildScoreProvider {
     }
 
     /**
+     * Returns the similarity function the graph built with this provider is meant to be searched with, or
+     * empty if the provider doesn't name a single one. A graph reports it as its own
+     * {@link io.github.jbellis.jvector.api.Index#similarityFunction()}. (Named apart from that method so
+     * that it can't shadow a {@code similarityFunction()} method of a class that creates a provider.)
+     * <p>
+     * The factories in this interface report the function they were given; the default implementation,
+     * which custom providers inherit, returns empty.
+     */
+    default Optional<VectorSimilarityFunction> searchSimilarityFunction() {
+        return Optional.empty();
+    }
+
+    /**
+     * As {@link #searchSimilarityFunction()}, for a provider over int8 vectors: the function a graph built with
+     * it reports as its {@link io.github.jbellis.jvector.api.Index#byteSimilarityFunction()}. The default
+     * implementation returns empty.
+     */
+    default Optional<ByteVectorSimilarityFunction> searchByteSimilarityFunction() {
+        return Optional.empty();
+    }
+
+    /**
      * Returns a BSP that performs exact score comparisons using the given RandomAccessVectorValues and VectorSimilarityFunction.
      *
      * Helper method for the special case that mapping between graph node IDs and ravv ordinals is the identity function.
@@ -132,6 +155,11 @@ public interface BuildScoreProvider {
         Supplier<RandomAccessVectorValues> vectorsCopy = ravv.threadLocalSupplier();
 
         return new BuildScoreProvider() {
+            @Override
+            public Optional<VectorSimilarityFunction> searchSimilarityFunction() {
+                return Optional.of(similarityFunction);
+            }
+
             /// Exact scores against `node1`.
             ///
             /// For a value-shared source the anchor is read on the first comparison and kept as
@@ -213,6 +241,11 @@ public interface BuildScoreProvider {
 
         return new BuildScoreProvider() {
             @Override
+            public Optional<VectorSimilarityFunction> searchSimilarityFunction() {
+                return Optional.of(vsf);
+            }
+
+            @Override
             public boolean isExact() {
                 return false;
             }
@@ -262,6 +295,11 @@ public interface BuildScoreProvider {
         var vectorsCopy = ravv.threadLocalSupplier();
 
         return new BuildScoreProvider() {
+            @Override
+            public Optional<ByteVectorSimilarityFunction> searchByteSimilarityFunction() {
+                return Optional.of(bvsf);
+            }
+
             /// Exact scores against `node1`.
             ///
             /// For a value-shared source the anchor is read on the first comparison and kept as
@@ -340,8 +378,28 @@ public interface BuildScoreProvider {
         };
     }
 
+    /**
+     * Returns a BSP that compares {@code bqv}'s binary codes. It names no similarity function; see
+     * {@link #bqBuildScoreProvider(BQVectors, VectorSimilarityFunction)}.
+     */
     static BuildScoreProvider bqBuildScoreProvider(BQVectors bqv) {
+        return bqBuildScoreProvider(bqv, null);
+    }
+
+    /**
+     * Returns a BSP that compares {@code bqv}'s binary codes, for a graph meant to be searched with
+     * {@code similarityFunction}. The codes are compared the same way whatever the function;
+     * {@code similarityFunction} is only reported by {@link #searchSimilarityFunction()}.
+     *
+     * @param similarityFunction the function the graph is meant to be searched with, or null if it has none
+     */
+    static BuildScoreProvider bqBuildScoreProvider(BQVectors bqv, VectorSimilarityFunction similarityFunction) {
         return new BuildScoreProvider() {
+            @Override
+            public Optional<VectorSimilarityFunction> searchSimilarityFunction() {
+                return Optional.ofNullable(similarityFunction);
+            }
+
             @Override
             public boolean isExact() {
                 return false;
@@ -410,6 +468,11 @@ public interface BuildScoreProvider {
         final var symmetric = new ASHSymmetricScorer(ashv);
 
         return new BuildScoreProvider() {
+            @Override
+            public Optional<VectorSimilarityFunction> searchSimilarityFunction() {
+                return Optional.of(vsf);
+            }
+
             @Override
             public boolean isExact() {
                 return false;

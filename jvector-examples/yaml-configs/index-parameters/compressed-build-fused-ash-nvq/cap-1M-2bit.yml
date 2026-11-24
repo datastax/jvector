@@ -1,7 +1,7 @@
 # CAP-1M at 32X nominal compression. Build with symmetric 2-bit ASH scoring
 # and write fused ASH traversal codes and NVQ reranking vectors in parallel.
 yamlSchemaVersion: 3
-onDiskIndexVersion: 7
+onDiskIndexVersion: 8
 dataset: cap-1M
 
 construction:

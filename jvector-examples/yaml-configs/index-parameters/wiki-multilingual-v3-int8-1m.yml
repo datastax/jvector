@@ -1,6 +1,6 @@
 # Signed int8 vectors stored inline and scored exactly; int8 supports no compression or reranking.
 yamlSchemaVersion: 3
-onDiskIndexVersion: 7
+onDiskIndexVersion: 8
 
 dataset: wiki-multilingual-v3-int8-1m
 

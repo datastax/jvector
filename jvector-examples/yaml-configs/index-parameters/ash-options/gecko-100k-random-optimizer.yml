@@ -1,7 +1,7 @@
 # gecko-100k: fused 2-bit ASH graph with NVQ reranking. This example shows how to
 # train ASH with a random rotation instead of ITQ.
 yamlSchemaVersion: 3
-onDiskIndexVersion: 7
+onDiskIndexVersion: 8
 
 dataset: gecko-100k
 

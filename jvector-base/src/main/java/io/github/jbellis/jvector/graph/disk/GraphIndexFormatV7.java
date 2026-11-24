@@ -18,6 +18,8 @@ package io.github.jbellis.jvector.graph.disk;
 
 import io.github.jbellis.jvector.graph.disk.feature.FeatureId;
 
+import java.util.Set;
+
 /**
  * Format for version 7 of the on-disk graph format.
  * Version 7 characteristics:
@@ -37,10 +39,18 @@ import io.github.jbellis.jvector.graph.disk.feature.FeatureId;
  * Feature headers describe the quantizer and the fused source representation.
  * It also adds inline int8 vectors, one byte per dimension in each node record.
  */
-final class GraphIndexFormatV7 extends GraphIndexFormatV6 {
+class GraphIndexFormatV7 extends GraphIndexFormatV6 {
 
     /** Creates the singleton format for version 7. */
     GraphIndexFormatV7() {
         super(7, v7Features());
+    }
+
+    /**
+     * Protected constructor for subclasses (V8) that share V7's graph layout but extend the header or
+     * support a different set of features.
+     */
+    protected GraphIndexFormatV7(int version, Set<FeatureId> supportedFeatures) {
+        super(version, supportedFeatures);
     }
 }

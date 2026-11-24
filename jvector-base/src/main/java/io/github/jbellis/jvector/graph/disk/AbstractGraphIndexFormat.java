@@ -176,7 +176,8 @@ abstract class AbstractGraphIndexFormat implements GraphIndexFormat {
             var en = view.entryNode();
             entryNode = en == null ? GraphIndex.ENTRY_NODE_ABSENT : ctx.ordinalMapper.oldToNew(en.node);
         }
-        var commonHeader = new CommonHeader(getVersion(), ctx.dimension, entryNode, layerInfo, ctx.ordinalMapper.maxOrdinal() + 1);
+        var commonHeader = new CommonHeader(getVersion(), ctx.dimension, entryNode, layerInfo, ctx.ordinalMapper.maxOrdinal() + 1,
+                ctx.similarity);
         var header = new Header(commonHeader, ctx.featureMap);
         header.write(out);
         assert out.position() == ctx.startOffset + ctx.headerSize
@@ -196,7 +197,8 @@ abstract class AbstractGraphIndexFormat implements GraphIndexFormat {
             var en = view.entryNode();
             entryNode = en == null ? GraphIndex.ENTRY_NODE_ABSENT : ctx.ordinalMapper.oldToNew(en.node);
         }
-        var commonHeader = new CommonHeader(getVersion(), ctx.dimension, entryNode, layerInfo, ctx.ordinalMapper.maxOrdinal() + 1);
+        var commonHeader = new CommonHeader(getVersion(), ctx.dimension, entryNode, layerInfo, ctx.ordinalMapper.maxOrdinal() + 1,
+                ctx.similarity);
         var header = new Header(commonHeader, ctx.featureMap);
         header.write(out);
         out.writeLong(headerOffset);
@@ -415,6 +417,16 @@ abstract class AbstractGraphIndexFormat implements GraphIndexFormat {
     @Override
     public OnDiskGraphIndex loadOnDiskIndex(RandomAccessReader reader, Header header, ReaderSupplier readerSupplier, boolean useFooter) throws IOException {
         return OnDiskGraphIndex.construct(readerSupplier, header, reader.getPosition(), reader);
+    }
+
+    /**
+     * Helper to create the frozen set of features supported by version 8, the same as version 7's: version 8
+     * changes the header, not the features. Deliberately enumerated for the same reason as {@link #v6Features()}.
+     */
+    protected static Set<FeatureId> v8Features() {
+        return EnumSet.of(FeatureId.INLINE_VECTORS, FeatureId.FUSED_PQ, FeatureId.NVQ_VECTORS,
+                FeatureId.SEPARATED_VECTORS, FeatureId.SEPARATED_NVQ, FeatureId.FUSED_ASH,
+                FeatureId.PAGE_ALIGNMENT, FeatureId.INLINE_BYTE_VECTORS);
     }
 
     /**

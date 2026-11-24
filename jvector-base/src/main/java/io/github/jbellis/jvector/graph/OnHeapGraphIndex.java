@@ -32,6 +32,8 @@ import io.github.jbellis.jvector.graph.disk.OnDiskGraphIndexWriter;
 import io.github.jbellis.jvector.graph.disk.OnDiskParallelGraphIndexWriter;
 import io.github.jbellis.jvector.graph.disk.OnDiskSequentialGraphIndexWriter;
 import io.github.jbellis.jvector.graph.diversity.DiversityProvider;
+import io.github.jbellis.jvector.graph.diversity.VamanaDiversityProvider;
+import io.github.jbellis.jvector.graph.similarity.BuildScoreProvider;
 import io.github.jbellis.jvector.graph.similarity.ScoreFunction;
 import io.github.jbellis.jvector.util.Accountable;
 import io.github.jbellis.jvector.util.BitSet;
@@ -41,6 +43,8 @@ import io.github.jbellis.jvector.util.PagedIntMap;
 import io.github.jbellis.jvector.util.RamUsageEstimator;
 import io.github.jbellis.jvector.util.SparseIntMap;
 import io.github.jbellis.jvector.util.ThreadSafeGrowableBitSet;
+import io.github.jbellis.jvector.vector.ByteVectorSimilarityFunction;
+import io.github.jbellis.jvector.vector.VectorSimilarityFunction;
 import org.agrona.collections.IntArrayList;
 
 import java.io.DataOutput;
@@ -52,6 +56,7 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.NoSuchElementException;
+import java.util.Optional;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicIntegerArray;
 import java.util.concurrent.atomic.AtomicReference;
@@ -185,6 +190,29 @@ public class OnHeapGraphIndex implements MutableGraphIndex {
     /** The diversity provider that prunes this graph's neighbor lists, which scores the way the graph was built. */
     DiversityProvider diversityProvider() {
         return layers[0].diversityProvider;
+    }
+
+    /**
+     * Returns the similarity function of the score provider this graph is built with, which is empty for a
+     * custom provider that doesn't name one, and for a graph of int8 vectors.
+     */
+    @Override
+    public Optional<VectorSimilarityFunction> similarityFunction() {
+        BuildScoreProvider provider = buildScoreProvider();
+        return provider == null ? Optional.empty() : provider.searchSimilarityFunction();
+    }
+
+    /** As {@link #similarityFunction()}, for a graph of int8 vectors. */
+    @Override
+    public Optional<ByteVectorSimilarityFunction> byteSimilarityFunction() {
+        BuildScoreProvider provider = buildScoreProvider();
+        return provider == null ? Optional.empty() : provider.searchByteSimilarityFunction();
+    }
+
+    /** The score provider this graph is built with, or null if its diversity provider doesn't expose one. */
+    private BuildScoreProvider buildScoreProvider() {
+        DiversityProvider diversity = diversityProvider();
+        return diversity instanceof VamanaDiversityProvider ? ((VamanaDiversityProvider) diversity).scoreProvider : null;
     }
 
     public void addNode(NodeAtLevel nodeLevel) {

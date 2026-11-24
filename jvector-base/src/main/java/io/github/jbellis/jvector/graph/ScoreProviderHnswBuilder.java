@@ -18,10 +18,12 @@ package io.github.jbellis.jvector.graph;
 
 import io.github.jbellis.jvector.graph.similarity.BuildScoreProvider;
 import io.github.jbellis.jvector.management.CompressionType;
+import io.github.jbellis.jvector.vector.VectorSimilarityFunction;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.util.Objects;
+import java.util.Optional;
 
 /**
  * An {@link HnswIndexBuilder} that builds with a caller-supplied {@link BuildScoreProvider}, e.g. one
@@ -105,6 +107,11 @@ public class ScoreProviderHnswBuilder extends HnswIndexBuilder {
     @Override
     boolean scoresExactly() {
         return scoreProvider.isExact();
+    }
+
+    @Override
+    Optional<VectorSimilarityFunction> similarityFunction() {
+        return scoreProvider.searchSimilarityFunction();
     }
 
     @Override

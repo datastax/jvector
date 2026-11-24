@@ -2,7 +2,7 @@
 # build with asymmetric ASH scoring: full-precision insertion
 # queries against stored codes for insertion and pruning.
 yamlSchemaVersion: 3
-onDiskIndexVersion: 7
+onDiskIndexVersion: 8
 
 dataset: mpnet-1m
 

@@ -32,7 +32,7 @@ public class WorkersConfigTest {
 
     private MultiConfig load(int schema, String constructionWorkers, String searchWorkers) throws Exception {
         var file = directory.newFile().toPath();
-        Files.writeString(file, "yamlSchemaVersion: " + schema + "\nonDiskIndexVersion: 7\ndataset: test\n"
+        Files.writeString(file, "yamlSchemaVersion: " + schema + "\nonDiskIndexVersion: 8\ndataset: test\n"
                 + "construction:\n" + (schema == 3 ? "  type: onDisk\n" : "")
                 + "  outDegree: [16]\n  efConstruction: [50]\n"
                 + "  neighborOverflow: [1.2]\n  addHierarchy: [No]\n  refineFinalGraph: [Yes]\n"

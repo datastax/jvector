@@ -107,8 +107,16 @@ public class NVQ extends AbstractFeature {
     public ScoreFunction.ExactScoreFunction rerankerFor(VectorFloat<?> queryVector,
                                                         VectorSimilarityFunction vsf,
                                                         FeatureSource source) {
-        var function = scorer.scoreFunctionFor(queryVector, vsf);
+        return rerankerFor(scoreFunctionFor(queryVector, vsf), source);
+    }
 
+    /** The per-query part of {@link #rerankerFor(VectorFloat, VectorSimilarityFunction, FeatureSource)}, to compute once and reuse. */
+    public NVQScorer.NVQScoreFunction scoreFunctionFor(VectorFloat<?> queryVector, VectorSimilarityFunction vsf) {
+        return scorer.scoreFunctionFor(queryVector, vsf);
+    }
+
+    /** A reranker scoring the vectors {@code source} stores by {@code function}, from {@link #scoreFunctionFor}. */
+    public ScoreFunction.ExactScoreFunction rerankerFor(NVQScorer.NVQScoreFunction function, FeatureSource source) {
         return node2 -> {
             try {
                 var reader = source.featureReaderForNode(node2, FeatureId.NVQ_VECTORS);

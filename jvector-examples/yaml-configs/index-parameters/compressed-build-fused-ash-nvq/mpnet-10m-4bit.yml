@@ -1,7 +1,7 @@
 # MPNet 10M at 16X nominal compression. Build with symmetric 4-bit ASH scoring
 # and write fused ASH traversal codes and NVQ reranking vectors in parallel.
 yamlSchemaVersion: 3
-onDiskIndexVersion: 7
+onDiskIndexVersion: 8
 dataset: mpnet-10m
 
 construction:

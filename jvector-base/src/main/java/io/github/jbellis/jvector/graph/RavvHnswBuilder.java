@@ -27,6 +27,7 @@ import io.github.jbellis.jvector.quantization.PQVectors;
 import io.github.jbellis.jvector.vector.VectorSimilarityFunction;
 
 import java.util.Objects;
+import java.util.Optional;
 
 /**
  * An {@link HnswIndexBuilder} that builds from a {@link RandomAccessVectorValues} and a
@@ -238,6 +239,11 @@ public class RavvHnswBuilder extends HnswIndexBuilder {
     @Override
     boolean scoresExactly() {
         return compressionType == CompressionType.NONE;
+    }
+
+    @Override
+    Optional<VectorSimilarityFunction> similarityFunction() {
+        return Optional.of(similarityFunction);
     }
 
     @Override

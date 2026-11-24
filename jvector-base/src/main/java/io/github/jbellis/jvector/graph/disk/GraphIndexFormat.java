@@ -223,6 +223,14 @@ public interface GraphIndexFormat {
     
     void writeCommonHeader(IndexWriter out, List<CommonHeader.LayerInfo> layerInfo, int dimension, int entryNode, int idUpperBound) throws IOException;
 
+    /**
+     * Writes {@code header}'s fields in this format. The default writes the fields every version has, with
+     * {@link #writeCommonHeader(IndexWriter, List, int, int, int)}; versions with more fields override it.
+     */
+    default void writeCommonHeader(IndexWriter out, CommonHeader header) throws IOException {
+        writeCommonHeader(out, header.layerInfo, header.dimension, header.entryNode, header.idUpperBound);
+    }
+
     static CommonHeader loadCommonHeader(RandomAccessReader in) throws IOException {
         logger.debug("Loading common header at position {}", in.getPosition());
         int maybeMagic = in.readInt();

@@ -27,6 +27,7 @@ import io.github.jbellis.jvector.management.CompressionType;
 import io.github.jbellis.jvector.quantization.CompressedVectors;
 import io.github.jbellis.jvector.util.PhysicalCoreExecutor;
 import io.github.jbellis.jvector.vector.types.VectorFloat;
+import io.github.jbellis.jvector.vector.VectorSimilarityFunction;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -36,6 +37,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
 import java.util.concurrent.ForkJoinPool;
+import java.util.Optional;
 
 /**
  * Fluent builder for graph/HNSW indexes. Obtain one from {@code Indexes.hnswBuilder(...)}, which picks
@@ -420,6 +422,9 @@ public abstract class HnswIndexBuilder implements Closeable {
     /** Whether this builder scores with exact comparisons, as opposed to compressed vectors. */
     abstract boolean scoresExactly();
 
+    /** The similarity function the graph this builder builds is searched with, if it names one. */
+    abstract Optional<VectorSimilarityFunction> similarityFunction();
+
     /**
      * Creates the underlying {@link GraphIndexBuilder} from this builder's current settings. Called
      * at most once per builder, while holding the builder's internal lock.
@@ -599,6 +604,13 @@ public abstract class HnswIndexBuilder implements Closeable {
                             graphExact ? "exact" : "compressed", scoresExactly() ? "exact" : "compressed"));
                 }
             }
+        }
+        Optional<VectorSimilarityFunction> graphSimilarity = existingGraph.similarityFunction();
+        Optional<VectorSimilarityFunction> builderSimilarity = similarityFunction();
+        if (graphSimilarity.isPresent() && builderSimilarity.isPresent()
+                && graphSimilarity.get() != builderSimilarity.get()) {
+            problems.add(String.format("the existing graph was built with %s similarity, but this builder uses %s",
+                    graphSimilarity.get(), builderSimilarity.get()));
         }
         if (maxDegreesSet) {
             problems.add("withExistingGraph() takes its max degrees from the existing graph; "

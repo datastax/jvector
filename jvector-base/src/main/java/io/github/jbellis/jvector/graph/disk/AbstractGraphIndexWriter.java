@@ -66,6 +66,8 @@ public abstract class AbstractGraphIndexWriter<T extends IndexWriter> implements
     final GraphIndexFormat graphIndexFormat;
     /** Placement of base-layer records. */
     final L0Layout l0Layout;
+    /** The similarity function the header records, worked out once so that a disagreement is reported once. */
+    final RecordedSimilarity similarity;
     /** Why a requested page alignment was not applied, or null. */
     String alignmentNote;
 
@@ -107,6 +109,7 @@ public abstract class AbstractGraphIndexWriter<T extends IndexWriter> implements
         int recordBytes = L0Layout.recordBytes(inlineFeatures.stream().mapToInt(Feature::featureSize).sum(), graph.getDegree(0));
         var alignment = (PageAlignment) featureMap.get(FeatureId.PAGE_ALIGNMENT);
         this.l0Layout = alignment == null ? L0Layout.unaligned(recordBytes) : L0Layout.aligned(recordBytes, alignment.pageBytes());
+        this.similarity = RecordedSimilarity.forGraph(graph, featureMap, version >= 8);
     }
 
     /**
@@ -134,7 +137,8 @@ public abstract class AbstractGraphIndexWriter<T extends IndexWriter> implements
     }
 
     WriteContext createContext(long startOffset) {
-        return new WriteContext(graph, ordinalMapper, featureMap, inlineFeatures, startOffset, headerSize, dimension, l0Layout);
+        return new WriteContext(graph, ordinalMapper, featureMap, inlineFeatures, startOffset, headerSize, dimension, l0Layout,
+                similarity);
     }
 
     long featureOffsetForOrdinal(long startOffset, int ordinal) {

@@ -16,7 +16,11 @@
 
 package io.github.jbellis.jvector.api;
 
+import io.github.jbellis.jvector.vector.ByteVectorSimilarityFunction;
+import io.github.jbellis.jvector.vector.VectorSimilarityFunction;
+
 import java.io.IOException;
+import java.util.Optional;
 
 /**
  * The backing-agnostic handle for a vector index. Every concrete index type (graph/HNSW, IVF, and
@@ -40,6 +44,27 @@ public interface Index extends AutoCloseable {
      * and must close it, e.g. {@code try (IndexSearcher searcher = index.searcher()) { ... }}.
      */
     IndexSearcher searcher();
+
+    /**
+     * Returns the similarity function this index was built with, or empty if it doesn't know one: for
+     * example, an index built from a custom score provider that names no single function, or one loaded
+     * from an on-disk format that doesn't record it.
+     * <p>
+     * The default implementation returns empty.
+     */
+    default Optional<VectorSimilarityFunction> similarityFunction() {
+        return Optional.empty();
+    }
+
+    /**
+     * Returns the int8 similarity function this index was built with, for an index of int8 vectors, or empty
+     * if it doesn't know one. An index reports at most one of this and {@link #similarityFunction()}.
+     * <p>
+     * The default implementation returns empty.
+     */
+    default Optional<ByteVectorSimilarityFunction> byteSimilarityFunction() {
+        return Optional.empty();
+    }
 
     /**
      * Releases any resources this index holds. Declared to throw only {@link IOException}, like

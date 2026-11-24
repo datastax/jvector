@@ -1,6 +1,6 @@
 # nytimes-256-angular (256 dimensions, angular similarity): on-disk graph built and searched with full-precision vectors.
 yamlSchemaVersion: 3
-onDiskIndexVersion: 7
+onDiskIndexVersion: 8
 
 dataset: nytimes-256-angular
 

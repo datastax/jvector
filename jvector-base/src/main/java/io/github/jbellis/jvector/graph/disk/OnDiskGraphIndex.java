@@ -78,7 +78,7 @@ import static io.github.jbellis.jvector.graph.disk.AbstractGraphIndexWriter.FOOT
 public class OnDiskGraphIndex implements PersistableGraphIndex
 {
     private static final Logger logger = LoggerFactory.getLogger(OnDiskGraphIndex.class);
-    public static final int CURRENT_VERSION = 7;
+    public static final int CURRENT_VERSION = 8;
     static final int MAGIC = 0xFFFF0D61; // FFFF to distinguish from old graphs, which should never start with a negative size "ODGI"
     static final VectorTypeSupport vectorTypeSupport = VectorizationProvider.getInstance().getVectorTypeSupport();
     final ReaderSupplier readerSupplier;
@@ -87,6 +87,8 @@ public class OnDiskGraphIndex implements PersistableGraphIndex
     final int dimension;
     final NodeAtLevel entryNode;
     final int idUpperBound;
+    /** The similarity function the header records; none before version 8. */
+    private final RecordedSimilarity recordedSimilarity;
     final int inlineBlockSize; // total size of all inline elements contributed by features
     /** Placement of base-layer records. */
     final L0Layout l0Layout;
@@ -118,6 +120,7 @@ public class OnDiskGraphIndex implements PersistableGraphIndex
             this.entryNode = new NodeAtLevel(header.common.layerInfo.size() - 1, header.common.entryNode);
         }
         this.idUpperBound = header.common.idUpperBound;
+        this.recordedSimilarity = header.common.similarity;
         this.features = Collections.unmodifiableMap(header.features);
         this.featureList = header.features.values().toArray(new Feature[0]);
         this.neighborsOffset = neighborsOffset;
@@ -595,11 +598,45 @@ public class OnDiskGraphIndex implements PersistableGraphIndex
         return (double) sum / it.size();
     }
 
+    /**
+     * Returns the similarity function this graph records: from version 8, the one in its header; before that,
+     * the one its fused ASH model was trained with, if it has one. Empty if it records none.
+     */
+    @Override
+    public java.util.Optional<VectorSimilarityFunction> similarityFunction() {
+        var recorded = recordedSimilarity.floatFunction();
+        if (recorded.isPresent()) {
+            return recorded;
+        }
+        var feature = (FusedASH) features.get(FeatureId.FUSED_ASH);
+        return feature == null ? java.util.Optional.empty() : java.util.Optional.of(feature.getASH().similarityFunction());
+    }
+
+    /** Returns the int8 similarity function this graph's header records (version 8 and later), if any. */
+    @Override
+    public java.util.Optional<ByteVectorSimilarityFunction> byteSimilarityFunction() {
+        return recordedSimilarity.byteFunction();
+    }
+
+    /**
+     * Returns a preparer for queries scored by the similarity function this graph records: one for its fused ASH
+     * model, or, from format version 8, one for its fused PQ codes, NVQ vectors or inline float vectors. Empty
+     * for a graph that records no float similarity function or stores no float scorer, such as an int8 graph;
+     * search those through the explicit-function path.
+     */
     @Override
     public java.util.Optional<io.github.jbellis.jvector.graph.similarity.QueryPreparer> queryPreparer() {
         var feature = features.get(FeatureId.FUSED_ASH);
-        if (feature == null) return java.util.Optional.empty();
-        return java.util.Optional.of(new io.github.jbellis.jvector.quantization.ASHQueryPreparer(((FusedASH) feature).getASH()));
+        if (feature != null) {
+            return java.util.Optional.of(new io.github.jbellis.jvector.quantization.ASHQueryPreparer(((FusedASH) feature).getASH()));
+        }
+        var similarity = recordedSimilarity.floatFunction();
+        boolean scores = features.containsKey(FeatureId.FUSED_PQ) || features.containsKey(FeatureId.NVQ_VECTORS)
+                || features.containsKey(FeatureId.INLINE_VECTORS);
+        if (similarity.isEmpty() || !scores) {
+            return java.util.Optional.empty();
+        }
+        return java.util.Optional.of(new OnDiskQueryPreparer(this, similarity.get()));
     }
 
     public class View implements FeatureSource, ScoringView, RandomAccessVectorValues {
@@ -942,12 +979,35 @@ public class OnDiskGraphIndex implements PersistableGraphIndex
         public io.github.jbellis.jvector.graph.similarity.SearchScoreProvider scoreProviderFor(
                 io.github.jbellis.jvector.graph.similarity.PreparedQuery prepared, boolean rerank) {
             var feature = (FusedASH) features.get(FeatureId.FUSED_ASH);
-            if (feature == null) throw new UnsupportedOperationException("Prepared query scoring requires FusedASH");
-            var asf = feature.approximateScoreFunctionFor(prepared, this);
-            // The ASH model fixes the similarity: approximate and exact scores both use it.
-            var similarity = feature.getASH().similarityFunction();
-            var rr = rerank ? rerankerFor(prepared.queryVector(), similarity) : null;
-            return new io.github.jbellis.jvector.graph.similarity.DefaultSearchScoreProvider(asf, rr, similarity);
+            if (feature != null) {
+                var asf = feature.approximateScoreFunctionFor(prepared, this);
+                // The ASH model fixes the similarity: approximate and exact scores both use it.
+                var similarity = feature.getASH().similarityFunction();
+                var rr = rerank ? rerankerFor(prepared.queryVector(), similarity) : null;
+                return new io.github.jbellis.jvector.graph.similarity.DefaultSearchScoreProvider(asf, rr, similarity);
+            }
+            var state = OnDiskQueryPreparer.prepared(OnDiskGraphIndex.this, prepared);
+            var fusedPQ = (FusedPQ) features.get(FeatureId.FUSED_PQ);
+            if (fusedPQ == null) {
+                // the exact scores are the only ones, so there is nothing to rerank
+                return new io.github.jbellis.jvector.graph.similarity.DefaultSearchScoreProvider(
+                        preparedReranker(state), null, state.similarity);
+            }
+            var rr = rerank ? preparedReranker(state) : null;
+            var asf = fusedPQ.approximateScoreFunctionFor(state.query, state.partialSums, state.queryMagnitudeSquared,
+                    state.similarity, this, rr);
+            return new io.github.jbellis.jvector.graph.similarity.DefaultSearchScoreProvider(asf, rr, state.similarity);
+        }
+
+        /** As {@link #rerankerFor}, from a prepared query's state. */
+        private ScoreFunction.ExactScoreFunction preparedReranker(OnDiskQueryPreparer.State state) {
+            if (features.containsKey(FeatureId.INLINE_VECTORS)) {
+                return rerankerFor(state.query, state.similarity);
+            } else if (state.nvqFunction != null) {
+                return ((NVQ) features.get(FeatureId.NVQ_VECTORS)).rerankerFor(state.nvqFunction, this);
+            } else {
+                throw new UnsupportedOperationException("No reranker available for this graph");
+            }
         }
 
         @Override

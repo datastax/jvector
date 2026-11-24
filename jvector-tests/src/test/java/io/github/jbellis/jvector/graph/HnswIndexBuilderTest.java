@@ -430,6 +430,18 @@ public class HnswIndexBuilderTest extends RandomizedTest {
     }
 
     @Test
+    public void existingGraphMustMatchTheBuildersSimilarityFunction() {
+        var ravv = randomRavv(100, DIMENSION);
+        var existing = (OnHeapGraphIndex) Indexes.hnswBuilder(ravv, VectorSimilarityFunction.DOT_PRODUCT).buildAndPopulate();
+
+        expectIllegalState(() -> Indexes.hnswBuilder(ravv, VectorSimilarityFunction.EUCLIDEAN).withExistingGraph(existing).build(),
+                List.of("DOT_PRODUCT", "EUCLIDEAN"));
+        // the same function, from a score provider, is accepted
+        var sameFunction = BuildScoreProvider.randomAccessScoreProvider(ravv, VectorSimilarityFunction.DOT_PRODUCT);
+        Indexes.hnswBuilder(sameFunction, DIMENSION).withExistingGraph(existing).build();
+    }
+
+    @Test
     public void existingGraphMustMatchTheBuildersDimension() {
         var ravv = randomRavv(100, DIMENSION);
         var existing = (OnHeapGraphIndex) Indexes.hnswBuilder(ravv, VSF).buildAndPopulate();
@@ -1006,7 +1018,7 @@ public class HnswIndexBuilderTest extends RandomizedTest {
         assertSame(scoreProviderBuilder, scoreProviderBuilder.withPqAnisotropicThreshold(0.2f));
     }
 
-    /** Unit-length random vectors, for ASH, which scores dot products. */
+    /** Unit-length random vectors. */
     private static ListRandomAccessVectorValues randomUnitRavv(int n, int dimension) {
         List<VectorFloat<?>> vectors = createRandomVectors(n, dimension);
         vectors.forEach(VectorUtil::l2normalize);

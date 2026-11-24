@@ -2,7 +2,7 @@
 # uncompressed on-disk graph. Each list value is a separate case; the run covers every
 # combination of degree, build width and hierarchy, each searched with and without pruning.
 yamlSchemaVersion: 3
-onDiskIndexVersion: 7
+onDiskIndexVersion: 8
 
 dataset: glove-50-angular
 

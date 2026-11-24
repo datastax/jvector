@@ -1,7 +1,7 @@
 # tahoe-x1-1m (2560 dimensions): build with 2-bit ASH scoring and write the graph with full-precision
 # vectors. Searches traverse with ASH codes held in memory and rescore from disk.
 yamlSchemaVersion: 3
-onDiskIndexVersion: 7
+onDiskIndexVersion: 8
 
 dataset: tahoe-x1-1m
 

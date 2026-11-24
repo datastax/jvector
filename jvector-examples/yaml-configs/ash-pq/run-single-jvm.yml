@@ -6,7 +6,7 @@
 # (one search.workers value and one overquery): a later case in the same JVM would repeat
 # queries that earlier passes already ran, so its queries would not be cold.
 yamlSchemaVersion: 1
-onDiskIndexVersion: 7
+onDiskIndexVersion: 8
 benchmarks:
   throughput: [AVG]
   accuracy: [recall]

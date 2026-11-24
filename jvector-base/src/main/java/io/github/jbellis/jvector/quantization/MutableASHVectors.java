@@ -38,6 +38,7 @@ import java.lang.invoke.MethodHandles;
 import java.lang.invoke.VarHandle;
 import java.util.Arrays;
 import java.util.Objects;
+import java.util.Optional;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.Supplier;
@@ -849,6 +850,11 @@ public final class MutableASHVectors implements MutableCompressedVectors<VectorF
     public BuildScoreProvider buildScoreProvider(RandomAccessVectorValues vectors) {
         var views = vectors.threadLocalSupplier();
         return new BuildScoreProvider() {
+            @Override
+            public Optional<VectorSimilarityFunction> searchSimilarityFunction() {
+                return Optional.of(similarityFunction());
+            }
+
             @Override
             public boolean isExact() {
                 return false;

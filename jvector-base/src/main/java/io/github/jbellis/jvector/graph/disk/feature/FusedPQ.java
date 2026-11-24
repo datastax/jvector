@@ -136,6 +136,23 @@ public class FusedPQ extends AbstractFeature implements FusedFeature {
         return FusedPQDecoder.newDecoder(neighbors, pq, hierarchyCachedFeatures, queryVector, reusableNeighborCodes.get(), reusableResults.get(), vsf, esf);
     }
 
+    /**
+     * As {@link #approximateScoreFunctionFor(VectorFloat, VectorSimilarityFunction, OnDiskGraphIndex.View, ScoreFunction.ExactScoreFunction)},
+     * over a table {@link FusedPQDecoder#fillPartialSums} already filled for {@code queryVector} and {@code vsf},
+     * which the function reads in place.
+     */
+    public ScoreFunction.ApproximateScoreFunction approximateScoreFunctionFor(VectorFloat<?> queryVector,
+                                                                             VectorFloat<?> partialSums,
+                                                                             float queryMagnitudeSquared,
+                                                                             VectorSimilarityFunction vsf,
+                                                                             OnDiskGraphIndex.View view,
+                                                                             ScoreFunction.ExactScoreFunction esf) {
+        var neighbors = new PackedNeighbors(view);
+        var hierarchyCachedFeatures = view.getInlineSourceFeatures();
+        return FusedPQDecoder.newDecoder(neighbors, pq, hierarchyCachedFeatures, queryVector, partialSums,
+                queryMagnitudeSquared, reusableNeighborCodes.get(), vsf, esf);
+    }
+
     /** For compaction use. See {@link FusedFeature#createCompactionStrategy}. */
     @Override
     public QuantizationCompactionStrategy createCompactionStrategy(CompactionContext ctx) {

@@ -31,7 +31,7 @@ public class IndexSchemaVersionTest {
     @Rule public final TemporaryFolder directory = new TemporaryFolder();
 
     /** The layout of the dataset defaults in earlier releases, which declared schema 1. */
-    private static final String BODY = "onDiskIndexVersion: 7\ndataset: test\n"
+    private static final String BODY = "onDiskIndexVersion: 8\ndataset: test\n"
             + "construction:\n  outDegree: [32]\n  efConstruction: [100]\n  neighborOverflow: [1.2f]\n"
             + "  addHierarchy: [Yes]\n  refineFinalGraph: [Yes]\n  fusedGraph: [No]\n"
             + "  compression:\n    - type: PQ\n      parameters:\n        mFactor: 8\n"

@@ -45,6 +45,8 @@ class WriteContext {
     final int dimension;
     /** Placement of base-layer records. */
     final L0Layout l0Layout;
+    /** The similarity function the header records (format version 8 and later). */
+    final RecordedSimilarity similarity;
 
     /**
      * Constructs a {@code WriteContext} bundling all parameters required for a single serialization session.
@@ -57,6 +59,7 @@ class WriteContext {
      * @param headerSize     byte size of the header written before node records
      * @param dimension      vector dimension, sourced from the configured features
      * @param l0Layout       placement of base-layer records
+     * @param similarity     the similarity function the header records
      */
     WriteContext(GraphIndex graph,
                  OrdinalMapper ordinalMapper,
@@ -65,7 +68,8 @@ class WriteContext {
                  long startOffset,
                  long headerSize,
                  int dimension,
-                 L0Layout l0Layout) {
+                 L0Layout l0Layout,
+                 RecordedSimilarity similarity) {
         this.graph = graph;
         this.ordinalMapper = ordinalMapper;
         this.featureMap = featureMap;
@@ -74,5 +78,6 @@ class WriteContext {
         this.headerSize = headerSize;
         this.dimension = dimension;
         this.l0Layout = l0Layout;
+        this.similarity = similarity;
     }
 }
