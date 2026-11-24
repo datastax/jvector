@@ -77,10 +77,11 @@ public class TestPQClosestCentroid extends RandomizedTest {
     public void testFiniteDistanceAssertionIsPreserved() {
         org.junit.Assume.assumeTrue(VectorUtil.class.desiredAssertionStatus());
         var vts = VectorizationProvider.getInstance().getVectorTypeSupport();
-        // Centroids are checked once, when the codebooks are built
+        // Centroids are checked where they are built, in k-means
+        var points = new VectorFloat<?>[]{vts.createFloatVector(new float[]{0})};
         var badCentroids = vts.createFloatVector(new float[]{0, Float.POSITIVE_INFINITY});
-        org.junit.Assert.assertThrows(AssertionError.class, () -> new ProductQuantization(new VectorFloat<?>[]{badCentroids}, 2,
-                new int[][]{{1, 0}}, null, KMeansPlusPlusClusterer.UNWEIGHTED));
+        org.junit.Assert.assertThrows(AssertionError.class,
+                () -> new KMeansPlusPlusClusterer(points, badCentroids, KMeansPlusPlusClusterer.UNWEIGHTED));
         // Each encoded point is checked through its selected distance
         var centroids = vts.createFloatVector(new float[]{0, 1});
         var pq = new ProductQuantization(new VectorFloat<?>[]{centroids}, 2,
