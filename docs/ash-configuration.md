@@ -170,6 +170,12 @@ insertion. The overload taking an original vector retains asymmetric query
 preparation. Both policies use the same stored ASH vectors; application queries
 continue to use asymmetric scoring.
 
+Symmetric scoring has SIMD kernels at every width. 1, 2 and 4-bit codes use the
+native Highway kernels or Panama; 3 and 5 to 9-bit codes use a Panama kernel
+that decodes fields in registers and sums their products exactly, so it scores
+the same as the scalar path. CPUs with 4-lane vectors (for example NEON) decode
+these widths in Java.
+
 Construction policy can change the graph, recall and QPS. Use fresh indexes
 when comparing modes: the graph cache key does not include this JVM property,
 so changing it does not invalidate an existing cached graph.

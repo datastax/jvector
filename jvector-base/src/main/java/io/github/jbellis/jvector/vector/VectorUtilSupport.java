@@ -76,12 +76,13 @@ public interface VectorUtilSupport {
     throw new UnsupportedOperationException("Symmetric ASH SIMD is unavailable on this backend");
   }
 
-  /** Whether {@link #ashSymmetricDotAt} is implemented (2- and 4-bit codes at array offsets). */
+  /** Whether {@link #ashSymmetricDotAt} is implemented (2- to 9-bit codes at array offsets). */
   default boolean supportsAshSymmetricDotAt() { return false; }
 
   /**
-   * Symmetric 2/4-bit packed dot product of codes stored at offsets inside larger arrays.
-   * Same result as {@link #ashSymmetricDot} on the corresponding standalone code arrays.
+   * Symmetric packed dot product of 2- to 9-bit codes stored at offsets inside larger arrays. For 2 and 4 bits, the
+   * same result as {@link #ashSymmetricDot} on the corresponding standalone code arrays; offset-binary codes (3 and 5
+   * to 9 bits) give the exact sum of their decoded products.
    */
   default float ashSymmetricDotAt(byte[] aCodes, int aOffset, byte[] bCodes, int bOffset,
                                   int dimensions, int bits) {
@@ -92,7 +93,7 @@ public interface VectorUtilSupport {
   default boolean supportsAshSymmetricDotRows() { return false; }
 
   /**
-   * Symmetric 2/4-bit dot products of one code against {@code count} codes stored {@code stride} bytes apart from
+   * Symmetric dot products of one code against {@code count} codes stored {@code stride} bytes apart from
    * the start of {@code rows}: {@code out[i]} equals {@link #ashSymmetricDotAt} of the query and row {@code i}.
    * Requires {@link #supportsAshSymmetricDotAt()}.
    */

@@ -169,7 +169,8 @@ class NativeVectorUtilSupport extends PanamaVectorUtilSupport
     @Override
     public float ashSymmetricDotAt(byte[] aCodes, int aOffset, byte[] bCodes, int bOffset,
                                    int dimensions, int bits) {
-        return NativeASHSymmetricKernels.hasPairKernel()
+        // The native kernels take 2- and 4-bit codes; Panama decodes the other widths.
+        return NativeASHSymmetricKernels.hasPairKernel() && (bits == 2 || bits == 4)
                 ? NativeASHSymmetricKernels.dotAt(aCodes, aOffset, bCodes, bOffset, dimensions, bits)
                 : super.ashSymmetricDotAt(aCodes, aOffset, bCodes, bOffset, dimensions, bits);
     }
@@ -182,7 +183,7 @@ class NativeVectorUtilSupport extends PanamaVectorUtilSupport
     @Override
     public void ashSymmetricDotRows(byte[] query, int queryOffset, byte[] rows, int stride, int count,
                                     int dimensions, int bits, float[] out) {
-        if (NativeASHSymmetricKernels.hasRowsKernel())
+        if (NativeASHSymmetricKernels.hasRowsKernel() && (bits == 2 || bits == 4))
             NativeASHSymmetricKernels.dotRows(query, queryOffset, rows, stride, count, dimensions, bits, out);
         else super.ashSymmetricDotRows(query, queryOffset, rows, stride, count, dimensions, bits, out);
     }

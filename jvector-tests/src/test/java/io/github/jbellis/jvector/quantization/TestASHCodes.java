@@ -213,7 +213,8 @@ public class TestASHCodes {
     public void offsetKernelsMatchZeroOffsetKernels() {
         var vu = VectorizationProvider.getInstance().getVectorUtilSupport();
         var random = new Random(20261109);
-        for (int bits : new int[]{2, 4}) {
+        for (int bits = 2; bits <= 9; bits++) {
+            boolean projection = bits == 2 || bits == 4;
             // Odd and partial-word lengths exercise the vector tails.
             for (int dims : new int[]{1, 3, 7, 31, 32, 33, 63, 65, 127, 129, 384, 768, 1536}) {
                 int bytes = (dims * bits + 7) / 8;
@@ -226,6 +227,13 @@ public class TestASHCodes {
                     byte[] aPage = embed(a, aOff, random);
                     byte[] bPage = embed(b, bOff, random);
                     String where = "bits=" + bits + " dims=" + dims;
+                    if (!projection) {
+                        if (vu.supportsAshSymmetricDotAt()) {
+                            assertEquals(where, Float.floatToIntBits(vu.ashSymmetricDotAt(a, 0, b, 0, dims, bits)),
+                                    Float.floatToIntBits(vu.ashSymmetricDotAt(aPage, aOff, bPage, bOff, dims, bits)));
+                        }
+                        continue;
+                    }
                     // Exact length: no kernel may read query elements past the dimension count.
                     float[] query = new float[dims];
                     for (int k = 0; k < dims; k++) query[k] = (float) random.nextGaussian();

@@ -119,8 +119,9 @@ class PanamaVectorUtilSupport implements VectorUtilSupport {
     @Override
     public float ashSymmetricDotAt(byte[] aCodes, int aOffset, byte[] bCodes, int bOffset,
                                    int dimensions, int bits) {
+        // Other widths go to the offset-binary kernel, which also rejects invalid arguments
         if (dimensions < 0 || (bits != 2 && bits != 4))
-            throw new IllegalArgumentException("Offset symmetric ASH requires nonnegative dimensions and bits in {2,4}");
+            return ashSymmetricOffsetBinary(aCodes, aOffset, bCodes, bOffset, dimensions, bits);
         long bytes = ((long) dimensions * bits + 7) / 8;
         if (aOffset < 0 || bOffset < 0 || aOffset + bytes > aCodes.length || bOffset + bytes > bCodes.length)
             throw new IndexOutOfBoundsException("ASH code array ranges");
@@ -234,6 +235,67 @@ class PanamaVectorUtilSupport implements VectorUtilSupport {
             sum += av * bv;
         }
         return sum * 0.25f;
+    }
+
+    /**
+     * Offset-binary codes (3 and 5 to 9 bits): the exact sum of {@code (2x - m)(2y - m)} over fields x and y, with
+     * {@code m = 2^b - 1}, times 1/4, so any summation order gives the same score. Fields are decoded in registers as
+     * in {@link #ashOffsetBinaryDot}, from {@code sum(xy)} and {@code sum(x + y)}.
+     */
+    private static float ashSymmetricOffsetBinary(byte[] a, int aOff, byte[] b, int bOff, int dimensions, int bits) {
+        if (dimensions < 0 || bits < 2 || bits > 9)
+            throw new IllegalArgumentException("Offset symmetric ASH requires nonnegative dimensions and 2 to 9 bits");
+        int codeBytes = (int) (((long) dimensions * bits + 7) / 8);
+        if (aOff < 0 || bOff < 0 || aOff + codeBytes > a.length || bOff + codeBytes > b.length)
+            throw new IndexOutOfBoundsException("ASH code array ranges");
+        int lanes = ASH_FLOATS.length(), m = (1 << bits) - 1;
+        // Four-lane CPUs decode in Java; 32-byte loads serve every width.
+        int steps = lanes >= 8 ? dimensions / lanes : 0, stepBytes = lanes * bits / 8, load = ASH_OB_LOAD_WIDE.length();
+        long products = 0, fieldSums = 0;
+        if (steps > 0) {
+            int last = (steps - 1) * stepBytes + load;
+            if (aOff + last > a.length || bOff + last > b.length) {
+                // One padded copy holds both codes, so every step loads in place.
+                byte[] both = ashPaddedCopy(a, aOff, codeBytes, codeBytes + 2 * load);
+                System.arraycopy(b, bOff, both, codeBytes + load, codeBytes);
+                a = b = both;
+                aOff = 0;
+                bOff = codeBytes + load;
+            }
+            var windows = ASH_OB_SHUFFLES[bits];
+            var shifts = IntVector.fromArray(ASH_INTS, ASH_OB_SHIFTS[bits], 0);
+            // Each chunk's int sums stay below 2^31: at most 8192 fields of at most 511 * 511.
+            for (int from = 0, chunk = 8192 / lanes; from < steps; from += chunk) {
+                IntVector xy = IntVector.zero(ASH_INTS), sums = IntVector.zero(ASH_INTS);
+                for (int step = from, end = Math.min(steps, from + chunk); step < end; step++) {
+                    var x = ((IntVector) ((ByteVector) ByteVector.fromArray(ASH_OB_LOAD_WIDE, a, aOff + step * stepBytes)
+                            .reinterpretShape(ASH_OB_BYTES, 0)).rearrange(windows).reinterpretAsInts())
+                            .lanewise(VectorOperators.LSHR, shifts).and(m);
+                    var y = ((IntVector) ((ByteVector) ByteVector.fromArray(ASH_OB_LOAD_WIDE, b, bOff + step * stepBytes)
+                            .reinterpretShape(ASH_OB_BYTES, 0)).rearrange(windows).reinterpretAsInts())
+                            .lanewise(VectorOperators.LSHR, shifts).and(m);
+                    xy = xy.add(x.mul(y));
+                    sums = sums.add(x.add(y));
+                }
+                products += xy.reduceLanes(VectorOperators.ADD);
+                fieldSums += sums.reduceLanes(VectorOperators.ADD);
+            }
+        }
+        int from = steps * lanes;
+        long sum = 4 * products - 2L * m * fieldSums + (long) from * m * m;
+        for (int j = from; j < dimensions; j++) {
+            sum += (long) (2 * ashOffsetBinaryField(a, aOff, j, bits) - m) * (2 * ashOffsetBinaryField(b, bOff, j, bits) - m);
+        }
+        return sum * 0.25f;
+    }
+
+    /** Field {@code j} of an offset-binary code: bits {@code [j*b, (j+1)*b)}, little-endian. */
+    private static int ashOffsetBinaryField(byte[] code, int codeOffset, int j, int bits) {
+        int bit = j * bits, at = codeOffset + (bit >>> 3), shift = bit & 7;
+        int window = code[at] & 0xFF;
+        if (shift + bits > 8) window |= (code[at + 1] & 0xFF) << 8;
+        if (shift + bits > 16) window |= (code[at + 2] & 0xFF) << 16;
+        return (window >>> shift) & ((1 << bits) - 1);
     }
 
     @Override

@@ -175,8 +175,7 @@ public final class MutableASHVectors implements MutableCompressedVectors<VectorF
         int stride = Math.max(1, Math.max(signWords * Long.BYTES, bodyBytes));
         this.pageShift = 31 - Integer.numberOfLeadingZeros(Math.max(1, Math.min(MAX_VECTORS_PER_PAGE, pageBytes / stride)));
         this.pageMask = (1 << pageShift) - 1;
-        this.simdSymmetric = bits == 1 ? VU.supportsAshSymmetricScoring()
-                : (bits == 2 || bits == 4) && VU.supportsAshSymmetricScoring() && VU.supportsAshSymmetricDotAt();
+        this.simdSymmetric = VU.supportsAshSymmetricScoring() && (bits == 1 || VU.supportsAshSymmetricDotAt());
         this.models = new Model[]{new Model(0, ash)};
         this.current = 0;
         this.scratch = ThreadLocal.withInitial(() ->
