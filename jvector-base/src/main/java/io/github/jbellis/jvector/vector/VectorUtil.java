@@ -103,13 +103,16 @@ public final class VectorUtil {
    * Tries a bulk closest-centroid operation by squared L2 distance. Returns -1
    * when unsupported, allowing callers to retain their existing Java scan.
    * Equal distances retain the first centroid. No distance array is allocated.
-   * With assertions enabled, a second distance scan checks that every distance is finite.
+   * Callers must supply finite centroids; with assertions enabled, the selected distance is checked.
+   * Unlike the callers' fallback loops, which assert every distance, this does not fail when finite
+   * inputs overflow to an infinite distance for a centroid that is not selected.
    */
   public static int tryClosestCentroid(VectorFloat<?> point, int pointOffset,
                                     VectorFloat<?> centroids, int centroidCount, int dimension) {
     int nearest = impl.tryClosestCentroid(point, pointOffset, centroids, centroidCount, dimension);
-    // Preserve the former loop's finite-distance checks; this repeats the scan only with -ea.
-    assert nearest < 0 || centroidDistancesAreFinite(point, pointOffset, centroids, centroidCount, dimension);
+    // Hot path, and production runs with -ea: check only the selected distance (O(dimension), no provider
+    // call), which also catches a non-finite point. Centroids are checked where they are built.
+    assert nearest < 0 || Float.isFinite(squareDistanceForAssert(point, pointOffset, centroids, nearest * dimension, dimension));
     return nearest;
   }
 
@@ -144,14 +147,13 @@ public final class VectorUtil {
     return impl.tryUpdateKMeansDistances(points, centroid, minima, scratch);
   }
 
-  private static boolean centroidDistancesAreFinite(VectorFloat<?> point, int pointOffset,
-                                                    VectorFloat<?> centroids, int centroidCount, int dimension) {
-    for (int i = 0; i < centroidCount; i++) {
-      if (!Float.isFinite(impl.squareDistance(point, pointOffset, centroids, i * dimension, dimension))) {
-        return false;
-      }
+  private static float squareDistanceForAssert(VectorFloat<?> a, int aOffset, VectorFloat<?> b, int bOffset, int length) {
+    float sum = 0;
+    for (int i = 0; i < length; i++) {
+      float d = a.get(aOffset + i) - b.get(bOffset + i);
+      sum += d * d;
     }
-    return true;
+    return sum;
   }
 
   /**
