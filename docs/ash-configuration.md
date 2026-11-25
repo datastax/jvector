@@ -182,6 +182,13 @@ never encoded keep the all-zero code. For an index whose model changes while it
 grows, `StreamingASHIndex` uses `MutableASHVectors`, which re-encodes its pages
 for a new model one at a time.
 
+`StreamingASHIndex` is a graph index (`ASHGraphIndex`, a
+`PersistableGraphIndex`). Its views score with its ASH codes and rerank from
+the caller's vectors. `queryPreparer()` returns an `Optional` preparer for its
+current model, empty until a cold index has one, and a view's
+`scoreProviderFor` binds the prepared query. It is written as its graph is;
+call `prepareForFlush()` and `builder().cleanup()` first.
+
 ### In-memory code layout
 
 `ASHVectors` keeps one copy of the codes, in compact pages. Each vector's code
