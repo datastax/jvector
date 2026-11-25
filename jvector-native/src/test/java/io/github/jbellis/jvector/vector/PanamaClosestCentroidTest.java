@@ -23,7 +23,10 @@ import java.util.Random;
 
 import static org.junit.jupiter.api.Assertions.*;
 
-/** The Panama bulk centroid scan picks the same centroid as the per-centroid squareDistance loop it replaces. */
+/**
+ * The Panama bulk centroid scan and k-means++ distance update give the same results as the per-centroid and
+ * per-point squareDistance loops they replace.
+ */
 class PanamaClosestCentroidTest {
     private final PanamaVectorUtilSupport panama = new PanamaVectorUtilSupport();
     private final ArrayVectorProvider vectors = new ArrayVectorProvider();
@@ -85,5 +88,73 @@ class PanamaClosestCentroidTest {
         assertThrows(IndexOutOfBoundsException.class, () -> panama.tryClosestCentroid(p, 1, c, 4, 8));
         assertThrows(IndexOutOfBoundsException.class, () -> panama.tryClosestCentroid(p, 0, c, 5, 8));
         assertThrows(IndexOutOfBoundsException.class, () -> panama.tryClosestCentroid(p, 0, c, Integer.MAX_VALUE, 8));
+    }
+
+    @Test
+    void kMeansUpdateMatchesPerPointLoop() {
+        Random random = new Random(1702);
+        for (int dim : new int[]{0, 1, 2, 3, 4, 5, 7, 8, 9, 15, 16, 17, 24, 32, 65}) {
+            for (int count : new int[]{1, 7, 33, 300}) {
+                for (boolean integral : new boolean[]{true, false}) {
+                    VectorFloat<?>[] points = new VectorFloat<?>[count];
+                    float[][] originalPoints = new float[count][];
+                    for (int i = 0; i < count; i++) {
+                        originalPoints[i] = values(random, dim, integral);
+                        points[i] = vectors.createFloatVector(originalPoints[i].clone());
+                    }
+                    float[] center = values(random, dim, integral);
+                    var centroid = vectors.createFloatVector(center.clone());
+                    float[] start = new float[count];
+                    for (int i = 0; i < count; i++) {
+                        start[i] = i % 5 == 0 ? Float.MAX_VALUE : integral ? random.nextInt(600) : (float) Math.abs(random.nextGaussian() * dim);
+                    }
+                    var expectedScratch = vectors.createFloatVector(count);
+                    for (int i = 0; i < count; i++) expectedScratch.set(i, panama.squareDistance(points[i], 0, centroid, 0, dim));
+                    var expectedMinima = vectors.createFloatVector(start.clone());
+                    panama.minInPlace(expectedMinima, expectedScratch);
+
+                    var minima = vectors.createFloatVector(start.clone());
+                    var scratch = vectors.createFloatVector(count);
+                    String where = "dim=" + dim + " count=" + count + " integral=" + integral;
+                    assertTrue(panama.tryUpdateKMeansDistances(points, centroid, minima, scratch), where);
+                    for (int i = 0; i < count; i++) {
+                        closeDistance(expectedScratch.get(i), scratch.get(i), dim, where + " scratch " + i);
+                        closeDistance(expectedMinima.get(i), minima.get(i), dim, where + " minima " + i);
+                        for (int j = 0; j < dim; j++) assertEquals(originalPoints[i][j], points[i].get(j), 0f, where);
+                    }
+                    for (int j = 0; j < dim; j++) assertEquals(center[j], centroid.get(j), 0f, where);
+                }
+            }
+        }
+    }
+
+    @Test
+    void kMeansUpdateRejectsMismatchedLengths() {
+        VectorFloat<?>[] points = {vectors.createFloatVector(4), vectors.createFloatVector(4)};
+        var centroid = vectors.createFloatVector(4);
+        assertThrows(IllegalArgumentException.class,
+                () -> panama.tryUpdateKMeansDistances(points, centroid, vectors.createFloatVector(1), vectors.createFloatVector(2)));
+        assertThrows(IllegalArgumentException.class,
+                () -> panama.tryUpdateKMeansDistances(points, centroid, vectors.createFloatVector(2), vectors.createFloatVector(3)));
+        VectorFloat<?>[] mixed = {vectors.createFloatVector(4), vectors.createFloatVector(5)};
+        assertThrows(IllegalArgumentException.class,
+                () -> panama.tryUpdateKMeansDistances(mixed, centroid, vectors.createFloatVector(2), vectors.createFloatVector(2)));
+    }
+
+    private static void closeDistance(float expected, float actual, int dim, String where) {
+        // FloatVector ADD reductions may use any order, even within one JVM, so the per-point loop itself is not
+        // bit-stable: allow one ULP per rounded addition.
+        if (Float.isFinite(expected) && expected != 0.0f) {
+            assertTrue(Math.abs((double) expected - actual) <= Math.max(8, dim) * Math.ulp(expected),
+                    where + " expected=" + expected + " actual=" + actual);
+        } else {
+            assertEquals(Float.floatToRawIntBits(expected), Float.floatToRawIntBits(actual), where);
+        }
+    }
+
+    private static float[] values(Random random, int dim, boolean integral) {
+        float[] v = new float[dim];
+        for (int i = 0; i < dim; i++) v[i] = integral ? random.nextInt(33) - 16 : (float) random.nextGaussian();
+        return v;
     }
 }

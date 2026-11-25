@@ -1263,6 +1263,62 @@ class PanamaVectorUtilSupport implements VectorUtilSupport {
         return nearest;
     }
 
+    /**
+     * The k-means++ counterpart of {@link #tryClosestCentroid}, written the same way for the same reason: left in
+     * its caller, the per-point loop made PQ training about 3x slower in some JDK 22 JVMs.
+     */
+    @Override
+    public boolean tryUpdateKMeansDistances(VectorFloat<?>[] points, VectorFloat<?> centroid,
+                                            VectorFloat<?> minima, VectorFloat<?> scratch) {
+        int count = points.length;
+        if (minima.length() != count || scratch.length() != count) {
+            throw new IllegalArgumentException("Distance vector lengths");
+        }
+        int dimension = centroid.length();
+        int preferred = FloatVector.SPECIES_PREFERRED.length();
+        if (dimension == FloatVector.SPECIES_128.length() && dimension < preferred) {
+            var c = fromVectorFloat(FloatVector.SPECIES_128, centroid, 0);
+            for (int i = 0; i < count; i++) {
+                var point = points[i];
+                if (point.length() != dimension) {
+                    throw new IllegalArgumentException("Point dimensions differ from centroid");
+                }
+                var diff = fromVectorFloat(FloatVector.SPECIES_128, point, 0).sub(c);
+                scratch.set(i, diff.mul(diff).reduceLanes(VectorOperators.ADD));
+            }
+        } else if (dimension == FloatVector.SPECIES_256.length() && dimension < preferred) {
+            var c = fromVectorFloat(FloatVector.SPECIES_256, centroid, 0);
+            for (int i = 0; i < count; i++) {
+                var point = points[i];
+                if (point.length() != dimension) {
+                    throw new IllegalArgumentException("Point dimensions differ from centroid");
+                }
+                var diff = fromVectorFloat(FloatVector.SPECIES_256, point, 0).sub(c);
+                scratch.set(i, diff.mul(diff).reduceLanes(VectorOperators.ADD));
+            }
+        } else if (dimension == FloatVector.SPECIES_64.length() && dimension < preferred) {
+            var c = fromVectorFloat(FloatVector.SPECIES_64, centroid, 0);
+            for (int i = 0; i < count; i++) {
+                var point = points[i];
+                if (point.length() != dimension) {
+                    throw new IllegalArgumentException("Point dimensions differ from centroid");
+                }
+                var diff = fromVectorFloat(FloatVector.SPECIES_64, point, 0).sub(c);
+                scratch.set(i, diff.mul(diff).reduceLanes(VectorOperators.ADD));
+            }
+        } else {
+            for (int i = 0; i < count; i++) {
+                var point = points[i];
+                if (point.length() != dimension) {
+                    throw new IllegalArgumentException("Point dimensions differ from centroid");
+                }
+                scratch.set(i, squareDistance(point, 0, centroid, 0, dimension));
+            }
+        }
+        minInPlace(minima, scratch);
+        return true;
+    }
+
     float squareDistance64(VectorFloat<?> v1, int v1offset, VectorFloat<?> v2, int v2offset, int length) {
         if (length == FloatVector.SPECIES_64.length())
             return squareDistance64(v1, v1offset, v2, v2offset);
