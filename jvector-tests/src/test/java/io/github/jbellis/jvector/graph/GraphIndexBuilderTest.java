@@ -26,6 +26,8 @@ import io.github.jbellis.jvector.graph.similarity.ScoreFunction;
 import io.github.jbellis.jvector.graph.similarity.SearchScoreProvider;
 import io.github.jbellis.jvector.quantization.PQVectors;
 import io.github.jbellis.jvector.quantization.ProductQuantization;
+import io.github.jbellis.jvector.util.Bits;
+import io.github.jbellis.jvector.util.RamUsageEstimator;
 import io.github.jbellis.jvector.vector.VectorSimilarityFunction;
 import io.github.jbellis.jvector.vector.VectorizationProvider;
 import io.github.jbellis.jvector.vector.types.VectorFloat;
@@ -77,8 +79,29 @@ public class GraphIndexBuilderTest extends LuceneTestCase {
         var bsp = BuildScoreProvider.randomAccessScoreProvider(ravv, VectorSimilarityFunction.EUCLIDEAN);
         try (var builder = new GraphIndexBuilder(bsp, 2, 2, 10, 1.0f, 1.0f, false)) {
             var bytesUsed = builder.addGraphNode(0, ravv.getVector(0));
-            // The actual value is not critical, but this confirms we do not get unexpected changes (for this config)
-            assertEquals(92, bytesUsed);
+            // Three references, two four-element arrays, and the neighbor array's size field.
+            long expected = RamUsageEstimator.NUM_BYTES_OBJECT_HEADER + 3L * RamUsageEstimator.NUM_BYTES_OBJECT_REF
+                    + 2L * RamUsageEstimator.NUM_BYTES_ARRAY_HEADER + 9L * Integer.BYTES;
+            assertEquals(expected, bytesUsed);
+        }
+    }
+
+    @Test
+    public void testSearchCallsInitializeInternalOverride() throws IOException {
+        var vector = vts.createFloatVector(new float[] {0, 0});
+        var vectors = new ListRandomAccessVectorValues(List.of(vector), 2);
+        var bsp = BuildScoreProvider.randomAccessScoreProvider(vectors, VectorSimilarityFunction.EUCLIDEAN);
+        try (var builder = new GraphIndexBuilder(bsp, 2, 2, 10, 1.0f, 1.0f, false)) {
+            builder.addGraphNode(0, vector);
+            try (var searcher = new GraphSearcher(builder.getGraph()) {
+                @Override
+                public void initializeInternal(SearchScoreProvider provider, ImmutableGraphIndex.NodeAtLevel entry, Bits accept) {
+                    super.initializeInternal(provider, entry, ordinal -> false);
+                }
+            }) {
+                var provider = DefaultSearchScoreProvider.exact(vector, VectorSimilarityFunction.EUCLIDEAN, vectors);
+                assertEquals(0, searcher.search(provider, 1, Bits.ALL).getNodes().length);
+            }
         }
     }
 
