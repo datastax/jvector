@@ -129,7 +129,14 @@ public class FusedPQ extends AbstractFeature implements FusedFeature {
      * @param view The view needs to be the one used by the searcher
      * @param esf
      * @return
+     * @deprecated A function passed here isn't checked against the one the graph records. Search with
+     * {@link io.github.jbellis.jvector.graph.GraphSearcher#search(VectorFloat, int, int, io.github.jbellis.jvector.util.Bits)},
+     * which scores by the recorded function, or prepare the query with
+     * {@link io.github.jbellis.jvector.graph.GraphIndex#queryPreparer} and bind it with
+     * {@link io.github.jbellis.jvector.graph.GraphIndex.ScoringView#scoreProviderFor}. Graphs that record no
+     * function (format version 7 and earlier) keep using this path.
      */
+    @Deprecated
     public ScoreFunction.ApproximateScoreFunction approximateScoreFunctionFor(VectorFloat<?> queryVector, VectorSimilarityFunction vsf, OnDiskGraphIndex.View view, ScoreFunction.ExactScoreFunction esf) {
         var neighbors = new PackedNeighbors(view);
         var hierarchyCachedFeatures = view.getInlineSourceFeatures();
@@ -137,7 +144,7 @@ public class FusedPQ extends AbstractFeature implements FusedFeature {
     }
 
     /**
-     * As {@link #approximateScoreFunctionFor(VectorFloat, VectorSimilarityFunction, OnDiskGraphIndex.View, ScoreFunction.ExactScoreFunction)},
+     * As the explicit-function {@code approximateScoreFunctionFor(queryVector, vsf, view, esf)},
      * over a table {@link FusedPQDecoder#fillPartialSums} already filled for {@code queryVector} and {@code vsf},
      * which the function reads in place.
      */

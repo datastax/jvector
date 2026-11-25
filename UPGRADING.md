@@ -22,6 +22,24 @@ If you only read one thing, read this!
   signatures that took or returned `ImmutableGraphIndex` (for example `new GraphSearcher(graph)`,
   `GraphSearcher.getView()`, `OnDiskGraphIndex.write`, and the graph writer builders) now use `GraphIndex`.
   Classes compiled against 4.0.x will fail to link.
+- **`StreamingASHIndex.queryPreparer()` returns `Optional<QueryPreparer>`** instead of a nullable `QueryPreparer`
+  (experimental). `StreamingASHIndex` is now a graph index (see below), and `GraphIndex.queryPreparer()` returns
+  `Optional`. Replace a null check with `queryPreparer().orElse(null)` or `ifPresent`.
+
+## On-disk format version 8
+- Version 8 records the index's similarity function in the header: the float function (`VectorSimilarityFunction`)
+  for float graphs, or the byte function (`ByteVectorSimilarityFunction`) for int8 graphs, or none when the graph
+  was built with a custom score provider that names none. The header grows by 8 bytes; otherwise a version 8 file
+  has the version 7 layout. A fused ASH graph records its model's function.
+- `OnDiskGraphIndex.CURRENT_VERSION`, the default for the graph writer builders, `OnDiskGraphIndexCompactor` and
+  `CompressedVectors.write(out)`, is now 8. A version passed with `withVersion` is honored.
+- JVector 4.0.x reads formats up to 6 and 4.1.0-rc.1 up to 7; both reject version 8 files. To keep a rollback
+  possible, pass `withVersion(7)` (or 6 for 4.0.x) until every reader runs this release.
+- Files written before version 8 load and search exactly as before. They record no function (except fused ASH
+  files, through their model), so `similarityFunction()` is empty for them and they are searched with an explicit
+  function, as before.
+- `OnDiskGraphIndexCompactor` reads sources of versions 2 to 8 and records the function it was constructed with.
+  A source that recorded a different function is compacted anyway, with a warning.
 
 ## On-disk format version 7
 - Version 7 of the on-disk graph format adds three features: fused ASH (`FeatureId.FUSED_ASH`), ASH codes
@@ -39,8 +57,8 @@ If you only read one thing, read this!
 - Dot-product searches over indexes and PQ models written before version 7 stop by the standard rule,
   since their largest vector length is unknown; rewriting them at version 7 does not change that for codes
   encoded before, so a PQ model loaded from an older format keeps it unknown.
-- JVector 4.0.x reads formats up to 6 and rejects version 7 files. `OnDiskGraphIndex.CURRENT_VERSION`,
-  the default for `OnDiskGraphIndexWriter.Builder` and for `CompressedVectors.write(out)`, is now 7.
+- JVector 4.0.x reads formats up to 6 and rejects version 7 files. (`OnDiskGraphIndex.CURRENT_VERSION` is now 8;
+  see above.)
 - To keep a rollback to 4.0.x possible, pass the version explicitly until every reader runs 4.1:
   `withVersion(6)` on graph writer builders and `write(out, 6)` for compressors and compressed vectors.
   Versions 6 and below still write inline vectors, NVQ, separated vectors and fused PQ exactly as before,
@@ -136,20 +154,36 @@ If you only read one thing, read this!
   ```
   Constructing the writer builders directly and `GraphIndexWriter.getBuilderFor(...)` still work.
 - **Shortcuts for the simplest on-disk index.** `PersistableGraphIndex.writeTo(path, vectors)` writes a graph with
-  its vectors stored inline. `GraphSearcher.search(query, topK, rerankK, similarityFunction, acceptOrds)` searches a
-  graph that stores its vectors (an `OnDiskGraphIndex` with inline or NVQ vectors) without building a score
-  provider: with fused PQ or fused ASH it traverses with those codes and reranks the best `rerankK` with the stored vectors,
-  otherwise it scores with the stored vectors. For the same `rerankK` it returns the same results as building that
-  score provider by hand. On an in-memory graph it throws `IllegalStateException`. `GraphIndex.ScoringView.hasApproximateScores()`
-  (default `false`) reports whether a view supports `approximateScoreFunctionFor`.
+  its vectors stored inline. `IndexSearcher.search(query, topK, rerankK, acceptOrds)` searches a graph that
+  stores its vectors (an `OnDiskGraphIndex` with inline or NVQ vectors) by the similarity function it records,
+  without building a score provider: with fused PQ or fused ASH it traverses with those codes and reranks the best
+  `rerankK` with the stored vectors, otherwise it scores with the stored vectors. It throws `IllegalStateException`
+  on an in-memory graph, on a file that records no function (written before version 8), and on a searcher created
+  from a view. `GraphSearcher.search(query, topK, rerankK, similarityFunction, acceptOrds)` does the same with a
+  function you pass, and is the way to search older files; for the same function and `rerankK` both return the same
+  results as building that score provider by hand. `GraphIndex.ScoringView.hasApproximateScores()` (default
+  `false`) reports whether a view supports `approximateScoreFunctionFor`.
   ```java
   graph.writeTo(path, ravv);
   try (var rs = ReaderSupplierFactory.open(path);
        var onDisk = OnDiskGraphIndex.load(rs);
        var searcher = onDisk.searcher()) {
-      SearchResult result = searcher.search(query, 10, 30, VectorSimilarityFunction.COSINE, Bits.ALL);
+      SearchResult result = searcher.search(query, 10, 30, Bits.ALL);
   }
   ```
+- **Indexes know their similarity function.** `Index.similarityFunction()` (and `byteSimilarityFunction()` for
+  int8) report the function an index was built with: for an in-memory graph, its build score provider's; for an
+  on-disk graph, the one its file records (version 8). `IndexSearcher.search` scores by it, so a search can't use a
+  function the index wasn't built for. The default implementations return empty.
+- **Query preparation for every on-disk layout.** `GraphIndex.queryPreparer()` returns a `QueryPreparer` for
+  version 8 graphs with fused PQ, NVQ or inline vectors, as it already did for fused ASH: preparing a query once
+  computes fused PQ's lookup table and NVQ's per-query state, and `ScoringView.scoreProviderFor(prepared, rerank)`
+  binds it to a view. Prepared and unprepared searches return the same results. It is empty for files that record
+  no function and for int8 graphs.
+- **`StreamingASHIndex` is a graph index** (experimental). It implements the new `ASHGraphIndex`, a
+  `PersistableGraphIndex`: its views score with its ASH codes and rerank from the caller's vectors, its searcher
+  supports `search(query, topK, rerankK, acceptOrds)`, and it is written as its graph is (call `prepareForFlush()`
+  and `builder().cleanup()` first).
 - **Experimental:** recipes and IVF are marked `@Experimental`. `HnswRecipe.DEFAULT` is defined (it restates the
   builder's defaults) and can be applied with `HnswIndexBuilder.applyRecipe`; the other recipes, and
   `IvfIndexBuilder.build()`, throw `UnsupportedOperationException` until their values and implementation exist.
@@ -201,6 +235,13 @@ Differences to be aware of:
 
 ## Behavior changes
 
+- Searching an index by a similarity function other than the one it records logs a warning, and the search
+  proceeds with the function given, as before: once per loaded graph for `GraphSearcher.search(query, topK,
+  rerankK, similarityFunction, acceptOrds)` and the on-disk views' `rerankerFor` and `approximateScoreFunctionFor`,
+  and once per process for the static `GraphSearcher.search(query, topK, vectors, similarityFunction, graph,
+  acceptOrds)`. Some mismatches are deliberate, such as `COSINE` over a `DOT_PRODUCT` graph of unit vectors.
+  Fused ASH indexes still reject a mismatch with `IllegalArgumentException`.
+
 - Adding nodes to an `OnHeapGraphIndex` after `cleanup()` now works correctly. Previously the graph stayed
   "frozen" after cleanup, so a later insert could link a node to itself (tripping an assertion) and concurrent
   searches could see half-inserted nodes. Adding a node now unfreezes the graph; call `cleanup()` again before
@@ -218,6 +259,18 @@ Differences to be aware of:
   now encoded on `PhysicalCoreExecutor.pool()` rather than `ForkJoinPool.commonPool()`. Results are unchanged.
   The JMX build compression type also accepts `ASH`, with the same training as `HnswIndexBuilder`'s defaults
   (projected to the vector dimension, 2 bits per dimension), trained for the graph's similarity function.
+
+## Deprecations
+
+These still work; each `@deprecated` note names the replacement.
+
+- `GraphSearcher.search(query, topK, rerankK, similarityFunction, acceptOrds)`: use `search(query, topK, rerankK,
+  acceptOrds)`, which scores by the function the graph records. Files written before version 8 record none and keep
+  using the deprecated method.
+- `FusedPQ.approximateScoreFunctionFor(query, similarityFunction, view, reranker)`,
+  `FusedASH.approximateScoreFunctionFor(query, similarityFunction, view, reranker)` and
+  `NVQ.rerankerFor(query, similarityFunction, source)`: search with `search(query, topK, rerankK, acceptOrds)`, or
+  prepare the query with `GraphIndex.queryPreparer()` and bind it with `ScoringView.scoreProviderFor`.
 
 ## Other changes to public classes
 

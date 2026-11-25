@@ -89,6 +89,9 @@ public class OnDiskGraphIndex implements PersistableGraphIndex
     final int idUpperBound;
     /** The similarity function the header records; none before version 8. */
     private final RecordedSimilarity recordedSimilarity;
+    /** Whether {@link #warnIfNotRecorded} has logged for this graph. */
+    private final java.util.concurrent.atomic.AtomicBoolean similarityMismatchLogged =
+            new java.util.concurrent.atomic.AtomicBoolean();
     final int inlineBlockSize; // total size of all inline elements contributed by features
     /** Placement of base-layer records. */
     final L0Layout l0Layout;
@@ -612,6 +615,24 @@ public class OnDiskGraphIndex implements PersistableGraphIndex
         return feature == null ? java.util.Optional.empty() : java.util.Optional.of(feature.getASH().similarityFunction());
     }
 
+    /**
+     * Logs a warning, once per loaded graph, when an explicit-function search scores by a function other than the one
+     * the graph records. The search still proceeds: some mismatches are deliberate, such as COSINE over a
+     * DOT_PRODUCT graph of unit vectors. (Fused ASH graphs reject a mismatch instead.)
+     *
+     * @return whether this call logged
+     */
+    boolean warnIfNotRecorded(VectorSimilarityFunction vsf) {
+        var recorded = recordedSimilarity.floatFunction();
+        if (!recorded.isPresent() || recorded.get() == vsf || similarityMismatchLogged.getAndSet(true)) {
+            return false;
+        }
+        logger.warn("The graph records {} similarity but is being searched by {}; its scores use {}. Search with "
+                + "GraphSearcher.search(query, topK, rerankK, acceptOrds) to score by the recorded function. "
+                + "Logged once per graph.", recorded.get(), vsf, vsf);
+        return true;
+    }
+
     /** Returns the int8 similarity function this graph's header records (version 8 and later), if any. */
     @Override
     public java.util.Optional<ByteVectorSimilarityFunction> byteSimilarityFunction() {
@@ -942,6 +963,7 @@ public class OnDiskGraphIndex implements PersistableGraphIndex
         }
 
         @Override
+        @SuppressWarnings("deprecation")
         public ScoreFunction.ExactScoreFunction rerankerFor(VectorFloat<?> queryVector, VectorSimilarityFunction vsf) {
             // An ASH index scores only by its model's similarity, so its reranker must use the same one.
             var ashFeature = (FusedASH) features.get(FeatureId.FUSED_ASH);
@@ -949,6 +971,7 @@ public class OnDiskGraphIndex implements PersistableGraphIndex
                 throw new IllegalArgumentException("The index's ASH model was trained for "
                         + ashFeature.getASH().similarityFunction() + "; requested reranking by " + vsf);
             }
+            warnIfNotRecorded(vsf);
             if (features.containsKey(FeatureId.INLINE_VECTORS)) {
                 // Exact scores of the inline vectors, reporting the dot-product bound adaptive stopping needs: the
                 // query's length times the largest stored length (NaN when the header did not store it).
@@ -1016,7 +1039,9 @@ public class OnDiskGraphIndex implements PersistableGraphIndex
         }
 
         @Override
+        @SuppressWarnings("deprecation")
         public ScoreFunction.ApproximateScoreFunction approximateScoreFunctionFor(VectorFloat<?> queryVector, VectorSimilarityFunction vsf) {
+            warnIfNotRecorded(vsf);
             if (features.containsKey(FeatureId.FUSED_PQ)) {
                 return ((FusedPQ) features.get(FeatureId.FUSED_PQ)).approximateScoreFunctionFor(queryVector, vsf, this, rerankerFor(queryVector, vsf));
             } else if (features.containsKey(FeatureId.FUSED_ASH)) {

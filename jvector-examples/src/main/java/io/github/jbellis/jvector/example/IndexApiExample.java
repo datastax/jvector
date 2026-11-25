@@ -724,7 +724,7 @@ public class IndexApiExample {
 
         // As with fused PQ, the stored-vector search traverses with the fused codes and reranks the best
         // RERANK_K candidates with the inline vectors. Pass the dot-product similarity.
-        searchOnDisk(ds, graphPath, "fused ASH + inline rerank", RERANK_K, SIMILARITY_FUNCTION);
+        searchOnDisk(ds, graphPath, "fused ASH + inline rerank", RERANK_K);
         // Choosing the scoring yourself: rerankless, and with adaptive termination (section 8).
         searchOnDisk(ds, graphPath, "fused ASH only (rerankless)", TOP_K,
                 (view, q) -> new DefaultSearchScoreProvider(view.approximateScoreFunctionFor(q, SIMILARITY_FUNCTION)));
@@ -748,7 +748,7 @@ public class IndexApiExample {
             writer.write(states);
         }
         searchOnDisk(ds, nvqPath, String.format("NVQ + fused ASH, parallel writer (%,d bytes)", Files.size(nvqPath)),
-                RERANK_K, SIMILARITY_FUNCTION);
+                RERANK_K);
 
         System.out.println("Fused ASH needs format version 7; an older version is rejected:");
         expectFailure(() -> {
@@ -1129,22 +1129,15 @@ public class IndexApiExample {
     }
 
     /**
-     * Loads a graph from {@code path} and reports its recall, searching with the vectors the graph stores:
-     * {@code searcher.search(query, topK, rerankK, similarityFunction, filter)}. With fused PQ it traverses
-     * with the PQ codes and reranks with the stored vectors; otherwise it scores with the stored vectors.
+     * Loads a graph from {@code path} and reports its recall, searching with the vectors the graph stores by the
+     * similarity function it records: {@code searcher.search(query, topK, rerankK, filter)}. With fused codes it
+     * traverses with them and reranks with the stored vectors; otherwise it scores with the stored vectors.
      */
     private static void searchOnDisk(Dataset ds, Path path, String label, int rerankK) throws IOException {
-        searchOnDisk(ds, path, label, rerankK, SIMILARITY_FUNCTION);
-    }
-
-    /** As {@link #searchOnDisk(Dataset, Path, String, int)}, scoring with {@code similarityFunction}. */
-    private static void searchOnDisk(Dataset ds, Path path, String label, int rerankK,
-                                     VectorSimilarityFunction similarityFunction) throws IOException {
         try (ReaderSupplier rs = ReaderSupplierFactory.open(path);
              OnDiskGraphIndex onDisk = OnDiskGraphIndex.load(rs);
              GraphSearcher searcher = onDisk.searcher()) {
-            report(label, recall(ds, ds.groundTruth, Bits.ALL, node -> node,
-                    storedVectorSearch(searcher, rerankK, similarityFunction)));
+            report(label, recall(ds, ds.groundTruth, Bits.ALL, node -> node, storedVectorSearch(searcher, rerankK)));
         }
     }
 
@@ -1218,13 +1211,9 @@ public class IndexApiExample {
         return recall(ds, ds.groundTruth, Bits.ALL, node -> node, storedVectorSearch(searcher, rerankK));
     }
 
+    /** Searches with the vectors the graph stores, by the similarity function it records. */
     private static QuerySearch storedVectorSearch(GraphSearcher searcher, int rerankK) {
-        return storedVectorSearch(searcher, rerankK, SIMILARITY_FUNCTION);
-    }
-
-    private static QuerySearch storedVectorSearch(GraphSearcher searcher, int rerankK,
-                                                  VectorSimilarityFunction similarityFunction) {
-        return (q, acceptOrds) -> searcher.search(q, TOP_K, rerankK, similarityFunction, acceptOrds);
+        return (q, acceptOrds) -> searcher.search(q, TOP_K, rerankK, acceptOrds);
     }
 
     /** Mean number of nodes a search visits over the dataset's queries, scoring with {@code ssp}. */

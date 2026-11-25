@@ -261,6 +261,17 @@ public class FusedASH extends AbstractFeature implements FusedFeature {
         out.write(bytes, 0, length);
     }
 
+    /**
+     * Approximate scores of the fused ASH codes against {@code queryVector}, by {@code vsf}, which must be the model's.
+     *
+     * @deprecated A function passed here isn't checked against the one the graph records. Search with
+     * {@link io.github.jbellis.jvector.graph.GraphSearcher#search(VectorFloat, int, int, io.github.jbellis.jvector.util.Bits)},
+     * which scores by the recorded function, or prepare the query with
+     * {@link io.github.jbellis.jvector.graph.GraphIndex#queryPreparer} and bind it with
+     * {@link io.github.jbellis.jvector.graph.GraphIndex.ScoringView#scoreProviderFor}. Graphs that record no
+     * function (format version 7 and earlier) keep using this path.
+     */
+    @Deprecated
     public ScoreFunction.ApproximateScoreFunction approximateScoreFunctionFor(
             VectorFloat<?> queryVector,
             VectorSimilarityFunction vsf,

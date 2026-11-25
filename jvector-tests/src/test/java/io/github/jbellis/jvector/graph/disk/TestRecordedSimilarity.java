@@ -66,7 +66,9 @@ import java.util.function.IntFunction;
 
 import static io.github.jbellis.jvector.TestUtil.createRandomVectors;
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertThrows;
+import static org.junit.Assert.assertTrue;
 
 /**
  * Tests the similarity function on-disk graphs record: in the header from format version 8, and through a
@@ -377,5 +379,32 @@ public class TestRecordedSimilarity extends RandomizedTest {
         // a searcher that doesn't search by the index's own function says so
         IndexSearcher other = () -> { };
         assertThrows(UnsupportedOperationException.class, () -> other.search(q, 10, 10, Bits.ALL));
+    }
+
+    @Test
+    @SuppressWarnings("deprecation")
+    public void anExplicitSearchByAnotherFunctionWarnsOncePerGraphAndProceeds() throws Exception {
+        var ravv = unitRavv(100);
+        var q = createRandomVectors(1, DIMENSION).get(0);
+        var graph = build(ravv, VectorSimilarityFunction.DOT_PRODUCT);
+        try (var onDisk = writeAndLoad(graph, ravv, null, "warn")) {
+            assertFalse(onDisk.warnIfNotRecorded(VectorSimilarityFunction.DOT_PRODUCT));
+            assertTrue(onDisk.warnIfNotRecorded(VectorSimilarityFunction.COSINE));
+            assertFalse("once per graph", onDisk.warnIfNotRecorded(VectorSimilarityFunction.EUCLIDEAN));
+        }
+        // the explicit search logs, and searches by the function it was given
+        try (var onDisk = writeAndLoad(graph, ravv, null, "warn-search");
+             var searcher = onDisk.searcher()) {
+            var result = searcher.search(q, 5, 10, VectorSimilarityFunction.COSINE, Bits.ALL);
+            assertEquals(5, result.getNodes().length);
+            for (var ns : result.getNodes()) {
+                assertEquals(VectorSimilarityFunction.COSINE.compare(q, ravv.getVector(ns.node)), ns.score, 1e-6f);
+            }
+            assertFalse("the search logged", onDisk.warnIfNotRecorded(VectorSimilarityFunction.COSINE));
+        }
+        // a file that records no function has nothing to disagree with
+        try (var v7 = writeAndLoad(graph, ravv, 7, "warn-v7")) {
+            assertFalse(v7.warnIfNotRecorded(VectorSimilarityFunction.COSINE));
+        }
     }
 }

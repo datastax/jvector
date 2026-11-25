@@ -2248,6 +2248,7 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
      * Creates a score provider for searching across different source indexes. Uses approximate
      * PQ-based scoring if compressedPrecision is enabled, otherwise uses exact scoring.
      */
+    @SuppressWarnings("deprecation")
     private SearchScoreProvider buildCrossSourceScoreProvider(boolean compressedPrecision,
                                                               OnDiskGraphIndex searchSource,
                                                               int searchSourceIdx,

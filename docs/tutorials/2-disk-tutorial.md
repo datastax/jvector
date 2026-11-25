@@ -108,6 +108,17 @@ SearchScoreProvider ssp = DefaultSearchScoreProvider.exact(query, vsf, graphRavv
 SearchResult sr = searcher.search(ssp, topK, rerankK, 0.0f, 0.0f, Bits.ALL);
 ```
 
+Files written in format version 8 or later (the default) record the similarity function the graph was built
+with, so the searcher can score with the stored vectors by that function, with no score provider to build and no
+function to pass:
+
+```java
+SearchResult sr = searcher.search(query, topK, rerankK, Bits.ALL);
+```
+
+It throws `IllegalStateException` for a file written before version 8, which records no function; search those as
+above. `graph.similarityFunction()` reports the recorded function.
+
 The code from this tutorial is available in [`DiskIntro.java`](../../jvector-examples/src/main/java/io/github/jbellis/jvector/example/tutorial/DiskIntro.java). Run it from the root of this repo using
 ```sh
 mvn compile exec:exec@tutorial -Dtutorial=disk -pl jvector-examples -am

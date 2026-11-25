@@ -37,6 +37,8 @@ import io.github.jbellis.jvector.vector.VectorSimilarityFunction;
 import io.github.jbellis.jvector.vector.types.VectorFloat;
 import org.agrona.collections.Int2ObjectHashMap;
 import org.agrona.collections.IntHashSet;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.io.IOException;
 
@@ -46,6 +48,11 @@ import java.io.IOException;
  * search algorithm, see {@link GraphIndex}.
  */
 public class GraphSearcher implements IndexSearcher {
+    private static final Logger logger = LoggerFactory.getLogger(GraphSearcher.class);
+    /** Whether the one-off {@code search(..., vectors, similarityFunction, graph, ...)} has warned of a mismatch. */
+    private static final java.util.concurrent.atomic.AtomicBoolean oneOffMismatchLogged =
+            new java.util.concurrent.atomic.AtomicBoolean();
+
     /** The graph this searcher was created for, whose recorded similarity function it searches by; null when created from a view. */
     private final GraphIndex graph;
     private GraphIndex.View view;
@@ -210,7 +217,13 @@ public class GraphSearcher implements IndexSearcher {
      * @throws UnsupportedOperationException if the graph stores its vectors only as separated features
      *         ({@code SEPARATED_VECTORS} or {@code SEPARATED_NVQ}), which its view can't rerank with; search
      *         those with a {@link SearchScoreProvider}
+     * @deprecated For a graph that records its similarity function (on-disk format version 8 and later), use
+     * {@link #search(VectorFloat, int, int, Bits)}, which scores by that function, so a search can't use one the
+     * graph wasn't built for. This method still works on every graph, and is the way to search a file written before
+     * version 8; when {@code similarityFunction} differs from the recorded one it logs a warning, once per graph,
+     * and searches by {@code similarityFunction}.
      */
+    @Deprecated
     public SearchResult search(VectorFloat<?> queryVector,
                                int topK,
                                int rerankK,
@@ -272,9 +285,15 @@ public class GraphSearcher implements IndexSearcher {
 
     /**
      * Convenience function for simple one-off searches.  It is caller's responsibility to make sure that it
-     * is the unique owner of the vectors instance passed in here.
+     * is the unique owner of the vectors instance passed in here. If the graph records a similarity function other
+     * than {@code similarityFunction}, the search uses {@code similarityFunction} and logs a warning, once per process.
      */
     public static SearchResult search(VectorFloat<?> queryVector, int topK, RandomAccessVectorValues vectors, VectorSimilarityFunction similarityFunction, GraphIndex graph, Bits acceptOrds) {
+        var recorded = graph.similarityFunction();
+        if (recorded.isPresent() && recorded.get() != similarityFunction && !oneOffMismatchLogged.getAndSet(true)) {
+            logger.warn("The graph records {} similarity but is being searched by {}; its scores use {}. "
+                    + "Logged once per process.", recorded.get(), similarityFunction, similarityFunction);
+        }
         try (var searcher = new GraphSearcher(graph)) {
             var ssp = DefaultSearchScoreProvider.exact(queryVector, similarityFunction, vectors);
             return searcher.search(ssp, topK, acceptOrds);
