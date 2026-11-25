@@ -35,7 +35,6 @@ import io.github.jbellis.jvector.util.GrowableLongHeap;
 import io.github.jbellis.jvector.vector.VectorSimilarityFunction;
 import io.github.jbellis.jvector.vector.types.VectorFloat;
 import org.agrona.collections.Int2ObjectHashMap;
-import org.agrona.collections.IntHashSet;
 
 import java.io.Closeable;
 import java.io.IOException;
@@ -53,7 +52,7 @@ public class GraphSearcher implements Closeable {
     private final NodeQueue candidates;
     final NodeQueue approximateResults;
     private final NodeQueue rerankedResults;
-    private final IntHashSet visited;
+    private final VisitedSet visited;
     private final NodesUnsorted evictedResults;
     // Scored nodes that the current layer search can no longer expand (see searchOneLayer); they return to the
     // candidates at the next layer search, so a later layer or resume() sees the same candidates as before.
@@ -101,7 +100,7 @@ public class GraphSearcher implements Closeable {
         this.deferredCandidates = new NodesUnsorted(100);
         this.approximateResults = new NodeQueue(new BoundedLongHeap(100), NodeQueue.Order.MIN_HEAP);
         this.rerankedResults = new NodeQueue(new BoundedLongHeap(100), NodeQueue.Order.MIN_HEAP);
-        this.visited = new IntHashSet();
+        this.visited = new VisitedSet(view == null ? 0 : view.getIdUpperBound());
 
         this.pruneSearch = false;
         this.scoreTrackerFactory = new ScoreTracker.ScoreTrackerFactory();
@@ -403,7 +402,7 @@ public class GraphSearcher implements Closeable {
 
         // Start with entry point
         float score = scoreProvider.scoreFunction().similarityTo(entry.node);
-        visited.add(entry.node);
+        visited.mark(entry.node);
         candidates.push(entry.node, score);
 
         visitedCount = 0;
@@ -549,7 +548,7 @@ public class GraphSearcher implements Closeable {
                 expandedCount++;
 
                 // score the neighbors of the top candidate and add them to the queue
-                view.processNeighbors(level, topCandidateNode, scoreFunction, visited::add, neighborProcessor);
+                view.processNeighbors(level, topCandidateNode, scoreFunction, visited, neighborProcessor);
             }
             visitedCount += neighborProcessor.visits;
         } catch (Throwable t) {
