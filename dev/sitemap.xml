@@ -401,6 +401,14 @@
          <lastmod>2026-11-25</lastmod>
     </url>
     <url>
+         <loc>https://datastax.github.io/jvector/dev/release%20notes/4.1.0-rc.2/831.bugfix/</loc>
+         <lastmod>2026-11-25</lastmod>
+    </url>
+    <url>
+         <loc>https://datastax.github.io/jvector/dev/release%20notes/4.1.0-rc.2/831.performance/</loc>
+         <lastmod>2026-11-25</lastmod>
+    </url>
+    <url>
          <loc>https://datastax.github.io/jvector/dev/release%20notes/4.1.0-rc.2/832.docs/</loc>
          <lastmod>2026-11-25</lastmod>
     </url>
