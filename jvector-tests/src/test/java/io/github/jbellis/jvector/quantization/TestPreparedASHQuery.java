@@ -82,7 +82,10 @@ public class TestPreparedASHQuery {
                     // Offset-binary entries weight Aq by up to 2^(b-1), amplifying batch/single projection
                     // differences of up to 2e-6 by the same factor.
                     float lutTolerance = bits == 1 || bits == 2 || bits == 4 ? 5e-6f : 2e-6f * (1 << bits);
-                    for (int e = 0; e < expected.lut.length; e++) {
+                    // The table is built only where something reads it.
+                    assertEquals(ASHScorer.readsQueryLut(bits), expected.lut != null);
+                    assertEquals(expected.lut != null, actual.lut != null);
+                    for (int e = 0; expected.lut != null && e < expected.lut.length; e++) {
                         assertEquals(expected.lut[e], actual.lut[e], lutTolerance * Math.max(1f, Math.abs(expected.lut[e])));
                     }
                 }

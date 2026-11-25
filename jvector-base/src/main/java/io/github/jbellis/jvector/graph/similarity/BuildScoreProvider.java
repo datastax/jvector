@@ -252,10 +252,9 @@ public interface BuildScoreProvider {
 
             @Override
             public ScoreFunction diversityScoreFunctionFor(int node1) {
-                // like searchProviderFor, this skips reranking; unlike sPF, it uses pqv.scoreFunctionFor
-                // instead of precomputedScoreFunctionFor; since we only perform a few dozen comparisons
-                // during diversity computation, this is cheaper than precomputing a lookup table
-                return pqv.diversityFunctionFor(node1, vsf); // not precomputed!
+                // like searchProviderFor, this skips reranking; diversity scores code pairs straight
+                // from the PQ codebooks
+                return pqv.diversityFunctionFor(node1, vsf);
             }
 
             @Override

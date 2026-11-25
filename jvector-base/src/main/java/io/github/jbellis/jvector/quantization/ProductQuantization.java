@@ -80,6 +80,8 @@ public class ProductQuantization implements VectorCompressor<ByteSequence<?>>, A
     static final int MAX_NORM_VERSION = 7;
     private final ThreadLocal<VectorFloat<?>> partialSums; // for dot product, euclidean, and cosine partials
     private final AtomicReference<VectorFloat<?>> partialSquaredMagnitudes; // for cosine partials
+    // Codebooks back to back with per-dimension lookups, created on first diversity scoring.
+    private final AtomicReference<CodebookLayout> codebookLayout = new AtomicReference<>();
 
     /**
      * Initializes the codebooks by clustering the input data using Product Quantization.
@@ -448,6 +450,47 @@ public class ProductQuantization implements VectorCompressor<ByteSequence<?>>, A
         else
             encodeUnweighted(vector, dest);
         recordCode(dest, 0);
+    }
+
+    /** Codebooks laid out back to back, with the lookups that code-pair scoring uses. */
+    static final class CodebookLayout {
+        final VectorFloat<?> codebooks;
+        final int[] subspaceOffsets, subspaceWidths, dimBase;
+        final int minWidth, maxWidth;
+
+        CodebookLayout(ProductQuantization pq) {
+            int dim = pq.originalDimension, k = pq.clusterCount;
+            codebooks = vectorTypeSupport.createFloatVector(k * dim);
+            subspaceOffsets = new int[pq.M];
+            subspaceWidths = new int[pq.M];
+            dimBase = new int[dim];
+            int narrowest = Integer.MAX_VALUE, widest = 0;
+            for (int m = 0; m < pq.M; m++) {
+                int width = pq.subvectorSizesAndOffsets[m][0], off = pq.subvectorSizesAndOffsets[m][1];
+                subspaceOffsets[m] = off;
+                subspaceWidths[m] = width;
+                narrowest = Math.min(narrowest, width);
+                widest = Math.max(widest, width);
+                codebooks.copyFrom(pq.codebooks[m], 0, k * off, k * width);
+                for (int t = 0; t < width; t++) dimBase[off + t] = k * off + t;
+            }
+            minWidth = narrowest;
+            maxWidth = widest;
+        }
+
+        long ramBytesUsed() {
+            return RamUsageEstimator.shallowSizeOf(this) + codebooks.ramBytesUsed()
+                    + RamUsageEstimator.sizeOf(subspaceOffsets) + RamUsageEstimator.sizeOf(subspaceWidths)
+                    + RamUsageEstimator.sizeOf(dimBase);
+        }
+    }
+
+    CodebookLayout codebookLayout() {
+        CodebookLayout layout = codebookLayout.get();
+        if (layout != null) return layout;
+        // About the size of the codebooks; a racing duplicate is cheap and only the first is kept.
+        codebookLayout.compareAndSet(null, new CodebookLayout(this));
+        return codebookLayout.get();
     }
 
     /** The squared length of the reconstruction of the code at {@code offset}, relative to the global centroid. */
@@ -822,6 +865,9 @@ public class ProductQuantization implements VectorCompressor<ByteSequence<?>>, A
         if (globalCentroid != null) size += globalCentroid.ramBytesUsed();
         VectorFloat<?> magnitudes = partialSquaredMagnitudes.get();
         if (magnitudes != null) size += magnitudes.ramBytesUsed();
+        size += RamUsageEstimator.shallowSizeOf(codebookLayout);
+        CodebookLayout layout = codebookLayout.get();
+        if (layout != null) size += layout.ramBytesUsed();
         size += maxEncoded.ramBytesUsed();
         return size;
     }

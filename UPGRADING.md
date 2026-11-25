@@ -302,6 +302,14 @@ These still work; each `@deprecated` note names the replacement.
   (which picks a writer from the JMX configuration) ignores them when it picks the single-threaded one. A worker
   count of 0 or less means "use all available processors".
 
+## Behavior changes
+- `ramBytesUsed()` now counts caches created after loading, so its value can grow while an index is open;
+  see [Retained memory accounting](docs/retained-memory-accounting.md).
+- Saved (immutable) PQ vectors no longer build a scoring table per similarity function for graph-construction
+  diversity checks, which took `subspaces × clusters × (clusters + 1) / 2` floats each (17 MB at 128 subspaces of
+  256 clusters). Diversity scoring now reads one codebook copy per model, about 4 × clusters × dimension bytes, made
+  on first use. `ramBytesUsed()` drops accordingly.
+
 # Upgrading from 3.0.x to 4.0.x
 
 ## New features

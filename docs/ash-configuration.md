@@ -13,7 +13,10 @@ existing objects. CPU-count properties do not pin threads.
 
 An ASH model is trained for one similarity, `DOT_PRODUCT`, `EUCLIDEAN` or
 `COSINE`, which `AsymmetricHashing.initialize` requires as its second argument,
-as `GraphIndexBuilder` does; an ASH index cannot be built without one. The model
+as `GraphIndexBuilder` does; an ASH index cannot be built without one. Every
+similarity works at every setting: 1 to 9 bits, any landmark count, `ITQ` and
+`RANDOM`, in-memory, symmetric, fused, separated and streaming scoring, and every
+kernel mode and provider (`TestASHMetricMatrix` covers them). The model
 saves it, and its codes and every scorer of them use it; asking a scorer for
 another similarity throws `IllegalArgumentException`, and every ASH score
 function reports it in `similarityFunction()`, which adaptive stopping reads.
@@ -167,6 +170,12 @@ insertion. The overload taking an original vector retains asymmetric query
 preparation. Both policies use the same stored ASH vectors; application queries
 continue to use asymmetric scoring.
 
+Symmetric scoring has SIMD kernels at every width. 1, 2 and 4-bit codes use the
+native Highway kernels or Panama; 3 and 5 to 9-bit codes use a Panama kernel
+that decodes fields in registers and sums their products exactly, so it scores
+the same as the scalar path. CPUs with 4-lane vectors (for example NEON) decode
+these widths in Java.
+
 Construction policy can change the graph, recall and QPS. Use fresh indexes
 when comparing modes: the graph cache key does not include this JVM property,
 so changing it does not invalidate an existing cached graph.
@@ -226,9 +235,11 @@ Single-vector scoring (separated codes, streaming indexes and fused upper layers
 depends on the bit width. 1-bit codes use a SIMD masked add over their sign bits.
 2- and 4-bit codes use a projection dot that decodes codes in registers: native
 Highway kernels, or with Panama a contiguous-query kernel on JDK 25+ and a
-query-gather kernel on earlier JDKs. The other widths use the native nibble-LUT
-dot; with Panama they are decoded in scalar Java, so prefer 1, 2 or 4 bits there.
-Fused graphs score base-layer neighborhoods with whole-block kernels at every width.
+field-decode kernel on earlier JDKs. The other widths (3 and 5 to 9 bits) use
+the field-decode kernel with either provider. Fused graphs score base-layer
+neighborhoods with whole-block kernels at every width; with Panama, or with more
+than one landmark, 3 and 5 to 9-bit neighborhoods sum each neighbor's INT8 dot
+product in SIMD.
 
 To choose these per model in code, call `setQueryOptions` before the model
 projects its first query, for example right after opening an index. Later calls

@@ -135,7 +135,7 @@ public final class ASHQueryPreparer implements QueryPreparer {
 
     private void finish(State state) {
         scorer.finishQuery(state.scoringQuery, state.prepared);
-        FusedASHLayout.buildQueryLut(state.prepared.qProj, ash.quantizedDim, ash.bitsPerDimension, state.lut);
+        if (state.lut != null) FusedASHLayout.buildQueryLut(state.prepared.qProj, ash.quantizedDim, ash.bitsPerDimension, state.lut);
         state.ready = true;
     }
 
@@ -178,12 +178,13 @@ public final class ASHQueryPreparer implements QueryPreparer {
             this.projectionView = projectionInput == input ? query
                     : VectorizationProvider.getInstance().getVectorTypeSupport().createFloatVector(projectionInput);
             this.prepared = prepared;
-            this.lut = new float[Math.multiplyExact(FusedASHLayout.codeGroups(ash.quantizedDim, ash.bitsPerDimension), 16)];
+            this.lut = ASHScorer.readsQueryLut(ash.bitsPerDimension)
+                    ? new float[Math.multiplyExact(FusedASHLayout.codeGroups(ash.quantizedDim, ash.bitsPerDimension), 16)] : null;
             // Initialize a provider's lazy view once, outside preparation/search.
             Object backing = query.get();
             long sum = RamUsageEstimator.shallowSizeOf(this) + RamUsageEstimator.sizeOf(input)
                     + RamUsageEstimator.shallowSizeOf(query) + RamUsageEstimator.shallowSizeOf(prepared)
-                    + RamUsageEstimator.sizeOf(prepared.qProj) + RamUsageEstimator.sizeOf(lut)
+                    + RamUsageEstimator.sizeOf(prepared.qProj) + (lut == null ? 0 : RamUsageEstimator.sizeOf(lut))
                     + RamUsageEstimator.sizeOf(prepared.dotQMuByLandmark);
             if (backing != input) sum += RamUsageEstimator.shallowSizeOf(backing);
             if (projectionInput != input) sum += RamUsageEstimator.sizeOf(projectionInput);

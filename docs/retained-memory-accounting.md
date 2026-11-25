@@ -11,15 +11,18 @@ a loop over its subspaces).
   feature, including any model read from the index header (fused PQ codebooks, NVQ
   parameters). A model is counted by the feature that owns it.
 - **PQ and NVQ models:** the whole model, including caches created later on first use
-  (for example the PQ cosine table).
-- **PQ vectors:** their code storage plus the model, and, for immutable vectors, each
-  scoring table once it exists.
+  (for example the PQ cosine table and the codebook copy that diversity scoring reads).
+- **PQ vectors:** their code storage plus the model.
 - **ASH:** models can hold native memory (their native projections). `ramBytesUsed()`
   includes it and `nativeBytesUsed()` reports that part, for the index, the `FusedASH`
   feature and the model. See [Native ASH](native-ash-preparation.md#retained-memory-accounting).
 
 Not counted: per-thread scratch, the caller's reader supplier, JVM-global objects, and
 memory-mapped file pages or the OS page cache, which are not Java heap.
+
+Totals can grow after loading, as caches are created on first use. A caller that adds a
+total when it opens an index and subtracts it at close must subtract the value it added,
+not a fresh read.
 
 ## Accuracy
 

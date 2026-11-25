@@ -170,15 +170,19 @@ class KMeansInitializationTest {
     }
 
     @Test
-    void unsupportedPathsLeaveOutputsAlone() {
+    void otherDimensionsUseJavaOnNativeAndLeaveOutputsAloneOnPanama() {
         var nativeTypes = new MemorySegmentVectorProvider();
         var support = NativeVectorUtilSupport.create();
         var point = nativeTypes.createFloatVector(new float[4]);
+        var centroid = nativeTypes.createFloatVector(new float[]{1, 2, 0, 0});
         var minimum = nativeTypes.createFloatVector(new float[]{17});
         var scratch = nativeTypes.createFloatVector(new float[]{23});
-        assertFalse(support.tryUpdateKMeansDistances(new VectorFloat<?>[]{point}, point, minimum, scratch));
-        assertEquals(17, minimum.get(0));
-        assertEquals(23, scratch.get(0));
+        // Native handles every dimension: 8 with its dedicated update, others in Java to avoid tiny native calls.
+        assertTrue(support.tryUpdateKMeansDistances(new VectorFloat<?>[]{point}, centroid, minimum, scratch));
+        assertEquals(5, scratch.get(0));
+        assertEquals(5, minimum.get(0));
+        minimum.set(0, 17);
+        scratch.set(0, 23);
         var javaSupport = new PanamaVectorizationProvider().getVectorUtilSupport();
         assertFalse(javaSupport.tryUpdateKMeansDistances(new VectorFloat<?>[]{point}, point, minimum, scratch));
         assertEquals(17, minimum.get(0));

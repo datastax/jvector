@@ -176,8 +176,7 @@ public final class MutableASHVectors implements MutableCompressedVectors<VectorF
         int stride = Math.max(1, Math.max(signWords * Long.BYTES, bodyBytes));
         this.pageShift = 31 - Integer.numberOfLeadingZeros(Math.max(1, Math.min(MAX_VECTORS_PER_PAGE, pageBytes / stride)));
         this.pageMask = (1 << pageShift) - 1;
-        this.simdSymmetric = bits == 1 ? VU.supportsAshSymmetricScoring()
-                : (bits == 2 || bits == 4) && VU.supportsAshSymmetricScoring() && VU.supportsAshSymmetricDotAt();
+        this.simdSymmetric = VU.supportsAshSymmetricScoring() && (bits == 1 || VU.supportsAshSymmetricDotAt());
         this.models = new Model[]{new Model(0, ash)};
         this.current = 0;
         this.scratch = ThreadLocal.withInitial(() ->
@@ -796,6 +795,11 @@ public final class MutableASHVectors implements MutableCompressedVectors<VectorF
         /** Gathers same-model codes into one buffer and scores them in one call; same scores as one at a time. */
         @Override
         public void similarityTo(int[] nodes, int count, float[] scores) {
+            // Without the rows kernel (1-bit codes, or no SIMD), score one at a time.
+            if (!batch) {
+                for (int i = 0; i < count; i++) scores[i] = similarityTo(nodes[i]);
+                return;
+            }
             byte[] rows = gather(count * bodyBytes);
             Page[] targets = new Page[count];
             int same = 0;

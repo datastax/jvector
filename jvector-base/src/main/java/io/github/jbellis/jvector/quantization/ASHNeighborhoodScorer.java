@@ -109,12 +109,17 @@ public final class ASHNeighborhoodScorer {
         if (reusableLut != null && reusableLut.length != lutSize) {
             throw new IllegalArgumentException("LUT size does not match the ASH model");
         }
-        this.lut = reusableLut == null ? new float[lutSize] : reusableLut;
-        if (!alreadyPrepared) FusedASHLayout.buildQueryLut(query.qProj, dimensions, bits, lut);
+        // Built only where something reads it; a prepared table arrives built.
+        boolean readsLut = ASHScorer.readsQueryLut(bits);
+        this.lut = !readsLut ? null : reusableLut != null ? reusableLut : new float[lutSize];
+        if (readsLut && (!alreadyPrepared || reusableLut == null)) FusedASHLayout.buildQueryLut(query.qProj, dimensions, bits, lut);
         var backend = VectorizationProvider.getInstance().getVectorUtilSupport();
         if (FusedASHLayout.usesFieldBlocks(bits)) {
-            // The LUT above still serves canonical scoring of upper-layer nodes.
-            this.int8Query = new ASHInt8Query(dimensions, bits);
+            // The LUT, where built, serves direct scoring of upper-layer nodes.
+            // Without the whole-neighborhood kernel, the query sums each lane in SIMD. It holds the backend to keep
+            // score() small, which keeps 2-bit neighborhoods fast.
+            this.int8Query = new ASHInt8Query(dimensions, bits,
+                    kernel.isSimd() && backend.supportsAshOffsetBinaryInt8Dot() ? backend : null);
             this.int8Query.prepare(query.qProj);
             this.int8Backend = kernel.isSimd() && dotQMu.length == 1 && backend.supportsAshInt8NeighborhoodScoring()
                     ? backend : null;
@@ -193,10 +198,10 @@ public final class ASHNeighborhoodScorer {
     public String toString() {
         Object implementation = neighborhoodBackend != null ? "native Highway whole-neighborhood FFM"
                 : int8Backend != null ? "native Highway whole-neighborhood FFM, INT8 field blocks"
-                : int8Query != null ? "Java INT8 field blocks" : kernel;
+                : int8Query != null ? (int8Query.laneBackend != null ? "SIMD" : "Java") + " INT8 field blocks" : kernel;
         return "ASHNeighborhoodScorer[" + implementation + ", blockSize=" + blockSize + ", capacity=" + maxDegree + "]";
     }
 
-    /** Query-lifetime table shared with canonical direct-node scoring. */
+    /** Query-lifetime table shared with canonical direct-node scoring; null where nothing reads it. */
     float[] queryLut() { return lut; }
 }

@@ -308,7 +308,8 @@ public class ASHVectors implements CompressedVectors {
     private ScoreFunction.AdaptiveApproximateScoreFunction nodeScoreFunction(ASHScorer.CodeScorer f,
                                                                             ASHScorer.QueryPrecompute qp) {
         final ASHCodes c = codes;
-        if (c.signWords == 0 && gatheredScoringSupported(ash)) {
+        // Gathered scoring needs the prepared query; the scalar reference has none.
+        if (c.signWords == 0 && qp != null && gatheredScoringSupported(ash)) {
             return new GatheredScoreFunction(f, qp);
         }
         if (c.signWords == 0) {

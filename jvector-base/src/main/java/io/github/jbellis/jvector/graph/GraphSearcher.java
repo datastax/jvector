@@ -593,29 +593,41 @@ public class GraphSearcher implements IndexSearcher {
             if (adaptive) capScored.setMaxSize(capSize);
             expandBar = Float.NEGATIVE_INFINITY;
             adaptiveBar = adaptive;
+            // Resolved once per layer so the per-neighbor path does not read shared objects (Bits.ALL, the
+            // no-op tracker), and visits are counted locally rather than in a searcher field; this avoids
+            // false sharing between concurrent searchers.
+            boolean acceptAll = acceptOrdsThisLayer instanceof Bits.MatchAllBits;
             if (trackBest) {
                 bestScored.setMaxSize(rerankK);
                 candidates.foreach((node, score) -> {
-                    if (acceptOrdsThisLayer.get(node) && score >= threshold) offerScored(node, score, rerankK);
+                    if ((acceptAll || acceptOrdsThisLayer.get(node)) && score >= threshold) offerScored(node, score, rerankK);
                 });
             }
 
             // TopK and filtered pruning are disabled. Threshold searches retain their
             // legacy threshold early-termination path inside ScoreTrackerFactory.
             var scoreTracker = scoreTrackerFactory.getScoreTracker(false, rerankK, threshold);
+            boolean tracking = !(scoreTracker instanceof ScoreTracker.NoOpTracker);
 
             var scoreFunction = scoreProvider.scoreFunction();
-            GraphIndex.NeighborProcessor neighborProcessor = (node2, score) -> {
-                visitedCount++;
-                scoreTracker.track(score);
-                if (trackBest && acceptOrdsThisLayer.get(node2) && score >= threshold) offerScored(node2, score, rerankK);
-                if (bounded) {
-                    if (!mayExpand(score, rerankK)) {
-                        deferredCandidates.add(node2, score);
-                        return;
+            var neighborProcessor = new GraphIndex.NeighborProcessor() {
+                int visits;
+
+                @Override
+                public void process(int node2, float score) {
+                    visits++;
+                    if (tracking) scoreTracker.track(score);
+                    if (trackBest && (acceptAll || acceptOrdsThisLayer.get(node2)) && score >= threshold) {
+                        offerScored(node2, score, rerankK);
                     }
+                    if (bounded) {
+                        if (!mayExpand(score, rerankK)) {
+                            deferredCandidates.add(node2, score);
+                            return;
+                        }
+                    }
+                    candidates.push(node2, score);
                 }
-                candidates.push(node2, score);
             };
 
             // the main search loop
@@ -627,12 +639,12 @@ public class GraphSearcher implements IndexSearcher {
                 // process the top candidate
                 float topCandidateScore = candidates.topScore();
                 int topCandidateNode = candidates.pop();
-                if (acceptOrdsThisLayer.get(topCandidateNode) && topCandidateScore >= threshold) {
+                if ((acceptAll || acceptOrdsThisLayer.get(topCandidateNode)) && topCandidateScore >= threshold) {
                     addTopCandidate(topCandidateNode, topCandidateScore, rerankK);
                 }
 
                 // skip edge loading if we've found a local maximum and we have enough results
-                if (scoreTracker.shouldStop() && candidates.size() >= rerankK - approximateResults.size()) {
+                if (tracking && scoreTracker.shouldStop() && candidates.size() >= rerankK - approximateResults.size()) {
                     continue;
                 }
 
@@ -644,6 +656,7 @@ public class GraphSearcher implements IndexSearcher {
                 // score the neighbors of the top candidate and add them to the queue
                 view.processNeighbors(level, topCandidateNode, scoreFunction, visited::add, neighborProcessor);
             }
+            visitedCount += neighborProcessor.visits;
         } catch (Throwable t) {
             // clear scratch structures if terminated via throwable, as they may not have been drained
             approximateResults.clear();
