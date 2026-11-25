@@ -73,6 +73,30 @@ class NativeVectorUtilSupport extends PanamaVectorUtilSupport
         }
     }
 
+    // The bulk kernels inherited from the Panama provider would not reproduce the native single-pair results, so
+    // score one pair at a time with the native kernels.
+
+    @Override
+    public void dotProduct(VectorFloat<?> q, VectorFloat<?>[] targets, int count, float[] results) {
+        for (int i = 0; i < count; i++) {
+            results[i] = dotProduct(q, targets[i]);
+        }
+    }
+
+    @Override
+    public void cosine(VectorFloat<?> q, VectorFloat<?>[] targets, int count, float[] results) {
+        for (int i = 0; i < count; i++) {
+            results[i] = cosine(q, targets[i]);
+        }
+    }
+
+    @Override
+    public void squareDistance(VectorFloat<?> q, VectorFloat<?>[] targets, int count, float[] results) {
+        for (int i = 0; i < count; i++) {
+            results[i] = squareDistance(q, targets[i]);
+        }
+    }
+
     @Override
     public int setBlasThreadsLocal(int threads) {
         return NativeBlasThreads.set(threads);

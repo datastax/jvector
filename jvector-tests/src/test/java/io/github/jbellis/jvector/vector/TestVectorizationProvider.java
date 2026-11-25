@@ -61,6 +61,39 @@ public class TestVectorizationProvider extends RandomizedTest {
         Assert.assertEquals(a.getVectorUtilSupport().squareDistance(v1a, v2a), b.getVectorUtilSupport().squareDistance(v1b, v2b), 0.0001f);
     }
 
+    /**
+     * PQ scoring calls dotProduct on short slices at non-zero offsets, so check every length around the SIMD widths,
+     * including a slice exactly as wide as one preferred vector, at several offsets against the scalar provider.
+     */
+    @Test
+    public void testDotProductOnShortSlicesWithOffsets() {
+        Assume.assumeTrue(hasSimd);
+
+        VectorizationProvider scalar = new DefaultVectorizationProvider();
+        VectorizationProvider simd = VectorizationProvider.getInstance();
+
+        for (int length : new int[] {1, 2, 3, 4, 5, 7, 8, 9, 15, 16, 17, 31, 32, 33}) {
+            for (int offset1 : new int[] {0, 1, 4, 13}) {
+                for (int offset2 : new int[] {0, 3, 8}) {
+                    VectorFloat<?> simdA = TestUtil.randomVector(getRandom(), offset1 + length + 5);
+                    VectorFloat<?> simdB = TestUtil.randomVector(getRandom(), offset2 + length + 5);
+                    var scalarA = scalar.getVectorTypeSupport().createFloatVector(simdA.length());
+                    var scalarB = scalar.getVectorTypeSupport().createFloatVector(simdB.length());
+                    for (int i = 0; i < simdA.length(); i++) {
+                        scalarA.set(i, simdA.get(i));
+                    }
+                    for (int i = 0; i < simdB.length(); i++) {
+                        scalarB.set(i, simdB.get(i));
+                    }
+                    Assert.assertEquals("length=" + length + " offsets=" + offset1 + "," + offset2,
+                                        scalar.getVectorUtilSupport().dotProduct(scalarA, offset1, scalarB, offset2, length),
+                                        simd.getVectorUtilSupport().dotProduct(simdA, offset1, simdB, offset2, length),
+                                        1e-4f);
+                }
+            }
+        }
+    }
+
     @Test
     public void testSimilarityMetricsByte() {
         Assume.assumeTrue(hasSimd);
@@ -244,6 +277,68 @@ public class TestVectorizationProvider extends RandomizedTest {
                             + provider.getClass().getSimpleName()
             );
         }
+    }
+
+    /**
+     * The bulk similarity methods must return exactly what the pairwise ones do, for every provider, at lengths around
+     * the SIMD widths (where the pairwise methods change path) and at counts that leave a partial batch.
+     */
+    @Test
+    public void testBulkSimilarityEqualsPairwise() throws Exception {
+        var providers = new java.util.ArrayList<VectorizationProvider>();
+        providers.add(new DefaultVectorizationProvider());
+        providers.add(VectorizationProvider.getInstance());
+        if (hasSimd) {
+            providers.add((VectorizationProvider) Class.forName("io.github.jbellis.jvector.vector.PanamaVectorizationProvider")
+                                                       .getConstructor().newInstance());
+        }
+        int[] lengths = {1, 2, 3, 4, 5, 7, 8, 9, 15, 16, 17, 23, 31, 32, 33, 47, 48, 49, 63, 64, 65, 100, 1021, 1024};
+        for (var provider : providers) {
+            var vts = provider.getVectorTypeSupport();
+            var util = provider.getVectorUtilSupport();
+            for (int length : lengths) {
+                var q = copyOf(vts, TestUtil.randomVector(getRandom(), length));
+                for (int count = 0; count <= 9; count++) {
+                    VectorFloat<?>[] targets = new VectorFloat<?>[count + 1];
+                    for (int i = 0; i < count; i++) {
+                        targets[i] = copyOf(vts, TestUtil.randomVector(getRandom(), length));
+                    }
+                    float[] dot = new float[count + 1], cosine = new float[count + 1], l2 = new float[count + 1];
+                    util.dotProduct(q, targets, count, dot);
+                    util.cosine(q, targets, count, cosine);
+                    util.squareDistance(q, targets, count, l2);
+                    for (int i = 0; i < count; i++) {
+                        String where = provider.getClass().getSimpleName() + " length=" + length + " count=" + count + " i=" + i;
+                        double absDot = 0, qq = 0, tt = 0, sq = 0;
+                        for (int j = 0; j < length; j++) {
+                            double a = q.get(j), b = targets[i].get(j);
+                            absDot += Math.abs(a * b); qq += a * a; tt += b * b; sq += (a - b) * (a - b);
+                        }
+                        float cos = util.cosine(q, targets[i]);
+                        assertSameScore(where + " dot", util.dotProduct(q, targets[i]), dot[i], length, absDot);
+                        assertSameScore(where + " cosine", cos, cosine[i], length, absDot / Math.sqrt(qq * tt) + Math.abs(cos));
+                        assertSameScore(where + " l2", util.squareDistance(q, targets[i]), l2[i], length, sq);
+                    }
+                }
+            }
+        }
+    }
+
+    // The Vector API leaves the order of a float lane reduction (reduceLanes(ADD)) unspecified, and the interpreter,
+    // C1 and C2 can reduce in different orders (seen on aarch64 and on x86 with JDK 25), so the same pairwise call can
+    // give different bits depending on which JIT tier runs it; the test passes interpreted only. Allow the worst-case
+    // difference between two summation orders of the same n terms, 2 * n * eps * sum(|term|). A wrong target or
+    // accumulator is off by far more.
+    private static void assertSameScore(String where, float expected, float actual, int n, double scale) {
+        Assert.assertEquals(where, expected, actual, 2.0 * n * Math.ulp(1.0f) * scale);
+    }
+
+    private static VectorFloat<?> copyOf(VectorTypeSupport vts, VectorFloat<?> v) {
+        var copy = vts.createFloatVector(v.length());
+        for (int i = 0; i < v.length(); i++) {
+            copy.set(i, v.get(i));
+        }
+        return copy;
     }
 
     private static float[] getVector(VectorFloat<?> vf) {

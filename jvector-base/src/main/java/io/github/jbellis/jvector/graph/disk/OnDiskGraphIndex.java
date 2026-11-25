@@ -632,6 +632,29 @@ public class OnDiskGraphIndex implements ImmutableGraphIndex, AutoCloseable, Acc
             return false;
         }
 
+        // vectors this view reads into when scoring in bulk (a view is used by one thread)
+        private VectorFloat<?>[] bulkTargets;
+        private final float[] bulkScores = new float[4];
+
+        /** Reads the vectors into ones this view reuses, so scoring in bulk makes no new vector per read. */
+        @Override
+        public void similarityTo(VectorFloat<?> query, VectorSimilarityFunction vsf, int[] nodes, int count, float[] results) {
+            if (bulkTargets == null) {
+                bulkTargets = new VectorFloat<?>[4];
+                for (int j = 0; j < 4; j++) {
+                    bulkTargets[j] = vectorTypeSupport.createFloatVector(dimension);
+                }
+            }
+            for (int i = 0; i < count; i += 4) {
+                int n = Math.min(4, count - i);
+                for (int j = 0; j < n; j++) {
+                    getVectorInto(nodes[i + j], bulkTargets[j], 0);
+                }
+                vsf.compare(query, bulkTargets, n, bulkScores);
+                System.arraycopy(bulkScores, 0, results, i, n);
+            }
+        }
+
         @Override
         public RandomAccessVectorValues copy() {
             throw new UnsupportedOperationException(); // need to copy reader
