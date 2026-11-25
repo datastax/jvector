@@ -21,6 +21,7 @@ import io.github.jbellis.jvector.vector.VectorizationProvider;
 
 import io.github.jbellis.jvector.vector.VectorSimilarityFunction;
 import io.github.jbellis.jvector.vector.VectorUtil;
+import io.github.jbellis.jvector.vector.VectorUtilSupport;
 import io.github.jbellis.jvector.vector.types.VectorFloat;
 
 /**
@@ -127,12 +128,12 @@ public final class ASHScorer {
         }
         var mode = ASHVectors.AshSingleKernel.fromProperty();
         var backend = VectorizationProvider.getInstance().getVectorUtilSupport();
-        if (mode == ASHVectors.AshSingleKernel.SIMD && !backend.supportsAshCanonicalLutScoring()) {
+        boolean simd = backend.supportsAshCanonicalLutScoring() || backend.supportsAshOffsetBinaryDot();
+        if (mode == ASHVectors.AshSingleKernel.SIMD && !simd) {
             throw new IllegalStateException("ASH single-vector SIMD requested, but backend "
-                    + backend.getClass().getName() + " does not support canonical LUT scoring");
+                    + backend.getClass().getName() + " does not support offset-binary scoring");
         }
-        return genericMultibitDotProductScorer(qp,
-                mode != ASHVectors.AshSingleKernel.SCALAR && backend.supportsAshCanonicalLutScoring());
+        return genericMultibitDotProductScorer(qp, mode != ASHVectors.AshSingleKernel.SCALAR && simd);
     }
 
     /** Reuses a fused scorer's table for direct nodes when the backend supports it. */
@@ -157,14 +158,29 @@ public final class ASHScorer {
         }
         // Two coordinates share each 2-bit LUT entry. Four-bit codes instead
         // use the backend's contiguous projection dot, avoiding a 16x larger table.
-        if ((ash.bitsPerDimension == 2 || AsymmetricHashing.usesOffsetBinaryCode(ash.bitsPerDimension))
-                && mode != ASHVectors.AshSingleKernel.SCALAR
-                && backend.supportsAshCanonicalLutScoring()) {
+        // Offset-binary codes decode faster in registers than through the LUT, where the backend can.
+        if (directScoringReadsLut(ash.bitsPerDimension, mode, backend)) {
             int groups = FusedASHLayout.codeGroups(qp.d, ash.bitsPerDimension);
             return v -> v.scale * backend.ashCanonicalLutDot(v.extraBits, groups, lut)
                     + qp.dotQMuByLandmark[v.landmark & 255] + v.offset;
         }
         return scoreFunctionFor(qp);
+    }
+
+    /** Whether {@link #scoreFunctionFor(QueryPrecompute, float[])} scores direct nodes through the query table. */
+    private static boolean directScoringReadsLut(int bits, ASHVectors.AshSingleKernel mode, VectorUtilSupport backend) {
+        return (bits == 2 || (AsymmetricHashing.usesOffsetBinaryCode(bits) && !backend.supportsAshOffsetBinaryDot()))
+                && mode != ASHVectors.AshSingleKernel.SCALAR && backend.supportsAshCanonicalLutScoring();
+    }
+
+    /**
+     * Whether anything reads a query's nibble table at this width: fused neighborhoods at 1, 2 and 4 bits, and
+     * direct-node scoring of offset-binary codes (3 and 5 to 9 bits) on a backend that has no other SIMD kernel.
+     */
+    static boolean readsQueryLut(int bitsPerDimension) {
+        return !AsymmetricHashing.usesOffsetBinaryCode(bitsPerDimension)
+                || directScoringReadsLut(bitsPerDimension, ASHVectors.AshSingleKernel.fromProperty(),
+                        VectorizationProvider.getInstance().getVectorUtilSupport());
     }
 
     /** Prepared encoded-query state; uses the same arithmetic as the raw-query scorer. */
@@ -301,16 +317,21 @@ public final class ASHScorer {
     }
 
     /**
-     * Offset-binary codes (3 and 5 to 9 bits): {@code scale * <Aq, code> + <q, mu_c> + offset}. The SIMD
-     * path sums the code's 4-bit groups through a query LUT prepared once per scorer; the scalar path
-     * decodes each field and is the independent reference.
+     * Offset-binary codes (3 and 5 to 9 bits): {@code scale * <Aq, code> + <q, mu_c> + offset}. The SIMD path
+     * decodes fields in registers where the backend can, or else sums the code's 4-bit groups through a query LUT
+     * prepared once per scorer; the scalar path decodes each field and is the independent reference.
      */
     private CodeScorer genericMultibitDotProductScorer(QueryPrecompute qp, boolean simd) {
         final int d = qp.d;
         final int C = qp.C;
         final int bitsPerDimension = ash.bitsPerDimension;
+        final var backend = VectorizationProvider.getInstance().getVectorUtilSupport();
+        if (simd && backend.supportsAshOffsetBinaryDot()) {
+            return (signBits, signOffset, code, codeOffset, scale, offset, c) ->
+                    scale * backend.ashOffsetBinaryDot(qp.qProj, code, codeOffset, d, bitsPerDimension)
+                    + qp.dotQMuByLandmark[c] + offset;
+        }
         if (simd) {
-            final var backend = VectorizationProvider.getInstance().getVectorUtilSupport();
             final int groups = FusedASHLayout.codeGroups(d, bitsPerDimension);
             // Query-owned: prepared scorers may outlive this thread or run concurrently.
             final float[] lut = new float[Math.multiplyExact(groups, 16)];

@@ -80,6 +80,42 @@ public class TestMutableASHVectors extends RandomizedTest {
         return new ASHVectors(ash, codes);
     }
 
+    /** Component {@code j} of {@code code}, in quantization steps of one. */
+    private static float component(AsymmetricHashing.QuantizedVector code, int j, int bits) {
+        if (bits == 1) return (code.binaryVector[j >>> 6] >>> (j & 63) & 1L) == 0 ? -0.5f : 0.5f;
+        if (AsymmetricHashing.usesFastScanProjectionCode(bits)) return AsymmetricHashing.projectionComponent(code.extraBits, 0, j, bits);
+        return AsymmetricHashing.decodeOffsetBinary(AsymmetricHashing.offsetBinaryField(code.extraBits, 0, j, bits), bits);
+    }
+
+    /** Components a 1 ULP change may move, those at a rounding boundary. JDK 25 runs showed only header changes. */
+    private static final int MAX_DIFFERING_COMPONENTS = 1;
+
+    /** One unit in the last place of a half-precision header value. */
+    private static float halfUlp(float value) {
+        return Math.max(Math.ulp(value) * (1 << 13), 0x1p-24f);
+    }
+
+    /**
+     * {@code actual} is {@code expected} up to a 1 ULP change in the encoder's FP32 sums: each component within one
+     * quantization step, each half-precision header within 1 ULP. On JDK 25, C2 adds SIMD lanes in another order than
+     * the interpreter and C1, so the same vector may round otherwise once the encoder is compiled.
+     */
+    private static void assertSameCodeWithinOneUlp(String where, AsymmetricHashing.QuantizedVector expected,
+                                                   AsymmetricHashing.QuantizedVector actual, int bits) {
+        assertEquals(where, expected.landmark, actual.landmark);
+        float ulp = Math.max(halfUlp(expected.scale), halfUlp(actual.scale));
+        assertEquals(where + " scale", expected.scale, actual.scale, ulp);
+        ulp = Math.max(halfUlp(expected.offset), halfUlp(actual.offset));
+        assertEquals(where + " offset", expected.offset, actual.offset, ulp);
+        int differing = 0;
+        for (int j = 0; j < PROJECTED; j++) {
+            float e = component(expected, j, bits), a = component(actual, j, bits);
+            assertEquals(where + " dim " + j, e, a, 1f);
+            if (e != a) differing++;
+        }
+        assertTrue(where + ": " + differing + " components differ", differing <= MAX_DIFFERING_COMPONENTS);
+    }
+
     /** Waits until {@code checks} grows, or a reader fails; fails if the readers make no progress for a minute. */
     private static void awaitMoreChecks(AtomicInteger checks, AtomicReference<Throwable> failure) throws InterruptedException {
         int start = checks.get();
@@ -113,7 +149,7 @@ public class TestMutableASHVectors extends RandomizedTest {
         var query = vectors(1, 99).get(0);
         for (int bits : new int[]{1, 2, 4}) {
             var ash = model(data, AsymmetricHashing.ITQ, bits);
-            var reference = fixed(ash, data);
+            var encoded = fixed(ash, data);
             var growing = new MutableASHVectors(ash, SMALL_PAGE_BYTES);
             long emptyBytes = growing.ramBytesUsed();
             addAll(growing, data, 8);
@@ -121,15 +157,21 @@ public class TestMutableASHVectors extends RandomizedTest {
             assertTrue(growing.pageCount() > 10);
             assertTrue(growing.ramBytesUsed() > emptyBytes);
             assertArrayEquals(new int[]{0}, growing.modelsInUse());
+            // Every vector's code landed at its own ordinal, as encoding it alone gives it.
+            var stored = new AsymmetricHashing.QuantizedVector[data.size()];
+            for (int i = 0; i < data.size(); i++) {
+                stored[i] = growing.get(i);
+                assertSameCodeWithinOneUlp("bits=" + bits + " node " + i, encoded.get(i), stored[i], bits);
+            }
+            // The same codes in a fixed collection score bit for bit as the growing store does.
+            var reference = new ASHVectors(ash, stored);
 
             var refScore = reference.scoreFunctionFor(query, DOT);
             var growScore = growing.scoreFunctionFor(query, DOT);
             assertEquals(refScore.dotProductBound(), growScore.dotProductBound(), 0f);
             var refSym = new ASHSymmetricScorer(reference);
-            for (int i = 0; i < data.size(); i++) {
-                assertEquals(reference.get(i), growing.get(i));
+            for (int i = 0; i < data.size(); i++)
                 assertEquals("bits=" + bits + " node " + i, refScore.similarityTo(i), growScore.similarityTo(i), 0f);
-            }
             var provider = growing.buildScoreProvider(new ListRandomAccessVectorValues(data, DIM));
             for (int a = 0; a < data.size(); a += 97) {
                 var refFn = refSym.scoreFunctionFor(a);

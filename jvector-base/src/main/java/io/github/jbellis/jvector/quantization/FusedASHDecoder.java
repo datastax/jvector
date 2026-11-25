@@ -119,7 +119,8 @@ public final class FusedASHDecoder implements ScoreFunction.AdaptiveApproximateS
             this.scorer = new ASHScorer(ash);
             this.prepared = scorer.newQueryPrecompute();
             this.input = new float[ash.originalDimension];
-            this.lut = new float[Math.multiplyExact(FusedASHLayout.codeGroups(ash.quantizedDim, ash.bitsPerDimension), 16)];
+            this.lut = ASHScorer.readsQueryLut(ash.bitsPerDimension)
+                    ? new float[Math.multiplyExact(FusedASHLayout.codeGroups(ash.quantizedDim, ash.bitsPerDimension), 16)] : null;
             this.neighborhoodBytes = new byte[size];
             this.scores = new float[maxDegree];
         }

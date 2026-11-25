@@ -233,6 +233,13 @@ public final class VectorUtil {
     return impl.assembleAndSum(data, dataBase, dataOffsets, dataOffsetsOffset, dataOffsetsLength);
   }
 
+  public static float pqCodePairSimilarity(boolean dot, VectorFloat<?> codebooks, int clusterCount,
+                                          int[] subspaceOffsets, int[] subspaceWidths, int minWidth, int maxWidth, int[] dimBase,
+                                          ByteSequence<?> code1, int offset1, ByteSequence<?> code2, int offset2) {
+    return impl.pqCodePairSimilarity(dot, codebooks, clusterCount, subspaceOffsets, subspaceWidths, minWidth, maxWidth, dimBase,
+                                     code1, offset1, code2, offset2);
+  }
+
   public static float assembleAndSumPQ(VectorFloat<?> data, int subspaceCount, ByteSequence<?> dataOffsets1, int dataOffsetsOffset1, ByteSequence<?> dataOffsets2, int dataOffsetsOffset2, int clusterCount) {
     return impl.assembleAndSumPQ(data, subspaceCount, dataOffsets1, dataOffsetsOffset1, dataOffsets2, dataOffsetsOffset2, clusterCount);
   }

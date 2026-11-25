@@ -23,6 +23,7 @@ import java.util.Objects;
 import io.github.jbellis.jvector.quantization.ASHQueryProjection;
 import io.github.jbellis.jvector.vector.cnative.NativeSimdOps;
 import io.github.jbellis.jvector.vector.types.ByteSequence;
+import io.github.jbellis.jvector.vector.types.FloatArray;
 import io.github.jbellis.jvector.vector.types.VectorFloat;
 import jdk.incubator.vector.ByteVector;
 import jdk.incubator.vector.FloatVector;
@@ -98,6 +99,19 @@ class NativeVectorUtilSupport extends PanamaVectorUtilSupport
     @Override
     public boolean tryUpdateKMeansDistances(VectorFloat<?>[] points, VectorFloat<?> centroid,
                                            VectorFloat<?> minima, VectorFloat<?> scratch) {
+        if (tryVectorKMeansUpdate(points, centroid, minima, scratch)) return true;
+        // Other dimensions: score in Java. The caller's generic loop would make one native call per
+        // point, and for small PQ subspaces each call costs more than the distance it computes.
+        for (int i = 0; i < points.length; i++) {
+            scratch.set(i, super.squareDistance(points[i], 0, centroid, 0, centroid.length()));
+        }
+        super.minInPlace(minima, scratch);
+        return true;
+    }
+
+    /** The dedicated 8-float update for this JVM's vector width; false, leaving outputs alone, when it can't run. */
+    boolean tryVectorKMeansUpdate(VectorFloat<?>[] points, VectorFloat<?> centroid,
+                                  VectorFloat<?> minima, VectorFloat<?> scratch) {
         return NativeKMeansInitialization.update(points, centroid, minima, scratch);
     }
 
@@ -169,7 +183,8 @@ class NativeVectorUtilSupport extends PanamaVectorUtilSupport
     @Override
     public float ashSymmetricDotAt(byte[] aCodes, int aOffset, byte[] bCodes, int bOffset,
                                    int dimensions, int bits) {
-        return NativeASHSymmetricKernels.hasPairKernel()
+        // The native kernels take 2- and 4-bit codes; Panama decodes the other widths.
+        return NativeASHSymmetricKernels.hasPairKernel() && (bits == 2 || bits == 4)
                 ? NativeASHSymmetricKernels.dotAt(aCodes, aOffset, bCodes, bOffset, dimensions, bits)
                 : super.ashSymmetricDotAt(aCodes, aOffset, bCodes, bOffset, dimensions, bits);
     }
@@ -182,7 +197,7 @@ class NativeVectorUtilSupport extends PanamaVectorUtilSupport
     @Override
     public void ashSymmetricDotRows(byte[] query, int queryOffset, byte[] rows, int stride, int count,
                                     int dimensions, int bits, float[] out) {
-        if (NativeASHSymmetricKernels.hasRowsKernel())
+        if (NativeASHSymmetricKernels.hasRowsKernel() && (bits == 2 || bits == 4))
             NativeASHSymmetricKernels.dotRows(query, queryOffset, rows, stride, count, dimensions, bits, out);
         else super.ashSymmetricDotRows(query, queryOffset, rows, stride, count, dimensions, bits, out);
     }
@@ -313,7 +328,8 @@ class NativeVectorUtilSupport extends PanamaVectorUtilSupport
 
     @Override
     protected FloatVector fromVectorFloat(VectorSpecies<Float> SPEC, VectorFloat<?> vector, int offset) {
-        return FloatVector.fromMemorySegment(SPEC, ((MemorySegmentVectorFloat) vector).get(), vector.offset(offset), ByteOrder.LITTLE_ENDIAN);
+        // Read the backing array directly so Panama paths never materialize the MemorySegment view.
+        return FloatVector.fromArray(SPEC, ((FloatArray) vector).array(), offset);
     }
 
     @Override
@@ -325,7 +341,7 @@ class NativeVectorUtilSupport extends PanamaVectorUtilSupport
     protected void intoVectorFloat(FloatVector vector, VectorFloat<?> v, int offset) {
         // MemorySegmentVectorFloat is heap-backed: use its array store intrinsic directly.
         // This also avoids the intoMemorySegment compiler failure observed on JDK 22.
-        vector.intoArray(((MemorySegmentVectorFloat) v).array(), offset);
+        vector.intoArray(((FloatArray) v).array(), offset);
     }
 
     @Override
@@ -483,43 +499,37 @@ class NativeVectorUtilSupport extends PanamaVectorUtilSupport
 
     @Override
     public float squareDistance(VectorFloat<?> v1, VectorFloat<?> v2) {
-        return NativeSimdOps.euclidean_f32(((MemorySegmentVectorFloat) v1).get(), 0,
-                                          ((MemorySegmentVectorFloat) v2).get(), 0,
-                                          v1.length());
+        return squareDistance(v1, 0, v2, 0, v1.length());
     }
 
     @Override
     public float squareDistance(VectorFloat<?> v1, int v1offset, VectorFloat<?> v2, int v2offset, int length) {
-        return NativeSimdOps.euclidean_f32(((MemorySegmentVectorFloat) v1).get(), v1offset,
-                                          ((MemorySegmentVectorFloat) v2).get(), v2offset,
+        return NativeSimdOps.euclidean_f32(MemorySegment.ofArray(((MemorySegmentVectorFloat) v1).array()), v1offset,
+                                          MemorySegment.ofArray(((MemorySegmentVectorFloat) v2).array()), v2offset,
                                           length);
     }
 
     @Override
     public float cosine(VectorFloat<?> v1, VectorFloat<?> v2) {
-        return NativeSimdOps.cosine_f32(((MemorySegmentVectorFloat) v1).get(), 0,
-                                       ((MemorySegmentVectorFloat) v2).get(), 0,
-                                       v1.length());
+        return cosine(v1, 0, v2, 0, v1.length());
     }
 
     @Override
     public float cosine(VectorFloat<?> v1, int v1offset, VectorFloat<?> v2, int v2offset, int length) {
-        return NativeSimdOps.cosine_f32(((MemorySegmentVectorFloat) v1).get(), v1offset,
-                                       ((MemorySegmentVectorFloat) v2).get(), v2offset,
+        return NativeSimdOps.cosine_f32(MemorySegment.ofArray(((MemorySegmentVectorFloat) v1).array()), v1offset,
+                                       MemorySegment.ofArray(((MemorySegmentVectorFloat) v2).array()), v2offset,
                                        length);
     }
 
     @Override
     public float dotProduct(VectorFloat<?> v1, VectorFloat<?> v2) {
-        return NativeSimdOps.dot_product_f32(((MemorySegmentVectorFloat) v1).get(), 0,
-                                             ((MemorySegmentVectorFloat) v2).get(), 0,
-                                             v1.length());
+        return dotProduct(v1, 0, v2, 0, v1.length());
     }
 
     @Override
     public float dotProduct(VectorFloat<?> v1, int v1offset, VectorFloat<?> v2, int v2offset, int length) {
-        return NativeSimdOps.dot_product_f32(((MemorySegmentVectorFloat) v1).get(), v1offset,
-                                             ((MemorySegmentVectorFloat) v2).get(), v2offset,
+        return NativeSimdOps.dot_product_f32(MemorySegment.ofArray(((MemorySegmentVectorFloat) v1).array()), v1offset,
+                                             MemorySegment.ofArray(((MemorySegmentVectorFloat) v2).array()), v2offset,
                                              length);
     }
 

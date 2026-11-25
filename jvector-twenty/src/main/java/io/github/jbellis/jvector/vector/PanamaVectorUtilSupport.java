@@ -38,8 +38,8 @@ class PanamaVectorUtilSupport implements VectorUtilSupport {
     // which crashes or corrupts the heap. JDK 20 is past end of life, so ASH uses the
     // scalar kernels there. The constant folds away on later JDKs.
     private static final boolean ASH_SIMD = Runtime.version().feature() != 20;
-    // The prepared (gather-free) 2/4-bit projection dot. JDK 22's C2 loses its vectors to the heap once it is inlined
-    // into a scorer, running slower than the gather kernel; JDK 25 compiles it well. Earlier JDKs keep the gather kernel.
+    // The prepared 2/4-bit projection dot, faster on JDK 25+. JDK 22's C2 loses its vectors to the heap once it is
+    // inlined into a scorer, so earlier JDKs use the register-decode kernel (ashProjectionDot).
     private static final boolean ASH_PREPARED_PROJECTION = Runtime.version().feature() >= 25;
     private static final VectorSpecies<Float> ASH_FLOATS = FloatVector.SPECIES_PREFERRED;
     private static final VectorSpecies<Integer> ASH_INTS = VectorSpecies.of(
@@ -53,32 +53,10 @@ class PanamaVectorUtilSupport implements VectorUtilSupport {
     private static final VectorSpecies<Short> ASH_SYM_SHORTS = VectorSpecies.of(short.class, ASH_SYM_BYTES.vectorShape());
     private static final VectorSpecies<Integer> ASH_SYM_INTS = VectorSpecies.of(int.class, ASH_SYM_BYTES.vectorShape());
     private static final VectorSpecies<Float> ASH_SYM_FLOATS = VectorSpecies.of(float.class, ASH_SYM_BYTES.vectorShape());
+    // Symmetric kernels need at least 128-bit vectors; narrower shapes score in Java.
+    private static final boolean ASH_SYM_SIMD = ASH_SYM_SHORTS.vectorBitSize() >= 128;
     private static final VectorSpecies<Byte> ASH_SYM_BLOCK_BYTES = VectorSpecies.of(byte.class,
-            jdk.incubator.vector.VectorShape.forBitSize(ASH_SYM_SHORTS.vectorBitSize() / 2));
-    private static final int[] ASH_TWO_BIT_QUERY_INDICES = ashQueryIndices(4);
-    private static final int[] ASH_FOUR_BIT_QUERY_INDICES = ashQueryIndices(2);
-    private static final int[][] ASH_TWO_BIT_TAIL_INDICES = ashTailQueryIndices(4);
-    private static final int[][] ASH_FOUR_BIT_TAIL_INDICES = ashTailQueryIndices(2);
-    // A code's last partial block, copied here when its array ends too soon to load the block in place
-    private static final ThreadLocal<byte[]> ASH_TAIL_BLOCK = ThreadLocal.withInitial(() -> new byte[ASH_BYTES.length()]);
-
-    private static int[] ashQueryIndices(int dimensionsPerByte) {
-        int[] indices = new int[ASH_FLOATS.length()];
-        for (int i = 0; i < indices.length; i++) indices[i] = i * dimensionsPerByte;
-        return indices;
-    }
-
-    // Indices for a partial block: inactive lanes repeat the first query element, so the
-    // gather stays in range without a mask.
-    private static int[][] ashTailQueryIndices(int dimensionsPerByte) {
-        int[][] tails = new int[ASH_FLOATS.length()][];
-        for (int active = 1; active < tails.length; active++) {
-            int[] indices = new int[ASH_FLOATS.length()];
-            for (int lane = 0; lane < active; lane++) indices[lane] = lane * dimensionsPerByte;
-            tails[active] = indices;
-        }
-        return tails;
-    }
+            jdk.incubator.vector.VectorShape.forBitSize(Math.max(64, ASH_SYM_SHORTS.vectorBitSize() / 2)));
 
     @Override
     public void ashSymmetricLutScore(byte[] codes, int groups, int stride, int lane, int count,
@@ -122,7 +100,7 @@ class PanamaVectorUtilSupport implements VectorUtilSupport {
     }
 
     @Override
-    public boolean supportsAshSymmetricScoring() { return ASH_SIMD; }
+    public boolean supportsAshSymmetricScoring() { return ASH_SIMD && ASH_SYM_SIMD; }
 
     @Override
     public float ashSymmetricDot(long[] aBits, byte[] aCodes, long[] bBits, byte[] bCodes,
@@ -138,13 +116,14 @@ class PanamaVectorUtilSupport implements VectorUtilSupport {
     }
 
     @Override
-    public boolean supportsAshSymmetricDotAt() { return ASH_SIMD; }
+    public boolean supportsAshSymmetricDotAt() { return ASH_SIMD && ASH_SYM_SIMD; }
 
     @Override
     public float ashSymmetricDotAt(byte[] aCodes, int aOffset, byte[] bCodes, int bOffset,
                                    int dimensions, int bits) {
+        // Other widths go to the offset-binary kernel, which also rejects invalid arguments
         if (dimensions < 0 || (bits != 2 && bits != 4))
-            throw new IllegalArgumentException("Offset symmetric ASH requires nonnegative dimensions and bits in {2,4}");
+            return ashSymmetricOffsetBinary(aCodes, aOffset, bCodes, bOffset, dimensions, bits);
         long bytes = ((long) dimensions * bits + 7) / 8;
         if (aOffset < 0 || bOffset < 0 || aOffset + bytes > aCodes.length || bOffset + bytes > bCodes.length)
             throw new IndexOutOfBoundsException("ASH code array ranges");
@@ -260,11 +239,407 @@ class PanamaVectorUtilSupport implements VectorUtilSupport {
         return sum * 0.25f;
     }
 
+    /**
+     * Offset-binary codes (3 and 5 to 9 bits): the exact sum of {@code (2x - m)(2y - m)} over fields x and y, with
+     * {@code m = 2^b - 1}, times 1/4, so any summation order gives the same score. Fields are decoded in registers as
+     * in {@link #ashOffsetBinaryDot}, from {@code sum(xy)} and {@code sum(x + y)}.
+     */
+    private static float ashSymmetricOffsetBinary(byte[] a, int aOff, byte[] b, int bOff, int dimensions, int bits) {
+        if (dimensions < 0 || bits < 2 || bits > 9)
+            throw new IllegalArgumentException("Offset symmetric ASH requires nonnegative dimensions and 2 to 9 bits");
+        int codeBytes = (int) (((long) dimensions * bits + 7) / 8);
+        if (aOff < 0 || bOff < 0 || aOff + codeBytes > a.length || bOff + codeBytes > b.length)
+            throw new IndexOutOfBoundsException("ASH code array ranges");
+        int lanes = ASH_FLOATS.length(), m = (1 << bits) - 1;
+        // Four-lane and other untabled shapes decode in Java; 32-byte loads serve every width.
+        int steps = ASH_OB_SIMD && lanes >= 8 ? dimensions / lanes : 0, stepBytes = lanes * bits / 8, load = ASH_OB_LOAD_WIDE.length();
+        long products = 0, fieldSums = 0;
+        if (steps > 0) {
+            int last = (steps - 1) * stepBytes + load;
+            if (aOff + last > a.length || bOff + last > b.length) {
+                // One padded copy holds both codes, so every step loads in place.
+                byte[] both = ashPaddedCopy(a, aOff, codeBytes, codeBytes + 2 * load);
+                System.arraycopy(b, bOff, both, codeBytes + load, codeBytes);
+                a = b = both;
+                aOff = 0;
+                bOff = codeBytes + load;
+            }
+            var windows = ASH_OB_SHUFFLES[bits];
+            var shifts = IntVector.fromArray(ASH_INTS, ASH_OB_SHIFTS[bits], 0);
+            // Each chunk's int sums stay below 2^31: at most 8192 fields of at most 511 * 511.
+            for (int from = 0, chunk = 8192 / lanes; from < steps; from += chunk) {
+                IntVector xy = IntVector.zero(ASH_INTS), sums = IntVector.zero(ASH_INTS);
+                for (int step = from, end = Math.min(steps, from + chunk); step < end; step++) {
+                    var x = ((IntVector) ((ByteVector) ByteVector.fromArray(ASH_OB_LOAD_WIDE, a, aOff + step * stepBytes)
+                            .reinterpretShape(ASH_OB_BYTES, 0)).rearrange(windows).reinterpretAsInts())
+                            .lanewise(VectorOperators.LSHR, shifts).and(m);
+                    var y = ((IntVector) ((ByteVector) ByteVector.fromArray(ASH_OB_LOAD_WIDE, b, bOff + step * stepBytes)
+                            .reinterpretShape(ASH_OB_BYTES, 0)).rearrange(windows).reinterpretAsInts())
+                            .lanewise(VectorOperators.LSHR, shifts).and(m);
+                    xy = xy.add(x.mul(y));
+                    sums = sums.add(x.add(y));
+                }
+                products += xy.reduceLanes(VectorOperators.ADD);
+                fieldSums += sums.reduceLanes(VectorOperators.ADD);
+            }
+        }
+        int from = steps * lanes;
+        long sum = 4 * products - 2L * m * fieldSums + (long) from * m * m;
+        for (int j = from; j < dimensions; j++) {
+            sum += (long) (2 * ashOffsetBinaryField(a, aOff, j, bits) - m) * (2 * ashOffsetBinaryField(b, bOff, j, bits) - m);
+        }
+        return sum * 0.25f;
+    }
+
+    /** Field {@code j} of an offset-binary code: bits {@code [j*b, (j+1)*b)}, little-endian. */
+    private static int ashOffsetBinaryField(byte[] code, int codeOffset, int j, int bits) {
+        int bit = j * bits, at = codeOffset + (bit >>> 3), shift = bit & 7;
+        int window = code[at] & 0xFF;
+        if (shift + bits > 8) window |= (code[at + 1] & 0xFF) << 8;
+        if (shift + bits > 16) window |= (code[at + 2] & 0xFF) << 16;
+        return (window >>> shift) & ((1 << bits) - 1);
+    }
+
     @Override
     public boolean supportsAshProjectionScoring() { return ASH_SIMD && PanamaASHKernels.supported(); }
 
     @Override
     public boolean supportsAshLutScoring() { return ASH_SIMD && PanamaASHKernels.supported(); }
+
+    // Codes decoded in registers: offset-binary (3 and 5 to 9 bits) and sign-magnitude (2 and 4 bits) fields, field j
+    // at bits [j*b, (j+1)*b). A step of ASH_OB_STEP fields starts on a byte boundary (8 fields fill b bytes). Each
+    // float lane takes the little-endian 32-bit window starting at the byte that holds its field's first bit, shifts the
+    // field down and masks it; a field ends at most 16 bits into its window.
+    private static final VectorSpecies<Byte> ASH_OB_BYTES = VectorSpecies.of(byte.class, ASH_FLOATS.vectorShape());
+    // The decode tables cover 4, 8 and 16 float lanes; other vector shapes score these codes in Java.
+    private static final boolean ASH_OB_SIMD =
+            ASH_FLOATS.length() == 4 || ASH_FLOATS.length() == 8 || ASH_FLOATS.length() == 16;
+    private static final int ASH_OB_STEP = Math.max(8, ASH_FLOATS.length());
+    private static final int ASH_OB_VECTORS = ASH_OB_STEP / ASH_FLOATS.length();
+    // With 8 or more lanes a step loads only the bytes its fields span, widened in registers: 16 bytes, or 32 for 8 and
+    // 9 bits with 16 lanes. A code in an exactly sized array then copies only its last steps.
+    private static final VectorSpecies<Byte> ASH_OB_LOAD =
+            ASH_FLOATS.length() >= 8 ? ByteVector.SPECIES_128 : ASH_OB_BYTES;
+    private static final VectorSpecies<Byte> ASH_OB_LOAD_WIDE =
+            ASH_FLOATS.length() >= 16 ? ByteVector.SPECIES_256 : ASH_OB_LOAD;
+    // Per width: each lane's window bytes as shuffles, built once (JDK 22 does not reliably fold per-call shuffles),
+    // and each lane's shift
+    @SuppressWarnings("unchecked")
+    private static final VectorShuffle<Byte>[] ASH_OB_SHUFFLES = new VectorShuffle[10], ASH_OB_SHUFFLES_HI = new VectorShuffle[10];
+    private static final int[][] ASH_OB_SHIFTS = new int[10][];
+    // Codes copied with load padding when they end too close to the end of their array
+    private static final ThreadLocal<byte[][]> ASH_OB_PADDED =
+            ThreadLocal.withInitial(() -> new byte[][] {new byte[0]});
+
+    static {
+        int lanes = ASH_FLOATS.length();
+        for (int bits = 2; ASH_OB_SIMD && bits <= 9; bits++) {
+            int[] windows = new int[ASH_OB_STEP * 4], shifts = new int[ASH_OB_STEP];
+            for (int field = 0; field < ASH_OB_STEP; field++) {
+                int bit = field * bits;
+                int last = ashObLoad(bits).length() - 1;
+                for (int k = 0; k < 4; k++) windows[field * 4 + k] = Math.min(bit / 8 + k, last);
+                shifts[field] = bit & 7;
+            }
+            assert (ASH_OB_STEP - 1) * bits / 8 + 1 < ashObLoad(bits).length() && lanes * ASH_OB_VECTORS == ASH_OB_STEP;
+            ASH_OB_SHUFFLES[bits] = VectorShuffle.fromArray(ASH_OB_BYTES, windows, 0);
+            if (ASH_OB_VECTORS == 2) ASH_OB_SHUFFLES_HI[bits] = VectorShuffle.fromArray(ASH_OB_BYTES, windows, 4 * lanes);
+            ASH_OB_SHIFTS[bits] = shifts;
+        }
+    }
+
+    // INT8 field-block lane dot: one 8-field unit per 256-bit integer vector, windows as above.
+    private static final VectorSpecies<Byte> ASH_UNIT_BYTES = ByteVector.SPECIES_256;
+    private static final VectorSpecies<Integer> ASH_UNIT_INTS = IntVector.SPECIES_256;
+    @SuppressWarnings("unchecked")
+    private static final VectorShuffle<Byte>[] ASH_UNIT_SHUFFLES = new VectorShuffle[10];
+    private static final int[][] ASH_UNIT_SHIFTS = new int[10][];
+    // A unit whose array ends before a whole 32-byte load, copied
+    private static final ThreadLocal<byte[]> ASH_UNIT_TAIL = ThreadLocal.withInitial(() -> new byte[32]);
+
+    static {
+        for (int bits = 3; bits <= 9; bits++) {
+            int[] windows = new int[32], shifts = new int[8];
+            for (int field = 0; field < 8; field++) {
+                for (int k = 0; k < 4; k++) windows[field * 4 + k] = Math.min(field * bits / 8 + k, 31);
+                shifts[field] = (field * bits) & 7;
+            }
+            ASH_UNIT_SHUFFLES[bits] = VectorShuffle.fromArray(ASH_UNIT_BYTES, windows, 0);
+            ASH_UNIT_SHIFTS[bits] = shifts;
+        }
+    }
+
+    // 256-bit integer vectors are native on AVX2 and AVX-512; narrower CPUs keep the Java loop.
+    @Override
+    public boolean supportsAshOffsetBinaryInt8Dot() { return ASH_SIMD && ASH_FLOATS.length() >= 8; }
+
+    @Override
+    public long ashOffsetBinaryInt8Dot(byte[] codes, int offset, int unitStride, int units, int bits, int[] digits) {
+        if (bits < 3 || bits > 9 || bits == 4) {
+            throw new IllegalArgumentException("Offset-binary codes have 3 or 5 to 9 bits per dimension, got " + bits);
+        }
+        Objects.checkFromIndexSize(0, units * 8, digits.length);
+        if (units > 0) Objects.checkFromIndexSize(offset, (long) (units - 1) * unitStride + bits, codes.length);
+        var windows = ASH_UNIT_SHUFFLES[bits];
+        var shifts = IntVector.fromArray(ASH_UNIT_INTS, ASH_UNIT_SHIFTS[bits], 0);
+        int mask = (1 << bits) - 1;
+        // Exact: |digit * field| < 2^16, so 2^15 units fit an int lane, in any order. Keep one copy of the vector
+        // operations: unrolled copies were sometimes compiled as heap-allocating calls.
+        IntVector acc = IntVector.zero(ASH_UNIT_INTS);
+        // Units whose 32-byte load stays inside the array
+        int inPlace = Math.max(0, Math.min(units, Math.floorDiv(codes.length - offset - 32, unitStride) + 1));
+        for (int unit = 0, at = offset; unit < units; unit++, at += unitStride) {
+            byte[] source = codes;
+            int from = at;
+            if (unit >= inPlace) {
+                source = ASH_UNIT_TAIL.get();
+                System.arraycopy(codes, at, source, 0, bits);
+                from = 0;
+            }
+            var fields = ByteVector.fromArray(ASH_UNIT_BYTES, source, from).rearrange(windows).reinterpretAsInts()
+                    .lanewise(VectorOperators.LSHR, shifts).and(mask);
+            acc = acc.add(fields.mul(IntVector.fromArray(ASH_UNIT_INTS, digits, unit * 8)));
+        }
+        return acc.reduceLanes(VectorOperators.ADD);
+    }
+
+    /** {@code code[offset, offset + bytes)} at the start of this thread's buffer, followed by {@code load} or more bytes. */
+    private static byte[] ashPaddedCopy(byte[] code, int offset, int bytes, int load) {
+        byte[][] holder = ASH_OB_PADDED.get();
+        byte[] buffer = holder[0];
+        if (buffer.length < bytes + load) holder[0] = buffer = new byte[bytes + load];
+        System.arraycopy(code, offset, buffer, 0, bytes);
+        return buffer;
+    }
+
+    private static VectorSpecies<Byte> ashObLoad(int bits) {
+        return (ASH_FLOATS.length() - 1) * bits / 8 + 1 < ASH_OB_LOAD.length() ? ASH_OB_LOAD : ASH_OB_LOAD_WIDE;
+    }
+
+    @Override
+    public boolean supportsAshOffsetBinaryDot() { return ASH_SIMD && ASH_OB_SIMD && PanamaASHKernels.supported(); }
+
+    @Override
+    public float ashOffsetBinaryDot(float[] query, byte[] code, int codeOffset, int dimensions, int bits) {
+        if (bits < 3 || bits > 9 || bits == 4) {
+            throw new IllegalArgumentException("Offset-binary codes have 3 or 5 to 9 bits per dimension, got " + bits);
+        }
+        Objects.checkFromIndexSize(0, dimensions, query.length);
+        int codeBytes = (int) (((long) dimensions * bits + 7) / 8);
+        Objects.checkFromIndexSize(codeOffset, codeBytes, code.length);
+        if (ASH_OB_VECTORS != 1) return ashOffsetBinaryDot2(query, code, codeOffset, dimensions, bits, codeBytes);
+        return ashObLoad(bits) == ASH_OB_LOAD
+                ? ashOffsetBinaryDot1(query, code, codeOffset, dimensions, bits, codeBytes)
+                : ashOffsetBinaryDot1Wide(query, code, codeOffset, dimensions, bits, codeBytes);
+    }
+
+    /** One vector of fields per step: 8 lanes (AVX2) or 16 (AVX-512). */
+    private static float ashOffsetBinaryDot1(float[] query, byte[] code, int codeOffset, int dimensions, int bits,
+                                             int codeBytes) {
+        int lanes = ASH_FLOATS.length(), load = ASH_OB_LOAD.length(), stepBytes = lanes * bits / 8;
+        var windows = ASH_OB_SHUFFLES[bits];
+        var shifts = IntVector.fromArray(ASH_INTS, ASH_OB_SHIFTS[bits], 0);
+        int mask = (1 << bits) - 1;
+        float center = mask * 0.5f;
+        int steps = dimensions / lanes;
+        // A code whose last load would pass the end of its array is copied once into a padded buffer, so every step
+        // loads in place and the loop is the same wherever the code is.
+        if (steps > 0 && codeOffset + (steps - 1) * stepBytes + load > code.length) {
+            code = ashPaddedCopy(code, codeOffset, codeBytes, load);
+            codeOffset = 0;
+        }
+        FloatVector a0 = FloatVector.zero(ASH_FLOATS), a1 = FloatVector.zero(ASH_FLOATS);
+        int at = codeOffset;
+        for (int step = 0; step < steps; step++, at += stepBytes) {
+            var w0 = (ByteVector) ByteVector.fromArray(ASH_OB_LOAD, code, at).reinterpretShape(ASH_OB_BYTES, 0);
+            var f0 = ((IntVector) w0.rearrange(windows).reinterpretAsInts())
+                    .lanewise(VectorOperators.LSHR, shifts).and(mask);
+            var v0 = ((FloatVector) f0.convert(VectorOperators.I2F, 0)).sub(center);
+            // Even and odd steps keep separate sums in a fixed order: the accumulators trade places every step.
+            // One copy of the decode, as in ashOffsetBinaryInt8Dot.
+            var next = FloatVector.fromArray(ASH_FLOATS, query, step * lanes).fma(v0, a0);
+            a0 = a1;
+            a1 = next;
+        }
+        // Fixed-order lane sum: the same score whether or not C2 has compiled this thread's copy yet.
+        float sum = addLanesPairwise(a0.add(a1));
+        return sum + ashOffsetBinaryTail(query, code, codeOffset, steps * lanes, dimensions, bits);
+    }
+
+    /** As {@link #ashOffsetBinaryDot1} with 32-byte loads: 8 and 9 bits with 16 lanes. One method per load shape. */
+    private static float ashOffsetBinaryDot1Wide(float[] query, byte[] code, int codeOffset, int dimensions, int bits,
+                                             int codeBytes) {
+        int lanes = ASH_FLOATS.length(), load = ASH_OB_LOAD_WIDE.length(), stepBytes = lanes * bits / 8;
+        var windows = ASH_OB_SHUFFLES[bits];
+        var shifts = IntVector.fromArray(ASH_INTS, ASH_OB_SHIFTS[bits], 0);
+        int mask = (1 << bits) - 1;
+        float center = mask * 0.5f;
+        int steps = dimensions / lanes;
+        // Padded copy, as in ashOffsetBinaryDot1
+        if (steps > 0 && codeOffset + (steps - 1) * stepBytes + load > code.length) {
+            code = ashPaddedCopy(code, codeOffset, codeBytes, load);
+            codeOffset = 0;
+        }
+        FloatVector a0 = FloatVector.zero(ASH_FLOATS), a1 = FloatVector.zero(ASH_FLOATS);
+        int at = codeOffset;
+        for (int step = 0; step < steps; step++, at += stepBytes) {
+            var w0 = (ByteVector) ByteVector.fromArray(ASH_OB_LOAD_WIDE, code, at).reinterpretShape(ASH_OB_BYTES, 0);
+            var f0 = ((IntVector) w0.rearrange(windows).reinterpretAsInts())
+                    .lanewise(VectorOperators.LSHR, shifts).and(mask);
+            var v0 = ((FloatVector) f0.convert(VectorOperators.I2F, 0)).sub(center);
+            // Separate even and odd sums, as in ashOffsetBinaryDot1
+            var next = FloatVector.fromArray(ASH_FLOATS, query, step * lanes).fma(v0, a0);
+            a0 = a1;
+            a1 = next;
+        }
+        // Fixed-order lane sum: the same score whether or not C2 has compiled this thread's copy yet.
+        float sum = addLanesPairwise(a0.add(a1));
+        return sum + ashOffsetBinaryTail(query, code, codeOffset, steps * lanes, dimensions, bits);
+    }
+
+    /** Two vectors of fields per eight-field step: 4 lanes (NEON). */
+    private static float ashOffsetBinaryDot2(float[] query, byte[] code, int codeOffset, int dimensions, int bits,
+                                             int codeBytes) {
+        int lanes = ASH_FLOATS.length(), load = ASH_OB_BYTES.length(), stepBytes = bits;
+        var windows0 = ASH_OB_SHUFFLES[bits];
+        var windows1 = ASH_OB_SHUFFLES_HI[bits];
+        var shifts0 = IntVector.fromArray(ASH_INTS, ASH_OB_SHIFTS[bits], 0);
+        var shifts1 = IntVector.fromArray(ASH_INTS, ASH_OB_SHIFTS[bits], lanes);
+        int mask = (1 << bits) - 1;
+        float center = mask * 0.5f;
+        int steps = dimensions / 8;
+        // Padded copy, as in ashOffsetBinaryDot1
+        if (steps > 0 && codeOffset + (steps - 1) * stepBytes + load > code.length) {
+            code = ashPaddedCopy(code, codeOffset, codeBytes, load);
+            codeOffset = 0;
+        }
+        FloatVector a0 = FloatVector.zero(ASH_FLOATS), a1 = FloatVector.zero(ASH_FLOATS);
+        int at = codeOffset;
+        for (int step = 0; step < steps; step++, at += stepBytes) {
+            var window = ByteVector.fromArray(ASH_OB_BYTES, code, at);
+            var f0 = ((IntVector) window.rearrange(windows0).reinterpretAsInts())
+                    .lanewise(VectorOperators.LSHR, shifts0).and(mask);
+            var f1 = ((IntVector) window.rearrange(windows1).reinterpretAsInts())
+                    .lanewise(VectorOperators.LSHR, shifts1).and(mask);
+            var v0 = ((FloatVector) f0.convert(VectorOperators.I2F, 0)).sub(center);
+            var v1 = ((FloatVector) f1.convert(VectorOperators.I2F, 0)).sub(center);
+            a0 = FloatVector.fromArray(ASH_FLOATS, query, step * 8).fma(v0, a0);
+            a1 = FloatVector.fromArray(ASH_FLOATS, query, step * 8 + lanes).fma(v1, a1);
+        }
+        float sum = addLanesPairwise(a0.add(a1));
+        return sum + ashOffsetBinaryTail(query, code, codeOffset, steps * 8, dimensions, bits);
+    }
+
+    /**
+     * Sign-magnitude 2 and 4-bit codes in registers, the query in its own order: no gathers and no prepared query.
+     * Field {@code f} is {@code (2 * (f & m) + 1) / 2} with {@code m = 2^(b-1) - 1}, negative unless its top bit is set;
+     * lanes accumulate the odd integers {@code 2v} and the sum is halved once.
+     */
+    private static float ashSignMagnitudeDot(float[] query, byte[] code, int codeOffset, int dimensions, int bits) {
+        Objects.checkFromIndexSize(0, dimensions, query.length);
+        int codeBytes = (int) (((long) dimensions * bits + 7) / 8);
+        Objects.checkFromIndexSize(codeOffset, codeBytes, code.length);
+        return ASH_OB_VECTORS == 1 ? ashSignMagnitudeDot1(query, code, codeOffset, dimensions, bits, codeBytes)
+                : ashSignMagnitudeDot2(query, code, codeOffset, dimensions, bits, codeBytes);
+    }
+
+    /** One vector of fields per step: 8 lanes (AVX2) or 16 (AVX-512). */
+    private static float ashSignMagnitudeDot1(float[] query, byte[] code, int codeOffset, int dimensions, int bits,
+                                              int codeBytes) {
+        int lanes = ASH_FLOATS.length(), load = ASH_OB_LOAD.length(), stepBytes = lanes * bits / 8;
+        var windows = ASH_OB_SHUFFLES[bits];
+        var shifts = IntVector.fromArray(ASH_INTS, ASH_OB_SHIFTS[bits], 0);
+        int magnitude = (1 << (bits - 1)) - 1, sign = bits - 1;
+        int steps = dimensions / lanes;
+        // Padded copy, as in ashOffsetBinaryDot1
+        if (steps > 0 && codeOffset + (steps - 1) * stepBytes + load > code.length) {
+            code = ashPaddedCopy(code, codeOffset, codeBytes, load);
+            codeOffset = 0;
+        }
+        FloatVector a0 = FloatVector.zero(ASH_FLOATS), a1 = FloatVector.zero(ASH_FLOATS);
+        int at = codeOffset;
+        for (int step = 0; step < steps; step++, at += stepBytes) {
+            var w0 = (ByteVector) ByteVector.fromArray(ASH_OB_LOAD, code, at).reinterpretShape(ASH_OB_BYTES, 0);
+            var f0 = ((IntVector) w0.rearrange(windows).reinterpretAsInts())
+                    .lanewise(VectorOperators.LSHR, shifts);
+            // t = 0 for a positive field, -1 for a negative one; (m ^ t) - t negates m when t = -1.
+            var t0 = f0.lanewise(VectorOperators.LSHR, sign).and(1).sub(1);
+            var m0 = f0.and(magnitude).lanewise(VectorOperators.LSHL, 1).add(1);
+            var v0 = (FloatVector) m0.lanewise(VectorOperators.XOR, t0).sub(t0).convert(VectorOperators.I2F, 0);
+            // Separate even and odd sums, as in ashOffsetBinaryDot1
+            var next = FloatVector.fromArray(ASH_FLOATS, query, step * lanes).fma(v0, a0);
+            a0 = a1;
+            a1 = next;
+        }
+        // Fixed-order lane sum: the same score whether or not C2 has compiled this thread's copy yet.
+        float sum = addLanesPairwise(a0.add(a1));
+        return (sum + ashSignMagnitudeTail(query, code, codeOffset, steps * lanes, dimensions, bits)) * 0.5f;
+    }
+
+    /** Two vectors of fields per eight-field step: 4 lanes (NEON). */
+    private static float ashSignMagnitudeDot2(float[] query, byte[] code, int codeOffset, int dimensions, int bits,
+                                              int codeBytes) {
+        int lanes = ASH_FLOATS.length(), load = ASH_OB_BYTES.length(), stepBytes = bits;
+        var windows0 = ASH_OB_SHUFFLES[bits];
+        var windows1 = ASH_OB_SHUFFLES_HI[bits];
+        var shifts0 = IntVector.fromArray(ASH_INTS, ASH_OB_SHIFTS[bits], 0);
+        var shifts1 = IntVector.fromArray(ASH_INTS, ASH_OB_SHIFTS[bits], lanes);
+        int magnitude = (1 << (bits - 1)) - 1, sign = bits - 1;
+        int steps = dimensions / 8;
+        // Padded copy, as in ashOffsetBinaryDot1
+        if (steps > 0 && codeOffset + (steps - 1) * stepBytes + load > code.length) {
+            code = ashPaddedCopy(code, codeOffset, codeBytes, load);
+            codeOffset = 0;
+        }
+        FloatVector a0 = FloatVector.zero(ASH_FLOATS), a1 = FloatVector.zero(ASH_FLOATS);
+        int at = codeOffset;
+        for (int step = 0; step < steps; step++, at += stepBytes) {
+            var window = ByteVector.fromArray(ASH_OB_BYTES, code, at);
+            var f0 = ((IntVector) window.rearrange(windows0).reinterpretAsInts())
+                    .lanewise(VectorOperators.LSHR, shifts0);
+            var f1 = ((IntVector) window.rearrange(windows1).reinterpretAsInts())
+                    .lanewise(VectorOperators.LSHR, shifts1);
+            var t0 = f0.lanewise(VectorOperators.LSHR, sign).and(1).sub(1);
+            var t1 = f1.lanewise(VectorOperators.LSHR, sign).and(1).sub(1);
+            var m0 = f0.and(magnitude).lanewise(VectorOperators.LSHL, 1).add(1);
+            var m1 = f1.and(magnitude).lanewise(VectorOperators.LSHL, 1).add(1);
+            var v0 = (FloatVector) m0.lanewise(VectorOperators.XOR, t0).sub(t0).convert(VectorOperators.I2F, 0);
+            var v1 = (FloatVector) m1.lanewise(VectorOperators.XOR, t1).sub(t1).convert(VectorOperators.I2F, 0);
+            a0 = FloatVector.fromArray(ASH_FLOATS, query, step * 8).fma(v0, a0);
+            a1 = FloatVector.fromArray(ASH_FLOATS, query, step * 8 + lanes).fma(v1, a1);
+        }
+        float sum = addLanesPairwise(a0.add(a1));
+        return (sum + ashSignMagnitudeTail(query, code, codeOffset, steps * 8, dimensions, bits)) * 0.5f;
+    }
+
+    /** Fields {@code [from, dimensions)} as odd integers {@code 2v}, in order. */
+    private static float ashSignMagnitudeTail(float[] query, byte[] code, int codeOffset, int from, int dimensions,
+                                              int bits) {
+        int magnitude = (1 << (bits - 1)) - 1;
+        float sum = 0f;
+        for (int j = from; j < dimensions; j++) {
+            int bit = j * bits;
+            int field = ((code[codeOffset + (bit >>> 3)] & 0xFF) >>> (bit & 7)) & ((1 << bits) - 1);
+            int v = 2 * (field & magnitude) + 1;
+            sum = Math.fma(query[j], (field >>> (bits - 1)) == 0 ? -v : v, sum);
+        }
+        return sum;
+    }
+
+    /** Fields {@code [from, dimensions)}, in order. */
+    private static float ashOffsetBinaryTail(float[] query, byte[] code, int codeOffset, int from, int dimensions,
+                                             int bits) {
+        int mask = (1 << bits) - 1;
+        float center = mask * 0.5f, sum = 0f;
+        for (int j = from; j < dimensions; j++) {
+            int bit = j * bits, at = codeOffset + (bit >>> 3), shift = bit & 7;
+            int window = code[at] & 0xFF;
+            if (shift + bits > 8) window |= (code[at + 1] & 0xFF) << 8;
+            if (shift + bits > 16) window |= (code[at + 2] & 0xFF) << 16;
+            sum = Math.fma(query[j], ((window >>> shift) & mask) - center, sum);
+        }
+        return sum;
+    }
 
     @Override
     public String ashKernelDescription() { return PanamaASHKernels.description(); }
@@ -282,63 +657,14 @@ class PanamaVectorUtilSupport implements VectorUtilSupport {
 
     @Override
     public float ashProjectionDot(float[] query, byte[] code, int codeOffset, int dimensions, int bitsPerDimension) {
-        if (!supportsAshProjectionScoring()) {
+        if (!ASH_OB_SIMD || !supportsAshProjectionScoring()) {
             return VectorUtilSupport.super.ashProjectionDot(query, code, codeOffset, dimensions, bitsPerDimension);
         }
         if (bitsPerDimension != 2 && bitsPerDimension != 4) {
             throw new IllegalArgumentException("Projection scoring requires 2 or 4 bits per dimension");
         }
-        Objects.checkFromIndexSize(0, dimensions, query.length);
-        int perByte = 8 / bitsPerDimension;
-        int bytes = dimensions / perByte + (dimensions % perByte == 0 ? 0 : 1);
-        Objects.checkFromIndexSize(codeOffset, bytes, code.length);
-        int sign = 1 << (bitsPerDimension - 1);
-        int[] indices = bitsPerDimension == 2 ? ASH_TWO_BIT_QUERY_INDICES : ASH_FOUR_BIT_QUERY_INDICES;
-        int lanes = ASH_FLOATS.length();
-        // No masked loads or gathers: JDK 20's C2 miscompiles masked AVX-512 memory
-        // operations here. Whole blocks need no mask. A partial final block loads its
-        // bytes unmasked (extra lanes are discarded), gathers with indices that stay in
-        // range, and masks only the register addition. When the array ends before a whole
-        // block, the block is loaded from a copy, so a code scores the same wherever it is.
-        int fullBytes = (dimensions / (lanes * perByte)) * lanes;
-        int loadBytes = ASH_BYTES.length();
-        FloatVector sum = FloatVector.zero(ASH_FLOATS);
-        int base = 0;
-        for (; base < fullBytes && base + loadBytes <= bytes; base += lanes) {
-            var packed = (IntVector) ByteVector.fromArray(ASH_BYTES, code, codeOffset + base)
-                    .convertShape(VectorOperators.B2I, ASH_INTS, 0);
-            for (int slot = 0; slot < perByte; slot++) {
-                sum = sum.add(ashProjectionTerm(query, packed, base * perByte + slot, indices, slot, bitsPerDimension));
-            }
-        }
-        if (base < bytes && bytes - base <= lanes) {
-            byte[] block = code;
-            int blockOffset = codeOffset + base;
-            if (blockOffset + loadBytes > code.length) {
-                block = ASH_TAIL_BLOCK.get();
-                System.arraycopy(code, blockOffset, block, 0, bytes - base);
-                blockOffset = 0;
-            }
-            var packed = (IntVector) ByteVector.fromArray(ASH_BYTES, block, blockOffset)
-                    .convertShape(VectorOperators.B2I, ASH_INTS, 0);
-            int[][] tails = bitsPerDimension == 2 ? ASH_TWO_BIT_TAIL_INDICES : ASH_FOUR_BIT_TAIL_INDICES;
-            for (int slot = 0; slot < perByte; slot++) {
-                int remaining = dimensions - base * perByte - slot;
-                if (remaining <= 0) break;
-                int active = Math.min(lanes, (remaining - 1) / perByte + 1);
-                int[] gather = active == lanes ? indices : tails[active];
-                sum = sum.add(ashProjectionTerm(query, packed, base * perByte + slot, gather, slot, bitsPerDimension),
-                        ASH_FLOATS.indexInRange(0, active));
-            }
-            base = bytes;
-        }
-        float total = sum.reduceLanes(VectorOperators.ADD);
-        for (int i = base * perByte; i < dimensions; i++) {
-            int field = (code[codeOffset + i / perByte] & 255) >>> ((i % perByte) * bitsPerDimension);
-            float magnitude = (field & (sign - 1)) + 0.5f;
-            total += query[i] * ((field & sign) == 0 ? -magnitude : magnitude);
-        }
-        return total;
+        // Decoded in registers: no gathers, which are slow on some CPUs (Ice Lake), and no prepared query.
+        return ashSignMagnitudeDot(query, code, codeOffset, dimensions, bitsPerDimension);
     }
 
     /**
@@ -377,11 +703,15 @@ class PanamaVectorUtilSupport implements VectorUtilSupport {
     // One method per width with no vector-valued helpers, every slot decoded before any is accumulated.
     private static float ashPreparedDot2(float[] prepared, byte[] code, int codeOffset, int dimensions, int blocks) {
         int lanes = ASH_FLOATS.length(), loadBytes = ASH_BYTES.length();
-        // Blocks whose load stays inside the array; a code ending its array scores the rest in scalar code.
-        int inPlace = Math.max(0, Math.min(blocks, Math.floorDiv(code.length - codeOffset - loadBytes, lanes) + 1));
+        // A code whose last load would pass the end of its array is copied once into a padded buffer, so every block
+        // loads in place and the score does not depend on where the code sits.
+        if (blocks > 0 && codeOffset + (blocks - 1) * lanes + loadBytes > code.length) {
+            code = ashPaddedCopy(code, codeOffset, (dimensions + 3) / 4, loadBytes);
+            codeOffset = 0;
+        }
         FloatVector a0 = FloatVector.zero(ASH_FLOATS), a1 = FloatVector.zero(ASH_FLOATS);
         FloatVector a2 = FloatVector.zero(ASH_FLOATS), a3 = FloatVector.zero(ASH_FLOATS);
-        for (int block = 0, q = 0; block < inPlace; block++, q += 4 * lanes) {
+        for (int block = 0, q = 0; block < blocks; block++, q += 4 * lanes) {
             var packed = (IntVector) ByteVector.fromArray(ASH_BYTES, code, codeOffset + block * lanes)
                     .convertShape(VectorOperators.B2I, ASH_INTS, 0);
             var f0 = packed;
@@ -403,16 +733,20 @@ class PanamaVectorUtilSupport implements VectorUtilSupport {
         }
         // Fixed-order lane sum: the same score whether or not C2 has compiled this thread's copy yet.
         float sum = addLanesPairwise(a0.add(a1).add(a2.add(a3)));
-        return inPlace == blocks ? sum : sum + ashPreparedTail(prepared, code, codeOffset, dimensions, 2, inPlace, blocks);
+        return sum;
     }
 
     // One method per width with no vector-valued helpers, every slot decoded before any is accumulated.
     private static float ashPreparedDot4(float[] prepared, byte[] code, int codeOffset, int dimensions, int blocks) {
         int lanes = ASH_FLOATS.length(), loadBytes = ASH_BYTES.length();
-        // Blocks whose load stays inside the array; a code ending its array scores the rest in scalar code.
-        int inPlace = Math.max(0, Math.min(blocks, Math.floorDiv(code.length - codeOffset - loadBytes, lanes) + 1));
+        // A code whose last load would pass the end of its array is copied once into a padded buffer, so every block
+        // loads in place and the score does not depend on where the code sits.
+        if (blocks > 0 && codeOffset + (blocks - 1) * lanes + loadBytes > code.length) {
+            code = ashPaddedCopy(code, codeOffset, (dimensions + 1) / 2, loadBytes);
+            codeOffset = 0;
+        }
         FloatVector a0 = FloatVector.zero(ASH_FLOATS), a1 = FloatVector.zero(ASH_FLOATS);
-        for (int block = 0, q = 0; block < inPlace; block++, q += 2 * lanes) {
+        for (int block = 0, q = 0; block < blocks; block++, q += 2 * lanes) {
             var packed = (IntVector) ByteVector.fromArray(ASH_BYTES, code, codeOffset + block * lanes)
                     .convertShape(VectorOperators.B2I, ASH_INTS, 0);
             var f0 = packed;
@@ -426,39 +760,7 @@ class PanamaVectorUtilSupport implements VectorUtilSupport {
         }
         // Fixed-order lane sum: the same score whether or not C2 has compiled this thread's copy yet.
         float sum = addLanesPairwise(a0.add(a1));
-        return inPlace == blocks ? sum : sum + ashPreparedTail(prepared, code, codeOffset, dimensions, 4, inPlace, blocks);
-    }
-
-    /** Blocks {@code [first, blocks)} of a prepared projection dot, in scalar code: only a code ending its array. */
-    private static float ashPreparedTail(float[] prepared, byte[] code, int codeOffset, int dimensions, int bits,
-                                         int first, int blocks) {
-        int perByte = 8 / bits, lanes = ASH_FLOATS.length(), blockDims = lanes * perByte, sign = 1 << (bits - 1);
-        float sum = 0;
-        for (int block = first; block < blocks; block++) {
-            for (int lane = 0; lane < lanes; lane++) {
-                int base = block * blockDims + lane * perByte;
-                if (base >= dimensions) break;
-                int b = code[codeOffset + block * lanes + lane] & 255;
-                for (int slot = 0; slot < perByte && base + slot < dimensions; slot++) {
-                    int field = b >>> (slot * bits);
-                    float magnitude = (field & (sign - 1)) + 0.5f;
-                    sum += prepared[block * blockDims + slot * lanes + lane] * ((field & sign) == 0 ? -magnitude : magnitude);
-                }
-            }
-        }
         return sum;
-    }
-
-    // One slot of a block: decode signed-magnitude fields and multiply by the gathered query.
-    private static FloatVector ashProjectionTerm(float[] query, IntVector packed, int queryOffset,
-                                                 int[] gather, int slot, int bitsPerDimension) {
-        int sign = 1 << (bitsPerDimension - 1);
-        var fields = packed.lanewise(VectorOperators.LSHR, slot * bitsPerDimension);
-        var magnitude = ((FloatVector) fields.and(sign - 1)
-                .convertShape(VectorOperators.I2F, ASH_FLOATS, 0)).add(0.5f);
-        var values = magnitude.blend(magnitude.neg(), fields.and(sign)
-                .compare(VectorOperators.EQ, 0).cast(ASH_FLOATS));
-        return FloatVector.fromArray(ASH_FLOATS, query, queryOffset, gather, 0).mul(values);
     }
 
     @Override
@@ -508,7 +810,6 @@ class PanamaVectorUtilSupport implements VectorUtilSupport {
     protected void intoByteSequence(ByteVector vector, ByteSequence<?> v, int offset, VectorMask<Byte> mask) {
         vector.intoArray(((ArrayByteSequence) v).get(), offset, mask);
     }
-
 
     @Override
     public float sum(VectorFloat<?> vector) {
@@ -596,6 +897,11 @@ class PanamaVectorUtilSupport implements VectorUtilSupport {
 
     @Override
     public float dotProduct(VectorFloat<?> v1, int v1offset, VectorFloat<?> v2, int v2offset, final int length) {
+        // Exactly one vector wide (the PQ subvector size on 128-bit hardware): handle it here. dotProductPreferred is
+        // too large for the JIT to inline, so routing this case through it cost every call a real method call.
+        if (length == FloatVector.SPECIES_PREFERRED.length())
+            return dotPreferred(v1, v1offset, v2, v2offset);
+
         //Common case first
         if (length >= FloatVector.SPECIES_PREFERRED.length())
             return dotProductPreferred(v1, v1offset, v2, v2offset, length);
@@ -657,7 +963,6 @@ class PanamaVectorUtilSupport implements VectorUtilSupport {
 
         return res;
     }
-
 
     float dotProduct256(VectorFloat<?> v1, int v1offset, VectorFloat<?> v2, int v2offset, int length) {
 
@@ -954,7 +1259,6 @@ class PanamaVectorUtilSupport implements VectorUtilSupport {
 
         return res;
     }
-
 
     float squareDistance256(VectorFloat<?> v1, int v1offset, VectorFloat<?> v2, int v2offset, int length) {
         if (length == FloatVector.SPECIES_256.length())
@@ -1258,6 +1562,183 @@ class PanamaVectorUtilSupport implements VectorUtilSupport {
         return sum;
     }
 
+    private static final VectorSpecies<Float> PAIR_FLOATS = FloatVector.SPECIES_PREFERRED;
+    private static final VectorSpecies<Integer> PAIR_INTS = VectorSpecies.of(int.class, PAIR_FLOATS.vectorShape());
+    private static final int PAIR_LANES = PAIR_FLOATS.length();
+    // One code byte per float lane, for 1-float subspaces. Byte vectors start at 64 bits, so narrower
+    // registers leave this null and use the plain loop.
+    private static final VectorSpecies<Byte> PAIR_BYTES = PAIR_LANES >= 8
+            ? VectorSpecies.of(byte.class, VectorShape.forBitSize(PAIR_LANES * 8)) : null;
+    private static final ThreadLocal<int[]> PAIR_INDICES = ThreadLocal.withInitial(() -> new int[2 * PAIR_LANES]);
+
+
+    private static float pairScalar(boolean dot, float[] cb, int clusterCount, int[] subspaceOffsets, int[] subspaceWidths,
+                                    ByteSequence<?> code1, int offset1, ByteSequence<?> code2, int offset2) {
+        float sum = 0;
+        for (int m = 0; m < subspaceOffsets.length; m++) {
+            int width = subspaceWidths[m], base = clusterCount * subspaceOffsets[m];
+            int b1 = base + Byte.toUnsignedInt(code1.get(offset1 + m)) * width;
+            int b2 = base + Byte.toUnsignedInt(code2.get(offset2 + m)) * width;
+            for (int t = 0; t < width; t++) {
+                float x = cb[b1 + t], y = cb[b2 + t];
+                sum += dot ? x * y : (x - y) * (x - y);
+            }
+        }
+        return sum;
+    }
+
+    private static float pairContiguous512(boolean dot, float[] cb, int clusterCount, int[] subspaceOffsets, int[] subspaceWidths,
+                                          ByteSequence<?> code1, int offset1, ByteSequence<?> code2, int offset2) {
+        final VectorSpecies<Float> species = FloatVector.SPECIES_512;
+        final int lanes = species.length();
+        FloatVector acc = FloatVector.zero(species);
+        float tail = 0;
+        for (int m = 0; m < subspaceOffsets.length; m++) {
+            int width = subspaceWidths[m], base = clusterCount * subspaceOffsets[m];
+            int b1 = base + Byte.toUnsignedInt(code1.get(offset1 + m)) * width;
+            int b2 = base + Byte.toUnsignedInt(code2.get(offset2 + m)) * width;
+            int t = 0;
+            for (; t + lanes <= width; t += lanes) {
+                var x = FloatVector.fromArray(species, cb, b1 + t);
+                var y = FloatVector.fromArray(species, cb, b2 + t);
+                acc = dot ? x.fma(y, acc) : x.sub(y).fma(x.sub(y), acc);
+            }
+            for (; t < width; t++) {
+                float x = cb[b1 + t], y = cb[b2 + t];
+                tail += dot ? x * y : (x - y) * (x - y);
+            }
+        }
+        return acc.reduceLanes(VectorOperators.ADD) + tail;
+    }
+
+    private static float pairContiguous256(boolean dot, float[] cb, int clusterCount, int[] subspaceOffsets, int[] subspaceWidths,
+                                          ByteSequence<?> code1, int offset1, ByteSequence<?> code2, int offset2) {
+        final VectorSpecies<Float> species = FloatVector.SPECIES_256;
+        final int lanes = species.length();
+        FloatVector acc = FloatVector.zero(species);
+        float tail = 0;
+        for (int m = 0; m < subspaceOffsets.length; m++) {
+            int width = subspaceWidths[m], base = clusterCount * subspaceOffsets[m];
+            int b1 = base + Byte.toUnsignedInt(code1.get(offset1 + m)) * width;
+            int b2 = base + Byte.toUnsignedInt(code2.get(offset2 + m)) * width;
+            int t = 0;
+            for (; t + lanes <= width; t += lanes) {
+                var x = FloatVector.fromArray(species, cb, b1 + t);
+                var y = FloatVector.fromArray(species, cb, b2 + t);
+                acc = dot ? x.fma(y, acc) : x.sub(y).fma(x.sub(y), acc);
+            }
+            for (; t < width; t++) {
+                float x = cb[b1 + t], y = cb[b2 + t];
+                tail += dot ? x * y : (x - y) * (x - y);
+            }
+        }
+        return acc.reduceLanes(VectorOperators.ADD) + tail;
+    }
+
+    private static float pairContiguous128(boolean dot, float[] cb, int clusterCount, int[] subspaceOffsets, int[] subspaceWidths,
+                                          ByteSequence<?> code1, int offset1, ByteSequence<?> code2, int offset2) {
+        final VectorSpecies<Float> species = FloatVector.SPECIES_128;
+        final int lanes = species.length();
+        FloatVector acc = FloatVector.zero(species);
+        float tail = 0;
+        for (int m = 0; m < subspaceOffsets.length; m++) {
+            int width = subspaceWidths[m], base = clusterCount * subspaceOffsets[m];
+            int b1 = base + Byte.toUnsignedInt(code1.get(offset1 + m)) * width;
+            int b2 = base + Byte.toUnsignedInt(code2.get(offset2 + m)) * width;
+            int t = 0;
+            for (; t + lanes <= width; t += lanes) {
+                var x = FloatVector.fromArray(species, cb, b1 + t);
+                var y = FloatVector.fromArray(species, cb, b2 + t);
+                acc = dot ? x.fma(y, acc) : x.sub(y).fma(x.sub(y), acc);
+            }
+            for (; t < width; t++) {
+                float x = cb[b1 + t], y = cb[b2 + t];
+                tail += dot ? x * y : (x - y) * (x - y);
+            }
+        }
+        return acc.reduceLanes(VectorOperators.ADD) + tail;
+    }
+
+    private static float pairContiguous64(boolean dot, float[] cb, int clusterCount, int[] subspaceOffsets, int[] subspaceWidths,
+                                          ByteSequence<?> code1, int offset1, ByteSequence<?> code2, int offset2) {
+        final VectorSpecies<Float> species = FloatVector.SPECIES_64;
+        final int lanes = species.length();
+        FloatVector acc = FloatVector.zero(species);
+        float tail = 0;
+        for (int m = 0; m < subspaceOffsets.length; m++) {
+            int width = subspaceWidths[m], base = clusterCount * subspaceOffsets[m];
+            int b1 = base + Byte.toUnsignedInt(code1.get(offset1 + m)) * width;
+            int b2 = base + Byte.toUnsignedInt(code2.get(offset2 + m)) * width;
+            int t = 0;
+            for (; t + lanes <= width; t += lanes) {
+                var x = FloatVector.fromArray(species, cb, b1 + t);
+                var y = FloatVector.fromArray(species, cb, b2 + t);
+                acc = dot ? x.fma(y, acc) : x.sub(y).fma(x.sub(y), acc);
+            }
+            for (; t < width; t++) {
+                float x = cb[b1 + t], y = cb[b2 + t];
+                tail += dot ? x * y : (x - y) * (x - y);
+            }
+        }
+        return acc.reduceLanes(VectorOperators.ADD) + tail;
+    }
+
+    @Override
+    public float pqCodePairSimilarity(boolean dot, VectorFloat<?> codebooks, int clusterCount,
+                                      int[] subspaceOffsets, int[] subspaceWidths, int minWidth, int maxWidth, int[] dimBase,
+                                      ByteSequence<?> code1, int offset1, ByteSequence<?> code2, int offset2) {
+        // A build calls this tens of millions of times, so it only dispatches: each path is its own small
+        // method, keeping the whole call chain small enough to inline.
+        float[] cb = ((FloatArray) codebooks).array();
+        if (minWidth >= 4) {
+            // Every centroid fills at least a 128-bit register: load both contiguously. Each width gets
+            // its own method so the species is a constant the JIT can compile to SIMD instructions.
+            if (minWidth >= 16 && PREFERRED_BIT_SIZE >= 512) {
+                return pairContiguous512(dot, cb, clusterCount, subspaceOffsets, subspaceWidths, code1, offset1, code2, offset2);
+            }
+            if (minWidth >= 8 && PREFERRED_BIT_SIZE >= 256) {
+                return pairContiguous256(dot, cb, clusterCount, subspaceOffsets, subspaceWidths, code1, offset1, code2, offset2);
+            }
+            return pairContiguous128(dot, cb, clusterCount, subspaceOffsets, subspaceWidths, code1, offset1, code2, offset2);
+        }
+        if (minWidth >= 2) {
+            // 2- and 3-float subspaces: one 64-bit load per centroid.
+            return pairContiguous64(dot, cb, clusterCount, subspaceOffsets, subspaceWidths, code1, offset1, code2, offset2);
+        }
+        if (maxWidth == 1 && dimBase.length >= PAIR_LANES && PAIR_BYTES != null) {
+            return pairGatherOneFloat(dot, cb, dimBase, code1, offset1, code2, offset2);
+        }
+        // Mixed 1-float subspaces, or too few to fill a register: a plain loop.
+        return pairScalar(dot, cb, clusterCount, subspaceOffsets, subspaceWidths, code1, offset1, code2, offset2);
+    }
+
+    /** Full registers of 1-float subspaces: each lane's code is one byte of a vector load. */
+    private float pairGatherOneFloat(boolean dot, float[] cb, int[] dimBase,
+                                     ByteSequence<?> code1, int offset1, ByteSequence<?> code2, int offset2) {
+        int dim = dimBase.length;
+        int[] indices = PAIR_INDICES.get();
+        int base1 = code1.offset() + offset1, base2 = code2.offset() + offset2;
+        FloatVector acc = FloatVector.zero(PAIR_FLOATS);
+        int j = 0;
+        for (; j + PAIR_LANES <= dim; j += PAIR_LANES) {
+            var lanesBase = IntVector.fromArray(PAIR_INTS, dimBase, j);
+            ((IntVector) fromByteSequence(PAIR_BYTES, code1, base1 + j).convertShape(VectorOperators.B2I, PAIR_INTS, 0))
+                    .and(0xff).add(lanesBase).intoArray(indices, 0);
+            ((IntVector) fromByteSequence(PAIR_BYTES, code2, base2 + j).convertShape(VectorOperators.B2I, PAIR_INTS, 0))
+                    .and(0xff).add(lanesBase).intoArray(indices, PAIR_LANES);
+            var x = FloatVector.fromArray(PAIR_FLOATS, cb, 0, indices, 0);
+            var y = FloatVector.fromArray(PAIR_FLOATS, cb, 0, indices, PAIR_LANES);
+            acc = dot ? x.fma(y, acc) : x.sub(y).fma(x.sub(y), acc);
+        }
+        float tail = 0;
+        for (; j < dim; j++) {
+            float x = cb[dimBase[j] + Byte.toUnsignedInt(code1.get(offset1 + j))];
+            float y = cb[dimBase[j] + Byte.toUnsignedInt(code2.get(offset2 + j))];
+            tail += dot ? x * y : (x - y) * (x - y);
+        }
+        return acc.reduceLanes(VectorOperators.ADD) + tail;
+    }
+
     @Override
     public float assembleAndSumPQ(
             VectorFloat<?> codebookPartialSums,
@@ -1330,7 +1811,6 @@ class PanamaVectorUtilSupport implements VectorUtilSupport {
         FloatVector kvec = FloatVector.broadcast(FloatVector.SPECIES_256, k);
         FloatVector onevec = FloatVector.broadcast(FloatVector.SPECIES_256, 1);
         FloatVector twovec = FloatVector.broadcast(FloatVector.SPECIES_256, 0.5f);
-
 
         for (int i = 0; i + LANES <= M; i += LANES) {
 
@@ -2146,7 +2626,6 @@ class PanamaVectorUtilSupport implements VectorUtilSupport {
         var logisticBias = logisticNQT(minValue, scaledAlpha, scaledX0);
         var logisticScale = (logisticNQT(maxValue, scaledAlpha, scaledX0) - logisticBias) / 255;
 
-
         for (int i = 0; i < vectorizedLength; i += ByteVector.SPECIES_PREFERRED.length()) {
             var byteArr = fromByteSequence(ByteVector.SPECIES_PREFERRED, quantizedVector, i);
 
@@ -2684,6 +3163,13 @@ class PanamaVectorUtilSupport implements VectorUtilSupport {
 
     // Shuffles that rotate SPECIES_PREFERRED by half, a quarter, ... of its lanes, for addLanesPairwise.
     private static final VectorShuffle<Float>[] PAIRWISE_ROTATIONS = pairwiseRotations();
+    private static final int PAIRWISE_LANES = FloatVector.SPECIES_PREFERRED.length();
+    private static final VectorShuffle<Float> ROTATE_8 = pairwiseRotation(8), ROTATE_4 = pairwiseRotation(4),
+            ROTATE_2 = pairwiseRotation(2), ROTATE_1 = pairwiseRotation(1);
+
+    private static VectorShuffle<Float> pairwiseRotation(int lanes) {
+        return lanes < PAIRWISE_LANES ? VectorShuffle.iota(FloatVector.SPECIES_PREFERRED, lanes, 1, true) : null;
+    }
 
     @SuppressWarnings("unchecked")
     private static VectorShuffle<Float>[] pairwiseRotations() {
@@ -2702,8 +3188,16 @@ class PanamaVectorUtilSupport implements VectorUtilSupport {
      * is the same compiled or not; and unlike a lane-by-lane loop it stays in vector registers.
      */
     private static float addLanesPairwise(FloatVector v) {
-        for (VectorShuffle<Float> rotation : PAIRWISE_ROTATIONS) v = v.add(v.rearrange(rotation));
-        return v.lane(0);
+        // Straight-line steps for up to 16 lanes: carried around a loop, the vector was sometimes compiled as
+        // heap-allocating calls.
+        if (PAIRWISE_LANES > 16) {
+            for (VectorShuffle<Float> rotation : PAIRWISE_ROTATIONS) v = v.add(v.rearrange(rotation));
+            return v.lane(0);
+        }
+        if (PAIRWISE_LANES > 8) v = v.add(v.rearrange(ROTATE_8));
+        if (PAIRWISE_LANES > 4) v = v.add(v.rearrange(ROTATE_4));
+        if (PAIRWISE_LANES > 2) v = v.add(v.rearrange(ROTATE_2));
+        return v.add(v.rearrange(ROTATE_1)).lane(0);
     }
 
     @Override

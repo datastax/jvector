@@ -16,6 +16,8 @@
 
 package io.github.jbellis.jvector.quantization;
 
+import io.github.jbellis.jvector.vector.VectorUtilSupport;
+
 /**
  * A projected query {@code Aq} rounded to INT8 for scoring offset-binary codes (3 and 5 to 9 bits) in graph
  * neighborhoods. With {@code s = 127 / max|Aq|}, the dot product with a code's unsigned fields {@code u} is
@@ -31,10 +33,18 @@ final class ASHInt8Query {
     final int units;
     /** The rounded query, {@code units * 8} entries; zero past {@code quantizedDim}. */
     final byte[] digits;
+    /** {@link #digits} widened to int, for the SIMD lane kernel. */
+    final int[] wideDigits;
+    /** Sums {@link #laneDot} in SIMD when not null. */
+    final VectorUtilSupport laneBackend;
     float invScale;
     float center;
 
     ASHInt8Query(int quantizedDim, int bits) {
+        this(quantizedDim, bits, null);
+    }
+
+    ASHInt8Query(int quantizedDim, int bits, VectorUtilSupport laneBackend) {
         if (!AsymmetricHashing.usesOffsetBinaryCode(bits)) {
             throw new IllegalArgumentException("INT8 neighborhood queries require offset-binary codes; got " + bits);
         }
@@ -42,6 +52,8 @@ final class ASHInt8Query {
         this.bits = bits;
         this.units = FusedASHLayout.fieldUnits(quantizedDim);
         this.digits = new byte[units * 8];
+        this.wideDigits = new int[units * 8];
+        this.laneBackend = laneBackend;
     }
 
     /** Quantizes {@code qProj[0, quantizedDim)}. A non-finite component makes every score NaN. */
@@ -49,6 +61,7 @@ final class ASHInt8Query {
         float max = 0f;
         for (int j = 0; j < quantizedDim; j++) max = Math.max(max, Math.abs(qProj[j]));
         java.util.Arrays.fill(digits, (byte) 0);
+        java.util.Arrays.fill(wideDigits, 0);
         if (!Float.isFinite(max)) {
             invScale = Float.NaN;
             center = 0f;
@@ -64,6 +77,7 @@ final class ASHInt8Query {
         for (int j = 0; j < quantizedDim; j++) {
             int q = Math.max(-127, Math.min(127, Math.round(qProj[j] * scale)));
             digits[j] = (byte) q;
+            wideDigits[j] = q;
             sum += q;
         }
         invScale = max / 127f;
@@ -72,10 +86,20 @@ final class ASHInt8Query {
 
     /**
      * The dot product of the query with one lane of a field-block neighborhood block, with the native
-     * kernel's arithmetic: an exact integer sum, then {@code (sum - center) * invScale}.
+     * kernel's arithmetic: an exact integer sum, then {@code (sum - center) * invScale}; in SIMD with
+     * {@link #laneBackend}.
      */
     float laneDot(byte[] block, int blockOffset, int lane, int blockSize) {
+        return laneDot(block, blockOffset, lane, blockSize, laneBackend);
+    }
+
+    /** As {@link #laneDot(byte[], int, int, int)}, summed by {@code simd}'s kernel when it is not null. */
+    float laneDot(byte[] block, int blockOffset, int lane, int blockSize, VectorUtilSupport simd) {
         int b = bits;
+        if (simd != null) {
+            long dot = simd.ashOffsetBinaryInt8Dot(block, blockOffset + lane * b, blockSize * b, units, b, wideDigits);
+            return ((float) dot - center) * invScale;
+        }
         long dot = 0;
         for (int unit = 0; unit < units; unit++) {
             int base = blockOffset + (unit * blockSize + lane) * b;
