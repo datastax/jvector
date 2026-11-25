@@ -21,6 +21,7 @@ import io.github.jbellis.jvector.disk.RandomAccessWriter;
 import io.github.jbellis.jvector.graph.GraphIndex;
 import io.github.jbellis.jvector.graph.disk.feature.Feature;
 import io.github.jbellis.jvector.graph.disk.feature.FeatureId;
+import io.github.jbellis.jvector.management.CompressionType;
 
 import java.io.FileNotFoundException;
 import java.io.IOException;
@@ -204,6 +205,12 @@ public class OnDiskGraphIndexWriter extends RandomAccessOnDiskGraphIndexWriter {
         @Override
         public Builder withVersion(int version) {
             super.withVersion(version);
+            return this;
+        }
+
+        @Override
+        public Builder withCompressionType(CompressionType compressionType) {
+            super.withCompressionType(compressionType);
             return this;
         }
 

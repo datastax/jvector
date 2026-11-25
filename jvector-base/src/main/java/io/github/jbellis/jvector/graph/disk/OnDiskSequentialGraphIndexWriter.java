@@ -21,6 +21,7 @@ import io.github.jbellis.jvector.graph.GraphIndex;
 import io.github.jbellis.jvector.graph.disk.feature.Feature;
 import io.github.jbellis.jvector.graph.disk.feature.FeatureId;
 import io.github.jbellis.jvector.graph.disk.feature.PageAlignment;
+import io.github.jbellis.jvector.management.CompressionType;
 
 import java.io.IOException;
 import java.io.UncheckedIOException;
@@ -141,6 +142,12 @@ public class OnDiskSequentialGraphIndexWriter extends AbstractGraphIndexWriter<I
         @Override
         public Builder withVersion(int version) {
             super.withVersion(version);
+            return this;
+        }
+
+        @Override
+        public Builder withCompressionType(CompressionType compressionType) {
+            super.withCompressionType(compressionType);
             return this;
         }
     }

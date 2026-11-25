@@ -47,6 +47,8 @@ class WriteContext {
     final L0Layout l0Layout;
     /** The similarity function the header records (format version 8 and later). */
     final RecordedSimilarity similarity;
+    /** The compression type the header records (format version 8 and later). */
+    final RecordedCompression compression;
 
     /**
      * Constructs a {@code WriteContext} bundling all parameters required for a single serialization session.
@@ -60,6 +62,7 @@ class WriteContext {
      * @param dimension      vector dimension, sourced from the configured features
      * @param l0Layout       placement of base-layer records
      * @param similarity     the similarity function the header records
+     * @param compression    the compression type the header records
      */
     WriteContext(GraphIndex graph,
                  OrdinalMapper ordinalMapper,
@@ -69,7 +72,8 @@ class WriteContext {
                  long headerSize,
                  int dimension,
                  L0Layout l0Layout,
-                 RecordedSimilarity similarity) {
+                 RecordedSimilarity similarity,
+                 RecordedCompression compression) {
         this.graph = graph;
         this.ordinalMapper = ordinalMapper;
         this.featureMap = featureMap;
@@ -79,5 +83,6 @@ class WriteContext {
         this.dimension = dimension;
         this.l0Layout = l0Layout;
         this.similarity = similarity;
+        this.compression = compression;
     }
 }

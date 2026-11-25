@@ -28,6 +28,7 @@ import io.github.jbellis.jvector.graph.disk.feature.PageAlignment;
 import io.github.jbellis.jvector.graph.disk.feature.SeparatedFeature;
 import io.github.jbellis.jvector.graph.disk.feature.SeparatedNVQ;
 import io.github.jbellis.jvector.graph.disk.feature.SeparatedVectors;
+import io.github.jbellis.jvector.management.CompressionType;
 
 import org.agrona.collections.Int2IntHashMap;
 
@@ -70,6 +71,8 @@ public abstract class AbstractGraphIndexWriter<T extends IndexWriter> implements
     final RecordedSimilarity similarity;
     /** Why a requested page alignment was not applied, or null. */
     String alignmentNote;
+    /** The compression type the header records; set by the builder. */
+    RecordedCompression compression = RecordedCompression.UNKNOWN;
 
     AbstractGraphIndexWriter(T out,
                              int version,
@@ -138,7 +141,7 @@ public abstract class AbstractGraphIndexWriter<T extends IndexWriter> implements
 
     WriteContext createContext(long startOffset) {
         return new WriteContext(graph, ordinalMapper, featureMap, inlineFeatures, startOffset, headerSize, dimension, l0Layout,
-                similarity);
+                similarity, compression);
     }
 
     long featureOffsetForOrdinal(long startOffset, int ordinal) {
@@ -226,6 +229,7 @@ public abstract class AbstractGraphIndexWriter<T extends IndexWriter> implements
         OrdinalMapper ordinalMapper;
         int version;
         int pageAlignment;
+        CompressionType compressionType;
 
         /**
          * Opens the output for a builder that owns it, e.g. a file the builder was given by path.
@@ -277,6 +281,20 @@ public abstract class AbstractGraphIndexWriter<T extends IndexWriter> implements
             }
 
             this.version = version;
+            return this;
+        }
+
+        /**
+         * Records the compression of the codes this graph is searched with, when they are stored beside it rather
+         * than fused (for example PQ codes written with {@code PQVectors.write}): {@code PQ}, {@code BQ} or
+         * {@code ASH}, or {@code NONE} if it is searched with its stored vectors alone. Readers see it as
+         * {@link OnDiskGraphIndex#compressionType()}, and a compactor checks the codes it is given against it. A
+         * graph with fused codes records their type without this. Requires format version 8 or later.
+         *
+         * @return this builder
+         */
+        public Builder<K, T> withCompressionType(CompressionType compressionType) {
+            this.compressionType = java.util.Objects.requireNonNull(compressionType, "compressionType");
             return this;
         }
 
@@ -395,12 +413,14 @@ public abstract class AbstractGraphIndexWriter<T extends IndexWriter> implements
                             pageAlignment);
                 }
             }
+            var compression = RecordedCompression.forWriter(compressionType, features, version);
             if (opener != null) {
                 out = opener.open();
             }
             try {
                 K writer = reallyBuild(dimension);
                 writer.alignmentNote = note;
+                writer.compression = compression;
                 return writer;
             } catch (IOException | RuntimeException | Error e) {
                 try {

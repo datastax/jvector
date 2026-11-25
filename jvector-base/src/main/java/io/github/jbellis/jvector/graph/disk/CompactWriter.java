@@ -83,6 +83,7 @@ final class CompactWriter implements AutoCloseable {
      *                Fused PQ needs a version that supports it (6 and above), an output with upper layers one
      *                that supports multi-layer graphs (4 and above).
      * @param similarity the similarity function to record in the header; only version 8 and above write it
+     * @param compression the compression type to record in the header; only version 8 and above write it
      */
     CompactWriter(Path outputPath,
                   int version,
@@ -94,7 +95,8 @@ final class CompactWriter implements AutoCloseable {
                   int dimension,
                   List<Integer> layerDegrees,
                   FusedFeature fusedFeature,
-                  RecordedSimilarity similarity)
+                  RecordedSimilarity similarity,
+                  RecordedCompression compression)
             throws IOException {
         this.fusedFeature = fusedFeature;
         this.fusedPQEnabled = fusedFeature != null;
@@ -136,7 +138,8 @@ final class CompactWriter implements AutoCloseable {
         this.recordSize = rsize;
 
         this.configuredLayerInfo.set(0, new CommonHeader.LayerInfo(numBaseLayerNodes, baseDegree));
-        var commonHeader = new CommonHeader(version, dimension, entryNode, this.configuredLayerInfo, this.maxOrdinal + 1, similarity);
+        var commonHeader = new CommonHeader(version, dimension, entryNode, this.configuredLayerInfo, this.maxOrdinal + 1, similarity,
+                compression);
         this.header = new Header(commonHeader, featureMap);
         this.headerSize = header.size();
 

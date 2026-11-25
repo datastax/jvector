@@ -20,6 +20,7 @@ import io.github.jbellis.jvector.annotations.VisibleForTesting;
 import io.github.jbellis.jvector.disk.IndexWriter;
 import io.github.jbellis.jvector.disk.RandomAccessReader;
 import io.github.jbellis.jvector.graph.GraphIndex;
+import io.github.jbellis.jvector.management.CompressionType;
 import io.github.jbellis.jvector.vector.ByteVectorSimilarityFunction;
 import io.github.jbellis.jvector.vector.VectorSimilarityFunction;
 import org.slf4j.Logger;
@@ -47,7 +48,7 @@ import java.util.stream.IntStream;
  * - v2: Basic format with no magic number
  * - v3: Added magic number and feature set support
  * - v4: Added multi-layer support and ID upper bound
- * - v8: Added the similarity function the graph was built with
+ * - v8: Added the similarity function the graph was built with, and the compression of the codes it is searched with
  * <p>
  * The on-disk layout for v4+ is:
  * - Magic number (to identify JVector files)
@@ -59,7 +60,8 @@ import java.util.stream.IntStream;
  * - ID upper bound
  * - Number of layers
  * - Layer info (size and degree for each layer)
- * - From v8: the similarity function, as {@link RecordedSimilarity} writes it
+ * - From v8: the similarity function, as {@link RecordedSimilarity} writes it, then the compression type, as
+ *   {@link RecordedCompression} writes it
  */
 public class CommonHeader {
     private static final Logger logger = LoggerFactory.getLogger(CommonHeader.class);
@@ -73,20 +75,23 @@ public class CommonHeader {
     public final int idUpperBound;
     /** The recorded similarity function; always {@link RecordedSimilarity#NONE} before version 8. */
     final RecordedSimilarity similarity;
+    /** The recorded compression type; always {@link RecordedCompression#UNKNOWN} before version 8. */
+    final RecordedCompression compression;
     private final GraphIndexFormat graphIndexFormat;
 
     CommonHeader(int version, int dimension, int entryNode, List<LayerInfo> layerInfo, int idUpperBound) {
-        this(version, dimension, entryNode, layerInfo, idUpperBound, RecordedSimilarity.NONE);
+        this(version, dimension, entryNode, layerInfo, idUpperBound, RecordedSimilarity.NONE, RecordedCompression.UNKNOWN);
     }
 
     CommonHeader(int version, int dimension, int entryNode, List<LayerInfo> layerInfo, int idUpperBound,
-                 RecordedSimilarity similarity) {
+                 RecordedSimilarity similarity, RecordedCompression compression) {
         this.version = version;
         this.dimension = dimension;
         this.entryNode = entryNode;
         this.layerInfo = layerInfo;
         this.idUpperBound = idUpperBound;
         this.similarity = similarity;
+        this.compression = compression;
         this.graphIndexFormat = GraphIndexFormatFactory.forVersion(version);
     }
 
@@ -98,6 +103,11 @@ public class CommonHeader {
     /** The int8 similarity function this header records; empty before version 8, or if it records none. */
     public Optional<ByteVectorSimilarityFunction> byteSimilarityFunction() {
         return similarity.byteFunction();
+    }
+
+    /** The compression type this header records; empty before version 8, or if it is unknown. */
+    public Optional<CompressionType> compressionType() {
+        return compression.type();
     }
 
     void write(IndexWriter out) throws IOException {

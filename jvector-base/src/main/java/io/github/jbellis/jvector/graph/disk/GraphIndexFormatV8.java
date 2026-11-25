@@ -27,6 +27,7 @@ import java.io.IOException;
  * - Everything in version 7: the same graph records, features and footer
  * - Records the similarity function the graph was built with in the common header, after the layer info
  *   (see {@link RecordedSimilarity}), so that searches can be checked against it
+ * - Then the compression of the codes the graph is searched with (see {@link RecordedCompression})
  */
 final class GraphIndexFormatV8 extends GraphIndexFormatV7 {
 
@@ -39,18 +40,20 @@ final class GraphIndexFormatV8 extends GraphIndexFormatV7 {
     public void writeCommonHeader(IndexWriter out, CommonHeader header) throws IOException {
         super.writeCommonHeader(out, header);
         header.similarity.write(out);
+        header.compression.write(out);
     }
 
     @Override
     public CommonHeader readCommonHeader(RandomAccessReader in, int size) throws IOException {
         CommonHeader common = super.readCommonHeader(in, size);
         RecordedSimilarity similarity = RecordedSimilarity.read(in);
+        RecordedCompression compression = RecordedCompression.read(in);
         return new CommonHeader(common.version, common.dimension, common.entryNode, common.layerInfo,
-                common.idUpperBound, similarity);
+                common.idUpperBound, similarity, compression);
     }
 
     @Override
     public int commonHeaderSize() {
-        return super.commonHeaderSize() + RecordedSimilarity.SIZE;
+        return super.commonHeaderSize() + RecordedSimilarity.SIZE + RecordedCompression.SIZE;
     }
 }

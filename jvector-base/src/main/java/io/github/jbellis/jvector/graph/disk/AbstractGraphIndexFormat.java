@@ -177,7 +177,7 @@ abstract class AbstractGraphIndexFormat implements GraphIndexFormat {
             entryNode = en == null ? GraphIndex.ENTRY_NODE_ABSENT : ctx.ordinalMapper.oldToNew(en.node);
         }
         var commonHeader = new CommonHeader(getVersion(), ctx.dimension, entryNode, layerInfo, ctx.ordinalMapper.maxOrdinal() + 1,
-                ctx.similarity);
+                ctx.similarity, ctx.compression);
         var header = new Header(commonHeader, ctx.featureMap);
         header.write(out);
         assert out.position() == ctx.startOffset + ctx.headerSize
@@ -198,7 +198,7 @@ abstract class AbstractGraphIndexFormat implements GraphIndexFormat {
             entryNode = en == null ? GraphIndex.ENTRY_NODE_ABSENT : ctx.ordinalMapper.oldToNew(en.node);
         }
         var commonHeader = new CommonHeader(getVersion(), ctx.dimension, entryNode, layerInfo, ctx.ordinalMapper.maxOrdinal() + 1,
-                ctx.similarity);
+                ctx.similarity, ctx.compression);
         var header = new Header(commonHeader, ctx.featureMap);
         header.write(out);
         out.writeLong(headerOffset);

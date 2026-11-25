@@ -89,6 +89,7 @@ public class OnDiskGraphIndex implements PersistableGraphIndex
     final int idUpperBound;
     /** The similarity function the header records; none before version 8. */
     private final RecordedSimilarity recordedSimilarity;
+    private final RecordedCompression recordedCompression;
     /** Whether {@link #warnIfNotRecorded} has logged for this graph. */
     private final java.util.concurrent.atomic.AtomicBoolean similarityMismatchLogged =
             new java.util.concurrent.atomic.AtomicBoolean();
@@ -124,6 +125,7 @@ public class OnDiskGraphIndex implements PersistableGraphIndex
         }
         this.idUpperBound = header.common.idUpperBound;
         this.recordedSimilarity = header.common.similarity;
+        this.recordedCompression = header.common.compression;
         this.features = Collections.unmodifiableMap(header.features);
         this.featureList = header.features.values().toArray(new Feature[0]);
         this.neighborsOffset = neighborsOffset;
@@ -613,6 +615,17 @@ public class OnDiskGraphIndex implements PersistableGraphIndex
         }
         var feature = (FusedASH) features.get(FeatureId.FUSED_ASH);
         return feature == null ? java.util.Optional.empty() : java.util.Optional.of(feature.getASH().similarityFunction());
+    }
+
+    /**
+     * The compression of the codes this graph is searched with: PQ or ASH for fused codes, or the type its writer
+     * declared for codes stored beside it ({@code withCompressionType}, format version 8). {@code NONE} means it is
+     * searched with its stored vectors alone. Empty when unknown: nothing was declared, or the file was written
+     * before version 8 and has no fused codes.
+     */
+    public java.util.Optional<io.github.jbellis.jvector.management.CompressionType> compressionType() {
+        var recorded = recordedCompression.type();
+        return recorded.isPresent() ? recorded : java.util.Optional.ofNullable(RecordedCompression.fusedType(features));
     }
 
     /**

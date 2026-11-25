@@ -37,6 +37,8 @@ import io.github.jbellis.jvector.graph.disk.feature.InlineVectors;
 import io.github.jbellis.jvector.graph.similarity.BuildScoreProvider;
 import io.github.jbellis.jvector.graph.similarity.DefaultSearchScoreProvider;
 import io.github.jbellis.jvector.index.Indexes;
+import io.github.jbellis.jvector.management.CompressionType;
+import io.github.jbellis.jvector.quantization.CompressedVectors;
 import io.github.jbellis.jvector.quantization.ASHVectors;
 import io.github.jbellis.jvector.quantization.AsymmetricHashing;
 import io.github.jbellis.jvector.quantization.PQVectors;
@@ -247,17 +249,29 @@ public class TestRecordedSimilarity extends RandomizedTest {
     /** Compacts two graphs built with {@code built} using a compactor for {@code compactWith}, at {@code version} or the default. */
     private OnDiskGraphIndex compact(VectorSimilarityFunction built, VectorSimilarityFunction compactWith, Integer version,
                                      String name) throws IOException {
+        return compact(new VectorSimilarityFunction[] {built, built}, null, compactWith, version, name);
+    }
+
+    /**
+     * Compacts one graph per entry of {@code built}, each built with that function and written at
+     * {@code sourceVersion} (the default if null), with a compactor for {@code compactWith}, or one that uses the
+     * sources' recorded function if null.
+     */
+    private OnDiskGraphIndex compact(VectorSimilarityFunction[] built, Integer sourceVersion,
+                                     VectorSimilarityFunction compactWith, Integer version, String name) throws IOException {
         var sources = new ArrayList<OnDiskGraphIndex>();
         var live = new ArrayList<FixedBitSet>();
-        for (int s = 0; s < 2; s++) {
+        for (int s = 0; s < built.length; s++) {
             var ravv = unitRavv(100);
-            sources.add(writeAndLoad(build(ravv, built), ravv, null, name + "-source" + s));
+            sources.add(writeAndLoad(build(ravv, built[s]), ravv, sourceVersion, name + "-source" + s));
             var all = new FixedBitSet(ravv.size());
             all.set(0, ravv.size());
             live.add(all);
         }
         try {
-            var compactor = new OnDiskGraphIndexCompactor(sources, live, compactWith, ForkJoinPool.commonPool());
+            var compactor = compactWith == null
+                    ? new OnDiskGraphIndexCompactor(sources, live, ForkJoinPool.commonPool())
+                    : new OnDiskGraphIndexCompactor(sources, live, compactWith, ForkJoinPool.commonPool());
             if (version != null) {
                 compactor.withVersion(version);
             }
@@ -296,7 +310,8 @@ public class TestRecordedSimilarity extends RandomizedTest {
     public void theHeaderGrowsByTheRecordedFunction() {
         var v7 = GraphIndexFormatFactory.forVersion(7);
         var v8 = GraphIndexFormatFactory.forVersion(8);
-        assertEquals(v7.commonHeaderSize() + 2 * Integer.BYTES, v8.commonHeaderSize());
+        // the similarity function (two ints) and the compression type (one)
+        assertEquals(v7.commonHeaderSize() + 3 * Integer.BYTES, v8.commonHeaderSize());
         assertEquals(v7.getSupportedFeatures(), v8.getSupportedFeatures());
         assertEquals(8, OnDiskGraphIndex.CURRENT_VERSION);
     }
@@ -406,5 +421,133 @@ public class TestRecordedSimilarity extends RandomizedTest {
         try (var v7 = writeAndLoad(graph, ravv, 7, "warn-v7")) {
             assertFalse(v7.warnIfNotRecorded(VectorSimilarityFunction.COSINE));
         }
+    }
+
+    @Test
+    public void aCompactorWithoutAFunctionUsesTheOneTheSourcesRecord() throws Exception {
+        for (VectorSimilarityFunction vsf : VectorSimilarityFunction.values()) {
+            try (var compacted = compact(new VectorSimilarityFunction[] {vsf, vsf}, null, null, null, "recorded-" + vsf)) {
+                assertEquals(Optional.of(vsf), compacted.similarityFunction());
+            }
+        }
+    }
+
+    @Test
+    public void aCompactorWithoutAFunctionRejectsSourcesThatDisagreeOrRecordNone() {
+        var cosine = VectorSimilarityFunction.COSINE;
+        var dot = VectorSimilarityFunction.DOT_PRODUCT;
+        var disagree = assertThrows(IllegalArgumentException.class,
+                () -> compact(new VectorSimilarityFunction[] {cosine, dot}, null, null, null, "disagree"));
+        assertTrue(disagree.getMessage(), disagree.getMessage().contains("source 0 records COSINE"));
+        var none = assertThrows(IllegalArgumentException.class,
+                () -> compact(new VectorSimilarityFunction[] {cosine, cosine}, 7, null, null, "none"));
+        assertTrue(none.getMessage(), none.getMessage().contains("records no similarity function"));
+    }
+
+    /** Writes {@code graph} with inline vectors at the default version, declaring {@code type}, and loads it. */
+    private OnDiskGraphIndex writeDeclaring(GraphIndex graph, ListRandomAccessVectorValues ravv, CompressionType type,
+                                            String name) throws IOException {
+        var path = directory.resolve(name);
+        try (var writer = new OnDiskGraphIndexWriter.Builder(graph, path)
+                .with(new InlineVectors(DIMENSION))
+                .withCompressionType(type)
+                .build()) {
+            writer.write(Feature.singleStateFactory(FeatureId.INLINE_VECTORS,
+                    node -> new InlineVectors.State(ravv.getVector(node))));
+        }
+        return OnDiskGraphIndex.load(new SimpleMappedReader.Supplier(path));
+    }
+
+    @Test
+    public void aGraphRecordsTheCompressionTypeItsWriterDeclares() throws Exception {
+        var ravv = unitRavv(100);
+        var graph = build(ravv, VectorSimilarityFunction.COSINE);
+        for (CompressionType type : CompressionType.values()) {
+            try (var onDisk = writeDeclaring(graph, ravv, type, "declared-" + type)) {
+                assertEquals(Optional.of(type), onDisk.compressionType());
+            }
+        }
+        // undeclared, and before version 8, it is unknown
+        try (var undeclared = writeAndLoad(graph, ravv, null, "undeclared");
+             var v7 = writeAndLoad(graph, ravv, 7, "undeclared-v7")) {
+            assertEquals(Optional.empty(), undeclared.compressionType());
+            assertEquals(Optional.empty(), v7.compressionType());
+        }
+    }
+
+    @Test
+    public void fusedCodesRecordTheirTypeAtEveryVersion() throws Exception {
+        var ravv = unitRavv(300);
+        var graph = build(ravv, VectorSimilarityFunction.DOT_PRODUCT);
+        var pqv = (PQVectors) ProductQuantization.compute(ravv, 8, 256, false).encodeAll(ravv);
+        var fusedPath = directory.resolve("fused-pq");
+        TestUtil.writeFusedGraph(graph, ravv, pqv, FeatureId.INLINE_VECTORS, fusedPath);
+        try (var fusedPq = OnDiskGraphIndex.load(new SimpleMappedReader.Supplier(fusedPath))) {
+            assertEquals(Optional.of(CompressionType.PQ), fusedPq.compressionType());
+        }
+        for (int version : new int[] {7, 8}) {
+            try (var fusedAsh = writeFusedAsh(graph, ravv, VectorSimilarityFunction.DOT_PRODUCT, version, "fused-ash-" + version)) {
+                assertEquals(Optional.of(CompressionType.ASH), fusedAsh.compressionType());
+            }
+        }
+    }
+
+    @Test
+    public void aDeclaredTypeNeedsVersion8AndMustMatchFusedCodes() throws Exception {
+        var ravv = unitRavv(100);
+        var graph = build(ravv, VectorSimilarityFunction.COSINE);
+        var v7 = new OnDiskGraphIndexWriter.Builder(graph, directory.resolve("declared-v7"))
+                .with(new InlineVectors(DIMENSION))
+                .withVersion(7)
+                .withCompressionType(CompressionType.PQ);
+        assertThrows(IllegalArgumentException.class, v7::build);
+        var ash = AsymmetricHashing.initialize(ravv, VectorSimilarityFunction.COSINE, AsymmetricHashing.RANDOM,
+                AsymmetricHashing.HEADER_BITS + DIMENSION * 2, 1, 2);
+        var fused = new OnDiskGraphIndexWriter.Builder(graph, directory.resolve("declared-fused"))
+                .with(new InlineVectors(DIMENSION))
+                .with(new FusedASH(graph.maxDegree(), ash))
+                .withCompressionType(CompressionType.PQ);
+        assertThrows(IllegalArgumentException.class, fused::build);
+    }
+
+    /**
+     * Two sources written declaring {@code declared}, compacted with PQ codes beside them by a compactor that takes
+     * the function ({@code explicit}) or the one that uses the recorded function.
+     */
+    private OnDiskGraphIndexCompactor sidecarCompactor(CompressionType declared, boolean explicit, String name)
+            throws IOException {
+        var sources = new ArrayList<OnDiskGraphIndex>();
+        var codes = new ArrayList<CompressedVectors>();
+        var live = new ArrayList<FixedBitSet>();
+        for (int s = 0; s < 2; s++) {
+            var ravv = unitRavv(300);
+            sources.add(writeDeclaring(build(ravv, VectorSimilarityFunction.COSINE), ravv, declared, name + "-source" + s));
+            codes.add(ProductQuantization.compute(ravv, 8, 256, false).encodeAll(ravv));
+            var all = new FixedBitSet(ravv.size());
+            all.set(0, ravv.size());
+            live.add(all);
+        }
+        return explicit
+                ? new OnDiskGraphIndexCompactor(sources, codes, live, VectorSimilarityFunction.COSINE, ForkJoinPool.commonPool())
+                : new OnDiskGraphIndexCompactor(sources, codes, live, ForkJoinPool.commonPool());
+    }
+
+    @Test
+    public void compactionWithCodesBesideTheGraphRecordsTheirType() throws Exception {
+        var compactor = sidecarCompactor(CompressionType.PQ, false, "sidecar");
+        var graphPath = directory.resolve("sidecar-out");
+        compactor.compact(graphPath, directory.resolve("sidecar-out.pq"));
+        try (var compacted = OnDiskGraphIndex.load(new SimpleMappedReader.Supplier(graphPath))) {
+            assertEquals(Optional.of(CompressionType.PQ), compacted.compressionType());
+        }
+    }
+
+    @Test
+    public void codesOfAnotherTypeThanASourceRecordsWarnOrAreRejected() throws Exception {
+        // the sources say BQ, but they are given PQ codes
+        sidecarCompactor(CompressionType.BQ, true, "mismatch-explicit"); // warns
+        var rejected = assertThrows(IllegalArgumentException.class,
+                () -> sidecarCompactor(CompressionType.BQ, false, "mismatch-recorded"));
+        assertTrue(rejected.getMessage(), rejected.getMessage().contains("records BQ compression"));
     }
 }

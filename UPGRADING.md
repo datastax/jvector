@@ -29,8 +29,14 @@ If you only read one thing, read this!
 ## On-disk format version 8
 - Version 8 records the index's similarity function in the header: the float function (`VectorSimilarityFunction`)
   for float graphs, or the byte function (`ByteVectorSimilarityFunction`) for int8 graphs, or none when the graph
-  was built with a custom score provider that names none. The header grows by 8 bytes; otherwise a version 8 file
-  has the version 7 layout. A fused ASH graph records its model's function.
+  was built with a custom score provider that names none. A fused ASH graph records its model's function.
+- Version 8 also records the compression of the codes the graph is searched with (`CompressionType`): PQ or ASH
+  for fused codes, automatically; for codes stored beside the graph, the type declared with the new
+  `withCompressionType(type)` on the graph writer builders (`NONE` for a graph searched with its stored vectors
+  alone). Undeclared, it is unknown. `OnDiskGraphIndex.compressionType()` reports it, also inferring fused codes in
+  older files. A declared type needs version 8 and must agree with any fused codes, or `build()` throws
+  `IllegalArgumentException`.
+- The header grows by 12 bytes; otherwise a version 8 file has the version 7 layout.
 - `OnDiskGraphIndex.CURRENT_VERSION`, the default for the graph writer builders, `OnDiskGraphIndexCompactor` and
   `CompressedVectors.write(out)`, is now 8. A version passed with `withVersion` is honored.
 - JVector 4.0.x reads formats up to 6 and 4.1.0-rc.1 up to 7; both reject version 8 files. To keep a rollback
@@ -39,7 +45,12 @@ If you only read one thing, read this!
   files, through their model), so `similarityFunction()` is empty for them and they are searched with an explicit
   function, as before.
 - `OnDiskGraphIndexCompactor` reads sources of versions 2 to 8 and records the function it was constructed with.
-  A source that recorded a different function is compacted anyway, with a warning.
+  A source that recorded a different function is compacted anyway, with a warning. New constructors that take no
+  function (`(sources, liveNodes, executor)` and `(sources, sourceCompressed, liveNodes, executor)`) compact by the
+  function the sources record, and throw `IllegalArgumentException` if one records none or they disagree. Compressed
+  vectors given for a source that records another compression type are compacted with a warning by the existing
+  constructors, and rejected by the new ones. The output records the type of its fused codes, or of the codes
+  `compact(graphPath, compressedPath)` writes beside it.
 
 ## On-disk format version 7
 - Version 7 of the on-disk graph format adds three features: fused ASH (`FeatureId.FUSED_ASH`), ASH codes
