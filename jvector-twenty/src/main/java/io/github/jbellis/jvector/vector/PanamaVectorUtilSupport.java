@@ -897,13 +897,17 @@ class PanamaVectorUtilSupport implements VectorUtilSupport {
 
     @Override
     public float dotProduct(VectorFloat<?> v1, int v1offset, VectorFloat<?> v2, int v2offset, final int length) {
+        // Exactly one vector wide (the PQ subvector size on 128-bit hardware): handle it here. dotProductPreferred is
+        // too large for the JIT to inline, so routing this case through it cost every call a real method call.
+        if (length == FloatVector.SPECIES_PREFERRED.length())
+            return dotPreferred(v1, v1offset, v2, v2offset);
+
         //Common case first
         if (length >= 4 * FloatVector.SPECIES_PREFERRED.length())
             return dotProductPreferred(v1, v1offset, v2, v2offset, length);
 
-        // One to three vectors, such as PQ subvectors. dotProductPreferred is too large for the JIT to inline, so
-        // these short slices take a small path of their own instead of paying for a call each time.
-        if (length >= FloatVector.SPECIES_PREFERRED.length())
+        // Up to three vectors, such as wider PQ subvectors, take a small path of their own for the same reason.
+        if (length > FloatVector.SPECIES_PREFERRED.length())
             return dotProductShort(v1, v1offset, v2, v2offset, length);
 
         if (length < FloatVector.SPECIES_128.length())
@@ -990,15 +994,12 @@ class PanamaVectorUtilSupport implements VectorUtilSupport {
     }
 
     /**
-     * One to three preferred vectors and a tail, small enough for the JIT to inline. The first two vectors use separate
-     * sums, as in {@link #dotProductPreferred}, so their multiply-adds do not wait on each other.
+     * More than one and fewer than four preferred vectors, small enough for the JIT to inline. The first two vectors use
+     * separate sums, as in {@link #dotProductPreferred}, so their multiply-adds do not wait on each other.
      */
     float dotProductShort(VectorFloat<?> va, int vaoffset, VectorFloat<?> vb, int vboffset, int length) {
         int vectorLength = FloatVector.SPECIES_PREFERRED.length();
-        assert length >= vectorLength && length < 4 * vectorLength : length;
-        if (length == vectorLength)
-            return dotPreferred(va, vaoffset, vb, vboffset);
-
+        assert length > vectorLength && length < 4 * vectorLength : length;
         FloatVector sum0 = FloatVector.zero(FloatVector.SPECIES_PREFERRED);
         int i = 0;
         if (length >= 2 * vectorLength) {
