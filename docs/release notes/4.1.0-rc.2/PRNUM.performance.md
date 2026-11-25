@@ -1,0 +1,22 @@
+### Faster PQ Query Tables for Subvectors Two or Three SIMD Vectors Wide
+
+**Description**
+
+With the Panama provider, a dot product over a slice two or three SIMD vectors wide, such as a PQ subvector, called a
+method too large for the JIT to inline. Such slices now take a small path the JIT inlines, with the same results. This
+extends [#816](https://github.com/datastax/jvector/pull/816), which covered slices exactly one vector wide, to 8- or
+12-float subvectors on 128-bit SIMD, 16 or 24 on AVX2 and 32 or 48 on AVX-512. `DOT_PRODUCT` and `COSINE` tables gain;
+`EUCLIDEAN` tables already used a routine small enough to inline and are unchanged, as are longer vectors. The native
+provider builds each table in one native call and is not affected.
+
+**How to Enable**
+
+No configuration is required.
+
+**Notes**
+
+Building the PQ table for a 1024-dimension query took 13-50% less time with 32-float subvectors at 512-bit width on
+Ice Lake (8 cores) and GNR (48 cores), JDK 22 and 25, and 62% less with 16-float subvectors at 256-bit width. End to
+end on a 1M-vector dataset, single-thread PQ search ran 19% faster at 512-bit width and 3.1 times as fast at 256-bit
+width. On Graviton4 (ARM), PQ search with 7- and 8-float subvectors ran 26-29% faster with 8 search cores. Recall was
+unchanged.

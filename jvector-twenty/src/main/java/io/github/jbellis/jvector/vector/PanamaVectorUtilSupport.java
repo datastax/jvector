@@ -897,14 +897,14 @@ class PanamaVectorUtilSupport implements VectorUtilSupport {
 
     @Override
     public float dotProduct(VectorFloat<?> v1, int v1offset, VectorFloat<?> v2, int v2offset, final int length) {
-        // Exactly one vector wide (the PQ subvector size on 128-bit hardware): handle it here. dotProductPreferred is
-        // too large for the JIT to inline, so routing this case through it cost every call a real method call.
-        if (length == FloatVector.SPECIES_PREFERRED.length())
-            return dotPreferred(v1, v1offset, v2, v2offset);
-
         //Common case first
-        if (length >= FloatVector.SPECIES_PREFERRED.length())
+        if (length >= 4 * FloatVector.SPECIES_PREFERRED.length())
             return dotProductPreferred(v1, v1offset, v2, v2offset, length);
+
+        // One to three vectors, such as PQ subvectors. dotProductPreferred is too large for the JIT to inline, so
+        // these short slices take a small path of their own instead of paying for a call each time.
+        if (length >= FloatVector.SPECIES_PREFERRED.length())
+            return dotProductShort(v1, v1offset, v2, v2offset, length);
 
         if (length < FloatVector.SPECIES_128.length())
             return dotProduct64(v1, v1offset, v2, v2offset, length);
@@ -987,6 +987,40 @@ class PanamaVectorUtilSupport implements VectorUtilSupport {
             res += v1.get(v1offset + i) * v2.get(v2offset + i);
 
         return res;
+    }
+
+    /**
+     * One to three preferred vectors and a tail, small enough for the JIT to inline. The first two vectors use separate
+     * sums, as in {@link #dotProductPreferred}, so their multiply-adds do not wait on each other.
+     */
+    float dotProductShort(VectorFloat<?> va, int vaoffset, VectorFloat<?> vb, int vboffset, int length) {
+        int vectorLength = FloatVector.SPECIES_PREFERRED.length();
+        assert length >= vectorLength && length < 4 * vectorLength : length;
+        if (length == vectorLength)
+            return dotPreferred(va, vaoffset, vb, vboffset);
+
+        FloatVector sum0 = FloatVector.zero(FloatVector.SPECIES_PREFERRED);
+        int i = 0;
+        if (length >= 2 * vectorLength) {
+            FloatVector sum1 = fromVectorFloat(FloatVector.SPECIES_PREFERRED, va, vaoffset + vectorLength)
+                    .fma(fromVectorFloat(FloatVector.SPECIES_PREFERRED, vb, vboffset + vectorLength), sum0);
+            sum0 = fromVectorFloat(FloatVector.SPECIES_PREFERRED, va, vaoffset)
+                    .fma(fromVectorFloat(FloatVector.SPECIES_PREFERRED, vb, vboffset), sum0);
+            sum0 = sum0.add(sum1);
+            i = 2 * vectorLength;
+        }
+        if (length - i >= vectorLength) {
+            sum0 = fromVectorFloat(FloatVector.SPECIES_PREFERRED, va, vaoffset + i)
+                    .fma(fromVectorFloat(FloatVector.SPECIES_PREFERRED, vb, vboffset + i), sum0);
+            i += vectorLength;
+        }
+
+        float resVec = sum0.reduceLanes(VectorOperators.ADD);
+        float resTail = 0;
+        for (; i < length; i++)
+            resTail += va.get(vaoffset + i) * vb.get(vboffset + i);
+
+        return resVec + resTail;
     }
 
     float dotProductPreferred(VectorFloat<?> va, int vaoffset, VectorFloat<?> vb, int vboffset, int length) {
