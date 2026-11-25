@@ -82,6 +82,15 @@ public interface RandomAccessVectorValues extends VectorValues<VectorFloat<?>> {
     }
 
     /**
+     * Scores {@code nodes[0..count)} against {@code query}: {@code results[i] = vsf.compare(query, getVector(nodes[i]))},
+     * up to float rounding. The default scores the nodes several at a time, which suits any source; a source that
+     * reads from storage may override it to read into vectors it reuses.
+     */
+    default void similarityTo(VectorFloat<?> query, VectorSimilarityFunction vsf, int[] nodes, int count, float[] results) {
+        BulkScoring.score(this, query, vsf, nodes, count, results);
+    }
+
+    /**
      * Creates a new copy of this {@link RandomAccessVectorValues}. This is helpful when you need to
      * access different values at once, to avoid overwriting the underlying float vector returned by
      * a shared {@link RandomAccessVectorValues#getVector}.
