@@ -96,8 +96,9 @@ public class TestVectorizationProvider extends RandomizedTest {
     /**
      * dotProduct handles a slice exactly one preferred vector wide itself instead of delegating to dotProductPreferred.
      * Both must return the same bits for every input, including signed zeros and non-finite values, so that the
-     * shortcut cannot change a score. dotProductPreferred is package-private, so it is reached by reflection, which
-     * also keeps this test loadable when the Panama provider is not in use.
+     * shortcut cannot change a score. Every NaN counts as the same value, since a NaN's sign and payload can differ
+     * between interpreted and compiled runs of the same code. dotProductPreferred is package-private, so it is reached
+     * by reflection, which also keeps this test loadable when the Panama provider is not in use.
      */
     @Test
     public void testDotProductFastPathMatchesPreferredBitwise() throws Exception {
@@ -132,7 +133,7 @@ public class TestVectorizationProvider extends RandomizedTest {
                 float direct = impl.dotProduct(a, offset1, b, offset2, length);
                 float viaPreferred = (float) preferred.invoke(impl, a, offset1, b, offset2, length);
                 Assert.assertEquals("length=" + length + " offsets=" + offset1 + "," + offset2,
-                                    Float.floatToRawIntBits(viaPreferred), Float.floatToRawIntBits(direct));
+                                    Float.floatToIntBits(viaPreferred), Float.floatToIntBits(direct));
             }
         }
     }
