@@ -106,6 +106,12 @@ public class TestASHTrainingSetup {
         final VectorFloat<?> mean;
         final double[] xCol;
         final int rows;
+        /**
+         * How far {@code mean} and {@code xCol} may move if a sampled vector's norm rounds 1 ULP otherwise, so the
+         * unit-length step scales it by 1 +- 2 ULP of 1: 2 ULP of the typical input component, plus the final rounding.
+         */
+        final float[] meanTolerance;
+        final double[] xColTolerance;
 
         Reference(VectorFloat<?>[] source, int dimensions, Random rng, boolean learn) {
             this(source, dimensions, rng, learn, false);
@@ -138,8 +144,18 @@ public class TestASHTrainingSetup {
             mean = VectorizationProvider.getInstance().getVectorTypeSupport().createFloatVector(dimensions);
             double inverseCount = 1.0 / points.length;
             for (int d = 0; d < dimensions; d++) mean.set(d, (float) (accumulator[d] * inverseCount));
+            final float scaleError = 2 * Math.ulp(1f);
+            meanTolerance = new float[dimensions];
+            float largestMeanTolerance = 0f;
+            for (int d = 0; d < dimensions; d++) {
+                double meanAbs = 0;
+                for (VectorFloat<?> point : points) meanAbs += Math.abs(point.get(d));
+                meanTolerance[d] = scaleError * (float) (meanAbs * inverseCount) + Math.ulp(mean.get(d));
+                largestMeanTolerance = Math.max(largestMeanTolerance, meanTolerance[d]);
+            }
             rows = learn ? sampleSize : 0;
             xCol = learn ? new double[rows * dimensions] : null;
+            xColTolerance = learn ? new double[rows * dimensions] : null;
             if (!learn) return;
             double[] residual = new double[dimensions];
             for (int row = 0; row < rows; row++) {
@@ -151,6 +167,11 @@ public class TestASHTrainingSetup {
                 }
                 double inverse = 1.0 / Math.max(Math.sqrt(norm2), 1e-20);
                 for (int d = 0; d < dimensions; d++) xCol[row + d * rows] = residual[d] * inverse;
+                // Each residual component moves by at most e; normalized, the component and the norm together by 2 e.
+                float largestInput = 0f;
+                for (int d = 0; d < dimensions; d++) largestInput = Math.max(largestInput, Math.abs(points[row].get(d)));
+                double e = scaleError * largestInput + largestMeanTolerance;
+                for (int d = 0; d < dimensions; d++) xColTolerance[row + d * rows] = 2 * e * inverse;
             }
         }
     }
@@ -395,12 +416,14 @@ public class TestASHTrainingSetup {
             Reference earlier = new Reference(values, dimensions, new Random(103), learn, true);
             Object actual = prepare(new Values(values, dimensions, true), dimensions, new Random(103), learn);
             VectorFloat<?> mean = (VectorFloat<?>) field(actual, "landmark");
+            // Not bit for bit: on JDK 25, C2 adds SIMD lanes in another order than the interpreter and C1, so a norm
+            // of exactly 1 may round 1 ULP otherwise once compiled, and the earlier path then rescales that vector.
             for (int d = 0; d < dimensions; d++)
-                assertEquals(Float.floatToRawIntBits(earlier.mean.get(d)), Float.floatToRawIntBits(mean.get(d)));
+                assertEquals(earlier.mean.get(d), mean.get(d), earlier.meanTolerance[d]);
             if (!learn) continue;
             double[] observed = (double[]) field(field(actual, "trainingData"), "xCol");
             for (int i = 0; i < observed.length; i++)
-                assertEquals(Double.doubleToRawLongBits(earlier.xCol[i]), Double.doubleToRawLongBits(observed[i]));
+                assertEquals(earlier.xCol[i], observed[i], earlier.xColTolerance[i]);
         }
     }
 
