@@ -154,7 +154,7 @@ public interface BuildScoreProvider {
                     };
                 }
                 var vector = vectors.get().getVector(node1);
-                return new VectorValuesScoreFunction(vector, similarityFunction, vectorsCopy.get(), null);
+                return new VectorValuesScoreFunction(vector, similarityFunction, vectorsCopy.get());
             }
 
             @Override

@@ -20,73 +20,68 @@ import io.github.jbellis.jvector.graph.RandomAccessVectorValues;
 import io.github.jbellis.jvector.vector.VectorSimilarityFunction;
 import io.github.jbellis.jvector.vector.types.VectorFloat;
 
-import java.util.Arrays;
 
 /**
- * Exact similarity of a fixed vector to the vectors of a {@link RandomAccessVectorValues}.
+ * Exact similarity of a fixed vector to the vectors of a {@link RandomAccessVectorValues}. A batch of nodes is scored by
+ * the source's {@link RandomAccessVectorValues#similarityTo(VectorFloat, VectorSimilarityFunction, int[], int, float[])},
+ * so each source decides how to read and score its own vectors.
  * <p>
- * A batch of nodes is scored with one bulk {@link VectorSimilarityFunction#compare(VectorFloat, VectorFloat[], int, float[])}
- * call, which lets the vector provider overlap the memory loads of the targets. That needs every target vector at once,
- * so it is only done when the values are not shared; a shared source is scored one node at a time.
- * <p>
- * Threadsafe: the scratch space of the bulk path is per thread.
+ * Threadsafe: {@link Mapped}'s only scratch, the mapped ordinals, is per thread.
  */
-final class VectorValuesScoreFunction implements ScoreFunction.ExactScoreFunction {
-    /** how many targets the provider scores at once */
-    private static final int BATCH = 4;
-    /** the target vectors of the bulk call, per thread */
-    private static final ThreadLocal<VectorFloat<?>[]> TARGETS = ThreadLocal.withInitial(() -> new VectorFloat<?>[BATCH]);
-    /** the scores of the bulk call, per thread */
-    private static final ThreadLocal<float[]> SCORES = ThreadLocal.withInitial(() -> new float[BATCH]);
+class VectorValuesScoreFunction implements ScoreFunction.ExactScoreFunction {
+    final VectorFloat<?> vector;
+    final VectorSimilarityFunction similarityFunction;
+    final RandomAccessVectorValues values;
 
-    private final VectorFloat<?> vector;
-    private final VectorSimilarityFunction similarityFunction;
-    private final RandomAccessVectorValues values;
-    /** maps node ids to ordinals of {@code values}, or null if they are the same */
-    private final int[] ordinals;
-
-    VectorValuesScoreFunction(VectorFloat<?> vector, VectorSimilarityFunction similarityFunction, RandomAccessVectorValues values, int[] ordinals) {
+    VectorValuesScoreFunction(VectorFloat<?> vector, VectorSimilarityFunction similarityFunction, RandomAccessVectorValues values) {
         this.vector = vector;
         this.similarityFunction = similarityFunction;
         this.values = values;
-        this.ordinals = ordinals;
-    }
-
-    private int ordinal(int node) {
-        return ordinals == null ? node : ordinals[node];
     }
 
     @Override
     public float similarityTo(int node2) {
-        return similarityFunction.compare(vector, values.getVector(ordinal(node2)));
+        return similarityFunction.compare(vector, values.getVector(node2));
     }
 
     @Override
     public boolean supportsBatchScoring() {
-        // a shared source hands out the same vector again on the next call, so its vectors cannot be held
-        return !values.isValueShared();
+        return true;
     }
 
     @Override
     public void similarityTo(int[] nodes, int count, float[] results) {
-        if (count < 2 || values.isValueShared()) {
-            ExactScoreFunction.super.similarityTo(nodes, count, results);
-            return;
+        values.similarityTo(vector, similarityFunction, nodes, count, results);
+    }
+
+    /** Scores nodes whose ordinals in {@code values} differ from their ids. */
+    static final class Mapped extends VectorValuesScoreFunction {
+        /** node ids mapped to ordinals of {@code values}, per thread */
+        private static final ThreadLocal<int[]> MAPPED = ThreadLocal.withInitial(() -> new int[64]);
+
+        private final int[] ordinals;
+
+        Mapped(VectorFloat<?> vector, VectorSimilarityFunction similarityFunction, RandomAccessVectorValues values, int[] ordinals) {
+            super(vector, similarityFunction, values);
+            this.ordinals = ordinals;
         }
-        // Score four targets at a time: the provider keeps four load streams in flight, and only four target
-        // vectors are held at once, so a source that materializes a vector per call does not have to keep them
-        // all alive.
-        var targets = TARGETS.get();
-        var scores = SCORES.get();
-        for (int i = 0; i < count; i += BATCH) {
-            int n = Math.min(BATCH, count - i);
-            for (int j = 0; j < n; j++) {
-                targets[j] = values.getVector(ordinal(nodes[i + j]));
+
+        @Override
+        public float similarityTo(int node2) {
+            return similarityFunction.compare(vector, values.getVector(ordinals[node2]));
+        }
+
+        @Override
+        public void similarityTo(int[] nodes, int count, float[] results) {
+            int[] mapped = MAPPED.get();
+            if (mapped.length < count) {
+                mapped = new int[count];
+                MAPPED.set(mapped);
             }
-            similarityFunction.compare(vector, targets, n, scores);
-            System.arraycopy(scores, 0, results, i, n);
-            // don't keep vectors the source may have materialized for this call
-            Arrays.fill(targets, 0, n, null);
+            for (int i = 0; i < count; i++) {
+                mapped[i] = ordinals[nodes[i]];
+            }
+            values.similarityTo(vector, similarityFunction, mapped, count, results);
         }
     }
 }
