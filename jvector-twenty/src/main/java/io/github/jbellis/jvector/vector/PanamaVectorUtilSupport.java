@@ -1201,6 +1201,68 @@ class PanamaVectorUtilSupport implements VectorUtilSupport {
             return squareDistance256(v1, v1offset, v2, v2offset, length);
     }
 
+    /**
+     * Runs the whole scan in this one method so C2 compiles it on its own. Compiled inside a large caller, the
+     * per-centroid loop sometimes failed to intrinsify the small-vector subtraction on JDK 22 and allocated on every
+     * distance, making PQ encoding and training up to 15x slower. Keep this method above C2's inline limit
+     * (FreqInlineSize, 325 bytecodes) and each branch's species constant: a shared helper would be inlined back
+     * into the callers. Ties keep the first centroid.
+     */
+    @Override
+    public int tryClosestCentroid(VectorFloat<?> point, int pointOffset,
+                                  VectorFloat<?> centroids, int centroidCount, int dimension) {
+        if (centroidCount <= 0) {
+            throw new IllegalArgumentException("centroidCount must be positive");
+        }
+        Objects.checkFromIndexSize(pointOffset, dimension, point.length());
+        if ((long) centroidCount * dimension > centroids.length()) {
+            throw new IndexOutOfBoundsException("centroids do not contain centroidCount vectors");
+        }
+        int preferred = FloatVector.SPECIES_PREFERRED.length();
+        int nearest = 0;
+        float min = Float.MAX_VALUE;
+        if (dimension == FloatVector.SPECIES_128.length() && dimension < preferred) {
+            var x = fromVectorFloat(FloatVector.SPECIES_128, point, pointOffset);
+            for (int i = 0, at = 0; i < centroidCount; i++, at += dimension) {
+                var diff = x.sub(fromVectorFloat(FloatVector.SPECIES_128, centroids, at));
+                float d = diff.mul(diff).reduceLanes(VectorOperators.ADD);
+                if (d < min) {
+                    min = d;
+                    nearest = i;
+                }
+            }
+        } else if (dimension == FloatVector.SPECIES_256.length() && dimension < preferred) {
+            var x = fromVectorFloat(FloatVector.SPECIES_256, point, pointOffset);
+            for (int i = 0, at = 0; i < centroidCount; i++, at += dimension) {
+                var diff = x.sub(fromVectorFloat(FloatVector.SPECIES_256, centroids, at));
+                float d = diff.mul(diff).reduceLanes(VectorOperators.ADD);
+                if (d < min) {
+                    min = d;
+                    nearest = i;
+                }
+            }
+        } else if (dimension == FloatVector.SPECIES_64.length() && dimension < preferred) {
+            var x = fromVectorFloat(FloatVector.SPECIES_64, point, pointOffset);
+            for (int i = 0, at = 0; i < centroidCount; i++, at += dimension) {
+                var diff = x.sub(fromVectorFloat(FloatVector.SPECIES_64, centroids, at));
+                float d = diff.mul(diff).reduceLanes(VectorOperators.ADD);
+                if (d < min) {
+                    min = d;
+                    nearest = i;
+                }
+            }
+        } else {
+            for (int i = 0, at = 0; i < centroidCount; i++, at += dimension) {
+                float d = squareDistance(point, pointOffset, centroids, at, dimension);
+                if (d < min) {
+                    min = d;
+                    nearest = i;
+                }
+            }
+        }
+        return nearest;
+    }
+
     float squareDistance64(VectorFloat<?> v1, int v1offset, VectorFloat<?> v2, int v2offset, int length) {
         if (length == FloatVector.SPECIES_64.length())
             return squareDistance64(v1, v1offset, v2, v2offset);
