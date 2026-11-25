@@ -31,10 +31,14 @@ public class QueryExecutor {
      */
     public static void verifyConcurrentQuery(ConfiguredSystem cs, int topK, int rerankK,
             boolean usePruning, int ordinal) {
+        verifyConcurrentQuery(cs, cs.queries(), topK, rerankK, usePruning, ordinal);
+    }
+
+    private static <Q> void verifyConcurrentQuery(ConfiguredSystem cs, QuerySet<Q> queries, int topK, int rerankK,
+            boolean usePruning, int ordinal) {
         var searcher = cs.getSearcher();
         searcher.usePruning(usePruning);
-        var query = cs.getDataSet().getQueryVectors().get(ordinal);
-        var provider = cs.scoreProviderFor(query, searcher.getView());
+        var provider = queries.scoreProviderFor(queries.get(ordinal), searcher.getView());
         var expected = searcher.search(provider, topK, rerankK, 0.0f, 0.0f, Bits.ALL);
         var actual = searcher.search(provider, topK, rerankK, 0.0f, 0.0f, Bits.ALL);
         if (!java.util.Arrays.equals(expected.getNodes(), actual.getNodes())
@@ -61,8 +65,12 @@ public class QueryExecutor {
      * @return the SearchResult for query i.
      */
     public static SearchResult executeQuery(ConfiguredSystem cs, int topK, int rerankK, boolean usePruning, int i) {
-        var queryVector = cs.getDataSet().getQueryVectors().get(i);
-        return executeQuery(cs, topK, rerankK, usePruning, queryVector);
+        return executeQueryAt(cs, cs.queries(), topK, rerankK, usePruning, i);
+    }
+
+    private static <Q> SearchResult executeQueryAt(ConfiguredSystem cs, QuerySet<Q> queries, int topK, int rerankK,
+                                                   boolean usePruning, int i) {
+        return executeQuery(cs, queries, topK, rerankK, usePruning, queries.get(i));
     }
 
     // Overload to allow single query injection (e.g., for warm-up with random vectors)
@@ -71,6 +79,15 @@ public class QueryExecutor {
         var searcher = cs.getSearcher();
         searcher.usePruning(usePruning);
         var sf = cs.scoreProviderFor(queryVector, searcher.getView());
+        return searcher.search(sf, topK, rerankK, 0.0f, 0.0f, Bits.ALL);
+    }
+
+    /** Executes {@code query}, of the system's vector type, scored by {@code queries}. */
+    public static <Q> SearchResult executeQuery(ConfiguredSystem cs, QuerySet<Q> queries, int topK, int rerankK,
+                                                boolean usePruning, Q query) {
+        var searcher = cs.getSearcher();
+        searcher.usePruning(usePruning);
+        var sf = queries.scoreProviderFor(query, searcher.getView());
         return searcher.search(sf, topK, rerankK, 0.0f, 0.0f, Bits.ALL);
     }
 }

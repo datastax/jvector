@@ -17,6 +17,7 @@
 package io.github.jbellis.jvector.example;
 
 import io.github.jbellis.jvector.graph.ImmutableGraphIndex;
+import io.github.jbellis.jvector.graph.RandomAccessByteVectorValues;
 import io.github.jbellis.jvector.graph.RandomAccessVectorValues;
 import io.github.jbellis.jvector.graph.disk.feature.FeatureId;
 import io.github.jbellis.jvector.quantization.PQVectors;
@@ -36,6 +37,7 @@ final class FeatureProviders {
 
     static {
         register(new InlineVectorsProvider());
+        register(new InlineByteVectorsProvider());
         register(new NVQProvider());
         register(new FusedPQProvider());
         register(new FusedASHProvider());
@@ -130,6 +132,20 @@ final class FeatureProviders {
         var writer = GraphBuilderFactory.writerBuilder(graph, outPath, vectors.size(), writerMode, writerThreads);
         if (pageAlignment != null) writer.withPageAlignment(pageAlignment);
         var ctx = new FeatureWriteContext(writer, graph, vectors, buildPQ, buildASH, inputMean, metrics);
+        ctx.reportRecordLayout = pageAlignment != null;
+        for (var id : features) {
+            require(id).configure(ctx);
+        }
+        return ctx;
+    }
+
+    /** As {@link #configureWriter}, for an int8 dataset. */
+    static FeatureWriteContext configureWriter(Set<FeatureId> features, ImmutableGraphIndex graph, Path outPath,
+                                               RandomAccessByteVectorValues byteVectors, String writerMode,
+                                               int writerThreads, Integer pageAlignment) throws FileNotFoundException {
+        var writer = GraphBuilderFactory.writerBuilder(graph, outPath, byteVectors.size(), writerMode, writerThreads);
+        if (pageAlignment != null) writer.withPageAlignment(pageAlignment);
+        var ctx = new FeatureWriteContext(writer, graph, byteVectors);
         ctx.reportRecordLayout = pageAlignment != null;
         for (var id : features) {
             require(id).configure(ctx);

@@ -435,6 +435,36 @@ public class TestProductQuantization extends RandomizedTest {
     }
 
     @Test
+    public void testDiversityMatchesDecodedVectorsForSmallSubspaces() {
+        // Uneven and tiny shapes, then 1-, 2-, 4- and 8-float subspaces wide enough to fill SIMD registers.
+        int[][] shapes = {{7, 4}, {7, 7}, {32, 32}, {64, 32}, {128, 64}, {64, 16}, {128, 16}};
+        for (int[] shape : shapes) {
+            int dim = shape[0], m = shape[1];
+            var vectors = createRandomVectors(2000, dim);
+            var ravv = new ListRandomAccessVectorValues(vectors, dim);
+            var pq = ProductQuantization.compute(ravv, m, 256, false);
+            var mutable = new MutablePQVectors(pq);
+            for (int i = 0; i < vectors.size(); i++) mutable.encodeAndSet(i, vectors.get(i));
+            var immutable = ImmutablePQVectors.encodeAndBuild(pq, vectors.size(), ravv, ForkJoinPool.commonPool());
+            var a = vectorTypeSupport.createFloatVector(dim);
+            var b = vectorTypeSupport.createFloatVector(dim);
+            pq.decode(mutable.get(10), a);
+            for (VectorSimilarityFunction vsf : VectorSimilarityFunction.values()) {
+                var fromMutable = mutable.diversityFunctionFor(10, vsf);
+                var fromImmutable = immutable.diversityFunctionFor(10, vsf);
+                for (int i = 0; i < 200; i++) {
+                    pq.decode(mutable.get(i), b);
+                    float expected = vsf.compare(a, b);
+                    String where = vsf + " dim=" + dim + " m=" + m + " node=" + i;
+                    double tolerance = 1e-5 * Math.max(1, Math.abs(expected));
+                    assertEquals(where, expected, fromMutable.similarityTo(i), tolerance);
+                    assertEquals(where, expected, fromImmutable.similarityTo(i), tolerance);
+                }
+            }
+        }
+    }
+
+    @Test
     public void testErrorOnInsufficientVectors() {
         int dim = 384;
         var pqM = 48;

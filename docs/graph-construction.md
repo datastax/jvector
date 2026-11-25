@@ -32,6 +32,7 @@ speed and memory.
 | Scoring | Provider | Memory | Notes |
 | --- | --- | --- | --- |
 | Full vectors | `BuildScoreProvider.randomAccessScoreProvider` (or `builder(vectors, similarity, M)`) | The vectors, unless read from a file-backed source | Exact scores; simplest |
+| Int8 vectors | `BuildScoreProvider.byteVectorScoreProvider` (or `builder(byteVectors, ByteVectorSimilarityFunction, M)`) | The signed int8 vectors, one byte per dimension | Exact scores; no compression. Write the index with the `InlineByteVectors` feature (format version 7) |
 | PQ codes | `BuildScoreProvider.pqBuildScoreProvider` | PQ codes | Builds under a memory limit; see [Tutorial 3](tutorials/3-larger-than-memory-tutorial.md) |
 | BQ codes | `BuildScoreProvider.bqBuildScoreProvider` | BQ codes | Cheapest scoring, coarsest graph |
 | ASH codes, symmetric | `BuildScoreProvider.ashBuildScoreProvider`, inserting with `provider.searchProviderFor(node)` | ASH codes | Compares stored codes with each other; needs neither the source vectors nor query projection during insertion. The fastest ASH option |

@@ -18,10 +18,6 @@ package io.github.jbellis.jvector.example.benchmarks;
 
 import io.github.jbellis.jvector.example.Grid.ConfiguredSystem;
 import io.github.jbellis.jvector.graph.SearchResult;
-import io.github.jbellis.jvector.vector.types.VectorFloat;
-import io.github.jbellis.jvector.vector.types.VectorTypeSupport;
-import io.github.jbellis.jvector.vector.VectorUtil;
-import io.github.jbellis.jvector.vector.VectorizationProvider;
 import io.github.jbellis.jvector.example.benchmarks.diagnostics.BenchmarkDiagnostics;
 import io.github.jbellis.jvector.example.benchmarks.diagnostics.DiagnosticLevel;
 
@@ -38,7 +34,6 @@ import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.function.IntFunction;
 import java.util.function.Consumer;
 import java.util.function.Supplier;
-import java.util.concurrent.ThreadLocalRandom;
 import java.util.concurrent.atomic.LongAdder;
 import java.util.stream.IntStream;
 import org.apache.commons.math3.stat.StatUtils;
@@ -69,8 +64,6 @@ public class ThroughputBenchmark extends AbstractQueryBenchmark {
     private static final long COMPILED_JIT_MS = 50;
     /** Warmup passes run at most this many times while waiting for compilation to settle. */
     private static final int MAX_WARMUP_PASSES = 10;
-
-    VectorTypeSupport vts = VectorizationProvider.getInstance().getVectorTypeSupport();
 
     public static ThroughputBenchmark createDefault() {
         return new ThroughputBenchmark(3, 3,
@@ -186,28 +179,27 @@ public class ThroughputBenchmark extends AbstractQueryBenchmark {
     private List<Metric> runWithReporting(
             ConfiguredSystem cs, int topK, int rerankK, boolean usePruning,
             int queryRuns, Consumer<Supplier<List<Metric>>> deferredReports) {
-        if (cs.usesQueuedExecution()) return runConfiguredBenchmark(cs, topK, rerankK, usePruning, queryRuns, deferredReports);
+        if (cs.usesQueuedExecution()) return runConfiguredBenchmark(cs, cs.queries(), topK, rerankK, usePruning, queryRuns, deferredReports);
         int threads = cs.directCallerThreads();
         if (threads > 1) {
             var pool = new java.util.concurrent.ForkJoinPool(threads);
             try {
-                return pool.submit(() -> runConfiguredBenchmark(cs, topK, rerankK, usePruning, queryRuns, deferredReports)).join();
+                return pool.submit(() -> runConfiguredBenchmark(cs, cs.queries(), topK, rerankK, usePruning, queryRuns, deferredReports)).join();
             } finally {
                 pool.shutdown();
             }
         }
-        return runConfiguredBenchmark(cs, topK, rerankK, usePruning, queryRuns, deferredReports);
+        return runConfiguredBenchmark(cs, cs.queries(), topK, rerankK, usePruning, queryRuns, deferredReports);
     }
 
     /**
      * {@code count} base vectors drawn uniformly from the whole dataset, with a fixed seed for each warmup pass, so
      * every configuration warms the same index pages.
      */
-    private static VectorFloat<?>[] baseSample(ConfiguredSystem cs, int count, int pass) {
-        var base = cs.getDataSet().getBaseVectors();
+    private static <Q> Q[] baseSample(QuerySet<Q> queries, int count, int pass) {
         var random = new SplittableRandom(0x5EED_0000L + pass);
-        var sample = new VectorFloat<?>[count];
-        for (int i = 0; i < count; i++) sample[i] = base.get(random.nextInt(base.size())).copy();
+        Q[] sample = queries.newArray(count);
+        for (int i = 0; i < count; i++) sample[i] = queries.baseQuery(random.nextInt(queries.baseCount()));
         return sample;
     }
 
@@ -222,10 +214,9 @@ public class ThroughputBenchmark extends AbstractQueryBenchmark {
         }
     }
 
-    private VectorFloat<?> randomQuery(int dim) {
-        VectorFloat<?> query = vts.createFloatVector(dim);
-        for (int j = 0; j < dim; j++) query.set(j, ThreadLocalRandom.current().nextFloat());
-        VectorUtil.l2normalize(query);
+    private static <Q> Q randomQuery(QuerySet<Q> queries) {
+        Q query = queries.newQuery();
+        queries.randomize(query);
         return query;
     }
 
@@ -234,7 +225,7 @@ public class ThroughputBenchmark extends AbstractQueryBenchmark {
         return cs.directCallerThreads() == 1 ? stream : stream.parallel();
     }
 
-    private List<Metric> runConfiguredBenchmark(ConfiguredSystem cs, int topK, int rerankK,
+    private <Q> List<Metric> runConfiguredBenchmark(ConfiguredSystem cs, QuerySet<Q> queries, int topK, int rerankK,
                                                 boolean usePruning, int queryRuns,
                                                 Consumer<Supplier<List<Metric>>> deferredReports) {
 
@@ -242,12 +233,12 @@ public class ThroughputBenchmark extends AbstractQueryBenchmark {
             throw new RuntimeException("At least one metric must be displayed");
         }
         try (BenchmarkDiagnostics diagnostics = new BenchmarkDiagnostics(diagnosticLevel);
-             QueuedQueryExecution queued = cs.usesQueuedExecution()
-                     ? new QueuedQueryExecution(cs, topK, rerankK, usePruning) : null) {
+             QueuedQueryExecution<Q> queued = cs.usesQueuedExecution()
+                     ? new QueuedQueryExecution<>(cs, queries, topK, rerankK, usePruning) : null) {
         if (Boolean.getBoolean("jvector.bench.verifyConcurrentResults")) {
-            int count = cs.getDataSet().getQueryVectors().size();
+            int count = queries.size();
             if (queued != null) {
-                queued.verifyConcurrentResults(count, cs.getDataSet().getQueryVectors()::get);
+                queued.verifyConcurrentResults(count, queries::get);
             } else {
                 // Direct callers may naturally combine projections too. Keep
                 // the prepared provider fixed while checking per-thread search
@@ -263,8 +254,7 @@ public class ThroughputBenchmark extends AbstractQueryBenchmark {
         }
 
 
-            int totalQueries = cs.getDataSet().getQueryVectors().size();
-            int dim = cs.getDataSet().getDimension();
+            int totalQueries = queries.size();
 
             // Warmup, optionally continuing until JIT compilation settles.
             var compiler = ManagementFactory.getCompilationMXBean();
@@ -278,9 +268,9 @@ public class ThroughputBenchmark extends AbstractQueryBenchmark {
             for (int warmupRun = 0; warmupRun < maxWarmupPasses; warmupRun++) {
                 if (warmupRun >= warmupPasses && lastPassJitMs <= COMPILED_JIT_MS) break;
                 String warmupPhase = "Warmup-" + warmupRun;
-                VectorFloat<?>[] baseQueries = warmupQueries == WarmupQueries.BASE ? baseSample(cs, totalQueries, warmupRun) : null;
-                IntFunction<VectorFloat<?>> warmupQuery =
-                        baseQueries != null ? k -> baseQueries[k] : k -> randomQuery(dim);
+                Q[] baseQueries = warmupQueries == WarmupQueries.BASE ? baseSample(queries, totalQueries, warmupRun) : null;
+                IntFunction<Q> warmupQuery =
+                        baseQueries != null ? k -> baseQueries[k] : k -> randomQuery(queries);
                 long jitBefore = jitTimed ? compiler.getTotalCompilationTime() : 0;
                 long passStart = System.nanoTime();
 
@@ -291,7 +281,7 @@ public class ThroughputBenchmark extends AbstractQueryBenchmark {
                             .forEach(k -> {
                                 long queryStart = System.nanoTime();
                                 SearchResult sr = QueryExecutor.executeQuery(
-                                        cs, topK, rerankK, usePruning, warmupQuery.apply(k));
+                                        cs, queries, topK, rerankK, usePruning, warmupQuery.apply(k));
                                 SINK += sr.getVisitedCount();
 
                                 long queryEnd = System.nanoTime();
@@ -359,7 +349,7 @@ public class ThroughputBenchmark extends AbstractQueryBenchmark {
                     do {
                         if (queued != null) {
                             visitedAdder.add(queued.runPass(totalQueries,
-                                    cs.getDataSet().getQueryVectors()::get, recorder, false).visited());
+                                    queries::get, recorder, false).visited());
                         } else queryStream(cs, totalQueries)
                                 .forEach(i -> {
                                     long queryStart = System.nanoTime();

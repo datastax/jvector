@@ -206,6 +206,38 @@ public class MultiConfig {
         return withCompaction != null && withCompaction.contains(Boolean.TRUE);
     }
 
+    /**
+     * Int8 datasets are stored and scored natively as bytes; reranking and compression are not supported.
+     * Fails with an explicit error unless reranking is None, every compression type is "None" and fusedGraph is No.
+     */
+    public void validateForInt8Dataset() {
+        String name = dataset;
+        if (construction != null) {
+            if (!"None".equals(construction.rerankingType())) {
+                throw new IllegalArgumentException("Int8 dataset '" + name + "' does not support construction.reranking "
+                        + construction.rerankingType() + "; use reranking.type None.");
+            }
+            if (construction.fusedGraph != null && construction.fusedGraph.contains(true)) {
+                throw new IllegalArgumentException("Int8 dataset '" + name + "' does not support construction.fusedGraph: "
+                        + "fused graphs require compression; use [No] or remove 'fusedGraph' from the YAML config.");
+            }
+            requireNoCompression(name, "construction", construction.compression);
+        }
+        if (search != null) {
+            requireNoCompression(name, "search", search.compression);
+        }
+    }
+
+    private static void requireNoCompression(String dataset, String section, List<Compression> compression) {
+        if (compression == null) return;
+        for (var c : compression) {
+            if (!"None".equals(c.type)) {
+                throw new IllegalArgumentException("Int8 dataset '" + dataset + "' does not support " + section
+                        + ".compression type '" + c.type + "'; only 'None' is allowed.");
+            }
+        }
+    }
+
     public int getYamlSchemaVersion() {
         return yamlSchemaVersion;
     }

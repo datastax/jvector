@@ -71,12 +71,18 @@ public class TestASHSymmetricScorer {
                     assertEquals("symmetric SIMD bits=" + bits + " d=" + d, actual,
                             backend.ashSymmetricDot(a.binaryVector, a.extraBits, b.binaryVector, b.extraBits, d, bits), 0f);
                 }
+                if (bits != 1 && backend.supportsAshSymmetricDotAt()) {
+                    // Codes inside larger arrays, as on a code page; the second ends exactly where its array does.
+                    int bytes = (d * bits + 7) / 8, offset = random.nextInt(40);
+                    byte[] aPage = new byte[offset + bytes + random.nextInt(40)], bPage = new byte[offset + 3 + bytes];
+                    random.nextBytes(aPage);
+                    random.nextBytes(bPage);
+                    System.arraycopy(a.extraBits, 0, aPage, offset, bytes);
+                    System.arraycopy(b.extraBits, 0, bPage, offset + 3, bytes);
+                    assertEquals("symmetric SIMD at offsets bits=" + bits + " d=" + d, actual,
+                            backend.ashSymmetricDotAt(aPage, offset, bPage, offset + 3, d, bits), 0f);
+                }
                 if (bits == 2 && backend.supportsNativeAshCanonicalLutScoring()) {
-                    // Native b=2 deliberately requires prepared state; keep its raw-entry guard.
-                    if ("native".equalsIgnoreCase(System.getProperty("jvector.vectorization_provider", "").trim())) {
-                        assertThrows(IllegalStateException.class,
-                                () -> backend.ashProjectionDot(unpacked, b.extraBits, unpacked.length, 2));
-                    }
                     int groups = FusedASHLayout.codeGroups(d, bits);
                     float[] lut = new float[groups * 16];
                     FusedASHLayout.buildQueryLut(unpacked, d, bits, lut);
@@ -288,7 +294,7 @@ public class TestASHSymmetricScorer {
                         AsymmetricHashing.HEADER_BITS + 31*bits, centers, bits);
                 var encoded = ash.encodeAll(values, java.util.concurrent.ForkJoinPool.commonPool());
                 var scalar = new ASHSymmetricScorer(encoded, ASHSymmetricScorer.Kernel.SCALAR);
-                boolean useSimd = (bits == 1 || bits == 2 || bits == 4) && backend.supportsAshSymmetricScoring();
+                boolean useSimd = backend.supportsAshSymmetricScoring() && (bits == 1 || backend.supportsAshSymmetricDotAt());
                 var vector = useSimd
                         ? new ASHSymmetricScorer(encoded, ASHSymmetricScorer.Kernel.SIMD) : scalar;
                 for (int i = 0; i < input.length; i++) {

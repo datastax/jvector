@@ -68,4 +68,6 @@ Rerank more candidates to raise recall; see [Tuning](tuning.md).
 
 JVector supports `DOT_PRODUCT`, `COSINE` and `EUCLIDEAN`. An ASH model is trained for one
 similarity and saved with it; ASH does not require normalized vectors. See
-[ASH similarity](ash-configuration.md#similarity).
+[ASH similarity](ash-configuration.md#similarity). Int8 indexes use `ByteVectorSimilarityFunction`,
+with the same three functions. Under `COSINE`, ASH and int8 indexes both reject a zero vector with
+`IllegalArgumentException` when it is added or used as a query.

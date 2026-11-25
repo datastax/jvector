@@ -28,6 +28,7 @@ import io.github.jbellis.jvector.graph.disk.feature.FeatureSource;
 import io.github.jbellis.jvector.graph.disk.feature.FusedASH;
 import io.github.jbellis.jvector.graph.disk.feature.FusedPQ;
 import io.github.jbellis.jvector.graph.disk.feature.FusedFeature;
+import io.github.jbellis.jvector.graph.disk.feature.InlineByteVectors;
 import io.github.jbellis.jvector.graph.disk.feature.InlineVectors;
 import io.github.jbellis.jvector.graph.disk.feature.NVQ;
 import io.github.jbellis.jvector.graph.disk.feature.PageAlignment;
@@ -38,8 +39,10 @@ import org.agrona.collections.Int2ObjectHashMap;
 import java.util.ArrayList;
 import io.github.jbellis.jvector.util.Bits;
 import io.github.jbellis.jvector.util.RamUsageEstimator;
+import io.github.jbellis.jvector.vector.ByteVectorSimilarityFunction;
 import io.github.jbellis.jvector.vector.VectorSimilarityFunction;
 import io.github.jbellis.jvector.vector.VectorizationProvider;
+import io.github.jbellis.jvector.vector.types.ByteSequence;
 import io.github.jbellis.jvector.vector.types.VectorFloat;
 import io.github.jbellis.jvector.vector.types.VectorTypeSupport;
 
@@ -585,6 +588,8 @@ public class OnDiskGraphIndex implements ImmutableGraphIndex, AutoCloseable, Acc
         protected final RandomAccessReader reader;
         private final int[] neighbors;
         private int nodeDegree;
+        // The node whose layer-0 neighbors are in neighbors[0, nodeDegree), or -1
+        private int neighborsNode = -1;
         private EnumMap<FeatureId, Object> featureScratch;
         // the unvisited neighbors of a node and their scores, for score functions that score a batch at once
         private int[] batchNodes = new int[64];
@@ -695,6 +700,66 @@ public class OnDiskGraphIndex implements ImmutableGraphIndex, AutoCloseable, Acc
             }
         }
 
+        /**
+         * Returns the signed int8 vector stored for {@code node} via the
+         * {@link FeatureId#INLINE_BYTE_VECTORS} feature.
+         *
+         * @throws UnsupportedOperationException if the graph was not written with
+         *         {@link InlineByteVectors}
+         */
+        public ByteSequence<?> getByteVector(int node) {
+            ByteSequence<?> vec = vectorTypeSupport.createByteSequence(dimension);
+            getByteVectorInto(node, vec);
+            return vec;
+        }
+
+        /**
+         * Reads the signed int8 vector stored for {@code node} into {@code destination}, which must have
+         * exactly {@link #dimension()} elements. Use this instead of {@link #getByteVector(int)} on hot paths
+         * to avoid allocating a new vector per read.
+         *
+         * @throws UnsupportedOperationException if the graph was not written with
+         *         {@link InlineByteVectors}
+         */
+        public void getByteVectorInto(int node, ByteSequence<?> destination) {
+            if (!features.containsKey(FeatureId.INLINE_BYTE_VECTORS)) {
+                throw new UnsupportedOperationException("No inline byte vectors in this graph");
+            }
+            try {
+                long diskOffset = offsetFor(node, FeatureId.INLINE_BYTE_VECTORS);
+                reader.seek(diskOffset);
+                vectorTypeSupport.readByteSequence(reader, destination);
+            } catch (IOException e) {
+                throw new UncheckedIOException(e);
+            }
+        }
+
+        /**
+         * Returns a {@link ScoreFunction.ExactScoreFunction} that scores candidates by reading
+         * their int8 vectors from disk and comparing them byte×byte against {@code queryBytes}.
+         * The resulting function reuses a single scratch vector and is NOT thread-safe.
+         *
+         * @throws UnsupportedOperationException if the graph was not written with
+         *         {@link InlineByteVectors}
+         * @throws IllegalArgumentException for a query {@code bvsf} can't score, such as a zero vector under COSINE
+         */
+        public ScoreFunction.ExactScoreFunction byteVectorRerankerFor(ByteSequence<?> queryBytes,
+                                                                       ByteVectorSimilarityFunction bvsf) {
+            if (!features.containsKey(FeatureId.INLINE_BYTE_VECTORS)) {
+                throw new UnsupportedOperationException("No inline byte vectors in this graph");
+            }
+            var query = bvsf.similarityInput(queryBytes);
+            return new ScoreFunction.ExactScoreFunction() {
+                private final ByteSequence<?> scratch = vectorTypeSupport.createByteSequence(dimension);
+
+                @Override
+                public float similarityTo(int node) {
+                    getByteVectorInto(node, scratch);
+                    return bvsf.compare(query, scratch);
+                }
+            };
+        }
+
         public NodesIterator getNeighborsIterator(int level, int node) {
             try {
                 int[] stored;
@@ -706,12 +771,14 @@ public class OnDiskGraphIndex implements ImmutableGraphIndex, AutoCloseable, Acc
                     assert nodeDegree <= neighbors.length
                             : String.format("Node %d neighborCount %d > M %d", node, nodeDegree, neighbors.length);
                     reader.read(neighbors, 0, nodeDegree);
+                    neighborsNode = node;
                     stored = neighbors;
                 } else {
                     // For levels > 0, read from memory
                     var imn = inMemoryNeighbors;
                     stored = imn.get(level).get(node);
                     nodeDegree = stored.length;
+                    neighborsNode = -1;
                     assert stored != null : String.format("No neighbors found for node %d at level %d", node, level);
 
                 }
@@ -739,7 +806,7 @@ public class OnDiskGraphIndex implements ImmutableGraphIndex, AutoCloseable, Acc
             assert nodeDegree <= neighbors.length
                     : String.format("Node %d neighborCount %d > M %d", node, nodeDegree, neighbors.length);
             reader.read(neighbors, 0, nodeDegree);
-
+            neighborsNode = node;
         }
 
         /**
@@ -755,6 +822,8 @@ public class OnDiskGraphIndex implements ImmutableGraphIndex, AutoCloseable, Acc
             var useEdgeLoading = scoreFunction.supportsSimilarityToNeighbors();
             if (useEdgeLoading && level == 0) {
                 scoreFunction.enableSimilarityToNeighbors(node);
+                // A score function bound to another view loads the neighbors there, not here
+                if (neighborsNode != node) getNeighborsIterator(0, node);
 
                 for (int i = 0; i < nodeDegree; i++) {
                     var friendOrd = neighbors[i];

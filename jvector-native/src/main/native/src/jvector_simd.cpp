@@ -109,7 +109,7 @@ static const KernelVTable AVX3_vtable = {
 };
 #undef KERNEL_ENTRY
 
-// AVX3_DL inherits AVX3 and uses native popcount/byte-dot for ASH pairs.
+// AVX3_DL inherits AVX3 and uses native popcount/byte-dot for ASH pairs and VNNI for int8 similarity.
 // To override a slot: t.kernel_name = AVX3_DL::kernel_name;
 // The implementation must exist in jvector_avx3_dl_kernels.cpp.
 static const KernelVTable AVX3_DL_vtable = []() {
@@ -120,6 +120,9 @@ static const KernelVTable AVX3_DL_vtable = []() {
     t.ash_score_neighborhood_i8_c1_euclidean = AVX3_DL::ash_score_neighborhood_i8_c1_euclidean;
     t.ash_project_i8_available = AVX3_DL::ash_project_i8_available;
     t.ash_project_batch_i8 = AVX3_DL::ash_project_batch_i8;
+    t.dot_product_i8 = AVX3_DL::dot_product_i8;
+    t.euclidean_i8   = AVX3_DL::euclidean_i8;
+    t.cosine_i8      = AVX3_DL::cosine_i8;
     return t;
 }();
 

@@ -91,11 +91,11 @@ public final class ASHSymmetricScorer {
     long ramBytesUsed() { return retainedBytes; }
 
     private boolean selectSimd(Kernel kernel) {
-        boolean supported = (bits == 1 || bits == 2 || bits == 4) && backend.supportsAshSymmetricScoring();
+        boolean supported = backend.supportsAshSymmetricScoring();
         // Pair kernels read stored codes at page offsets.
-        if (bits == 2 || bits == 4) supported &= backend.supportsAshSymmetricDotAt();
+        if (bits != 1) supported &= backend.supportsAshSymmetricDotAt();
         if (landmarks != 1) supported &= bits == 1 ? backend.supportsAshMaskedLoad() : backend.supportsAshProjectionScoring();
-        if (kernel == Kernel.SIMD && !supported) throw new UnsupportedOperationException("Symmetric SIMD requires a vector backend and bits 1, 2, or 4");
+        if (kernel == Kernel.SIMD && !supported) throw new UnsupportedOperationException("Symmetric SIMD requires a vector backend");
         return kernel != Kernel.SCALAR && supported;
     }
 
@@ -172,7 +172,7 @@ public final class ASHSymmetricScorer {
         final ASHCodes c = codes;
         final float[] scales = c.scales;
         final float landmarkDot = landmarkDots[0][0];
-        if (simd && (bits == 2 || bits == 4)) {
+        if (simd && bits != 1) {
             // The graph-construction hot path: one offset kernel call per target, no object loads.
             final byte[][] pages = c.bodyPages;
             final int shift = c.pageShift, mask = c.pageMask, stride = c.bodyBytes;

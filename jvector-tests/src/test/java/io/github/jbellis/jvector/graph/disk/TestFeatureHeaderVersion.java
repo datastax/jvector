@@ -28,6 +28,7 @@ import io.github.jbellis.jvector.graph.disk.feature.FeatureId;
 import io.github.jbellis.jvector.graph.disk.feature.FusedASH;
 import io.github.jbellis.jvector.graph.disk.feature.FusedPQ;
 import io.github.jbellis.jvector.graph.disk.feature.SeparatedVectors;
+import io.github.jbellis.jvector.graph.disk.feature.InlineByteVectors;
 import io.github.jbellis.jvector.graph.disk.feature.InlineVectors;
 import io.github.jbellis.jvector.graph.disk.feature.NVQ;
 import io.github.jbellis.jvector.graph.disk.feature.SeparatedNVQ;
@@ -86,6 +87,10 @@ public class TestFeatureHeaderVersion extends RandomizedTest {
                 }),
                 new Case(FeatureId.SEPARATED_VECTORS, new SeparatedVectors(DIMENSION, 4321L), (out, v) -> {
                     out.writeLong(4321L);
+                    if (v >= 7) out.writeFloat(Float.NaN);
+                }),
+                // Int8 vectors arrive at version 7 and store their largest length like full-precision vectors.
+                new Case(FeatureId.INLINE_BYTE_VECTORS, new InlineByteVectors(DIMENSION), (out, v) -> {
                     if (v >= 7) out.writeFloat(Float.NaN);
                 }));
 

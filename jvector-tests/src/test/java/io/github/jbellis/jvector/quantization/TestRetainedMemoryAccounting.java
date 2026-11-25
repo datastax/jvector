@@ -363,6 +363,7 @@ public class TestRetainedMemoryAccounting {
             for (var vsf : io.github.jbellis.jvector.vector.VectorSimilarityFunction.values()) {
                 scored.diversityFunctionFor(0, vsf);
                 scored.scoreFunctionFor(query, vsf);
+                mutable.diversityFunctionFor(0, vsf);
                 assertPQStorage(scored, pq);
                 assertPQStorage(mutable, pq);
             }

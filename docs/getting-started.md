@@ -8,12 +8,12 @@ JVector is published to Maven Central as `io.github.jbellis:jvector`:
 <dependency>
   <groupId>io.github.jbellis</groupId>
   <artifactId>jvector</artifactId>
-  <version>4.1.0</version>
+  <version>4.1.0-rc.1</version>
 </dependency>
 ```
 
-With Gradle: `implementation("io.github.jbellis:jvector:4.1.0")`. The library runs on Java 11 and
-newer; ASH requires 4.1.0 or later.
+With Gradle: `implementation("io.github.jbellis:jvector:4.1.0-rc.1")`. The library runs on Java 11 and
+newer; ASH requires 4.1.0-rc.1 or later.
 
 ## Enable SIMD
 
@@ -66,4 +66,7 @@ searches it.
 2. [Tutorial 2](tutorials/2-disk-tutorial.md): writing an index to disk and searching it.
 3. [Tutorial 3](tutorials/3-larger-than-memory-tutorial.md): compressed vectors and reranking for
    indexes larger than memory.
-4. [Choosing an index](choosing-an-index.md) and [Tuning](tuning.md) for production settings.
+4. [Int8Example](../jvector-examples/src/main/java/io/github/jbellis/jvector/example/tutorial/Int8Example.java):
+   building, writing and searching an index of signed int8 vectors
+   (`mvn compile exec:exec@tutorial -Dtutorial=int8 -pl jvector-examples -am`).
+5. [Choosing an index](choosing-an-index.md) and [Tuning](tuning.md) for production settings.

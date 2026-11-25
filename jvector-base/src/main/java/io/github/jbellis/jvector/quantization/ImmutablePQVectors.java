@@ -16,21 +16,11 @@
 
 package io.github.jbellis.jvector.quantization;
 
-import io.github.jbellis.jvector.graph.similarity.ScoreFunction;
-import io.github.jbellis.jvector.vector.VectorSimilarityFunction;
-import io.github.jbellis.jvector.vector.VectorUtil;
 import io.github.jbellis.jvector.vector.types.ByteSequence;
-import io.github.jbellis.jvector.vector.types.VectorFloat;
-
-import io.github.jbellis.jvector.util.RamUsageEstimator;
-
-import java.util.concurrent.atomic.AtomicReferenceArray;
 
 public class ImmutablePQVectors extends PQVectors {
     private final int vectorCount;
     private final long retainedBytes;
-    // One lazily created scoring table per similarity function, by ordinal.
-    private final AtomicReferenceArray<VectorFloat<?>> codebookPartialSums;
 
     /**
      * Construct an immutable PQVectors instance with the given ProductQuantization and compressed data chunks.
@@ -55,23 +45,16 @@ public class ImmutablePQVectors extends PQVectors {
         this.compressedDataChunks = compressedDataChunks.clone();
         this.vectorCount = vectorCount;
         this.vectorsPerChunk = vectorsPerChunk;
-        this.codebookPartialSums = new AtomicReferenceArray<>(VectorSimilarityFunction.values().length);
         if (recordCodes) {
             for (int i = 0; i < vectorCount; i++) pq.recordCode(getChunk(i), getOffsetInChunk(i));
         }
-        retainedBytes = storageBytes() + RamUsageEstimator.shallowSizeOf(codebookPartialSums)
-                + RamUsageEstimator.sizeOfArray(VectorSimilarityFunction.values().length, RamUsageEstimator.NUM_BYTES_OBJECT_REF);
+        retainedBytes = storageBytes();
     }
 
     /** Cached vector storage, plus the model and the scoring tables created so far. Allocates nothing. */
     @Override
     public long ramBytesUsed() {
-        long bytes = retainedBytes + pq.ramBytesUsed();
-        for (int i = 0; i < codebookPartialSums.length(); i++) {
-            VectorFloat<?> table = codebookPartialSums.get(i);
-            if (table != null) bytes += table.ramBytesUsed();
-        }
-        return bytes;
+        return retainedBytes + pq.ramBytesUsed();
     }
 
     @Override
@@ -84,57 +67,4 @@ public class ImmutablePQVectors extends PQVectors {
         return vectorCount;
     }
 
-    private VectorFloat<?> getOrCreateCodebookPartialSums(VectorSimilarityFunction vsf) {
-        VectorFloat<?> table = codebookPartialSums.get(vsf.ordinal());
-        if (table != null) return table;
-        // Concurrent first callers may each build a table; only the first is kept.
-        codebookPartialSums.compareAndSet(vsf.ordinal(), null, pq.createCodebookPartialSums(vsf));
-        return codebookPartialSums.get(vsf.ordinal());
-    }
-
-    @Override
-    public ScoreFunction.ApproximateScoreFunction diversityFunctionFor(int node1, VectorSimilarityFunction similarityFunction) {
-        final int subspaceCount = pq.getSubspaceCount();
-        var node1Chunk = getChunk(node1);
-        var node1Offset = getOffsetInChunk(node1);
-        int clusterCount = pq.getClusterCount();
-
-        VectorFloat<?> codebookPartialSums = getOrCreateCodebookPartialSums(similarityFunction);
-
-        switch (similarityFunction) {
-            case DOT_PRODUCT:
-                return (node2) -> {
-                    var node2Chunk = getChunk(node2);
-                    var node2Offset = getOffsetInChunk(node2);
-                    // compute the euclidean distance between the query and the codebook centroids corresponding to the encoded points
-                    float sum = VectorUtil.assembleAndSumPQ(codebookPartialSums, subspaceCount, node1Chunk, node1Offset, node2Chunk, node2Offset, clusterCount);
-                    // scale to [0, 1]
-                    return (1 + sum) / 2;
-                };
-            case COSINE:
-                float norm1 = VectorUtil.assembleAndSumPQ(codebookPartialSums, subspaceCount, node1Chunk, node1Offset, node1Chunk, node1Offset, clusterCount);
-                return (node2) -> {
-                    var node2Chunk = getChunk(node2);
-                    var node2Offset = getOffsetInChunk(node2);
-                    // compute the dot product of the query and the codebook centroids corresponding to the encoded points
-                    float sum = VectorUtil.assembleAndSumPQ(codebookPartialSums, subspaceCount, node1Chunk, node1Offset, node2Chunk, node2Offset, clusterCount);
-                    float norm2 = VectorUtil.assembleAndSumPQ(codebookPartialSums, subspaceCount, node2Chunk, node2Offset, node2Chunk, node2Offset, clusterCount);
-                    float cosine = sum / (float) Math.sqrt(norm1 * norm2);
-                    // scale to [0, 1]
-                    return (1 + cosine) / 2;
-                };
-            case EUCLIDEAN:
-                return (node2) -> {
-                    var node2Chunk = getChunk(node2);
-                    var node2Offset = getOffsetInChunk(node2);
-                    // compute the euclidean distance between the query and the codebook centroids corresponding to the encoded points
-                    float sum = VectorUtil.assembleAndSumPQ(codebookPartialSums, subspaceCount, node1Chunk, node1Offset, node2Chunk, node2Offset, clusterCount);
-
-                    // scale to [0, 1]
-                    return 1 / (1 + sum);
-                };
-            default:
-                throw new IllegalArgumentException("Unsupported similarity function " + similarityFunction);
-        }
-    }
 }

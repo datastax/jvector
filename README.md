@@ -8,6 +8,8 @@ experimental [Asymmetric Scalar Hashing (ASH)](https://dl.acm.org/doi/10.1145/37
 builds indexes faster. JVector targets newer JVMs, using native SIMD kernels on Java 22 and later,
 and also supports Java 11.
 
+Full documentation is at [datastax.github.io/jvector](https://datastax.github.io/jvector/).
+
 - [Why graph indexes](#why-graph-indexes)
 - [How JVector searches](#how-jvector-searches)
 - [Getting started](#getting-started)
@@ -85,11 +87,11 @@ JVector is published to Maven Central as `io.github.jbellis:jvector`:
 <dependency>
   <groupId>io.github.jbellis</groupId>
   <artifactId>jvector</artifactId>
-  <version>4.1.0</version>
+  <version>4.1.0-rc.1</version>
 </dependency>
 ```
 
-or with Gradle, `implementation("io.github.jbellis:jvector:4.1.0")`. ASH requires 4.1.0 or later.
+or with Gradle, `implementation("io.github.jbellis:jvector:4.1.0-rc.1")`. ASH requires 4.1.0-rc.1 or later.
 [Building and installing JVector](./docs/building-and-installing.md) explains what the jar contains,
 the JVM options for each Java version, and how to build JVector from source for each platform.
 
