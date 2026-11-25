@@ -581,4 +581,22 @@ public class TestStreamingASHIndex extends RandomizedTest {
             TestUtil.deleteQuietly(directory);
         }
     }
+
+    @Test
+    public void theIndexsSearcherSearchesByItsSimilarityAsTheIndexDoes() throws IOException {
+        var data = vectors(3000, 29);
+        var queries = vectors(20, 30);
+        var index = indexWithModel(data);
+        try (var searcher = index.searcher()) {
+            for (var q : queries) {
+                var expected = index.search(q, 10, 40, Bits.ALL).getNodes();
+                var found = searcher.search(q, 10, 40, Bits.ALL).getNodes();
+                assertEquals(expected.length, found.length);
+                for (int i = 0; i < found.length; i++) {
+                    assertEquals(expected[i].node, found[i].node);
+                    assertEquals(expected[i].score, found[i].score, 0f);
+                }
+            }
+        }
+    }
 }

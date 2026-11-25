@@ -46,6 +46,8 @@ import java.io.IOException;
  * search algorithm, see {@link GraphIndex}.
  */
 public class GraphSearcher implements IndexSearcher {
+    /** The graph this searcher was created for, whose recorded similarity function it searches by; null when created from a view. */
+    private final GraphIndex graph;
     private GraphIndex.View view;
 
     // Scratch data structures that are used in each {@link #searchInternal} call. These can be expensive
@@ -88,13 +90,18 @@ public class GraphSearcher implements IndexSearcher {
      * Creates a new graph searcher from the given GraphIndex
      */
     public GraphSearcher(GraphIndex graph) {
-        this(graph.getView());
+        this(graph, graph.getView());
     }
 
     /**
      * Creates a new graph searcher from the given GraphIndex.View
      */
     protected GraphSearcher(GraphIndex.View view) {
+        this(null, view);
+    }
+
+    private GraphSearcher(GraphIndex graph, GraphIndex.View view) {
+        this.graph = graph;
         this.view = view;
         this.candidates = new NodeQueue(new GrowableLongHeap(100), NodeQueue.Order.MAX_HEAP);
         this.evictedResults = new NodesUnsorted(100);
@@ -209,6 +216,45 @@ public class GraphSearcher implements IndexSearcher {
                                int rerankK,
                                VectorSimilarityFunction similarityFunction,
                                Bits acceptOrds) {
+        return searchStoredVectors(queryVector, topK, rerankK, similarityFunction, 0.0f, acceptOrds);
+    }
+
+    /**
+     * Searches for the {@code topK} nodes nearest {@code queryVector} by the similarity function the graph records,
+     * scoring with the vectors and codes the graph itself stores, as
+     * {@link #search(VectorFloat, int, int, VectorSimilarityFunction, Bits)} does with a function the caller passes.
+     * No function is passed, so a search can't use one the graph wasn't built for.
+     * <p>
+     * No score threshold applies: every candidate is kept whatever its score, as unclamped scores (such as a
+     * streaming ASH index's dot products) can be below zero. The explicit-function search keeps its zero threshold.
+     * <p>
+     * The function is read from the graph this searcher was created for; a searcher created from a view, or pointed
+     * by {@link #setView} at another graph's view, searches by that first graph's function.
+     *
+     * @param rerankK    how many candidates to collect before keeping the best {@code topK}; at least {@code topK}
+     * @param acceptOrds which nodes are acceptable results; {@link Bits#ALL} for all
+     * @throws IllegalStateException if this searcher was created from a view rather than a graph, if the graph
+     *         records no similarity function (an on-disk graph written before format version 8, or an in-memory graph
+     *         built with a custom score provider), or if it doesn't store its vectors; search those with
+     *         {@link #search(VectorFloat, int, int, VectorSimilarityFunction, Bits)} or a {@link SearchScoreProvider}
+     * @throws UnsupportedOperationException if the graph stores its vectors only as separated features, as for
+     *         {@link #search(VectorFloat, int, int, VectorSimilarityFunction, Bits)}
+     */
+    @Override
+    public SearchResult search(VectorFloat<?> queryVector, int topK, int rerankK, Bits acceptOrds) {
+        if (graph == null) {
+            throw new IllegalStateException("This searcher was created from a view, so it has no graph to read a "
+                    + "similarity function from; create it from the graph, or pass the function");
+        }
+        var similarityFunction = graph.similarityFunction().orElseThrow(() -> new IllegalStateException(
+                "The graph records no similarity function; search it with an explicit function or a SearchScoreProvider"));
+        return searchStoredVectors(queryVector, topK, rerankK, similarityFunction, Float.NEGATIVE_INFINITY, acceptOrds);
+    }
+
+    /** A search scored with the graph's stored vectors and codes; {@code floor} is the threshold and rerank floor. */
+    private SearchResult searchStoredVectors(VectorFloat<?> queryVector, int topK, int rerankK,
+                                             VectorSimilarityFunction similarityFunction, float floor,
+                                             Bits acceptOrds) {
         if (!(view instanceof GraphIndex.ScoringView)) {
             throw new IllegalStateException("This graph doesn't store its vectors, so it can't score a query on its own; "
                     + "search with a SearchScoreProvider, or with search(query, topK, vectors, similarityFunction, graph, acceptOrds)");
@@ -221,7 +267,7 @@ public class GraphSearcher implements IndexSearcher {
         SearchScoreProvider ssp = scoringView.hasApproximateScores()
                 ? new DefaultSearchScoreProvider(scoringView.approximateScoreFunctionFor(queryVector, similarityFunction), reranker)
                 : new DefaultSearchScoreProvider(reranker);
-        return search(ssp, topK, rerankK, 0.0f, 0.0f, acceptOrds);
+        return search(ssp, topK, rerankK, floor, floor, acceptOrds);
     }
 
     /**

@@ -19,21 +19,29 @@ package io.github.jbellis.jvector.graph.disk;
 import com.carrotsearch.randomizedtesting.RandomizedTest;
 import com.carrotsearch.randomizedtesting.annotations.ThreadLeakScope;
 import io.github.jbellis.jvector.TestUtil;
+import io.github.jbellis.jvector.api.Index;
+import io.github.jbellis.jvector.api.IndexSearcher;
 import io.github.jbellis.jvector.disk.SimpleMappedReader;
 import io.github.jbellis.jvector.graph.GraphIndex;
 import io.github.jbellis.jvector.graph.GraphIndexBuilder;
+import io.github.jbellis.jvector.graph.GraphSearcher;
 import io.github.jbellis.jvector.graph.ListRandomAccessByteVectorValues;
 import io.github.jbellis.jvector.graph.ListRandomAccessVectorValues;
 import io.github.jbellis.jvector.graph.PersistableGraphIndex;
+import io.github.jbellis.jvector.graph.SearchResult;
 import io.github.jbellis.jvector.graph.disk.feature.Feature;
 import io.github.jbellis.jvector.graph.disk.feature.FeatureId;
 import io.github.jbellis.jvector.graph.disk.feature.FusedASH;
 import io.github.jbellis.jvector.graph.disk.feature.InlineByteVectors;
 import io.github.jbellis.jvector.graph.disk.feature.InlineVectors;
 import io.github.jbellis.jvector.graph.similarity.BuildScoreProvider;
+import io.github.jbellis.jvector.graph.similarity.DefaultSearchScoreProvider;
 import io.github.jbellis.jvector.index.Indexes;
 import io.github.jbellis.jvector.quantization.ASHVectors;
 import io.github.jbellis.jvector.quantization.AsymmetricHashing;
+import io.github.jbellis.jvector.quantization.PQVectors;
+import io.github.jbellis.jvector.quantization.ProductQuantization;
+import io.github.jbellis.jvector.util.Bits;
 import io.github.jbellis.jvector.util.FixedBitSet;
 import io.github.jbellis.jvector.vector.ByteVectorSimilarityFunction;
 import io.github.jbellis.jvector.vector.VectorSimilarityFunction;
@@ -58,6 +66,7 @@ import java.util.function.IntFunction;
 
 import static io.github.jbellis.jvector.TestUtil.createRandomVectors;
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertThrows;
 
 /**
  * Tests the similarity function on-disk graphs record: in the header from format version 8, and through a
@@ -288,5 +297,85 @@ public class TestRecordedSimilarity extends RandomizedTest {
         assertEquals(v7.commonHeaderSize() + 2 * Integer.BYTES, v8.commonHeaderSize());
         assertEquals(v7.getSupportedFeatures(), v8.getSupportedFeatures());
         assertEquals(8, OnDiskGraphIndex.CURRENT_VERSION);
+    }
+
+    private static void assertSameResults(String message, SearchResult expected, SearchResult actual) {
+        assertEquals(message, expected.getNodes().length, actual.getNodes().length);
+        for (int i = 0; i < expected.getNodes().length; i++) {
+            assertEquals(message + " node " + i, expected.getNodes()[i].node, actual.getNodes()[i].node);
+            assertEquals(message + " score " + i, expected.getNodes()[i].score, actual.getNodes()[i].score, 0f);
+        }
+    }
+
+    @Test
+    public void aSearchByTheRecordedFunctionMatchesTheExplicitSearch() throws Exception {
+        var ravv = unitRavv(300);
+        var queries = createRandomVectors(5, DIMENSION);
+        for (VectorSimilarityFunction vsf : VectorSimilarityFunction.values()) {
+            var graph = build(ravv, vsf);
+            var pqv = (PQVectors) ProductQuantization.compute(ravv, 8, 256, false).encodeAll(ravv);
+            var fusedPath = directory.resolve("fused-pq-" + vsf);
+            TestUtil.writeFusedGraph(graph, ravv, pqv, FeatureId.INLINE_VECTORS, fusedPath);
+            try (var inline = writeAndLoad(graph, ravv, null, "inline-" + vsf);
+                 var fused = OnDiskGraphIndex.load(new SimpleMappedReader.Supplier(fusedPath))) {
+                for (OnDiskGraphIndex onDisk : List.of(inline, fused)) {
+                    // through the backing-agnostic API: no function is passed
+                    Index index = onDisk;
+                    try (IndexSearcher recorded = index.searcher();
+                         var explicit = new GraphSearcher(onDisk)) {
+                        for (var q : queries) {
+                            assertSameResults(vsf + " " + onDisk.getFeatures().keySet(),
+                                    explicit.search(q, 10, 20, vsf, Bits.ALL), recorded.search(q, 10, 20, Bits.ALL));
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    @Test
+    public void aSearchByTheRecordedFunctionOnFusedAshIsUnbounded() throws Exception {
+        // The search by the recorded function applies no score threshold or rerank floor.
+        var ravv = unitRavv(300);
+        var queries = createRandomVectors(5, DIMENSION);
+        var graph = build(ravv, VectorSimilarityFunction.DOT_PRODUCT);
+        try (var onDisk = writeFusedAsh(graph, ravv, VectorSimilarityFunction.DOT_PRODUCT, 8, "ash-dot");
+             var recorded = onDisk.searcher();
+             var unbounded = onDisk.searcher()) {
+            var view = (GraphIndex.ScoringView) unbounded.getView();
+            for (var q : queries) {
+                var vsf = VectorSimilarityFunction.DOT_PRODUCT;
+                var provider = new DefaultSearchScoreProvider(view.approximateScoreFunctionFor(q, vsf),
+                        view.rerankerFor(q, vsf));
+                assertSameResults("fused ASH",
+                        unbounded.search(provider, 10, 20, Float.NEGATIVE_INFINITY, Float.NEGATIVE_INFINITY, Bits.ALL),
+                        recorded.search(q, 10, 20, Bits.ALL));
+            }
+        }
+    }
+
+    @Test
+    @SuppressWarnings("deprecation")
+    public void aSearchByTheRecordedFunctionNeedsAGraphThatRecordsOneAndStoresItsVectors() throws Exception {
+        var ravv = unitRavv(100);
+        var q = createRandomVectors(1, DIMENSION).get(0);
+        var graph = build(ravv, VectorSimilarityFunction.COSINE);
+        // version 7 records no function
+        try (var v7 = writeAndLoad(graph, ravv, 7, "v7");
+             var searcher = v7.searcher()) {
+            assertThrows(IllegalStateException.class, () -> searcher.search(q, 10, 10, Bits.ALL));
+        }
+        // a searcher made from a view has no graph to read the function from
+        try (var v8 = writeAndLoad(graph, ravv, null, "v8");
+             var searcher = new GraphSearcher.Builder(v8.getView()).build()) {
+            assertThrows(IllegalStateException.class, () -> searcher.search(q, 10, 10, Bits.ALL));
+        }
+        // an in-memory graph records its function but stores no vectors
+        try (var searcher = graph.searcher()) {
+            assertThrows(IllegalStateException.class, () -> searcher.search(q, 10, 10, Bits.ALL));
+        }
+        // a searcher that doesn't search by the index's own function says so
+        IndexSearcher other = () -> { };
+        assertThrows(UnsupportedOperationException.class, () -> other.search(q, 10, 10, Bits.ALL));
     }
 }

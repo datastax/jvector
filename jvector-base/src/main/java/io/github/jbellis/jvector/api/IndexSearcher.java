@@ -16,6 +16,10 @@
 
 package io.github.jbellis.jvector.api;
 
+import io.github.jbellis.jvector.graph.SearchResult;
+import io.github.jbellis.jvector.util.Bits;
+import io.github.jbellis.jvector.vector.types.VectorFloat;
+
 import java.io.Closeable;
 
 /**
@@ -30,4 +34,21 @@ import java.io.Closeable;
  * only {@link Index} do that with try-with-resources, without knowing the backing.
  */
 public interface IndexSearcher extends Closeable {
+    /**
+     * Searches for the {@code topK} vectors nearest {@code query}, scoring with what the index itself knows: the
+     * similarity function it records and the vectors or codes it stores. No similarity function or score provider is
+     * passed, so a search can't use a function the index wasn't built for.
+     * <p>
+     * The default implementation throws {@link UnsupportedOperationException}; backings that can score a query on
+     * their own override it.
+     *
+     * @param rerankK    how many candidates to collect before keeping the best {@code topK}; at least {@code topK}
+     * @param acceptOrds which ordinals are acceptable results; {@link Bits#ALL} for all
+     * @throws IllegalStateException if the index records no similarity function, or stores nothing to score with;
+     *                               search it through the backing's own API with an explicit function or score provider
+     */
+    default SearchResult search(VectorFloat<?> query, int topK, int rerankK, Bits acceptOrds) {
+        throw new UnsupportedOperationException(getClass().getSimpleName() + " does not search by the index's own "
+                + "similarity function; use the backing's own search API");
+    }
 }
