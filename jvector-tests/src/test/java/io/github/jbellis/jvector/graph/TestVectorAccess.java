@@ -245,4 +245,56 @@ public class TestVectorAccess {
         } finally { pool.shutdown(); }
     }
 
+    /** A point-access source whose copies may be read only by the thread that made them. */
+    private static final class ThreadOwnedSource implements RandomAccessVectorValues {
+        final Thread owner;
+        final VectorFloat<?> value = VectorizationProvider.getInstance().getVectorTypeSupport().createFloatVector(1);
+        final java.util.concurrent.atomic.AtomicInteger lookups;
+        ThreadOwnedSource(Thread owner, java.util.concurrent.atomic.AtomicInteger lookups) {
+            this.owner = owner;
+            this.lookups = lookups;
+        }
+        public int size() { return 4096; }
+        public int dimension() { return 1; }
+        public boolean isValueShared() { return true; }
+        public VectorFloat<?> getVector(int ordinal) {
+            assertSame("copy read by another thread", owner, Thread.currentThread());
+            value.set(0, ordinal);
+            return value;
+        }
+        public RandomAccessVectorValues copy() { return new ThreadOwnedSource(Thread.currentThread(), lookups); }
+        public java.util.function.Supplier<RandomAccessVectorValues> threadLocalSupplier() {
+            var copies = RandomAccessVectorValues.super.threadLocalSupplier();
+            return () -> { lookups.incrementAndGet(); return copies.get(); };
+        }
+    }
+
+    @Test public void mappedPointScanVisitsEachPositionOnceWithItsOwnCopy() {
+        var lookups = new java.util.concurrent.atomic.AtomicInteger();
+        var source = new ThreadOwnedSource(null, lookups);
+        var pool = new ForkJoinPool(4);
+        try {
+            // Counts of none, one, part of, exactly, and several chunks, and one that leaves a partial chunk.
+            for (int count : new int[] {0, 1, 3, 64, 256, 2000}) {
+                lookups.set(0);
+                var visits = new java.util.concurrent.atomic.AtomicIntegerArray(count);
+                VectorAccess.forEach(source, count, i -> 2 * i + 1, pool, (position, vector) -> {
+                    assertEquals(2 * position + 1, vector.get(0), 0f);
+                    visits.incrementAndGet(position);
+                });
+                for (int i = 0; i < count; i++) assertEquals("count " + count + " position " + i, 1, visits.get(i));
+                // One copy lookup per worker, not one per vector.
+                assertTrue("count " + count + " lookups " + lookups.get(), lookups.get() <= pool.getParallelism());
+            }
+        } finally { pool.shutdown(); }
+    }
+
+    @Test public void pointScanPropagatesConsumerFailure() {
+        var source = new ThreadOwnedSource(null, new java.util.concurrent.atomic.AtomicInteger());
+        var pool = new ForkJoinPool(4);
+        try {
+            assertThrows(IllegalStateException.class, () -> VectorAccess.forEach(source, 2000, i -> i, pool,
+                    (position, vector) -> { if (position == 100) throw new IllegalStateException("consumer failed"); }));
+        } finally { pool.shutdown(); }
+    }
 }
