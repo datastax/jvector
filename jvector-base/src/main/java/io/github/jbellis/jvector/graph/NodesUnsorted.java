@@ -41,8 +41,7 @@ public class NodesUnsorted {
     }
 
     /**
-     * Add a new node to the NodeArray. The new node must be worse than all previously stored
-     * nodes.
+     * Appends a node and its score.
      */
     public void add(int newNode, float newScore) {
         if (size == node.length) {

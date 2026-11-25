@@ -61,6 +61,10 @@ public class GraphSearcher implements Closeable {
     // Scored nodes that the current layer search can no longer expand (see searchOneLayer); they return to the
     // candidates at the next layer search, so a later layer or resume() sees the same candidates as before.
     private final NodesUnsorted deferredCandidates;
+    // The neighbors scored by one expansion, collected by the view (see searchOneLayer). NodesUnsorted.add is
+    // small, so the JIT inlines it into the view whatever order the methods are compiled in.
+    private final NodesUnsorted scoredNeighbors = new NodesUnsorted(64);
+    private final ImmutableGraphIndex.NeighborProcessor collectScored = scoredNeighbors::add;
 
     // Search parameters that we save here for use by resume()
     private Bits acceptOrds;
@@ -509,26 +513,7 @@ public class GraphSearcher implements Closeable {
             boolean tracking = !(scoreTracker instanceof ScoreTracker.NoOpTracker);
 
             var scoreFunction = scoreProvider.scoreFunction();
-            var neighborProcessor = new ImmutableGraphIndex.NeighborProcessor() {
-                int visits;
-
-                @Override
-                public void process(int node2, float score) {
-                    visits++;
-                    if (tracking) scoreTracker.track(score);
-                    if (trackBest && (acceptAll || acceptOrdsThisLayer.get(node2)) && score >= threshold) {
-                        offerScored(node2, score, rerankK);
-                    }
-                    if (bounded) {
-                        if (!mayExpand(score, rerankK)) {
-                            deferredCandidates.add(node2, score);
-                            return;
-                        }
-                    }
-                    candidates.push(node2, score);
-                }
-            };
-
+            int visits = 0;
             // the main search loop
             while (candidates.size() > 0) {
                 if (stopSearch(candidates, scoreTracker, rerankK, threshold, adaptive)) {
@@ -552,10 +537,30 @@ public class GraphSearcher implements Closeable {
                 }
                 expandedCount++;
 
-                // score the neighbors of the top candidate and add them to the queue
-                view.processNeighbors(level, topCandidateNode, scoreFunction, visitedMarker, neighborProcessor);
+                // Score the neighbors of the top candidate and add them to the queue. The view only collects the
+                // scores; they are handled here, in this method's compiled code, not in a callback whose inlining
+                // into the view depends on the order in which the JIT compiles the two.
+                scoredNeighbors.clear();
+                view.processNeighbors(level, topCandidateNode, scoreFunction, visitedMarker, collectScored);
+                int count = scoredNeighbors.size();
+                int[] nodes = scoredNeighbors.node;
+                float[] scores = scoredNeighbors.score;
+                visits += count;
+                for (int i = 0; i < count; i++) {
+                    int node2 = nodes[i];
+                    float score = scores[i];
+                    if (tracking) scoreTracker.track(score);
+                    if (trackBest && (acceptAll || acceptOrdsThisLayer.get(node2)) && score >= threshold) {
+                        offerScored(node2, score, rerankK);
+                    }
+                    if (bounded && !mayExpand(score, rerankK)) {
+                        deferredCandidates.add(node2, score);
+                        continue;
+                    }
+                    candidates.push(node2, score);
+                }
             }
-            visitedCount += neighborProcessor.visits;
+            visitedCount += visits;
         } catch (Throwable t) {
             // clear scratch structures if terminated via throwable, as they may not have been drained
             approximateResults.clear();

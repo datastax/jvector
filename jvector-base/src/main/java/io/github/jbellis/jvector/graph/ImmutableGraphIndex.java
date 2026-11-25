@@ -155,7 +155,7 @@ public interface ImmutableGraphIndex extends AutoCloseable, Accountable {
     int size(int level);
 
     /**
-     * The steps needed to process a neighbor during a search. That is, adding it to the priority queue, etc.
+     * Receives each neighbor that {@link View#processNeighbors} scores, with its similarity.
      */
     interface NeighborProcessor {
         void process(int friendOrd, float similarity);
@@ -187,6 +187,9 @@ public interface ImmutableGraphIndex extends AutoCloseable, Accountable {
          * Iterates over the neighbors of a given node if they have not been visited yet.
          * For each non-visited neighbor, it computes its similarity and processes it using the given processor.
          */
+        // TODO: replace the per-neighbor callback with a method that fills a caller-supplied NodesUnsorted, so views
+        // that score in batches score straight into it; this removes OnHeapGraphIndex.BatchScratch, OnDiskGraphIndex's
+        // batch arrays and the copy in GraphSearcher.searchOneLayer.
         void processNeighbors(int level, int node, ScoreFunction scoreFunction, IntMarker visited, NeighborProcessor neighborProcessor);
 
         /**
