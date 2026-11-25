@@ -44,13 +44,13 @@ class LazyMemorySegmentTest {
     }
 
     @Test
-    void concurrentFirstUsePublishesOneViewOfTheOriginalArray() throws Exception {
+    void concurrentFirstUsePublishesViewsOfTheOriginalArray() throws Exception {
         float[] data = {-0.0f, 1, 2, 3, 4, 5, 6, 7};
         var v = new MemorySegmentVectorFloat(data);
         assertSame(data, v.array());
-        assertEquals(1, java.util.Arrays.stream(MemorySegmentVectorFloat.class.getDeclaredFields())
+        assertEquals(2, java.util.Arrays.stream(MemorySegmentVectorFloat.class.getDeclaredFields())
                 .filter(f -> !java.lang.reflect.Modifier.isStatic(f.getModifiers())).count());
-        var field = MemorySegmentVectorFloat.class.getDeclaredField("segment");
+        var field = MemorySegmentVectorFloat.class.getDeclaredField("data");
         field.setAccessible(true);
         assertSame(data, field.get(v));
         try (var pool = Executors.newFixedThreadPool(48)) {
@@ -60,14 +60,16 @@ class LazyMemorySegmentTest {
                 barrier.await();
                 var first = v.get();
                 for (int n = 0; n < 10000; n++) {
-                    assertSame(first, v.get());
+                    // The cache is a benign race: threads may see different view objects,
+                    // but every view must address the same backing array.
+                    assertSameView(data, v.get());
                     assertEquals(data.length, v.length());
                     assertEquals(Float.floatToRawIntBits(data[n & 7]), Float.floatToRawIntBits(v.get(n & 7)));
                 }
                 return first;
             }));
             MemorySegment first = tasks.get(0).get();
-            for (var task : tasks) assertSame(first, task.get());
+            for (var task : tasks) assertSameView(data, task.get());
             v.set(3, 19);
             assertEquals(19, first.getAtIndex(ValueLayout.JAVA_FLOAT, 3));
             first.setAtIndex(ValueLayout.JAVA_FLOAT, 4, 23);
@@ -81,7 +83,7 @@ class LazyMemorySegmentTest {
         float[] data = {-0.0f, Float.intBitsToFloat(0x7fc00123), 2, 3, 4, 5, 6, 7};
         var original = new MemorySegmentVectorFloat(data);
         var copy = (MemorySegmentVectorFloat) original.copy();
-        var field = MemorySegmentVectorFloat.class.getDeclaredField("segment");
+        var field = MemorySegmentVectorFloat.class.getDeclaredField("data");
         field.setAccessible(true);
         assertSame(data, field.get(original));
         assertSame(copy.array(), field.get(copy));
@@ -99,6 +101,22 @@ class LazyMemorySegmentTest {
         assertEquals(2, fromBuffer.length());
         fromBuffer.zero();
         for (float value : fromBuffer.array()) assertEquals(0, Float.floatToRawIntBits(value));
+    }
+
+    private static void assertSameView(float[] data, MemorySegment view) {
+        assertSame(data, view.heapBase().orElseThrow());
+        assertEquals(0, view.address());
+        assertEquals((long) data.length * Float.BYTES, view.byteSize());
+    }
+
+    @Test
+    void equalsComparesRawBits() {
+        int nan1 = 0x7fc00123, nan2 = 0x7fc00456;
+        var a = new MemorySegmentVectorFloat(new float[]{Float.intBitsToFloat(nan1), -0.0f});
+        assertEquals(a, new MemorySegmentVectorFloat(new float[]{Float.intBitsToFloat(nan1), -0.0f}));
+        assertNotEquals(a, new MemorySegmentVectorFloat(new float[]{Float.intBitsToFloat(nan2), -0.0f}));
+        assertNotEquals(a, new MemorySegmentVectorFloat(new float[]{Float.intBitsToFloat(nan1), 0.0f}));
+        assertNotEquals(a, new MemorySegmentVectorFloat(new float[]{Float.intBitsToFloat(nan1)}));
     }
 
     @Test

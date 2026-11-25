@@ -427,6 +427,29 @@ public interface VectorUtilSupport {
   float assembleAndSum(VectorFloat<?> data, int baseIndex, ByteSequence<?> baseOffsets, int baseOffsetsOffset, int baseOffsetsLength);
 
   /**
+   * Scores the vectors two PQ codes encode against each other, reading centroids straight from codebooks
+   * laid out back to back (subspace m's centroids start at {@code clusterCount * subspaceOffsets[m]}).
+   * Returns the dot product when {@code dot} is true, else the squared distance. {@code dimBase[j]} is
+   * dimension j's index in centroid 0 of its subspace; {@code minWidth} and {@code maxWidth} bound the
+   * subspace widths.
+   */
+  default float pqCodePairSimilarity(boolean dot, VectorFloat<?> codebooks, int clusterCount,
+                                     int[] subspaceOffsets, int[] subspaceWidths, int minWidth, int maxWidth, int[] dimBase,
+                                     ByteSequence<?> code1, int offset1, ByteSequence<?> code2, int offset2) {
+    float sum = 0;
+    for (int m = 0; m < subspaceOffsets.length; m++) {
+      int width = subspaceWidths[m], base = clusterCount * subspaceOffsets[m];
+      int b1 = base + Byte.toUnsignedInt(code1.get(offset1 + m)) * width;
+      int b2 = base + Byte.toUnsignedInt(code2.get(offset2 + m)) * width;
+      for (int t = 0; t < width; t++) {
+        float x = codebooks.get(b1 + t), y = codebooks.get(b2 + t);
+        sum += dot ? x * y : (x - y) * (x - y);
+      }
+    }
+    return sum;
+  }
+
+  /**
    * Calculates the distance between 2 vectors, which were quantized using Product Quantization, using a precomputed table of partial results
    *
    * See {@link ProductQuantization#createCodebookPartialSums(VectorSimilarityFunction)}
