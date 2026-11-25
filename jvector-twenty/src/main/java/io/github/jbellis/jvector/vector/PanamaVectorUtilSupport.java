@@ -1258,6 +1258,183 @@ class PanamaVectorUtilSupport implements VectorUtilSupport {
         return sum;
     }
 
+    private static final VectorSpecies<Float> PAIR_FLOATS = FloatVector.SPECIES_PREFERRED;
+    private static final VectorSpecies<Integer> PAIR_INTS = VectorSpecies.of(int.class, PAIR_FLOATS.vectorShape());
+    private static final int PAIR_LANES = PAIR_FLOATS.length();
+    // One code byte per float lane, for 1-float subspaces. Byte vectors start at 64 bits, so narrower
+    // registers leave this null and use the plain loop.
+    private static final VectorSpecies<Byte> PAIR_BYTES = PAIR_LANES >= 8
+            ? VectorSpecies.of(byte.class, VectorShape.forBitSize(PAIR_LANES * 8)) : null;
+    private static final ThreadLocal<int[]> PAIR_INDICES = ThreadLocal.withInitial(() -> new int[2 * PAIR_LANES]);
+
+
+    private static float pairScalar(boolean dot, float[] cb, int clusterCount, int[] subspaceOffsets, int[] subspaceWidths,
+                                    ByteSequence<?> code1, int offset1, ByteSequence<?> code2, int offset2) {
+        float sum = 0;
+        for (int m = 0; m < subspaceOffsets.length; m++) {
+            int width = subspaceWidths[m], base = clusterCount * subspaceOffsets[m];
+            int b1 = base + Byte.toUnsignedInt(code1.get(offset1 + m)) * width;
+            int b2 = base + Byte.toUnsignedInt(code2.get(offset2 + m)) * width;
+            for (int t = 0; t < width; t++) {
+                float x = cb[b1 + t], y = cb[b2 + t];
+                sum += dot ? x * y : (x - y) * (x - y);
+            }
+        }
+        return sum;
+    }
+
+    private static float pairContiguous512(boolean dot, float[] cb, int clusterCount, int[] subspaceOffsets, int[] subspaceWidths,
+                                          ByteSequence<?> code1, int offset1, ByteSequence<?> code2, int offset2) {
+        final VectorSpecies<Float> species = FloatVector.SPECIES_512;
+        final int lanes = species.length();
+        FloatVector acc = FloatVector.zero(species);
+        float tail = 0;
+        for (int m = 0; m < subspaceOffsets.length; m++) {
+            int width = subspaceWidths[m], base = clusterCount * subspaceOffsets[m];
+            int b1 = base + Byte.toUnsignedInt(code1.get(offset1 + m)) * width;
+            int b2 = base + Byte.toUnsignedInt(code2.get(offset2 + m)) * width;
+            int t = 0;
+            for (; t + lanes <= width; t += lanes) {
+                var x = FloatVector.fromArray(species, cb, b1 + t);
+                var y = FloatVector.fromArray(species, cb, b2 + t);
+                acc = dot ? x.fma(y, acc) : x.sub(y).fma(x.sub(y), acc);
+            }
+            for (; t < width; t++) {
+                float x = cb[b1 + t], y = cb[b2 + t];
+                tail += dot ? x * y : (x - y) * (x - y);
+            }
+        }
+        return acc.reduceLanes(VectorOperators.ADD) + tail;
+    }
+
+    private static float pairContiguous256(boolean dot, float[] cb, int clusterCount, int[] subspaceOffsets, int[] subspaceWidths,
+                                          ByteSequence<?> code1, int offset1, ByteSequence<?> code2, int offset2) {
+        final VectorSpecies<Float> species = FloatVector.SPECIES_256;
+        final int lanes = species.length();
+        FloatVector acc = FloatVector.zero(species);
+        float tail = 0;
+        for (int m = 0; m < subspaceOffsets.length; m++) {
+            int width = subspaceWidths[m], base = clusterCount * subspaceOffsets[m];
+            int b1 = base + Byte.toUnsignedInt(code1.get(offset1 + m)) * width;
+            int b2 = base + Byte.toUnsignedInt(code2.get(offset2 + m)) * width;
+            int t = 0;
+            for (; t + lanes <= width; t += lanes) {
+                var x = FloatVector.fromArray(species, cb, b1 + t);
+                var y = FloatVector.fromArray(species, cb, b2 + t);
+                acc = dot ? x.fma(y, acc) : x.sub(y).fma(x.sub(y), acc);
+            }
+            for (; t < width; t++) {
+                float x = cb[b1 + t], y = cb[b2 + t];
+                tail += dot ? x * y : (x - y) * (x - y);
+            }
+        }
+        return acc.reduceLanes(VectorOperators.ADD) + tail;
+    }
+
+    private static float pairContiguous128(boolean dot, float[] cb, int clusterCount, int[] subspaceOffsets, int[] subspaceWidths,
+                                          ByteSequence<?> code1, int offset1, ByteSequence<?> code2, int offset2) {
+        final VectorSpecies<Float> species = FloatVector.SPECIES_128;
+        final int lanes = species.length();
+        FloatVector acc = FloatVector.zero(species);
+        float tail = 0;
+        for (int m = 0; m < subspaceOffsets.length; m++) {
+            int width = subspaceWidths[m], base = clusterCount * subspaceOffsets[m];
+            int b1 = base + Byte.toUnsignedInt(code1.get(offset1 + m)) * width;
+            int b2 = base + Byte.toUnsignedInt(code2.get(offset2 + m)) * width;
+            int t = 0;
+            for (; t + lanes <= width; t += lanes) {
+                var x = FloatVector.fromArray(species, cb, b1 + t);
+                var y = FloatVector.fromArray(species, cb, b2 + t);
+                acc = dot ? x.fma(y, acc) : x.sub(y).fma(x.sub(y), acc);
+            }
+            for (; t < width; t++) {
+                float x = cb[b1 + t], y = cb[b2 + t];
+                tail += dot ? x * y : (x - y) * (x - y);
+            }
+        }
+        return acc.reduceLanes(VectorOperators.ADD) + tail;
+    }
+
+    private static float pairContiguous64(boolean dot, float[] cb, int clusterCount, int[] subspaceOffsets, int[] subspaceWidths,
+                                          ByteSequence<?> code1, int offset1, ByteSequence<?> code2, int offset2) {
+        final VectorSpecies<Float> species = FloatVector.SPECIES_64;
+        final int lanes = species.length();
+        FloatVector acc = FloatVector.zero(species);
+        float tail = 0;
+        for (int m = 0; m < subspaceOffsets.length; m++) {
+            int width = subspaceWidths[m], base = clusterCount * subspaceOffsets[m];
+            int b1 = base + Byte.toUnsignedInt(code1.get(offset1 + m)) * width;
+            int b2 = base + Byte.toUnsignedInt(code2.get(offset2 + m)) * width;
+            int t = 0;
+            for (; t + lanes <= width; t += lanes) {
+                var x = FloatVector.fromArray(species, cb, b1 + t);
+                var y = FloatVector.fromArray(species, cb, b2 + t);
+                acc = dot ? x.fma(y, acc) : x.sub(y).fma(x.sub(y), acc);
+            }
+            for (; t < width; t++) {
+                float x = cb[b1 + t], y = cb[b2 + t];
+                tail += dot ? x * y : (x - y) * (x - y);
+            }
+        }
+        return acc.reduceLanes(VectorOperators.ADD) + tail;
+    }
+
+    @Override
+    public float pqCodePairSimilarity(boolean dot, VectorFloat<?> codebooks, int clusterCount,
+                                      int[] subspaceOffsets, int[] subspaceWidths, int minWidth, int maxWidth, int[] dimBase,
+                                      ByteSequence<?> code1, int offset1, ByteSequence<?> code2, int offset2) {
+        // A build calls this tens of millions of times, so it only dispatches: each path is its own small
+        // method, keeping the whole call chain small enough to inline.
+        float[] cb = ((FloatArray) codebooks).array();
+        if (minWidth >= 4) {
+            // Every centroid fills at least a 128-bit register: load both contiguously. Each width gets
+            // its own method so the species is a constant the JIT can compile to SIMD instructions.
+            if (minWidth >= 16 && PREFERRED_BIT_SIZE >= 512) {
+                return pairContiguous512(dot, cb, clusterCount, subspaceOffsets, subspaceWidths, code1, offset1, code2, offset2);
+            }
+            if (minWidth >= 8 && PREFERRED_BIT_SIZE >= 256) {
+                return pairContiguous256(dot, cb, clusterCount, subspaceOffsets, subspaceWidths, code1, offset1, code2, offset2);
+            }
+            return pairContiguous128(dot, cb, clusterCount, subspaceOffsets, subspaceWidths, code1, offset1, code2, offset2);
+        }
+        if (minWidth >= 2) {
+            // 2- and 3-float subspaces: one 64-bit load per centroid.
+            return pairContiguous64(dot, cb, clusterCount, subspaceOffsets, subspaceWidths, code1, offset1, code2, offset2);
+        }
+        if (maxWidth == 1 && dimBase.length >= PAIR_LANES && PAIR_BYTES != null) {
+            return pairGatherOneFloat(dot, cb, dimBase, code1, offset1, code2, offset2);
+        }
+        // Mixed 1-float subspaces, or too few to fill a register: a plain loop.
+        return pairScalar(dot, cb, clusterCount, subspaceOffsets, subspaceWidths, code1, offset1, code2, offset2);
+    }
+
+    /** Full registers of 1-float subspaces: each lane's code is one byte of a vector load. */
+    private float pairGatherOneFloat(boolean dot, float[] cb, int[] dimBase,
+                                     ByteSequence<?> code1, int offset1, ByteSequence<?> code2, int offset2) {
+        int dim = dimBase.length;
+        int[] indices = PAIR_INDICES.get();
+        int base1 = code1.offset() + offset1, base2 = code2.offset() + offset2;
+        FloatVector acc = FloatVector.zero(PAIR_FLOATS);
+        int j = 0;
+        for (; j + PAIR_LANES <= dim; j += PAIR_LANES) {
+            var lanesBase = IntVector.fromArray(PAIR_INTS, dimBase, j);
+            ((IntVector) fromByteSequence(PAIR_BYTES, code1, base1 + j).convertShape(VectorOperators.B2I, PAIR_INTS, 0))
+                    .and(0xff).add(lanesBase).intoArray(indices, 0);
+            ((IntVector) fromByteSequence(PAIR_BYTES, code2, base2 + j).convertShape(VectorOperators.B2I, PAIR_INTS, 0))
+                    .and(0xff).add(lanesBase).intoArray(indices, PAIR_LANES);
+            var x = FloatVector.fromArray(PAIR_FLOATS, cb, 0, indices, 0);
+            var y = FloatVector.fromArray(PAIR_FLOATS, cb, 0, indices, PAIR_LANES);
+            acc = dot ? x.fma(y, acc) : x.sub(y).fma(x.sub(y), acc);
+        }
+        float tail = 0;
+        for (; j < dim; j++) {
+            float x = cb[dimBase[j] + Byte.toUnsignedInt(code1.get(offset1 + j))];
+            float y = cb[dimBase[j] + Byte.toUnsignedInt(code2.get(offset2 + j))];
+            tail += dot ? x * y : (x - y) * (x - y);
+        }
+        return acc.reduceLanes(VectorOperators.ADD) + tail;
+    }
+
     @Override
     public float assembleAndSumPQ(
             VectorFloat<?> codebookPartialSums,

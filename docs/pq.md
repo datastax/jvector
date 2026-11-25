@@ -33,7 +33,8 @@ see [Batched input vector access](batched-vector-access.md) for training straigh
 ## Build and search
 
 - **Construction:** `BuildScoreProvider.pqBuildScoreProvider(similarity, codes)` scores codes
-  instead of full vectors; see [Graph construction](graph-construction.md).
+  instead of full vectors; see [Graph construction](graph-construction.md). Diversity scoring
+  compares code pairs straight from the codebooks, in one pass per comparison.
 - **Search with codes in memory:** `codes.precomputedScoreFunctionFor(query, similarity)` gives
   the traversal scores; rerank with full or NVQ vectors from the index.
   [Tutorial 3](tutorials/3-larger-than-memory-tutorial.md) walks through the whole flow.
@@ -48,5 +49,6 @@ see [Batched input vector access](batched-vector-access.md) for training straigh
 | --- | --- |
 | Code | `M` per vector |
 | Codebooks | about 4 × 256 × dimension, once per model |
+| Diversity codebook copy | about 4 × 256 × dimension, once diversity is first scored |
 
 See [Memory and disk sizing](sizing.md) for whole-index estimates.
