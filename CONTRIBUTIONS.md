@@ -15,3 +15,10 @@
 - An appropriate level of unit testing is provided for new code.
 - Documentation is provided in markdown form for user-facing features.
 - Javadoc is provided sufficient to avoid failure by `mvn javadoc:jar`
+
+## Assertions
+
+Some users run JVector with assertions enabled (`-ea`) in production. An assertion on a hot path
+(build, search, compaction, or quantization of each vector) must cost a small fraction of the work it
+checks and must not repeat that work. Check inputs once where they are created, or check only the
+result, and build failure messages only when the check fails.
