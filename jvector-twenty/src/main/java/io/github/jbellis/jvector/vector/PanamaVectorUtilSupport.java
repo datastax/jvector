@@ -1357,6 +1357,79 @@ class PanamaVectorUtilSupport implements VectorUtilSupport {
         }
     }
 
+    /**
+     * Scans subspaces of up to three floats, such as 2- and 3-float PQ subspaces, with scalar arithmetic. A vector of
+     * two floats leaves SIMD little to do, and the Vector API path reaches these kernels through PQ encoding's deep
+     * call chain, where JDK 21's C2 can fail to intrinsify them and run the Java fallback instead. Each distance sums
+     * its terms in the order {@link #squareDistance} does, so the result matches the caller's scan exactly.
+     * Wider subspaces, and vectors this provider did not create, return -1 and keep the caller's scan.
+     */
+    @Override
+    public int tryClosestCentroid(VectorFloat<?> point, int pointOffset,
+                                  VectorFloat<?> centroids, int centroidCount, int dimension) {
+        if (dimension > 3 || !(point instanceof ArrayVectorFloat) || !(centroids instanceof ArrayVectorFloat)) {
+            return -1;
+        }
+        if (centroidCount <= 0) {
+            throw new IllegalArgumentException("centroidCount must be positive");
+        }
+        Objects.checkFromIndexSize(pointOffset, dimension, point.length());
+        if ((long) centroidCount * dimension > centroids.length()) {
+            throw new IndexOutOfBoundsException("centroids do not contain centroidCount vectors");
+        }
+        float[] p = ((ArrayVectorFloat) point).get();
+        float[] c = ((ArrayVectorFloat) centroids).get();
+        switch (dimension) {
+            case 3: return closestCentroid3(p[pointOffset], p[pointOffset + 1], p[pointOffset + 2], c, centroidCount);
+            case 2: return closestCentroid2(p[pointOffset], p[pointOffset + 1], c, centroidCount);
+            case 1: return closestCentroid1(p[pointOffset], c, centroidCount);
+            default: return 0;   // every distance is zero, and the first centroid wins the tie
+        }
+    }
+
+    // Strict < keeps the first of equal distances, as the caller's scan does.
+    private static int closestCentroid1(float p0, float[] c, int count) {
+        int nearest = 0;
+        float minimum = Float.MAX_VALUE;
+        for (int i = 0; i < count; i++) {
+            float d0 = p0 - c[i];
+            float distance = d0 * d0;
+            if (distance < minimum) {
+                minimum = distance;
+                nearest = i;
+            }
+        }
+        return nearest;
+    }
+
+    private static int closestCentroid2(float p0, float p1, float[] c, int count) {
+        int nearest = 0;
+        float minimum = Float.MAX_VALUE;
+        for (int i = 0, j = 0; i < count; i++, j += 2) {
+            float d0 = p0 - c[j], d1 = p1 - c[j + 1];
+            float distance = d0 * d0 + d1 * d1;
+            if (distance < minimum) {
+                minimum = distance;
+                nearest = i;
+            }
+        }
+        return nearest;
+    }
+
+    private static int closestCentroid3(float p0, float p1, float p2, float[] c, int count) {
+        int nearest = 0;
+        float minimum = Float.MAX_VALUE;
+        for (int i = 0, j = 0; i < count; i++, j += 3) {
+            float d0 = p0 - c[j], d1 = p1 - c[j + 1], d2 = p2 - c[j + 2];
+            float distance = d0 * d0 + d1 * d1 + d2 * d2;
+            if (distance < minimum) {
+                minimum = distance;
+                nearest = i;
+            }
+        }
+        return nearest;
+    }
+
     @Override
     public float squareDistance(VectorFloat<?> v1, int v1offset, VectorFloat<?> v2, int v2offset, final int length)
     {
