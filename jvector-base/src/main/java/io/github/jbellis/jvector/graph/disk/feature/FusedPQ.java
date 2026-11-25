@@ -18,7 +18,7 @@ package io.github.jbellis.jvector.graph.disk.feature;
 
 import io.github.jbellis.jvector.disk.IndexWriter;
 import io.github.jbellis.jvector.disk.RandomAccessReader;
-import io.github.jbellis.jvector.graph.ImmutableGraphIndex;
+import io.github.jbellis.jvector.graph.GraphIndex;
 import io.github.jbellis.jvector.graph.disk.CommonHeader;
 import io.github.jbellis.jvector.graph.disk.CompactionContext;
 import io.github.jbellis.jvector.graph.disk.FusedCompactionStrategy;
@@ -129,11 +129,35 @@ public class FusedPQ extends AbstractFeature implements FusedFeature {
      * @param view The view needs to be the one used by the searcher
      * @param esf
      * @return
+     * @deprecated A function passed here isn't checked against the one the graph records. Search with
+     * {@link io.github.jbellis.jvector.graph.GraphSearcher#search(VectorFloat, int, int, io.github.jbellis.jvector.util.Bits)},
+     * which scores by the recorded function, or prepare the query with
+     * {@link io.github.jbellis.jvector.graph.GraphIndex#queryPreparer} and bind it with
+     * {@link io.github.jbellis.jvector.graph.GraphIndex.ScoringView#scoreProviderFor}. Graphs that record no
+     * function (format version 7 and earlier) keep using this path.
      */
+    @Deprecated
     public ScoreFunction.ApproximateScoreFunction approximateScoreFunctionFor(VectorFloat<?> queryVector, VectorSimilarityFunction vsf, OnDiskGraphIndex.View view, ScoreFunction.ExactScoreFunction esf) {
         var neighbors = new PackedNeighbors(view);
         var hierarchyCachedFeatures = view.getInlineSourceFeatures();
         return FusedPQDecoder.newDecoder(neighbors, pq, hierarchyCachedFeatures, queryVector, reusableNeighborCodes.get(), reusableResults.get(), vsf, esf);
+    }
+
+    /**
+     * As the explicit-function {@code approximateScoreFunctionFor(queryVector, vsf, view, esf)},
+     * over a table {@link FusedPQDecoder#fillPartialSums} already filled for {@code queryVector} and {@code vsf},
+     * which the function reads in place.
+     */
+    public ScoreFunction.ApproximateScoreFunction approximateScoreFunctionFor(VectorFloat<?> queryVector,
+                                                                             VectorFloat<?> partialSums,
+                                                                             float queryMagnitudeSquared,
+                                                                             VectorSimilarityFunction vsf,
+                                                                             OnDiskGraphIndex.View view,
+                                                                             ScoreFunction.ExactScoreFunction esf) {
+        var neighbors = new PackedNeighbors(view);
+        var hierarchyCachedFeatures = view.getInlineSourceFeatures();
+        return FusedPQDecoder.newDecoder(neighbors, pq, hierarchyCachedFeatures, queryVector, partialSums,
+                queryMagnitudeSquared, reusableNeighborCodes.get(), vsf, esf);
     }
 
     /** For compaction use. See {@link FusedFeature#createCompactionStrategy}. */
@@ -178,15 +202,15 @@ public class FusedPQ extends AbstractFeature implements FusedFeature {
     }
 
     public static class State implements Feature.State {
-        public final ImmutableGraphIndex.View view;
+        public final GraphIndex.View view;
         public final IntFunction<ByteSequence<?>> compressedVectorFunction;
         public final int nodeId;
 
-        public State(ImmutableGraphIndex.View view, PQVectors pqVectors, int nodeId) {
+        public State(GraphIndex.View view, PQVectors pqVectors, int nodeId) {
             this(view, pqVectors::get, nodeId);
         }
 
-        public State(ImmutableGraphIndex.View view, IntFunction<ByteSequence<?>> compressedVectorFunction, int nodeId) {
+        public State(GraphIndex.View view, IntFunction<ByteSequence<?>> compressedVectorFunction, int nodeId) {
             this.view = view;
             this.compressedVectorFunction = compressedVectorFunction;
             this.nodeId = nodeId;

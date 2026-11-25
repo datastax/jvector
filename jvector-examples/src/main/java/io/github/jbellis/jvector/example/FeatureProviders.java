@@ -16,7 +16,7 @@
 
 package io.github.jbellis.jvector.example;
 
-import io.github.jbellis.jvector.graph.ImmutableGraphIndex;
+import io.github.jbellis.jvector.graph.GraphIndex;
 import io.github.jbellis.jvector.graph.RandomAccessByteVectorValues;
 import io.github.jbellis.jvector.graph.RandomAccessVectorValues;
 import io.github.jbellis.jvector.graph.disk.feature.FeatureId;
@@ -89,7 +89,7 @@ final class FeatureProviders {
      * @param metrics construction metrics sink, or null when not reporting
      */
     static FeatureWriteContext configureWriter(Set<FeatureId> features,
-                                               ImmutableGraphIndex graph,
+                                               GraphIndex graph,
                                                Path outPath,
                                                RandomAccessVectorValues vectors,
                                                PQVectors buildPQ,
@@ -97,14 +97,14 @@ final class FeatureProviders {
         return configureWriter(features, graph, outPath, vectors, buildPQ, null, null, metrics);
     }
 
-    static FeatureWriteContext configureWriter(Set<FeatureId> features, ImmutableGraphIndex graph,
+    static FeatureWriteContext configureWriter(Set<FeatureId> features, GraphIndex graph,
                                                Path outPath, RandomAccessVectorValues vectors,
                                                PQVectors buildPQ, ASHVectors buildASH,
                                                VectorFloat<?> inputMean, ConstructionMetrics metrics) throws FileNotFoundException {
         return configureWriter(features, graph, outPath, vectors, buildPQ, buildASH, inputMean, metrics, null);
     }
 
-    static FeatureWriteContext configureWriter(Set<FeatureId> features, ImmutableGraphIndex graph,
+    static FeatureWriteContext configureWriter(Set<FeatureId> features, GraphIndex graph,
                                                Path outPath, RandomAccessVectorValues vectors,
                                                PQVectors buildPQ, ASHVectors buildASH, VectorFloat<?> inputMean,
                                                ConstructionMetrics metrics, String writerMode) throws FileNotFoundException {
@@ -113,7 +113,7 @@ final class FeatureProviders {
     }
 
     /** As above, with {@code writerThreads} parallel writer workers. */
-    static FeatureWriteContext configureWriter(Set<FeatureId> features, ImmutableGraphIndex graph,
+    static FeatureWriteContext configureWriter(Set<FeatureId> features, GraphIndex graph,
                                                Path outPath, RandomAccessVectorValues vectors,
                                                PQVectors buildPQ, ASHVectors buildASH, VectorFloat<?> inputMean,
                                                ConstructionMetrics metrics, String writerMode, int writerThreads)
@@ -123,7 +123,7 @@ final class FeatureProviders {
     }
 
     /** As above, padding base-layer records to {@code pageAlignment} bytes when it is not null. */
-    static FeatureWriteContext configureWriter(Set<FeatureId> features, ImmutableGraphIndex graph,
+    static FeatureWriteContext configureWriter(Set<FeatureId> features, GraphIndex graph,
                                                Path outPath, RandomAccessVectorValues vectors,
                                                PQVectors buildPQ, ASHVectors buildASH, VectorFloat<?> inputMean,
                                                ConstructionMetrics metrics, String writerMode, int writerThreads,
@@ -140,7 +140,7 @@ final class FeatureProviders {
     }
 
     /** As {@link #configureWriter}, for an int8 dataset. */
-    static FeatureWriteContext configureWriter(Set<FeatureId> features, ImmutableGraphIndex graph, Path outPath,
+    static FeatureWriteContext configureWriter(Set<FeatureId> features, GraphIndex graph, Path outPath,
                                                RandomAccessByteVectorValues byteVectors, String writerMode,
                                                int writerThreads, Integer pageAlignment) throws FileNotFoundException {
         var writer = GraphBuilderFactory.writerBuilder(graph, outPath, byteVectors.size(), writerMode, writerThreads);

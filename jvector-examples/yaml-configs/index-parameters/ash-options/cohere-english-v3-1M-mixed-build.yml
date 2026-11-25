@@ -1,7 +1,7 @@
 # cohere-english-v3-1M: fused 2-bit ASH graph with NVQ reranking. This example shows how to
 # build with mixed ASH scoring: asymmetric insertion, symmetric pruning.
 yamlSchemaVersion: 3
-onDiskIndexVersion: 7
+onDiskIndexVersion: 8
 
 dataset: cohere-english-v3-1M
 

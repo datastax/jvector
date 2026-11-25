@@ -240,11 +240,15 @@ ASH also brings:
   and bound the work admitted, for database integrations; see
   [Integrating ASH queries](./docs/ash-query-integration.md).
 
-### On-disk format version 7
+### On-disk format version 8
 
-JVector now writes on-disk format version 7 by default, for every index, including PQ indexes. Fused
-ASH, separate ASH codes and page-aligned records require it. JVector 4.0.x cannot read version 7
-files; to keep a rollback possible, write version 6 until every reader is upgraded. Page-aligned
+JVector now writes on-disk format version 8 by default, for every index. Version 8 records the index's
+similarity function in the header, so a loaded index knows how it was built:
+`searcher.search(query, topK, rerankK, Bits.ALL)` searches by that function, and the older
+`search(..., similarityFunction, ...)` logs a warning when it is given a different one. Version 7 added
+fused ASH, separate ASH codes and page-aligned records, which require version 7 or later. JVector 4.0.x
+reads up to version 6 and 4.1.0-rc.1 up to version 7; to keep a rollback possible, write the older
+version with `withVersion` until every reader is upgraded. Page-aligned
 records (`withPageAlignment`, for any index) keep each node's record from crossing a device page, so
 a larger-than-memory index reads one page per node it expands instead of sometimes two; see [Building and serving larger-than-memory indexes](./docs/larger-than-memory-indexes.md).
 [UPGRADING.md](./UPGRADING.md) gives the details.

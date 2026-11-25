@@ -5,7 +5,7 @@
 # list (132) = 4,068 bytes, so each record fits one 4 KB page (0.7% padding). 776 encoded bits is
 # 368 projected dimensions at 2 bits plus the 40-bit header; it is chosen to keep the record within a page.
 yamlSchemaVersion: 3
-onDiskIndexVersion: 7
+onDiskIndexVersion: 8
 dataset: mpnet-10m
 useDatasetPrefetching: true  # Stream base vectors in order instead of loading them all into memory.
 

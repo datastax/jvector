@@ -1,7 +1,7 @@
 # glove-100-angular (100 dimensions, angular similarity): in-memory graph built and searched with full-precision vectors.
 # Nothing is written to disk.
 yamlSchemaVersion: 3
-onDiskIndexVersion: 7
+onDiskIndexVersion: 8
 
 dataset: glove-100-angular
 

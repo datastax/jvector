@@ -2,7 +2,7 @@
 # use four ASH landmarks. Symmetric and mixed construction
 # require one landmark, so the build uses asymmetric scoring.
 yamlSchemaVersion: 3
-onDiskIndexVersion: 7
+onDiskIndexVersion: 8
 
 dataset: ada002-1M
 

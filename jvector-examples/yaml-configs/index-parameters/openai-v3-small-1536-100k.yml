@@ -1,5 +1,5 @@
 yamlSchemaVersion: 3
-onDiskIndexVersion: 7
+onDiskIndexVersion: 8
 
 dataset: openai-v3-small-1536-100k
 

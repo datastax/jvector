@@ -18,25 +18,39 @@ package io.github.jbellis.jvector.graph.disk;
 
 import io.github.jbellis.jvector.graph.disk.feature.FeatureId;
 
-import java.util.EnumSet;
 import java.util.Set;
 
 /**
+ * Format for version 7 of the on-disk graph format.
+ * Version 7 characteristics:
+ * - Has magic number
+ * - Supports multiple features
+ * - Supports multi-layer (hierarchical) graphs
+ * - Has idUpperBound field
+ * - Uses footer for metadata
+ * - Places fused features last and writes feature count and ordinals explicitly (as in V6)
+ * - Adds support for the {@link FeatureId#FUSED_ASH}, {@link FeatureId#PAGE_ALIGNMENT} and
+ *   {@link FeatureId#INLINE_BYTE_VECTORS} features
+ *
+ * The wire format is identical to V6; the only difference is the supported feature set.
+ * FUSED_ASH uses the same fused-feature layout as FUSED_PQ: packed neighbor codes inline in
+ * each L0 record, and the in-memory hierarchy's source vectors in a block after the sparse levels.
  * Version 7 adds ASH feature payloads while retaining the V6 graph record layout.
  * Feature headers describe the quantizer and the fused source representation.
  * It also adds inline int8 vectors, one byte per dimension in each node record.
  */
-final class GraphIndexFormatV7 extends GraphIndexFormatV6 {
+class GraphIndexFormatV7 extends GraphIndexFormatV6 {
+
+    /** Creates the singleton format for version 7. */
     GraphIndexFormatV7() {
-        super(7, supportedFeatures());
+        super(7, v7Features());
     }
 
-    /** The extension is restricted to V7; earlier formats retain their feature sets. */
-    private static Set<FeatureId> supportedFeatures() {
-        var features = EnumSet.copyOf(allFeatures());
-        features.add(FeatureId.FUSED_ASH);
-        features.add(FeatureId.PAGE_ALIGNMENT);
-        features.add(FeatureId.INLINE_BYTE_VECTORS);
-        return features;
+    /**
+     * Protected constructor for subclasses (V8) that share V7's graph layout but extend the header or
+     * support a different set of features.
+     */
+    protected GraphIndexFormatV7(int version, Set<FeatureId> supportedFeatures) {
+        super(version, supportedFeatures);
     }
 }

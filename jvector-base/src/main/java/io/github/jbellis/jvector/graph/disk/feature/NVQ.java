@@ -104,11 +104,30 @@ public class NVQ extends AbstractFeature {
         return nvq;
     }
 
+    /**
+     * A reranker scoring the vectors {@code source} stores against {@code queryVector} by {@code vsf}.
+     *
+     * @deprecated A function passed here isn't checked against the one the graph records. Search with
+     * {@link io.github.jbellis.jvector.graph.GraphSearcher#search(VectorFloat, int, int, io.github.jbellis.jvector.util.Bits)},
+     * which scores by the recorded function, or prepare the query with
+     * {@link io.github.jbellis.jvector.graph.GraphIndex#queryPreparer} and bind it with
+     * {@link io.github.jbellis.jvector.graph.GraphIndex.ScoringView#scoreProviderFor}. Graphs that record no
+     * function (format version 7 and earlier) keep using this path.
+     */
+    @Deprecated
     public ScoreFunction.ExactScoreFunction rerankerFor(VectorFloat<?> queryVector,
                                                         VectorSimilarityFunction vsf,
                                                         FeatureSource source) {
-        var function = scorer.scoreFunctionFor(queryVector, vsf);
+        return rerankerFor(scoreFunctionFor(queryVector, vsf), source);
+    }
 
+    /** The per-query part of the explicit-function {@code rerankerFor(queryVector, vsf, source)}, to compute once and reuse. */
+    public NVQScorer.NVQScoreFunction scoreFunctionFor(VectorFloat<?> queryVector, VectorSimilarityFunction vsf) {
+        return scorer.scoreFunctionFor(queryVector, vsf);
+    }
+
+    /** A reranker scoring the vectors {@code source} stores by {@code function}, from {@link #scoreFunctionFor}. */
+    public ScoreFunction.ExactScoreFunction rerankerFor(NVQScorer.NVQScoreFunction function, FeatureSource source) {
         return node2 -> {
             try {
                 var reader = source.featureReaderForNode(node2, FeatureId.NVQ_VECTORS);

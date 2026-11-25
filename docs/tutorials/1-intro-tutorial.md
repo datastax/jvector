@@ -96,7 +96,7 @@ GraphIndexBuilder builder = new GraphIndexBuilder(bsp,
                                                   alpha,
                                                   addHierarchy,
                                                   refineFinalGraph);
-ImmutableGraphIndex graph = builder.build(ravv);
+GraphIndex graph = builder.build(ravv);
 ```
 
 > [!NOTE]

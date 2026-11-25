@@ -11,7 +11,7 @@
 # cases read. For a cold measurement of each worker count or overquery, give the index configuration one value
 # of each and run it once per value. See docs/larger-than-memory-indexes.md.
 yamlSchemaVersion: 1
-onDiskIndexVersion: 7
+onDiskIndexVersion: 8
 
 # Benchmarks to compute and the stats from each
 benchmarks:

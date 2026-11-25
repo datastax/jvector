@@ -307,7 +307,7 @@ public class ShardExp {
             int[] owner = new int[K * topK]; int at = 0;
             List<long[]> cand = new ArrayList<>();
             for (int k = 0; k < K; k++) {
-                var view = (ImmutableGraphIndex.ScoringView) ss[k].getView();
+                var view = (GraphIndex.ScoringView) ss[k].getView();
                 var ssp = new DefaultSearchScoreProvider(view.approximateScoreFunctionFor(qv, VSF), view.rerankerFor(qv, VSF));
                 var r = ss[k].search(ssp, topK, topK, 0f, 0f, Bits.ALL);
                 for (var ns : r.getNodes()) cand.add(new long[]{Float.floatToIntBits(ns.score), rowOf[k][ns.node]});

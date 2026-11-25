@@ -16,7 +16,7 @@
 
 package io.github.jbellis.jvector.example.benchmarks;
 
-import io.github.jbellis.jvector.graph.ImmutableGraphIndex;
+import io.github.jbellis.jvector.graph.GraphIndex;
 import io.github.jbellis.jvector.graph.similarity.SearchScoreProvider;
 import io.github.jbellis.jvector.vector.types.VectorFloat;
 
@@ -47,7 +47,7 @@ public interface QuerySet<Q> {
     Q[] newArray(int size);
 
     /** The score provider for {@code query} over {@code view}. */
-    SearchScoreProvider scoreProviderFor(Q query, ImmutableGraphIndex.View view);
+    SearchScoreProvider scoreProviderFor(Q query, GraphIndex.View view);
 
     /**
      * {@code query} as a float vector, for query preparation, which projects float queries only.

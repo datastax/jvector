@@ -20,10 +20,12 @@ import com.carrotsearch.randomizedtesting.annotations.ThreadLeakScope;
 import io.github.jbellis.jvector.LuceneTestCase;
 import io.github.jbellis.jvector.TestUtil;
 import io.github.jbellis.jvector.disk.SimpleMappedReader;
+import io.github.jbellis.jvector.graph.disk.OnDiskGraphIndex;
 import io.github.jbellis.jvector.graph.similarity.BuildScoreProvider;
 import io.github.jbellis.jvector.graph.similarity.DefaultSearchScoreProvider;
 import io.github.jbellis.jvector.graph.similarity.ScoreFunction;
 import io.github.jbellis.jvector.graph.similarity.SearchScoreProvider;
+import io.github.jbellis.jvector.util.Bits;
 import io.github.jbellis.jvector.quantization.PQVectors;
 import io.github.jbellis.jvector.quantization.ProductQuantization;
 import io.github.jbellis.jvector.vector.VectorSimilarityFunction;
@@ -38,6 +40,7 @@ import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
+import java.util.List;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Random;
@@ -47,6 +50,7 @@ import java.util.function.Supplier;
 import static io.github.jbellis.jvector.TestUtil.assertGraphEquals;
 import static io.github.jbellis.jvector.graph.TestVectorGraph.createRandomFloatVectors;
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
 
@@ -299,6 +303,71 @@ public class GraphIndexBuilderTest extends LuceneTestCase {
         assertGraphEquals(graph, builder.graph);
     }
 
+    /**
+     * A graph with no nodes reports level 0 and returns no results, both in memory and after a round trip
+     * through disk, rather than failing on its absent entry node.
+     */
+    @Test
+    public void testSearchEmptyGraph() throws IOException {
+        int dimension = randomIntBetween(2, 32);
+        var ravv = MockVectorValues.empty(dimension);
+        var query = TestUtil.randomVector(getRandom(), dimension);
+
+        try (var builder = new GraphIndexBuilder(ravv, VectorSimilarityFunction.COSINE, 2, 10, 1.0f, 1.0f, true)) {
+            var graph = builder.build(ravv);
+            assertEquals(0, graph.getMaxLevel());
+            assertEquals(0, GraphSearcher.search(query, 10, ravv, VectorSimilarityFunction.COSINE, graph, Bits.ALL).getNodes().length);
+
+            var indexPath = testDirectory.resolve("empty_graph_search");
+            graph.writeTo(indexPath, ravv);
+            try (var readerSupplier = new SimpleMappedReader.Supplier(indexPath);
+                 var onDiskGraph = OnDiskGraphIndex.load(readerSupplier);
+                 var searcher = onDiskGraph.searcher()) {
+                assertEquals(0, onDiskGraph.getMaxLevel());
+                assertEquals(0, searcher.search(query, 10, 10, VectorSimilarityFunction.COSINE, Bits.ALL).getNodes().length);
+            }
+        }
+    }
+
+    /**
+     * Regression test: rescore() copies every node into a new graph, and used to drop the set of nodes
+     * marked deleted, so a node deleted before a rescore became live again and survived cleanup().
+     */
+    @Test
+    public void testRescoreKeepsPendingDeletes() throws IOException {
+        int n = 200;
+        int dimension = 8;
+        var ravv = new ListRandomAccessVectorValues(List.of(createRandomFloatVectors(n, dimension, random())), dimension);
+        var vsf = VectorSimilarityFunction.EUCLIDEAN;
+        var bsp = BuildScoreProvider.randomAccessScoreProvider(ravv, vsf);
+        try (var builder = new GraphIndexBuilder(bsp, dimension, 16, 50, 1.2f, 1.2f, true)) {
+            for (int i = 0; i < n; i++) {
+                builder.addGraphNode(i, ravv.getVector(i));
+            }
+            builder.markNodeDeleted(7);
+            builder.markNodeDeleted(13);
+
+            try (var rescored = GraphIndexBuilder.rescore(builder, BuildScoreProvider.randomAccessScoreProvider(ravv, vsf))) {
+                var graph = (OnHeapGraphIndex) rescored.getGraph();
+                assertTrue(graph.getDeletedNodes().get(7));
+                assertTrue(graph.getDeletedNodes().get(13));
+                assertEquals(2, graph.getDeletedNodes().cardinality());
+
+                // still hidden from searches...
+                var result = GraphSearcher.search(ravv.getVector(7), 5, ravv, vsf, graph, Bits.ALL);
+                for (var ns : result.getNodes()) {
+                    assertTrue("deleted node " + ns.node + " returned after rescore", ns.node != 7 && ns.node != 13);
+                }
+
+                // ...and still removed by cleanup()
+                rescored.cleanup();
+                assertFalse(graph.containsNode(7));
+                assertFalse(graph.containsNode(13));
+                assertEquals(n - 2, graph.size(0));
+            }
+        }
+    }
+
     // Because RandomAccessVectorValues is exposed in such a way that it allows for subsequent additions to the
     // vector source, we need to ensure that GraphIndexBuilder can handle this.
     @Test
@@ -367,7 +436,7 @@ public class GraphIndexBuilderTest extends LuceneTestCase {
         }
     }
 
-    private static void assertUniqueNeighbors(ImmutableGraphIndex graph) throws IOException {
+    private static void assertUniqueNeighbors(GraphIndex graph) throws IOException {
         try (var view = graph.getView()) {
             for (int level = 0; level <= graph.getMaxLevel(); level++) {
                 var nodes = graph.getNodes(level);

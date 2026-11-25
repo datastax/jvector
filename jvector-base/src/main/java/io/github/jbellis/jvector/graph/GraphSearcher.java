@@ -25,7 +25,8 @@
 package io.github.jbellis.jvector.graph;
 
 import io.github.jbellis.jvector.annotations.Experimental;
-import io.github.jbellis.jvector.graph.ImmutableGraphIndex.NodeAtLevel;
+import io.github.jbellis.jvector.api.IndexSearcher;
+import io.github.jbellis.jvector.graph.GraphIndex.NodeAtLevel;
 import io.github.jbellis.jvector.graph.similarity.DefaultSearchScoreProvider;
 import io.github.jbellis.jvector.graph.similarity.ScoreFunction;
 import io.github.jbellis.jvector.graph.similarity.SearchScoreProvider;
@@ -36,17 +37,25 @@ import io.github.jbellis.jvector.vector.VectorSimilarityFunction;
 import io.github.jbellis.jvector.vector.types.VectorFloat;
 import org.agrona.collections.Int2ObjectHashMap;
 import org.agrona.collections.IntHashSet;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
-import java.io.Closeable;
 import java.io.IOException;
 
 
 /**
  * Searches a graph to find nearest neighbors to a query vector. For more background on the
- * search algorithm, see {@link ImmutableGraphIndex}.
+ * search algorithm, see {@link GraphIndex}.
  */
-public class GraphSearcher implements Closeable {
-    private ImmutableGraphIndex.View view;
+public class GraphSearcher implements IndexSearcher {
+    private static final Logger logger = LoggerFactory.getLogger(GraphSearcher.class);
+    /** Whether the one-off {@code search(..., vectors, similarityFunction, graph, ...)} has warned of a mismatch. */
+    private static final java.util.concurrent.atomic.AtomicBoolean oneOffMismatchLogged =
+            new java.util.concurrent.atomic.AtomicBoolean();
+
+    /** The graph this searcher was created for, whose recorded similarity function it searches by; null when created from a view. */
+    private final GraphIndex graph;
+    private GraphIndex.View view;
 
     // Scratch data structures that are used in each {@link #searchInternal} call. These can be expensive
     // to allocate, so they're cleared and reused across calls.
@@ -87,14 +96,19 @@ public class GraphSearcher implements Closeable {
     /**
      * Creates a new graph searcher from the given GraphIndex
      */
-    public GraphSearcher(ImmutableGraphIndex graph) {
-        this(graph.getView());
+    public GraphSearcher(GraphIndex graph) {
+        this(graph, graph.getView());
     }
 
     /**
      * Creates a new graph searcher from the given GraphIndex.View
      */
-    protected GraphSearcher(ImmutableGraphIndex.View view) {
+    protected GraphSearcher(GraphIndex.View view) {
+        this(null, view);
+    }
+
+    private GraphSearcher(GraphIndex graph, GraphIndex.View view) {
+        this.graph = graph;
         this.view = view;
         this.candidates = new NodeQueue(new GrowableLongHeap(100), NodeQueue.Order.MAX_HEAP);
         this.evictedResults = new NodesUnsorted(100);
@@ -129,7 +143,7 @@ public class GraphSearcher implements Closeable {
         cachingReranker = new CachingReranker(scoreProvider);
     }
 
-    public ImmutableGraphIndex.View getView() {
+    public GraphIndex.View getView() {
         return view;
     }
 
@@ -185,10 +199,97 @@ public class GraphSearcher implements Closeable {
     }
 
     /**
-     * Convenience function for simple one-off searches.  It is caller's responsibility to make sure that it
-     * is the unique owner of the vectors instance passed in here.
+     * Searches for the {@code topK} nodes nearest {@code queryVector}, scoring with the vectors the graph
+     * itself stores, so no score provider has to be built. For a graph with fused PQ or fused ASH codes, the search
+     * traverses with those and reranks the best {@code rerankK} candidates with the stored vectors (inline
+     * or NVQ); otherwise every candidate is scored with the stored vectors, and {@code rerankK} only widens
+     * the search. To choose the scoring yourself, use
+     * {@link #search(SearchScoreProvider, int, int, float, float, Bits)}.
+     * <p>
+     * Requires a graph that stores its vectors, such as an {@code OnDiskGraphIndex} written with inline or
+     * NVQ vectors. An in-memory graph doesn't: search it with a {@link SearchScoreProvider}, or with
+     * {@link #search(VectorFloat, int, RandomAccessVectorValues, VectorSimilarityFunction, GraphIndex, Bits)}.
+     *
+     * @param rerankK how many candidates to collect before keeping the best {@code topK}; at least
+     *                {@code topK}
+     * @param acceptOrds which nodes are acceptable results; {@link Bits#ALL} for all
+     * @throws IllegalStateException if the graph doesn't store its vectors
+     * @throws UnsupportedOperationException if the graph stores its vectors only as separated features
+     *         ({@code SEPARATED_VECTORS} or {@code SEPARATED_NVQ}), which its view can't rerank with; search
+     *         those with a {@link SearchScoreProvider}
+     * @deprecated For a graph that records its similarity function (on-disk format version 8 and later), use
+     * {@link #search(VectorFloat, int, int, Bits)}, which scores by that function, so a search can't use one the
+     * graph wasn't built for. This method still works on every graph, and is the way to search a file written before
+     * version 8; when {@code similarityFunction} differs from the recorded one it logs a warning, once per graph,
+     * and searches by {@code similarityFunction}.
      */
-    public static SearchResult search(VectorFloat<?> queryVector, int topK, RandomAccessVectorValues vectors, VectorSimilarityFunction similarityFunction, ImmutableGraphIndex graph, Bits acceptOrds) {
+    @Deprecated
+    public SearchResult search(VectorFloat<?> queryVector,
+                               int topK,
+                               int rerankK,
+                               VectorSimilarityFunction similarityFunction,
+                               Bits acceptOrds) {
+        return searchStoredVectors(queryVector, topK, rerankK, similarityFunction, 0.0f, acceptOrds);
+    }
+
+    /**
+     * Searches for the {@code topK} nodes nearest {@code queryVector} by the similarity function the graph records,
+     * scoring with the vectors and codes the graph itself stores, as
+     * {@link #search(VectorFloat, int, int, VectorSimilarityFunction, Bits)} does with a function the caller passes.
+     * No function is passed, so a search can't use one the graph wasn't built for.
+     * <p>
+     * No score threshold applies: every candidate is kept whatever its score, as unclamped scores (such as a
+     * streaming ASH index's dot products) can be below zero. The explicit-function search keeps its zero threshold.
+     * <p>
+     * The function is read from the graph this searcher was created for; a searcher created from a view, or pointed
+     * by {@link #setView} at another graph's view, searches by that first graph's function.
+     *
+     * @param rerankK    how many candidates to collect before keeping the best {@code topK}; at least {@code topK}
+     * @param acceptOrds which nodes are acceptable results; {@link Bits#ALL} for all
+     * @throws IllegalStateException if this searcher was created from a view rather than a graph, if the graph
+     *         records no similarity function (an on-disk graph written before format version 8, or an in-memory graph
+     *         built with a custom score provider), or if it doesn't store its vectors; search those with
+     *         {@link #search(VectorFloat, int, int, VectorSimilarityFunction, Bits)} or a {@link SearchScoreProvider}
+     * @throws UnsupportedOperationException if the graph stores its vectors only as separated features, as for
+     *         {@link #search(VectorFloat, int, int, VectorSimilarityFunction, Bits)}
+     */
+    @Override
+    public SearchResult search(VectorFloat<?> queryVector, int topK, int rerankK, Bits acceptOrds) {
+        if (graph == null) {
+            throw new IllegalStateException("This searcher was created from a view, so it has no graph to read a "
+                    + "similarity function from; create it from the graph, or pass the function");
+        }
+        var similarityFunction = graph.similarityFunction().orElseThrow(() -> new IllegalStateException(
+                "The graph records no similarity function; search it with an explicit function or a SearchScoreProvider"));
+        return searchStoredVectors(queryVector, topK, rerankK, similarityFunction, Float.NEGATIVE_INFINITY, acceptOrds);
+    }
+
+    /** A search scored with the graph's stored vectors and codes; {@code floor} is the threshold and rerank floor. */
+    private SearchResult searchStoredVectors(VectorFloat<?> queryVector, int topK, int rerankK,
+                                             VectorSimilarityFunction similarityFunction, float floor,
+                                             Bits acceptOrds) {
+        if (!(view instanceof GraphIndex.ScoringView)) {
+            throw new IllegalStateException("This graph doesn't store its vectors, so it can't score a query on its own; "
+                    + "search with a SearchScoreProvider, or with search(query, topK, vectors, similarityFunction, graph, acceptOrds)");
+        }
+        var scoringView = (GraphIndex.ScoringView) view;
+        // With fused PQ, approximateScoreFunctionFor creates its own reranker internally, so each query creates
+        // two (for NVQ, each precomputes per-query state). Callers building the score provider by hand do the
+        // same today; sharing one would need a ScoringView API change. A possible later optimization.
+        var reranker = scoringView.rerankerFor(queryVector, similarityFunction);
+        SearchScoreProvider ssp = scoringView.hasApproximateScores()
+                ? new DefaultSearchScoreProvider(scoringView.approximateScoreFunctionFor(queryVector, similarityFunction), reranker)
+                : new DefaultSearchScoreProvider(reranker);
+        return search(ssp, topK, rerankK, floor, floor, acceptOrds);
+    }
+
+    /**
+     * Convenience function for simple one-off searches.  It is caller's responsibility to make sure that it
+     * is the unique owner of the vectors instance passed in here. If the graph records a similarity function other
+     * than {@code similarityFunction}, the search uses {@code similarityFunction} and logs a warning, once per process.
+     */
+    public static SearchResult search(VectorFloat<?> queryVector, int topK, RandomAccessVectorValues vectors, VectorSimilarityFunction similarityFunction, GraphIndex graph, Bits acceptOrds) {
+        warnIfNotRecorded(graph, similarityFunction);
         try (var searcher = new GraphSearcher(graph)) {
             var ssp = DefaultSearchScoreProvider.exact(queryVector, similarityFunction, vectors);
             return searcher.search(ssp, topK, acceptOrds);
@@ -199,14 +300,25 @@ public class GraphSearcher implements Closeable {
 
     /**
      * Convenience function for simple one-off searches.  It is caller's responsibility to make sure that it
-     * is the unique owner of the vectors instance passed in here.
+     * is the unique owner of the vectors instance passed in here. If the graph records a similarity function other
+     * than {@code similarityFunction}, the search uses {@code similarityFunction} and logs a warning, once per process.
      */
-    public static SearchResult search(VectorFloat<?> queryVector, int topK, int rerankK, RandomAccessVectorValues vectors, VectorSimilarityFunction similarityFunction, ImmutableGraphIndex graph, Bits acceptOrds) {
+    public static SearchResult search(VectorFloat<?> queryVector, int topK, int rerankK, RandomAccessVectorValues vectors, VectorSimilarityFunction similarityFunction, GraphIndex graph, Bits acceptOrds) {
+        warnIfNotRecorded(graph, similarityFunction);
         try (var searcher = new GraphSearcher(graph)) {
             var ssp = DefaultSearchScoreProvider.exact(queryVector, similarityFunction, vectors);
             return searcher.search(ssp, topK, rerankK, 0.f, 0.f, acceptOrds);
         } catch (Exception e) {
             throw new RuntimeException(e);
+        }
+    }
+
+    /** Logs, once per process, a one-off search by a function other than the one {@code graph} records. */
+    private static void warnIfNotRecorded(GraphIndex graph, VectorSimilarityFunction similarityFunction) {
+        var recorded = graph.similarityFunction();
+        if (recorded.isPresent() && recorded.get() != similarityFunction && !oneOffMismatchLogged.getAndSet(true)) {
+            logger.warn("The graph records {} similarity but is being searched by {}; its scores use {}. "
+                    + "Logged once per process.", recorded.get(), similarityFunction, similarityFunction);
         }
     }
 
@@ -219,7 +331,7 @@ public class GraphSearcher implements Closeable {
      *
      * @param view the new view
      */
-    public void setView(ImmutableGraphIndex.View view) {
+    public void setView(GraphIndex.View view) {
         this.view = view;
     }
 
@@ -228,9 +340,9 @@ public class GraphSearcher implements Closeable {
      */
     @Deprecated
     public static class Builder {
-        private final ImmutableGraphIndex.View view;
+        private final GraphIndex.View view;
 
-        public Builder(ImmutableGraphIndex.View view) {
+        public Builder(GraphIndex.View view) {
             this.view = view;
         }
 
@@ -505,7 +617,7 @@ public class GraphSearcher implements Closeable {
             boolean tracking = !(scoreTracker instanceof ScoreTracker.NoOpTracker);
 
             var scoreFunction = scoreProvider.scoreFunction();
-            var neighborProcessor = new ImmutableGraphIndex.NeighborProcessor() {
+            var neighborProcessor = new GraphIndex.NeighborProcessor() {
                 int visits;
 
                 @Override

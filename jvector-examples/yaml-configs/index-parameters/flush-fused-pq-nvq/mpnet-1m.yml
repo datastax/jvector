@@ -1,7 +1,7 @@
 # mpnet-1m (768 dimensions): build the graph with full-precision vectors, then write fused PQ
 # traversal codes (D/8 subspaces, 256 centroids) and NVQ reranking vectors to disk.
 yamlSchemaVersion: 3
-onDiskIndexVersion: 7
+onDiskIndexVersion: 8
 
 dataset: mpnet-1m
 

@@ -17,10 +17,12 @@
 package io.github.jbellis.jvector.graph.disk;
 
 import io.github.jbellis.jvector.annotations.VisibleForTesting;
+import io.github.jbellis.jvector.disk.IndexWriter;
 import io.github.jbellis.jvector.disk.RandomAccessReader;
 import io.github.jbellis.jvector.disk.ReaderSupplier;
-import io.github.jbellis.jvector.graph.ImmutableGraphIndex;
+import io.github.jbellis.jvector.graph.GraphIndex;
 import io.github.jbellis.jvector.graph.NodesIterator;
+import io.github.jbellis.jvector.graph.PersistableGraphIndex;
 import io.github.jbellis.jvector.graph.RandomAccessVectorValues;
 import io.github.jbellis.jvector.graph.disk.feature.Feature;
 import io.github.jbellis.jvector.graph.disk.feature.FeatureId;
@@ -34,8 +36,9 @@ import io.github.jbellis.jvector.graph.disk.feature.NVQ;
 import io.github.jbellis.jvector.graph.disk.feature.PageAlignment;
 import io.github.jbellis.jvector.graph.disk.feature.SeparatedFeature;
 import io.github.jbellis.jvector.graph.similarity.ScoreFunction;
-import io.github.jbellis.jvector.util.Accountable;
 import org.agrona.collections.Int2ObjectHashMap;
+
+import java.io.FileNotFoundException;
 import java.util.ArrayList;
 import io.github.jbellis.jvector.util.Bits;
 import io.github.jbellis.jvector.util.RamUsageEstimator;
@@ -72,10 +75,10 @@ import static io.github.jbellis.jvector.graph.disk.AbstractGraphIndexWriter.FOOT
  * This graph may be extended with additional features, which are stored inline in the graph and in headers.
  * At runtime, this class may choose the best way to use these features.
  */
-public class OnDiskGraphIndex implements ImmutableGraphIndex, AutoCloseable, Accountable
+public class OnDiskGraphIndex implements PersistableGraphIndex
 {
     private static final Logger logger = LoggerFactory.getLogger(OnDiskGraphIndex.class);
-    public static final int CURRENT_VERSION = 7;
+    public static final int CURRENT_VERSION = 8;
     static final int MAGIC = 0xFFFF0D61; // FFFF to distinguish from old graphs, which should never start with a negative size "ODGI"
     static final VectorTypeSupport vectorTypeSupport = VectorizationProvider.getInstance().getVectorTypeSupport();
     final ReaderSupplier readerSupplier;
@@ -84,6 +87,12 @@ public class OnDiskGraphIndex implements ImmutableGraphIndex, AutoCloseable, Acc
     final int dimension;
     final NodeAtLevel entryNode;
     final int idUpperBound;
+    /** The similarity function the header records; none before version 8. */
+    private final RecordedSimilarity recordedSimilarity;
+    private final RecordedCompression recordedCompression;
+    /** Whether {@link #warnIfNotRecorded} has logged for this graph. */
+    private final java.util.concurrent.atomic.AtomicBoolean similarityMismatchLogged =
+            new java.util.concurrent.atomic.AtomicBoolean();
     final int inlineBlockSize; // total size of all inline elements contributed by features
     /** Placement of base-layer records. */
     final L0Layout l0Layout;
@@ -115,6 +124,8 @@ public class OnDiskGraphIndex implements ImmutableGraphIndex, AutoCloseable, Acc
             this.entryNode = new NodeAtLevel(header.common.layerInfo.size() - 1, header.common.entryNode);
         }
         this.idUpperBound = header.common.idUpperBound;
+        this.recordedSimilarity = header.common.similarity;
+        this.recordedCompression = header.common.compression;
         this.features = Collections.unmodifiableMap(header.features);
         this.featureList = header.features.values().toArray(new Feature[0]);
         this.neighborsOffset = neighborsOffset;
@@ -510,6 +521,21 @@ public class OnDiskGraphIndex implements ImmutableGraphIndex, AutoCloseable, Acc
         return bytes;
     }
 
+    @Override
+    public OnDiskParallelGraphIndexWriter.Builder getParallelWriterBuilder(Path path) throws FileNotFoundException {
+        return new OnDiskParallelGraphIndexWriter.Builder(this, path);
+    }
+
+    @Override
+    public OnDiskGraphIndexWriter.Builder getWriterBuilder(Path path) throws FileNotFoundException {
+        return new OnDiskGraphIndexWriter.Builder(this, path);
+    }
+
+    @Override
+    public OnDiskSequentialGraphIndexWriter.Builder getWriterBuilder(IndexWriter out) {
+        return new OnDiskSequentialGraphIndexWriter.Builder(this, out);
+    }
+
     public void close() throws IOException {
         // caller is responsible for closing ReaderSupplier
     }
@@ -577,11 +603,79 @@ public class OnDiskGraphIndex implements ImmutableGraphIndex, AutoCloseable, Acc
         return (double) sum / it.size();
     }
 
+    /**
+     * Returns the similarity function this graph records: from version 8, the one in its header; before that,
+     * the one its fused ASH model was trained with, if it has one. Empty if it records none.
+     */
+    @Override
+    public java.util.Optional<VectorSimilarityFunction> similarityFunction() {
+        var recorded = recordedSimilarity.floatFunction();
+        if (recorded.isPresent()) {
+            return recorded;
+        }
+        var feature = (FusedASH) features.get(FeatureId.FUSED_ASH);
+        return feature == null ? java.util.Optional.empty() : java.util.Optional.of(feature.getASH().similarityFunction());
+    }
+
+    /**
+     * The compression of the codes this graph is searched with: PQ or ASH for fused codes, or the type its writer
+     * declared for codes stored beside it ({@code withCompressionType}, format version 8). {@code NONE} means it is
+     * searched with its stored vectors alone. Empty when unknown: nothing was declared, or the file was written
+     * before version 8 and has no fused codes.
+     */
+    public java.util.Optional<io.github.jbellis.jvector.management.CompressionType> compressionType() {
+        var recorded = recordedCompression.type();
+        return recorded.isPresent() ? recorded : java.util.Optional.ofNullable(RecordedCompression.fusedType(features));
+    }
+
+    /**
+     * Logs a warning, once per loaded graph, when an explicit-function search scores by a function other than the one
+     * the graph records. The search still proceeds: some mismatches are deliberate, such as COSINE over a
+     * DOT_PRODUCT graph of unit vectors. (Fused ASH graphs reject a mismatch instead.)
+     *
+     * @return whether this call logged
+     */
+    boolean warnIfNotRecorded(VectorSimilarityFunction vsf) {
+        var recorded = recordedSimilarity.floatFunction();
+        if (!recorded.isPresent() || recorded.get() == vsf || similarityMismatchLogged.getAndSet(true)) {
+            return false;
+        }
+        logger.warn("The graph records {} similarity but is being searched by {}; its scores use {}. Search with "
+                + "GraphSearcher.search(query, topK, rerankK, acceptOrds) to score by the recorded function. "
+                + "Logged once per graph.", recorded.get(), vsf, vsf);
+        return true;
+    }
+
+    /** Returns the int8 similarity function this graph's header records (version 8 and later), if any. */
+    @Override
+    public java.util.Optional<ByteVectorSimilarityFunction> byteSimilarityFunction() {
+        return recordedSimilarity.byteFunction();
+    }
+
+    /**
+     * Returns a preparer for queries scored by the similarity function this graph records: one for its fused ASH
+     * model, or, from format version 8, one for its fused PQ codes, NVQ vectors or inline float vectors. Empty
+     * for a graph that records no float similarity function or stores no float scorer, such as an int8 graph;
+     * search those through the explicit-function path.
+     * <p>
+     * Reranking a prepared query ({@code scoreProviderFor(prepared, true)}) needs vectors the view can read: inline
+     * vectors or NVQ. A fused-PQ graph whose vectors are stored only as separated features is still offered a
+     * preparer, as its fused codes score prepared queries without reranking, but reranking throws
+     * {@link UnsupportedOperationException}, as {@link View#rerankerFor} does for that graph.
+     */
     @Override
     public java.util.Optional<io.github.jbellis.jvector.graph.similarity.QueryPreparer> queryPreparer() {
         var feature = features.get(FeatureId.FUSED_ASH);
-        if (feature == null) return java.util.Optional.empty();
-        return java.util.Optional.of(new io.github.jbellis.jvector.quantization.ASHQueryPreparer(((FusedASH) feature).getASH()));
+        if (feature != null) {
+            return java.util.Optional.of(new io.github.jbellis.jvector.quantization.ASHQueryPreparer(((FusedASH) feature).getASH()));
+        }
+        var similarity = recordedSimilarity.floatFunction();
+        boolean scores = features.containsKey(FeatureId.FUSED_PQ) || features.containsKey(FeatureId.NVQ_VECTORS)
+                || features.containsKey(FeatureId.INLINE_VECTORS);
+        if (similarity.isEmpty() || !scores) {
+            return java.util.Optional.empty();
+        }
+        return java.util.Optional.of(new OnDiskQueryPreparer(this, similarity.get()));
     }
 
     public class View implements FeatureSource, ScoringView, RandomAccessVectorValues {
@@ -798,7 +892,7 @@ public class OnDiskGraphIndex implements ImmutableGraphIndex, AutoCloseable, Acc
             reader.seek(offset);
             featureConsumer.accept(reader);
 
-            if (!format.supportsFeature(FeatureId.FUSED_PQ)) {
+            if (!format.supportsFusedFeatures()) {
                 reader.seek(neighborsOffsetFor(0, node));
             }
 
@@ -893,6 +987,7 @@ public class OnDiskGraphIndex implements ImmutableGraphIndex, AutoCloseable, Acc
         }
 
         @Override
+        @SuppressWarnings("deprecation")
         public ScoreFunction.ExactScoreFunction rerankerFor(VectorFloat<?> queryVector, VectorSimilarityFunction vsf) {
             // An ASH index scores only by its model's similarity, so its reranker must use the same one.
             var ashFeature = (FusedASH) features.get(FeatureId.FUSED_ASH);
@@ -900,6 +995,7 @@ public class OnDiskGraphIndex implements ImmutableGraphIndex, AutoCloseable, Acc
                 throw new IllegalArgumentException("The index's ASH model was trained for "
                         + ashFeature.getASH().similarityFunction() + "; requested reranking by " + vsf);
             }
+            warnIfNotRecorded(vsf);
             if (features.containsKey(FeatureId.INLINE_VECTORS)) {
                 // Exact scores of the inline vectors, reporting the dot-product bound adaptive stopping needs: the
                 // query's length times the largest stored length (NaN when the header did not store it).
@@ -926,20 +1022,56 @@ public class OnDiskGraphIndex implements ImmutableGraphIndex, AutoCloseable, Acc
             }
         }
 
+        /**
+         * {@inheritDoc}
+         *
+         * @throws UnsupportedOperationException if {@code rerank} is true, or the graph has no fused codes, and
+         *         the graph stores its vectors only as separated features, which this view can't read
+         */
         @Override
         public io.github.jbellis.jvector.graph.similarity.SearchScoreProvider scoreProviderFor(
                 io.github.jbellis.jvector.graph.similarity.PreparedQuery prepared, boolean rerank) {
             var feature = (FusedASH) features.get(FeatureId.FUSED_ASH);
-            if (feature == null) throw new UnsupportedOperationException("Prepared query scoring requires FusedASH");
-            var asf = feature.approximateScoreFunctionFor(prepared, this);
-            // The ASH model fixes the similarity: approximate and exact scores both use it.
-            var similarity = feature.getASH().similarityFunction();
-            var rr = rerank ? rerankerFor(prepared.queryVector(), similarity) : null;
-            return new io.github.jbellis.jvector.graph.similarity.DefaultSearchScoreProvider(asf, rr, similarity);
+            if (feature != null) {
+                var asf = feature.approximateScoreFunctionFor(prepared, this);
+                // The ASH model fixes the similarity: approximate and exact scores both use it.
+                var similarity = feature.getASH().similarityFunction();
+                var rr = rerank ? rerankerFor(prepared.queryVector(), similarity) : null;
+                return new io.github.jbellis.jvector.graph.similarity.DefaultSearchScoreProvider(asf, rr, similarity);
+            }
+            var state = OnDiskQueryPreparer.prepared(OnDiskGraphIndex.this, prepared);
+            var fusedPQ = (FusedPQ) features.get(FeatureId.FUSED_PQ);
+            if (fusedPQ == null) {
+                // the exact scores are the only ones, so there is nothing to rerank
+                return new io.github.jbellis.jvector.graph.similarity.DefaultSearchScoreProvider(
+                        preparedReranker(state), null, state.similarity);
+            }
+            var rr = rerank ? preparedReranker(state) : null;
+            var asf = fusedPQ.approximateScoreFunctionFor(state.query, state.partialSums, state.queryMagnitudeSquared,
+                    state.similarity, this, rr);
+            return new io.github.jbellis.jvector.graph.similarity.DefaultSearchScoreProvider(asf, rr, state.similarity);
+        }
+
+        /** As {@link #rerankerFor}, from a prepared query's state. */
+        private ScoreFunction.ExactScoreFunction preparedReranker(OnDiskQueryPreparer.State state) {
+            if (features.containsKey(FeatureId.INLINE_VECTORS)) {
+                return rerankerFor(state.query, state.similarity);
+            } else if (state.nvqFunction != null) {
+                return ((NVQ) features.get(FeatureId.NVQ_VECTORS)).rerankerFor(state.nvqFunction, this);
+            } else {
+                throw new UnsupportedOperationException("No reranker available for this graph");
+            }
         }
 
         @Override
+        public boolean hasApproximateScores() {
+            return features.containsKey(FeatureId.FUSED_PQ) || features.containsKey(FeatureId.FUSED_ASH);
+        }
+
+        @Override
+        @SuppressWarnings("deprecation")
         public ScoreFunction.ApproximateScoreFunction approximateScoreFunctionFor(VectorFloat<?> queryVector, VectorSimilarityFunction vsf) {
+            warnIfNotRecorded(vsf);
             if (features.containsKey(FeatureId.FUSED_PQ)) {
                 return ((FusedPQ) features.get(FeatureId.FUSED_PQ)).approximateScoreFunctionFor(queryVector, vsf, this, rerankerFor(queryVector, vsf));
             } else if (features.containsKey(FeatureId.FUSED_ASH)) {
@@ -951,12 +1083,12 @@ public class OnDiskGraphIndex implements ImmutableGraphIndex, AutoCloseable, Acc
     }
 
     /** Convenience function for writing a vanilla DiskANN-style index with no extra Features. */
-    public static void write(ImmutableGraphIndex graph, RandomAccessVectorValues vectors, Path path) throws IOException {
+    public static void write(GraphIndex graph, RandomAccessVectorValues vectors, Path path) throws IOException {
         write(graph, vectors, OnDiskGraphIndexWriter.sequentialRenumbering(graph), path);
     }
 
     /** Convenience function for writing a vanilla DiskANN-style index with no extra Features. */
-    public static void write(ImmutableGraphIndex graph,
+    public static void write(GraphIndex graph,
                              RandomAccessVectorValues vectors,
                              Map<Integer, Integer> oldToNewOrdinals,
                              Path path)

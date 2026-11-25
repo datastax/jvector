@@ -1,7 +1,7 @@
 # MPNet 10M at 32X nominal compression. Build the graph with source FP32 vectors,
 # then write fused 2-bit ASH traversal codes and NVQ reranking vectors to disk.
 yamlSchemaVersion: 3
-onDiskIndexVersion: 7
+onDiskIndexVersion: 8
 dataset: mpnet-10m
 
 construction:

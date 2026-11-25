@@ -2,7 +2,7 @@
 # project queries with INT8 arithmetic. Requires a
 # provider and CPU that support it; the run fails validation otherwise.
 yamlSchemaVersion: 3
-onDiskIndexVersion: 7
+onDiskIndexVersion: 8
 
 dataset: mpnet-1m
 

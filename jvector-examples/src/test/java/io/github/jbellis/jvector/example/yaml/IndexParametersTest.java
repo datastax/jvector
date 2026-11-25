@@ -44,7 +44,7 @@ public class IndexParametersTest {
     @Rule public final TemporaryFolder directory = new TemporaryFolder();
 
     private static String config(String dataset) {
-        return "yamlSchemaVersion: 3\nonDiskIndexVersion: 7\ndataset: " + dataset + "\n"
+        return "yamlSchemaVersion: 3\nonDiskIndexVersion: 8\ndataset: " + dataset + "\n"
                 + "construction:\n  type: inMemory\n  outDegree: [16]\n  efConstruction: [50]\n"
                 + "  neighborOverflow: [1.2f]\n  addHierarchy: [No]\n  refineFinalGraph: [Yes]\n"
                 + "  compression:\n    - type: None\n  reranking:\n    type: None\n"

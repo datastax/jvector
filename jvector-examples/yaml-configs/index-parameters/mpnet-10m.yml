@@ -1,7 +1,7 @@
 # MPNet-10M: ASH(b=2,d=384), nominal 32x compression.
 # Fused graph scoring and NVQ reranking.
 yamlSchemaVersion: 3
-onDiskIndexVersion: 7
+onDiskIndexVersion: 8
 dataset: mpnet-10m
 
 construction:

@@ -4,7 +4,7 @@
 # Throughput runs first, so its single timed pass is the cold measurement; recall
 # and visit counts come from later passes in the same JVM. One search case per JVM.
 yamlSchemaVersion: 1
-onDiskIndexVersion: 7
+onDiskIndexVersion: 8
 benchmarks:
   throughput: [AVG]
   accuracy: [recall]

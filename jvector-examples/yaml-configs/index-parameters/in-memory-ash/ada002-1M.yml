@@ -1,7 +1,7 @@
 # ada002-1M (1536 dimensions): in-memory graph built with full-precision vectors.
 # Searches traverse with 2-bit ASH codes (nominal 32x) and rescore with full-precision vectors.
 yamlSchemaVersion: 3
-onDiskIndexVersion: 7
+onDiskIndexVersion: 8
 
 dataset: ada002-1M
 

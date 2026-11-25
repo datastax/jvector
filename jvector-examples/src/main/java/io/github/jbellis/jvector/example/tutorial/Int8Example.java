@@ -29,7 +29,7 @@ import io.github.jbellis.jvector.disk.ReaderSupplierFactory;
 import io.github.jbellis.jvector.example.util.SiftLoader;
 import io.github.jbellis.jvector.graph.GraphIndexBuilder;
 import io.github.jbellis.jvector.graph.GraphSearcher;
-import io.github.jbellis.jvector.graph.ImmutableGraphIndex;
+import io.github.jbellis.jvector.graph.GraphIndex;
 import io.github.jbellis.jvector.graph.ListRandomAccessByteVectorValues;
 import io.github.jbellis.jvector.graph.RandomAccessByteVectorValues;
 import io.github.jbellis.jvector.graph.SearchResult;
@@ -121,7 +121,7 @@ public class Int8Example {
         float alpha = 1.2f;
 
         System.out.println("Building graph index from int8 vectors...");
-        ImmutableGraphIndex heapGraph;
+        GraphIndex heapGraph;
         try (GraphIndexBuilder builder = GraphIndexBuilder.builder(rabvv, ByteVectorSimilarityFunction.EUCLIDEAN, M)
                 .withBeamWidth(efConstruction)
                 .withNeighborOverflow(neighborOverflow)

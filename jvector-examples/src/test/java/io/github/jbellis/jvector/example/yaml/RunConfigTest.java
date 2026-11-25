@@ -38,7 +38,7 @@ public class RunConfigTest {
 
     private RunConfig load(String measurement) throws Exception {
         var file = directory.newFile().toPath();
-        Files.writeString(file, "yamlSchemaVersion: 1\nonDiskIndexVersion: 7\nbenchmarks:\n  throughput: [ AVG ]\n" + measurement);
+        Files.writeString(file, "yamlSchemaVersion: 1\nonDiskIndexVersion: 8\nbenchmarks:\n  throughput: [ AVG ]\n" + measurement);
         return RunConfig.load(file.toString());
     }
 

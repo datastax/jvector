@@ -23,7 +23,7 @@ import io.github.jbellis.jvector.disk.SimpleMappedReader;
 import io.github.jbellis.jvector.disk.SimpleWriter;
 import io.github.jbellis.jvector.graph.GraphIndexBuilder;
 import io.github.jbellis.jvector.graph.GraphSearcher;
-import io.github.jbellis.jvector.graph.ImmutableGraphIndex;
+import io.github.jbellis.jvector.graph.GraphIndex;
 import io.github.jbellis.jvector.graph.ListRandomAccessVectorValues;
 import io.github.jbellis.jvector.graph.RandomAccessVectorValues;
 import io.github.jbellis.jvector.graph.disk.feature.Feature;
@@ -250,7 +250,7 @@ public class TestPageAlignment extends LuceneTestCase {
         }
     }
 
-    private String write(Writer kind, ImmutableGraphIndex graph, RandomAccessVectorValues vectors, Path path,
+    private String write(Writer kind, GraphIndex graph, RandomAccessVectorValues vectors, Path path,
                          boolean align) throws IOException {
         var suppliers = Feature.singleStateFactory(FeatureId.INLINE_VECTORS,
                 node -> new InlineVectors.State(vectors.getVector(node)));
@@ -312,7 +312,7 @@ public class TestPageAlignment extends LuceneTestCase {
         return new ListRandomAccessVectorValues(new ArrayList<>(TestUtil.createRandomVectors(200, dimension)), dimension);
     }
 
-    private static ImmutableGraphIndex graph(RandomAccessVectorValues vectors, boolean hierarchy) {
+    private static GraphIndex graph(RandomAccessVectorValues vectors, boolean hierarchy) {
         var builder = new GraphIndexBuilder(vectors, VectorSimilarityFunction.COSINE, DEGREE, 64, 1.2f, 1.2f, hierarchy);
         return TestUtil.buildSequentially(builder, vectors);
     }

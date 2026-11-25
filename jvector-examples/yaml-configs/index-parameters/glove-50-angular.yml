@@ -1,6 +1,6 @@
 # This is here for loader testing purposes only, use other datasets for realistic test data
 yamlSchemaVersion: 3
-onDiskIndexVersion: 7
+onDiskIndexVersion: 8
 
 dataset: glove-50-angular
 useDatasetPrefetching: false

@@ -41,7 +41,7 @@ public class AshProjectionConfigTest {
     }
     private MultiConfig yaml(String body) throws Exception {
         var file = temporary.newFile().toPath();
-        Files.writeString(file, "yamlSchemaVersion: 2\nonDiskIndexVersion: 7\ndataset: precision-test\n"
+        Files.writeString(file, "yamlSchemaVersion: 2\nonDiskIndexVersion: 8\ndataset: precision-test\n"
                 + "construction:\n  compression:\n    - type: ASH\n      parameters:\n        encodedBits: 48\n        optimizer: RANDOM\n        bitsPerDimension: 2\n"
                 + (body.isEmpty() ? "search: {}\n" : body));
         return MultiConfig.getConfig(file.toString());

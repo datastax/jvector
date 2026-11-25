@@ -40,6 +40,7 @@ import io.github.jbellis.jvector.graph.disk.feature.FusedPQ;
 import io.github.jbellis.jvector.graph.similarity.DefaultSearchScoreProvider;
 import io.github.jbellis.jvector.graph.similarity.SearchScoreProvider;
 import io.github.jbellis.jvector.util.*;
+import io.github.jbellis.jvector.management.CompressionType;
 import io.github.jbellis.jvector.vector.VectorSimilarityFunction;
 import io.github.jbellis.jvector.vector.VectorUtil;
 import io.github.jbellis.jvector.graph.similarity.ScoreFunction;
@@ -161,6 +162,9 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
     // did not supply per-source CompressedVectors). Set by compactGraphImpl; consulted wherever
     // the fused path consults the inline strategy for codes.
     private QuantizationCompactionStrategy activeSidecarStrategy = QuantizationCompactionStrategy.NONE;
+    // The compression type the output records for codes written beside it: set while compact(graphPath,
+    // compressedPath) runs, unknown otherwise (the sources' separate codes don't carry over to the output).
+    private RecordedCompression sidecarCompression = RecordedCompression.UNKNOWN;
     // Wide code: a second, near-lossless PQ (2 dimensions per subspace) trained at merge time and kept in a
     // scratch cache by new ordinal, encoded by the same pre-encode pass as the scan code. At level 0 the cell
     // join reranks its candidates and scores the node's retained edges from it, and the diversity checks
@@ -279,8 +283,69 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
         return false;
     }
     /**
+     * Constructs a compactor that scores by the similarity function the sources record, for graphs without a
+     * non-fused compressed sidecar. Unlike the constructors that take a function, it can't compact sources with a
+     * function they weren't built for: it throws rather than warns.
+     *
+     * @throws IllegalArgumentException if a source records no similarity function (it was written before format
+     *         version 8), or the sources record different ones; compact those with a constructor that takes the
+     *         function. Also if a source's compressed vectors are of another type than the source records (see
+     *         {@link OnDiskGraphIndex#compressionType()})
+     */
+    @Experimental
+    public OnDiskGraphIndexCompactor(
+            List<OnDiskGraphIndex> sources,
+            List<FixedBitSet> liveNodes,
+            ForkJoinPool executor) {
+        this(sources, null, liveNodes, executor);
+    }
+
+    /**
+     * As {@link #OnDiskGraphIndexCompactor(List, List, ForkJoinPool)}, with a non-fused compressed sidecar; see
+     * {@link #OnDiskGraphIndexCompactor(List, List, List, VectorSimilarityFunction, ForkJoinPool)} for
+     * {@code sourceCompressed}.
+     *
+     * @throws IllegalArgumentException if a source records no similarity function, or the sources record
+     *         different ones, or a source's compressed vectors are of another type than the source records
+     */
+    @Experimental
+    public OnDiskGraphIndexCompactor(
+            List<OnDiskGraphIndex> sources,
+            List<CompressedVectors> sourceCompressed,
+            List<FixedBitSet> liveNodes,
+            ForkJoinPool executor) {
+        this(sources, sourceCompressed, liveNodes, recordedFunction(sources), executor, true);
+    }
+
+    /**
+     * The similarity function every source records. Null for no sources, which the constructor then rejects.
+     */
+    private static VectorSimilarityFunction recordedFunction(List<OnDiskGraphIndex> sources) {
+        if (sources == null || sources.isEmpty()) {
+            return null;
+        }
+        VectorSimilarityFunction function = null;
+        for (int s = 0; s < sources.size(); s++) {
+            var recorded = sources.get(s).similarityFunction();
+            if (!recorded.isPresent()) {
+                throw new IllegalArgumentException("Source " + s + " records no similarity function (it was written "
+                        + "before format version 8); pass the function to compact it with");
+            }
+            if (function == null) {
+                function = recorded.get();
+            } else if (recorded.get() != function) {
+                throw new IllegalArgumentException("Source " + s + " records " + recorded.get()
+                        + " similarity, but source 0 records " + function + "; pass the function to compact them with");
+            }
+        }
+        return function;
+    }
+
+    /**
      * Constructs a new OnDiskGraphIndexCompactor for graphs without a non-fused compressed sidecar.
      * Equivalent to calling the 6-arg constructor with {@code sourceCompressed = null}.
+     * A source that records a different similarity function is compacted by {@code similarityFunction}, with a
+     * warning; {@link #OnDiskGraphIndexCompactor(List, List, ForkJoinPool)} uses the recorded one instead.
      */
     @Experimental
     public OnDiskGraphIndexCompactor(
@@ -308,7 +373,22 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
             List<FixedBitSet> liveNodes,
             VectorSimilarityFunction similarityFunction,
             ForkJoinPool executor) {
+        this(sources, sourceCompressed, liveNodes, similarityFunction, executor, false);
+    }
+
+    /**
+     * @param strict whether a source whose compressed vectors disagree with the compression type it records is
+     *               rejected (the constructors that take no function) or compacted with a warning
+     */
+    private OnDiskGraphIndexCompactor(
+            List<OnDiskGraphIndex> sources,
+            List<CompressedVectors> sourceCompressed,
+            List<FixedBitSet> liveNodes,
+            VectorSimilarityFunction similarityFunction,
+            ForkJoinPool executor,
+            boolean strict) {
         checkBeforeCompact(sources, sourceCompressed, liveNodes);
+        checkCompressionTypes(sources, sourceCompressed, strict);
 
         if (executor != null) {
             this.executor = executor;
@@ -343,12 +423,65 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
         // 0..live-1), so the extent is known before the mapping itself exists.
         maxOrdinal = numTotalNodes - 1;
         this.similarityFunction = similarityFunction;
+        warnOnSimilarityMismatch(sources, similarityFunction);
+    }
+
+    // A source whose compressed vectors are of another type than it records (see OnDiskGraphIndex.compressionType)
+    // was paired with the wrong codes. The constructors that take a function warn, as for a similarity mismatch;
+    // those that take none reject it.
+    private static void checkCompressionTypes(List<OnDiskGraphIndex> sources, List<CompressedVectors> sourceCompressed,
+                                              boolean strict) {
+        if (sourceCompressed == null || sourceCompressed.isEmpty()) {
+            return;
+        }
+        for (int s = 0; s < sources.size(); s++) {
+            var recorded = sources.get(s).compressionType();
+            var given = RecordedCompression.typeOf(sourceCompressed.get(s));
+            if (recorded.isPresent() && given != null && recorded.get() != given) {
+                String message = String.format("Source %d records %s compression, but its compressed vectors are %s",
+                        s, recorded.get(), given);
+                if (strict) {
+                    throw new IllegalArgumentException(message);
+                }
+                log.warn(message);
+            }
+        }
+    }
+
+    /**
+     * The compression type the output records: that of its fused codes, or of the codes written beside it, or
+     * {@code NONE} when it has neither and every source recorded {@code NONE}.
+     */
+    private RecordedCompression outputCompression(io.github.jbellis.jvector.graph.disk.feature.FusedFeature fused) {
+        if (fused != null) {
+            return RecordedCompression.of(RecordedCompression.fusedType(Map.of(fused.id(), fused)));
+        }
+        if (sidecarCompression != RecordedCompression.UNKNOWN) {
+            return sidecarCompression;
+        }
+        boolean allNone = sources.stream()
+                .allMatch(s -> s.compressionType().equals(Optional.of(CompressionType.NONE)));
+        return allNone ? RecordedCompression.of(CompressionType.NONE) : RecordedCompression.UNKNOWN;
+    }
+
+    // The output records the compactor's function (format version 8 and above). A source that recorded a
+    // different one was built for another function, and its edges were chosen by it; compacting it anyway is
+    // what earlier releases did, so this warns rather than refuses.
+    private static void warnOnSimilarityMismatch(List<OnDiskGraphIndex> sources, VectorSimilarityFunction similarityFunction) {
+        for (int s = 0; s < sources.size(); s++) {
+            var recorded = sources.get(s).similarityFunction();
+            if (recorded.isPresent() && recorded.get() != similarityFunction) {
+                log.warn("Source {} was built with {} similarity, but the compactor uses {}; the output records {}",
+                        s, recorded.get(), similarityFunction, similarityFunction);
+            }
+        }
     }
 
     /**
      * Sets the on-disk format version of the output; the default is {@link OnDiskGraphIndex#CURRENT_VERSION}.
      * The sources may be of any version the reader supports, and the output is written at this one.
-     * An output that carries fused PQ needs version 6; one with upper layers needs version 4 or above.
+     * An output that carries fused PQ needs version 6 or above; one with upper layers needs version 4 or above.
+     * From version 8 the output records this compactor's similarity function.
      * A compressed sidecar written beside the graph ({@link #compact(Path, Path)}) serializes its merged
      * compressor at the same version; a PQ with an anisotropic threshold needs version 3 or above there.
      *
@@ -788,6 +921,7 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
             train(sidecarStrategy, true);
             scratch.retrain(similarityFunction);
             activeSidecarStrategy = sidecarStrategy;
+            sidecarCompression = RecordedCompression.of(RecordedCompression.typeOf(sourceCompressed.get(0)));
             vectorStore = scratch;
             compactGraphImpl(graphPath, inlineStrategy);
             // Record the graph path with the sidecar strategy before writeSidecar: the strategy
@@ -798,6 +932,7 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
             throw new RuntimeException("Sidecar compaction failed", e);
         } finally {
             activeSidecarStrategy = QuantizationCompactionStrategy.NONE;
+            sidecarCompression = RecordedCompression.UNKNOWN;
             vectorStore = QuantizationCompactionStrategy.NONE;
             inlineStrategy.onAfterClose(graphPath);
             scratch.onAfterClose(graphPath);
@@ -943,7 +1078,8 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
 
         log.info("Writing compacted graph : {} total nodes, maxOrdinal={}, dimension={}, degree={}",
                 numTotalNodes, maxOrdinal, dimension, maxDegrees.get(0));
-        try (CompactWriter writer = new CompactWriter(outputPath, version, maxOrdinal, numTotalNodes, 0, layerInfo, entryNode, dimension, maxDegrees, outputFusedFeature)) {
+        try (CompactWriter writer = new CompactWriter(outputPath, version, maxOrdinal, numTotalNodes, 0, layerInfo, entryNode, dimension, maxDegrees, outputFusedFeature,
+                RecordedSimilarity.of(similarityFunction), outputCompression(outputFusedFeature))) {
             // Header has to be written first so the writer's position is past the header
             // before any strategy that mmaps past the projected end of the output runs.
             writer.writeHeader();
@@ -2232,6 +2368,7 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
      * Creates a score provider for searching across different source indexes. Uses approximate
      * PQ-based scoring if compressedPrecision is enabled, otherwise uses exact scoring.
      */
+    @SuppressWarnings("deprecation")
     private SearchScoreProvider buildCrossSourceScoreProvider(boolean compressedPrecision,
                                                               OnDiskGraphIndex searchSource,
                                                               int searchSourceIdx,

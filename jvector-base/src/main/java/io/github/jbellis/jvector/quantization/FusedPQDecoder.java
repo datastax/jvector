@@ -49,7 +49,7 @@ public abstract class FusedPQDecoder implements ScoreFunction.ApproximateScoreFu
     protected FusedPQDecoder(ProductQuantization pq,
                              Int2ObjectHashMap<FusedFeature.InlineSource> hierarchyCachedFeatures,
                              VectorFloat<?> query, FusedPQ.PackedNeighbors packedNeighbors,
-                             ByteSequence<?> neighborCodes, VectorFloat<?> results, ExactScoreFunction esf,
+                             ByteSequence<?> neighborCodes, VectorFloat<?> partialSums, ExactScoreFunction esf,
                              VectorSimilarityFunction vsf) {
         this.pq = pq;
         this.hierarchyCachedFeatures = hierarchyCachedFeatures;
@@ -57,23 +57,35 @@ public abstract class FusedPQDecoder implements ScoreFunction.ApproximateScoreFu
         this.esf = esf;
         this.packedNeighbors = packedNeighbors;
         this.neighborCodes = neighborCodes;
+        this.partialSums = partialSums;
         this.vsf = vsf;
         this.origin = -1;
+    }
 
-        // compute partialSums
-        // cosine similarity is a special case where we need to compute the squared magnitude of the query
-        // in the same loop, so we skip this and compute it in the cosine constructor
-        partialSums = pq.reusablePartialSums();
-        if (vsf != VectorSimilarityFunction.COSINE) {
-            VectorFloat<?> center = pq.globalCentroid;
-            var centeredQuery = center == null ? query : VectorUtil.sub(query, center);
-            for (var i = 0; i < pq.getSubspaceCount(); i++) {
-                int offset = pq.subvectorSizesAndOffsets[i][1];
-                int size = pq.subvectorSizesAndOffsets[i][0];
-                var codebook = pq.codebooks[i];
-                VectorUtil.calculatePartialSums(codebook, i, size, pq.getClusterCount(), centeredQuery, offset, vsf, partialSums);
+    /**
+     * Fills {@code partialSums} with {@code query}'s per-subspace scores against every codebook entry, the table a
+     * decoder for {@code vsf} sums. COSINE fills the dot products, and needs the query's squared magnitude as
+     * well, which this returns; for the other functions it returns 0.
+     *
+     * @param partialSums {@code pq.getSubspaceCount() * pq.getClusterCount()} elements
+     */
+    public static float fillPartialSums(ProductQuantization pq, VectorFloat<?> query, VectorSimilarityFunction vsf,
+                                        VectorFloat<?> partialSums) {
+        VectorFloat<?> center = pq.globalCentroid;
+        var centeredQuery = center == null ? query : VectorUtil.sub(query, center);
+        // the cosine numerator is the same partial sums as DOT_PRODUCT's
+        var tableFunction = vsf == VectorSimilarityFunction.COSINE ? VectorSimilarityFunction.DOT_PRODUCT : vsf;
+        float queryMagSum = 0.0f;
+        for (var i = 0; i < pq.getSubspaceCount(); i++) {
+            int offset = pq.subvectorSizesAndOffsets[i][1];
+            int size = pq.subvectorSizesAndOffsets[i][0];
+            var codebook = pq.codebooks[i];
+            VectorUtil.calculatePartialSums(codebook, i, size, pq.getClusterCount(), centeredQuery, offset, tableFunction, partialSums);
+            if (vsf == VectorSimilarityFunction.COSINE) {
+                queryMagSum += VectorUtil.dotProduct(centeredQuery, offset, centeredQuery, offset, size);
             }
         }
+        return queryMagSum;
     }
 
     @Override
@@ -115,9 +127,9 @@ public abstract class FusedPQDecoder implements ScoreFunction.ApproximateScoreFu
     static class DotProductDecoder extends FusedPQDecoder {
         public DotProductDecoder(FusedPQ.PackedNeighbors neighbors, ProductQuantization pq,
                                  Int2ObjectHashMap<FusedFeature.InlineSource> hierarchyCachedFeatures,
-                                 VectorFloat<?> query, ByteSequence<?> neighborCodes, VectorFloat<?> results,
+                                 VectorFloat<?> query, ByteSequence<?> neighborCodes, VectorFloat<?> partialSums,
                                  ExactScoreFunction esf) {
-            super(pq, hierarchyCachedFeatures, query, neighbors, neighborCodes, results, esf, VectorSimilarityFunction.DOT_PRODUCT);
+            super(pq, hierarchyCachedFeatures, query, neighbors, neighborCodes, partialSums, esf, VectorSimilarityFunction.DOT_PRODUCT);
         }
 
         @Override
@@ -140,9 +152,9 @@ public abstract class FusedPQDecoder implements ScoreFunction.ApproximateScoreFu
     static class EuclideanDecoder extends FusedPQDecoder {
         public EuclideanDecoder(FusedPQ.PackedNeighbors neighbors, ProductQuantization pq,
                                 Int2ObjectHashMap<FusedFeature.InlineSource> hierarchyCachedFeatures,
-                                VectorFloat<?> query, ByteSequence<?> neighborCodes, VectorFloat<?> results,
+                                VectorFloat<?> query, ByteSequence<?> neighborCodes, VectorFloat<?> partialSums,
                                 ExactScoreFunction esf) {
-            super(pq, hierarchyCachedFeatures, query, neighbors, neighborCodes, results, esf, VectorSimilarityFunction.EUCLIDEAN);
+            super(pq, hierarchyCachedFeatures, query, neighbors, neighborCodes, partialSums, esf, VectorSimilarityFunction.EUCLIDEAN);
         }
 
         @Override
@@ -160,9 +172,9 @@ public abstract class FusedPQDecoder implements ScoreFunction.ApproximateScoreFu
 
         protected CosineDecoder(FusedPQ.PackedNeighbors neighbors, ProductQuantization pq,
                                 Int2ObjectHashMap<FusedFeature.InlineSource> hierarchyCachedFeatures,
-                                VectorFloat<?> query, ByteSequence<?> neighborCodes, VectorFloat<?> results,
-                                ExactScoreFunction esf) {
-            super(pq, hierarchyCachedFeatures, query, neighbors, neighborCodes, results, esf, VectorSimilarityFunction.COSINE);
+                                VectorFloat<?> query, ByteSequence<?> neighborCodes, VectorFloat<?> partialSums,
+                                float queryMagnitudeSquared, ExactScoreFunction esf) {
+            super(pq, hierarchyCachedFeatures, query, neighbors, neighborCodes, partialSums, esf, VectorSimilarityFunction.COSINE);
 
             // this part is not query-dependent, so we can cache it
             partialSquaredMagnitudes = pq.partialSquaredMagnitudes().updateAndGet(current -> {
@@ -186,20 +198,7 @@ public abstract class FusedPQDecoder implements ScoreFunction.ApproximateScoreFu
                 return partialSquaredMagnitudes;
             });
 
-            // compute partialSums
-            VectorFloat<?> center = pq.globalCentroid;
-            float queryMagSum = 0.0f;
-            var centeredQuery = center == null ? query : VectorUtil.sub(query, center);
-            for (var i = 0; i < pq.getSubspaceCount(); i++) {
-                int offset = pq.subvectorSizesAndOffsets[i][1];
-                int size = pq.subvectorSizesAndOffsets[i][0];
-                var codebook = pq.codebooks[i];
-                // cosine numerator is the same partial sums as if we were using DOT_PRODUCT
-                VectorUtil.calculatePartialSums(codebook, i, size, pq.getClusterCount(), centeredQuery, offset, VectorSimilarityFunction.DOT_PRODUCT, partialSums);
-                queryMagSum += VectorUtil.dotProduct(centeredQuery, offset, centeredQuery, offset, size);
-            }
-
-            this.queryMagnitudeSquared = queryMagSum;
+            this.queryMagnitudeSquared = queryMagnitudeSquared;
         }
 
         @Override
@@ -229,17 +228,39 @@ public abstract class FusedPQDecoder implements ScoreFunction.ApproximateScoreFu
         };
     }
 
+    /**
+     * A decoder for {@code query}, filling the PQ's per-thread table. The decoder is valid until the next one this
+     * thread creates for the same PQ.
+     *
+     * @param results unused
+     */
     public static FusedPQDecoder newDecoder(FusedPQ.PackedNeighbors neighbors, ProductQuantization pq,
                                             Int2ObjectHashMap<FusedFeature.InlineSource> hierarchyCachedFeatures, VectorFloat<?> query,
                                             ByteSequence<?> reusableNeighborCodes, VectorFloat<?> results,
                                             VectorSimilarityFunction similarityFunction, ExactScoreFunction esf) {
+        var partialSums = pq.reusablePartialSums();
+        float queryMagnitudeSquared = fillPartialSums(pq, query, similarityFunction, partialSums);
+        return newDecoder(neighbors, pq, hierarchyCachedFeatures, query, partialSums, queryMagnitudeSquared,
+                reusableNeighborCodes, similarityFunction, esf);
+    }
+
+    /**
+     * A decoder over a table {@link #fillPartialSums} filled for {@code query} and {@code similarityFunction}. The
+     * decoder reads the table and the query as they are, so they must stay unchanged while it is in use.
+     */
+    public static FusedPQDecoder newDecoder(FusedPQ.PackedNeighbors neighbors, ProductQuantization pq,
+                                            Int2ObjectHashMap<FusedFeature.InlineSource> hierarchyCachedFeatures, VectorFloat<?> query,
+                                            VectorFloat<?> partialSums, float queryMagnitudeSquared,
+                                            ByteSequence<?> reusableNeighborCodes,
+                                            VectorSimilarityFunction similarityFunction, ExactScoreFunction esf) {
         switch (similarityFunction) {
             case DOT_PRODUCT:
-                return new DotProductDecoder(neighbors, pq, hierarchyCachedFeatures, query, reusableNeighborCodes, results, esf);
+                return new DotProductDecoder(neighbors, pq, hierarchyCachedFeatures, query, reusableNeighborCodes, partialSums, esf);
             case EUCLIDEAN:
-                return new EuclideanDecoder(neighbors, pq, hierarchyCachedFeatures, query, reusableNeighborCodes, results, esf);
+                return new EuclideanDecoder(neighbors, pq, hierarchyCachedFeatures, query, reusableNeighborCodes, partialSums, esf);
             case COSINE:
-                return new CosineDecoder(neighbors, pq, hierarchyCachedFeatures, query, reusableNeighborCodes, results, esf);
+                return new CosineDecoder(neighbors, pq, hierarchyCachedFeatures, query, reusableNeighborCodes, partialSums,
+                        queryMagnitudeSquared, esf);
             default:
                 throw new IllegalArgumentException("Unsupported similarity function: " + similarityFunction);
         }

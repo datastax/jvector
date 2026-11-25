@@ -16,7 +16,7 @@
 
 package io.github.jbellis.jvector.graph.disk;
 
-import io.github.jbellis.jvector.graph.ImmutableGraphIndex;
+import io.github.jbellis.jvector.graph.GraphIndex;
 import io.github.jbellis.jvector.graph.disk.feature.Feature;
 import io.github.jbellis.jvector.graph.disk.feature.FeatureId;
 
@@ -30,7 +30,7 @@ import java.util.Map;
  */
 class WriteContext {
     /** The immutable graph being serialized. */
-    final ImmutableGraphIndex graph;
+    final GraphIndex graph;
     /** Maps between original (old) ordinals and the compacted (new) ordinals written to disk. */
     final OrdinalMapper ordinalMapper;
     /** All features configured for this index, keyed by their {@link FeatureId}. */
@@ -45,6 +45,10 @@ class WriteContext {
     final int dimension;
     /** Placement of base-layer records. */
     final L0Layout l0Layout;
+    /** The similarity function the header records (format version 8 and later). */
+    final RecordedSimilarity similarity;
+    /** The compression type the header records (format version 8 and later). */
+    final RecordedCompression compression;
 
     /**
      * Constructs a {@code WriteContext} bundling all parameters required for a single serialization session.
@@ -57,15 +61,19 @@ class WriteContext {
      * @param headerSize     byte size of the header written before node records
      * @param dimension      vector dimension, sourced from the configured features
      * @param l0Layout       placement of base-layer records
+     * @param similarity     the similarity function the header records
+     * @param compression    the compression type the header records
      */
-    WriteContext(ImmutableGraphIndex graph,
+    WriteContext(GraphIndex graph,
                  OrdinalMapper ordinalMapper,
                  Map<FeatureId, Feature> featureMap,
                  List<Feature> inlineFeatures,
                  long startOffset,
                  long headerSize,
                  int dimension,
-                 L0Layout l0Layout) {
+                 L0Layout l0Layout,
+                 RecordedSimilarity similarity,
+                 RecordedCompression compression) {
         this.graph = graph;
         this.ordinalMapper = ordinalMapper;
         this.featureMap = featureMap;
@@ -74,5 +82,7 @@ class WriteContext {
         this.headerSize = headerSize;
         this.dimension = dimension;
         this.l0Layout = l0Layout;
+        this.similarity = similarity;
+        this.compression = compression;
     }
 }

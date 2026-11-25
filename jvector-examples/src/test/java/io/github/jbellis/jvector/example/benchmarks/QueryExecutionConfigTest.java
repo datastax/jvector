@@ -36,7 +36,7 @@ public class QueryExecutionConfigTest {
     @Test
     public void schema2RejectsNestedAshDeliverySettings() throws Exception {
         var file = directory.newFile("index.yml").toPath();
-        Files.writeString(file, "yamlSchemaVersion: 2\nonDiskIndexVersion: 7\ndataset: test\n"
+        Files.writeString(file, "yamlSchemaVersion: 2\nonDiskIndexVersion: 8\ndataset: test\n"
                 + "search:\n  queryExecution: queued\n  compression:\n    - type: ASH\n");
         var error = assertThrows(IllegalArgumentException.class, () -> MultiConfig.getConfig(file.toString()));
         assertTrue(error.getMessage().contains("require schema 3"));
@@ -45,7 +45,7 @@ public class QueryExecutionConfigTest {
     private MultiConfig schema3(String construction, String search) throws Exception {
         var file = directory.newFile().toPath();
         Files.writeString(file, String.join("\n",
-                "yamlSchemaVersion: 3", "onDiskIndexVersion: 7", "dataset: test",
+                "yamlSchemaVersion: 3", "onDiskIndexVersion: 8", "dataset: test",
                 "construction:", construction,
                 "  outDegree: [8]", "  efConstruction: [32]", "  neighborOverflow: [1.2f]",
                 "  addHierarchy: [No]", "  refineFinalGraph: [No]",

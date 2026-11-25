@@ -2,7 +2,7 @@
 # This default suits a first run on a small dataset: a minute or two, one short console table, no files written.
 # Select another file with -Djvector.bench.runConfig=<path>; see docs/benchyaml-guide.md.
 yamlSchemaVersion: 1
-onDiskIndexVersion: 7   # On-disk format to write; 7 adds fused ASH graphs and page alignment
+onDiskIndexVersion: 8   # On-disk format to write; 8 records the similarity function, 7 added fused ASH graphs and page alignment
 
 # Benchmarks to compute and the stats from each
 benchmarks:

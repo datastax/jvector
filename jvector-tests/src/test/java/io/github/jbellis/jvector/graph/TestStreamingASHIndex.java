@@ -18,8 +18,13 @@ package io.github.jbellis.jvector.graph;
 
 import com.carrotsearch.randomizedtesting.RandomizedTest;
 import com.carrotsearch.randomizedtesting.annotations.ThreadLeakScope;
+import io.github.jbellis.jvector.TestUtil;
+import io.github.jbellis.jvector.disk.SimpleMappedReader;
+import io.github.jbellis.jvector.graph.disk.OnDiskGraphIndex;
 import io.github.jbellis.jvector.graph.similarity.BuildScoreProvider;
 import io.github.jbellis.jvector.graph.similarity.DefaultSearchScoreProvider;
+import io.github.jbellis.jvector.graph.similarity.PreparedQuery;
+import io.github.jbellis.jvector.graph.similarity.QueryPreparer;
 import io.github.jbellis.jvector.quantization.ASHQueryProjection;
 import io.github.jbellis.jvector.quantization.ASHVectors;
 import io.github.jbellis.jvector.quantization.AsymmetricHashing;
@@ -33,6 +38,8 @@ import org.junit.Test;
 
 import java.io.IOException;
 import java.io.UncheckedIOException;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.HashSet;
@@ -464,5 +471,156 @@ public class TestStreamingASHIndex extends RandomizedTest {
         double warmRecall = recall(warm, data, queries, 10, 40, Bits.ALL);
         double batch = batchRecall(model, data, queries, 10, 40, Bits.ALL);
         assertTrue("warm recall " + warmRecall + " vs batch " + batch, warmRecall > batch - 0.05);
+    }
+
+    /** A cold index with its first (random-projection) model fixed and every vector in its graph. */
+    private static StreamingASHIndex indexWithModel(List<VectorFloat<?>> data) {
+        var options = new StreamingASHIndex.Options();
+        options.coldStartSize = 256;
+        var index = StreamingASHIndex.coldStart(new ListRandomAccessVectorValues(data, DIM), DOT, encodedBits(2), 2,
+                builders(), options);
+        for (int i = 0; i < data.size(); i++) index.add(i);
+        while (index.isTraining()) Thread.onSpinWait();
+        assertTrue(index.hasModel());
+        return index;
+    }
+
+    @Test
+    public void aColdIndexIsAGraphIndexWithNothingToPrepare() throws IOException {
+        var data = vectors(100, 21);
+        var options = new StreamingASHIndex.Options();
+        options.coldStartSize = 256;
+        GraphIndex graph = StreamingASHIndex.coldStart(new ListRandomAccessVectorValues(data, DIM), DOT,
+                encodedBits(2), 2, builders(), options);
+        for (int i = 0; i < data.size(); i++) ((StreamingASHIndex) graph).add(i);
+
+        assertEquals(DOT, graph.similarityFunction().orElseThrow());
+        assertEquals(DIM, graph.getDimension());
+        assertEquals(0, graph.size(0));
+        assertTrue(graph.queryPreparer().isEmpty());
+        try (var view = (GraphIndex.ScoringView) graph.getView()) {
+            assertFalse(view.hasApproximateScores());
+            var other = indexWithModel(vectors(1000, 22));
+            var preparer = other.queryPreparer().orElseThrow();
+            var state = preparer.newState();
+            preparer.prepare(data.get(0), state);
+            assertThrows(IllegalStateException.class, () -> view.scoreProviderFor(state, true));
+        }
+    }
+
+    @Test
+    public void aSearchThroughTheGraphIndexMatchesTheIndexsOwnSearch() throws IOException {
+        var data = vectors(3000, 23);
+        var queries = vectors(20, 24);
+        var index = indexWithModel(data);
+        GraphIndex graph = index;
+        assertEquals(index.graph().size(0), graph.size(0));
+        assertEquals(index.graph().maxDegrees(), graph.maxDegrees());
+        assertEquals(index.graph().getMaxLevel(), graph.getMaxLevel());
+
+        QueryPreparer preparer = graph.queryPreparer().orElseThrow();
+        PreparedQuery state = preparer.newState();
+        try (var searcher = graph.searcher()) {
+            var view = (GraphIndex.ScoringView) searcher.getView();
+            assertTrue(view.hasApproximateScores());
+            for (var q : queries) {
+                preparer.prepare(q, state);
+                var expected = index.search(state, 10, 40, Bits.ALL).getNodes();
+                var provider = view.scoreProviderFor(state, true);
+                var found = searcher.search(provider, 10, 40, Float.NEGATIVE_INFINITY, Float.NEGATIVE_INFINITY,
+                        Bits.ALL).getNodes();
+                assertEquals(expected.length, found.length);
+                for (int i = 0; i < found.length; i++) {
+                    assertEquals(expected[i].node, found[i].node);
+                    assertEquals(expected[i].score, found[i].score, 0f);
+                }
+                assertNull(view.scoreProviderFor(state, false).reranker());
+
+                // The explicit-function search works on the index too, reranked exactly.
+                for (var ns : searcher.search(q, 10, 40, DOT, Bits.ALL).getNodes()) {
+                    assertEquals(DOT.compare(q, data.get(ns.node)), ns.score, 0f);
+                }
+            }
+        }
+    }
+
+    @Test
+    public void aQueryPreparedByAnotherIndexIsRejected() throws IOException {
+        var data = vectors(1000, 25);
+        var index = indexWithModel(data);
+        var other = indexWithModel(vectors(1000, 26));
+        var preparer = other.queryPreparer().orElseThrow();
+        var state = preparer.newState();
+        preparer.prepare(data.get(0), state);
+        try (var view = (GraphIndex.ScoringView) index.getView()) {
+            assertThrows(IllegalArgumentException.class, () -> view.scoreProviderFor(state, true));
+        }
+    }
+
+    @Test
+    public void anIndexIsWrittenAsItsGraphAndRecordsItsSimilarity() throws IOException {
+        var data = vectors(2000, 27);
+        var ravv = new ListRandomAccessVectorValues(data, DIM);
+        var index = indexWithModel(data);
+        index.prepareForFlush();
+        Path directory = Files.createTempDirectory(getClass().getSimpleName());
+        try {
+            index.markDeleted(5);
+            Path unclean = directory.resolve("unclean");
+            assertThrows(IllegalArgumentException.class, () -> index.writeTo(unclean, ravv));
+
+            index.builder().cleanup();
+            Path path = directory.resolve("graph");
+            PersistableGraphIndex persistable = index;
+            persistable.writeTo(path, ravv);
+            try (var onDisk = OnDiskGraphIndex.load(new SimpleMappedReader.Supplier(path))) {
+                assertEquals(index.graph().size(0), onDisk.size(0));
+                assertEquals(DOT, onDisk.similarityFunction().orElseThrow());
+            }
+        } finally {
+            TestUtil.deleteQuietly(directory);
+        }
+    }
+
+    @Test
+    public void theIndexsSearcherSearchesByItsSimilarityAsTheIndexDoes() throws IOException {
+        var data = vectors(3000, 29);
+        var queries = vectors(20, 30);
+        var index = indexWithModel(data);
+        try (var searcher = index.searcher()) {
+            for (var q : queries) {
+                var expected = index.search(q, 10, 40, Bits.ALL).getNodes();
+                var found = searcher.search(q, 10, 40, Bits.ALL).getNodes();
+                assertEquals(expected.length, found.length);
+                for (int i = 0; i < found.length; i++) {
+                    assertEquals(expected[i].node, found[i].node);
+                    assertEquals(expected[i].score, found[i].score, 0f);
+                }
+            }
+        }
+    }
+
+    @Test
+    public void itsSearcherSearchesTheIndexAsItIsNow() throws Exception {
+        var data = vectors(3000, 22);
+        var options = new StreamingASHIndex.Options();
+        options.coldStartSize = 256;
+        var index = StreamingASHIndex.coldStart(new ListRandomAccessVectorValues(data, DIM), DOT, encodedBits(2), 2,
+                builders(), options);
+        for (int i = 0; i < 100; i++) index.add(i);
+        var q = data.get(5);
+        try (var searcher = index.searcher()) {
+            // cold: the recorded vectors, scored exactly
+            var cold = searcher.search(q, 5, 20, Bits.ALL).getNodes();
+            assertEquals(5, cold.length);
+            assertEquals(5, cold[0].node);
+            // the same searcher, once the index has its model
+            for (int i = 100; i < data.size(); i++) index.add(i);
+            while (index.isTraining()) Thread.onSpinWait();
+            assertTrue(index.hasModel());
+            var live = searcher.search(q, 5, 20, Bits.ALL).getNodes();
+            assertEquals(5, live.length);
+            assertEquals(5, live[0].node);
+        }
     }
 }

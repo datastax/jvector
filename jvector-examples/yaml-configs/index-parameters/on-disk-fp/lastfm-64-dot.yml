@@ -1,6 +1,6 @@
 # lastfm-64-dot (65 dimensions, dot product): on-disk graph built and searched with full-precision vectors.
 yamlSchemaVersion: 3
-onDiskIndexVersion: 7
+onDiskIndexVersion: 8
 
 dataset: lastfm-64-dot
 

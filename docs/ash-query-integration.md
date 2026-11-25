@@ -83,7 +83,7 @@ separately.
 
 ## Library responsibilities and host responsibilities
 
-`ImmutableGraphIndex.queryPreparer()` returns an optional
+`GraphIndex.queryPreparer()` returns an optional
 `QueryPreparer`. Cache it with the loaded model. `newState()` creates reusable
 `PreparedQuery` buffers. `prepare` and `prepareBatch` snapshot FP32 query inputs,
 compute the projection and scoring data, and retain no traversal state. ASH

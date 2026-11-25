@@ -17,7 +17,7 @@
 package io.github.jbellis.jvector.example;
 
 import io.github.jbellis.jvector.graph.GraphSearcher;
-import io.github.jbellis.jvector.graph.ImmutableGraphIndex;
+import io.github.jbellis.jvector.graph.GraphIndex;
 import io.github.jbellis.jvector.graph.SearchResult;
 import io.github.jbellis.jvector.graph.disk.OnDiskGraphIndex;
 import io.github.jbellis.jvector.graph.similarity.PreparedQuery;
@@ -79,7 +79,7 @@ final class HelloASHQueuedSearch {
 
                  public void execute(Request request) {
                      var searcher = searchers.get();
-                     var view = (ImmutableGraphIndex.ScoringView) searcher.getView();
+                     var view = (GraphIndex.ScoringView) searcher.getView();
                      request.result = searcher.search(view.scoreProviderFor(request.prepared, true),
                              10, 20, 0.0f, 0.0f, Bits.ALL);
                  }

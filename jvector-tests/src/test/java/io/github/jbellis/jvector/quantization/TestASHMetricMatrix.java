@@ -23,7 +23,7 @@ import io.github.jbellis.jvector.graph.GraphSearcher;
 import io.github.jbellis.jvector.graph.SearchResult;
 import io.github.jbellis.jvector.graph.ListRandomAccessVectorValues;
 import io.github.jbellis.jvector.graph.MockVectorValues;
-import io.github.jbellis.jvector.graph.ImmutableGraphIndex;
+import io.github.jbellis.jvector.graph.GraphIndex;
 import io.github.jbellis.jvector.graph.StreamingASHIndex;
 import io.github.jbellis.jvector.graph.disk.OnDiskGraphIndex;
 import io.github.jbellis.jvector.graph.disk.OnDiskGraphIndexWriter;
@@ -329,7 +329,7 @@ public class TestASHMetricMatrix {
         var values = MockVectorValues.fromValues(data);
         for (var vsf : METRICS) {
             // The graph does not depend on the codes: build it once from exact scores.
-            ImmutableGraphIndex graph = new GraphIndexBuilder(BuildScoreProvider.randomAccessScoreProvider(values, vsf),
+            GraphIndex graph = new GraphIndexBuilder(BuildScoreProvider.randomAccessScoreProvider(values, vsf),
                     DIM, 12, 48, 1.2f, 1.2f, true, true).build(values);
             for (int optimizer : OPTIMIZERS) {
                 for (int landmarks : LANDMARKS) {
@@ -348,7 +348,7 @@ public class TestASHMetricMatrix {
         }
     }
 
-    private static void checkFused(String model, VectorSimilarityFunction vsf, ImmutableGraphIndex graph,
+    private static void checkFused(String model, VectorSimilarityFunction vsf, GraphIndex graph,
                                    VectorFloat<?>[] data, VectorFloat<?>[] queries, AsymmetricHashing ash,
                                    ASHVectors encoded, int blockSize) throws Exception {
         var path = Files.createTempFile("ash-metric-matrix-", ".index");
@@ -443,7 +443,7 @@ public class TestASHMetricMatrix {
     }
 
     /** Separated codes: an on-disk graph with codes held beside it, scored by the reloaded codes. */
-    private static void checkSeparatedSearch(String model, VectorSimilarityFunction vsf, ImmutableGraphIndex graph,
+    private static void checkSeparatedSearch(String model, VectorSimilarityFunction vsf, GraphIndex graph,
                                              VectorFloat<?>[] data, VectorFloat<?>[] queries, ASHVectors separated)
             throws Exception {
         var path = Files.createTempFile("ash-metric-matrix-separated-", ".index");

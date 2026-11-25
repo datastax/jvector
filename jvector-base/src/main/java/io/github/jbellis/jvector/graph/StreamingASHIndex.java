@@ -17,6 +17,10 @@
 package io.github.jbellis.jvector.graph;
 
 import io.github.jbellis.jvector.annotations.Experimental;
+import io.github.jbellis.jvector.disk.IndexWriter;
+import io.github.jbellis.jvector.graph.disk.OnDiskGraphIndexWriter;
+import io.github.jbellis.jvector.graph.disk.OnDiskParallelGraphIndexWriter;
+import io.github.jbellis.jvector.graph.disk.OnDiskSequentialGraphIndexWriter;
 import io.github.jbellis.jvector.graph.similarity.BuildScoreProvider;
 import io.github.jbellis.jvector.graph.similarity.DefaultSearchScoreProvider;
 import io.github.jbellis.jvector.graph.similarity.PreparedQuery;
@@ -26,7 +30,6 @@ import io.github.jbellis.jvector.graph.similarity.SearchScoreProvider;
 import io.github.jbellis.jvector.quantization.ASHQueryProjection;
 import io.github.jbellis.jvector.quantization.AsymmetricHashing;
 import io.github.jbellis.jvector.quantization.MutableASHVectors;
-import io.github.jbellis.jvector.util.Accountable;
 import io.github.jbellis.jvector.util.Bits;
 import io.github.jbellis.jvector.util.DocIdSetIterator;
 import io.github.jbellis.jvector.util.ExplicitThreadLocal;
@@ -38,10 +41,14 @@ import io.github.jbellis.jvector.vector.VectorSimilarityFunction;
 import io.github.jbellis.jvector.vector.VectorUtil;
 import io.github.jbellis.jvector.vector.types.VectorFloat;
 
+import java.io.FileNotFoundException;
 import java.io.IOException;
 import java.io.UncheckedIOException;
+import java.nio.file.Path;
 import java.util.ArrayList;
+import java.util.List;
 import java.util.Objects;
+import java.util.Optional;
 import java.util.concurrent.ForkJoinPool;
 import java.util.concurrent.Semaphore;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -58,6 +65,12 @@ import java.util.function.Supplier;
  * ordinal it has added. The index keeps only the graph and an ASH code per vector: the graph is built and searched
  * with ASH scoring, and the best candidates of each search are reranked with exact scores read from the caller's
  * vectors.</p>
+ *
+ * <p><b>A graph index.</b> The index is an {@link ASHGraphIndex}: its structure is that of its current
+ * {@link #graph}, its {@link #getView views} score queries with its ASH codes and rerank them from the caller's
+ * vectors, its {@link #queryPreparer} prepares queries for its model, and it is written as its graph is. Before a cold
+ * index has its model the graph is empty, so searches through a view find nothing; {@link #search} scores the
+ * recorded vectors exactly until then.</p>
  *
  * <p><b>Models.</b> An index starts with a model the caller passes in, typically one trained on an earlier index
  * over the same kind of data, or cold. A cold index first only records the ordinals it is given, and searches them
@@ -93,7 +106,7 @@ import java.util.function.Supplier;
  * vectors and queries with IllegalArgumentException; callers validate them first.</p>
  */
 @Experimental
-public final class StreamingASHIndex implements Accountable {
+public final class StreamingASHIndex implements ASHGraphIndex {
     /** Settings for a streaming index; the defaults suit most data. */
     public static final class Options {
         /**
@@ -852,12 +865,24 @@ public final class StreamingASHIndex implements Accountable {
     }
 
     /**
-     * A preparer that projects queries for this index, several at once when they arrive together, as a queued
-     * search does; null while a cold index scores exactly, when there is nothing to prepare.
+     * A preparer that projects queries for this index's current model, several at once when they arrive together, as
+     * a queued search does; empty while a cold index scores exactly, when there is nothing to prepare.
+     *
+     * <p>The preparer is for the model that is current when it is obtained. Queries it prepares stay usable while the
+     * index changes to a newer model, and are rejected once the change finishes and their model is no longer used; get
+     * a new preparer when {@link #model} changes.</p>
+     *
+     * <p>Before this index was a {@link GraphIndex}, this method returned the preparer or null. It returns
+     * {@link Optional} because {@link GraphIndex#queryPreparer} does: every graph index, ASH or not, is asked for its
+     * preparer the same way, and code written against {@code GraphIndex} works on this index unchanged. Java does not
+     * allow two methods that differ only in return type, and keeping the nullable form under another name would leave
+     * two methods doing one thing, so the signature changed; the class is experimental. Callers that checked for null
+     * use {@code queryPreparer().orElse(null)} or {@link Optional#ifPresent}.</p>
      */
-    public QueryPreparer queryPreparer() {
+    @Override
+    public Optional<QueryPreparer> queryPreparer() {
         Live l = live;
-        return l == null ? null : l.codes.queryPreparer();
+        return l == null ? Optional.empty() : Optional.of(l.codes.queryPreparer());
     }
 
     /** As {@link #search(VectorFloat, int, int, Bits)}, for a query prepared by this index's {@link #queryPreparer}. */
@@ -882,11 +907,13 @@ public final class StreamingASHIndex implements Accountable {
     // Accessors
 
     /** True once the index has fixed its first model. */
+    @Override
     public boolean hasModel() {
         return live != null;
     }
 
     /** The model new vectors are encoded with, or null while a cold index scores exactly. */
+    @Override
     public AsymmetricHashing model() {
         Live l = live;
         return l == null ? null : l.codes.getCompressor();
@@ -941,5 +968,210 @@ public final class StreamingASHIndex implements Accountable {
     public long nativeBytesUsed() {
         Live l = live;
         return l == null ? 0 : l.codes.nativeBytesUsed();
+    }
+
+    // ---------------------------------------------------------------------------------------------
+    // GraphIndex: the structure is the current graph's; see the class comment
+
+    /**
+     * A searcher whose {@link GraphSearcher#search(VectorFloat, int, int, Bits) search(query, topK, rerankK, acceptOrds)}
+     * is this index's {@link #search(VectorFloat, int, int, Bits)}: it scores a cold index's recorded vectors exactly,
+     * and searches the current graph with the current model, however long the searcher is kept. Its other searches
+     * search the graph as of the view it was created with, as for any graph searcher.
+     */
+    @Override
+    public GraphSearcher searcher() {
+        return new GraphSearcher(this) {
+            @Override
+            public SearchResult search(VectorFloat<?> queryVector, int topK, int rerankK, Bits acceptOrds) {
+                return StreamingASHIndex.this.search(queryVector, topK, rerankK, acceptOrds);
+            }
+        };
+    }
+
+    /**
+     * A view of the current graph that also scores queries: with ASH codes once the index has a model, reranked
+     * exactly from the caller's vectors. It scores with the model in use when it was taken; take a new view to see
+     * a model fixed since. Before a cold index has its model the graph is empty and the view finds nothing.
+     */
+    @Override
+    public View getView() {
+        Live l = live;
+        var g = l == null ? graph() : l.builder.getGraph();
+        return new IndexView(l, g.getView());
+    }
+
+    @Override
+    public NodesIterator getNodes(int level) {
+        return graph().getNodes(level);
+    }
+
+    @Override
+    public int maxDegree() {
+        return graph().maxDegree();
+    }
+
+    @Override
+    public List<Integer> maxDegrees() {
+        return graph().maxDegrees();
+    }
+
+    @Override
+    public int getDimension() {
+        return dimension;
+    }
+
+    @Override
+    public int getIdUpperBound() {
+        return graph().getIdUpperBound();
+    }
+
+    @Override
+    public boolean containsNode(int nodeId) {
+        return graph().containsNode(nodeId);
+    }
+
+    @Override
+    public boolean isHierarchical() {
+        return graph().isHierarchical();
+    }
+
+    @Override
+    public int getMaxLevel() {
+        return graph().getMaxLevel();
+    }
+
+    @Override
+    public int getDegree(int level) {
+        return graph().getDegree(level);
+    }
+
+    @Override
+    public double getAverageDegree(int level) {
+        return graph().getAverageDegree(level);
+    }
+
+    @Override
+    public int size(int level) {
+        return graph().size(level);
+    }
+
+    /** The index's similarity, fixed when it is created. */
+    @Override
+    public Optional<VectorSimilarityFunction> similarityFunction() {
+        return Optional.of(similarity);
+    }
+
+    /** Releases nothing: the caller owns the vectors, and the graph and codes are reclaimed with the index. */
+    @Override
+    public void close() {
+    }
+
+    // The writers write the current graph, as writing graph() does. The index holds no vectors: pass them to the
+    // writer, as inline vectors or features. Fused ASH codes need one model: call prepareForFlush first. Deleted
+    // nodes must be removed first with builder().cleanup().
+
+    /** Writes the current graph; see {@link PersistableGraphIndex#getParallelWriterBuilder}. */
+    @Override
+    public OnDiskParallelGraphIndexWriter.Builder getParallelWriterBuilder(Path path) throws FileNotFoundException {
+        return graph().getParallelWriterBuilder(path);
+    }
+
+    /** Writes the current graph; see {@link PersistableGraphIndex#getWriterBuilder(Path)}. */
+    @Override
+    public OnDiskGraphIndexWriter.Builder getWriterBuilder(Path path) throws FileNotFoundException {
+        return graph().getWriterBuilder(path);
+    }
+
+    /** Writes the current graph; see {@link PersistableGraphIndex#getWriterBuilder(IndexWriter)}. */
+    @Override
+    public OnDiskSequentialGraphIndexWriter.Builder getWriterBuilder(IndexWriter out) {
+        return graph().getWriterBuilder(out);
+    }
+
+    /** Writes the current graph with {@code vectors} inline; see {@link PersistableGraphIndex#writeTo}. */
+    @Override
+    public void writeTo(Path path, RandomAccessVectorValues vectors) throws IOException {
+        graph().writeTo(path, vectors);
+    }
+
+    /** A view of a graph, scoring with the codes of the index state it was taken from; null codes while cold. */
+    private final class IndexView implements ScoringView {
+        private final Live live;
+        private final View graphView;
+
+        IndexView(Live live, View graphView) {
+            this.live = live;
+            this.graphView = graphView;
+        }
+
+        @Override
+        public SearchScoreProvider scoreProviderFor(PreparedQuery query, boolean rerank) {
+            if (live == null) throw new IllegalStateException("The index has no model to prepare queries for");
+            var score = live.codes.scoreFunctionFor(query);
+            var reranker = rerank ? rerankerFor(query.queryVector(), similarity) : null;
+            return new DefaultSearchScoreProvider(score, reranker, similarity);
+        }
+
+        @Override
+        public ScoreFunction.ExactScoreFunction rerankerFor(VectorFloat<?> queryVector, VectorSimilarityFunction vsf) {
+            checkVector(queryVector);
+            return vectors.get().rerankerFor(queryVector, vsf);
+        }
+
+        @Override
+        public ScoreFunction.ApproximateScoreFunction approximateScoreFunctionFor(VectorFloat<?> queryVector,
+                                                                                  VectorSimilarityFunction vsf) {
+            if (live == null) throw new UnsupportedOperationException("The index has no model to score with yet");
+            checkVector(queryVector);
+            return live.codes.precomputedScoreFunctionFor(queryVector, vsf);
+        }
+
+        @Override
+        public boolean hasApproximateScores() {
+            return live != null;
+        }
+
+        @Override
+        public NodesIterator getNeighborsIterator(int level, int node) {
+            return graphView.getNeighborsIterator(level, node);
+        }
+
+        @Override
+        public void processNeighbors(int level, int node, ScoreFunction scoreFunction, IntMarker visited,
+                                     NeighborProcessor neighborProcessor) {
+            graphView.processNeighbors(level, node, scoreFunction, visited, neighborProcessor);
+        }
+
+        @Override
+        @Deprecated
+        public int size() {
+            return graphView.size();
+        }
+
+        @Override
+        public NodeAtLevel entryNode() {
+            return graphView.entryNode();
+        }
+
+        @Override
+        public Bits liveNodes() {
+            return graphView.liveNodes();
+        }
+
+        @Override
+        public int getIdUpperBound() {
+            return graphView.getIdUpperBound();
+        }
+
+        @Override
+        public boolean contains(int level, int node) {
+            return graphView.contains(level, node);
+        }
+
+        @Override
+        public void close() throws IOException {
+            graphView.close();
+        }
     }
 }

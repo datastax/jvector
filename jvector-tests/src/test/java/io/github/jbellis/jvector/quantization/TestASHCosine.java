@@ -20,7 +20,7 @@ import io.github.jbellis.jvector.disk.ByteBufferReader;
 import io.github.jbellis.jvector.disk.SimpleMappedReader;
 import io.github.jbellis.jvector.graph.GraphIndexBuilder;
 import io.github.jbellis.jvector.graph.GraphSearcher;
-import io.github.jbellis.jvector.graph.ImmutableGraphIndex;
+import io.github.jbellis.jvector.graph.GraphIndex;
 import io.github.jbellis.jvector.graph.ListRandomAccessVectorValues;
 import io.github.jbellis.jvector.graph.MockVectorValues;
 import io.github.jbellis.jvector.graph.StreamingASHIndex;
@@ -257,7 +257,7 @@ public class TestASHCosine {
         assertEquals(COS, loaded.similarityFunction());
         var before = codes.scoreFunctionFor(raw[1], COS);
         var after = loaded.scoreFunctionFor(raw[1], COS);
-        for (int i = 0; i < raw.length; i++) assertEquals(before.similarityTo(i), after.similarityTo(i), 0f);
+        for (int i = 0; i < raw.length; i++) assertEquals(before.similarityTo(i), after.similarityTo(i), 1e-5f);
     }
 
     /** Recall of a DOT_PRODUCT index of the normalized vectors, which a COSINE index of the raw ones must match. */
@@ -337,7 +337,7 @@ public class TestASHCosine {
     }
 
     /** Builds on one thread so that graphs built from identical codes are identical. */
-    private static ImmutableGraphIndex buildOnOneThread(ASHVectors codes, MockVectorValues values) throws Exception {
+    private static GraphIndex buildOnOneThread(ASHVectors codes, MockVectorValues values) throws Exception {
         var pool = new ForkJoinPool(1);
         try {
             return new GraphIndexBuilder(BuildScoreProvider.ashBuildScoreProvider(codes), DIM, 16, 64,

@@ -1,7 +1,7 @@
 # cap-1M: fused 2-bit ASH graph with NVQ reranking. This example shows how to
 # run each search on the calling thread.
 yamlSchemaVersion: 3
-onDiskIndexVersion: 7
+onDiskIndexVersion: 8
 
 dataset: cap-1M
 

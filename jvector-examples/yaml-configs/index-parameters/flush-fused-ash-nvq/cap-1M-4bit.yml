@@ -1,7 +1,7 @@
 # CAP-1M at 16X nominal compression. Build the graph with source FP32 vectors,
 # then write fused 4-bit ASH traversal codes and NVQ reranking vectors to disk.
 yamlSchemaVersion: 3
-onDiskIndexVersion: 7
+onDiskIndexVersion: 8
 dataset: cap-1M
 
 construction:

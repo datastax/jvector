@@ -25,9 +25,15 @@
 package io.github.jbellis.jvector.graph;
 
 import io.github.jbellis.jvector.annotations.Experimental;
+import io.github.jbellis.jvector.disk.IndexWriter;
 import io.github.jbellis.jvector.disk.RandomAccessReader;
 import io.github.jbellis.jvector.graph.ConcurrentNeighborMap.Neighbors;
+import io.github.jbellis.jvector.graph.disk.OnDiskGraphIndexWriter;
+import io.github.jbellis.jvector.graph.disk.OnDiskParallelGraphIndexWriter;
+import io.github.jbellis.jvector.graph.disk.OnDiskSequentialGraphIndexWriter;
 import io.github.jbellis.jvector.graph.diversity.DiversityProvider;
+import io.github.jbellis.jvector.graph.diversity.VamanaDiversityProvider;
+import io.github.jbellis.jvector.graph.similarity.BuildScoreProvider;
 import io.github.jbellis.jvector.graph.similarity.ScoreFunction;
 import io.github.jbellis.jvector.util.Accountable;
 import io.github.jbellis.jvector.util.BitSet;
@@ -37,15 +43,20 @@ import io.github.jbellis.jvector.util.PagedIntMap;
 import io.github.jbellis.jvector.util.RamUsageEstimator;
 import io.github.jbellis.jvector.util.SparseIntMap;
 import io.github.jbellis.jvector.util.ThreadSafeGrowableBitSet;
+import io.github.jbellis.jvector.vector.ByteVectorSimilarityFunction;
+import io.github.jbellis.jvector.vector.VectorSimilarityFunction;
 import org.agrona.collections.IntArrayList;
 
 import java.io.DataOutput;
+import java.io.FileNotFoundException;
 import java.io.IOException;
+import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.NoSuchElementException;
+import java.util.Optional;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicIntegerArray;
 import java.util.concurrent.atomic.AtomicReference;
@@ -53,7 +64,7 @@ import java.util.concurrent.locks.StampedLock;
 import java.util.stream.IntStream;
 
 /**
- * An {@link ImmutableGraphIndex} that offers concurrent access; for typical graphs you will get significant
+ * A {@link GraphIndex} that offers concurrent access; for typical graphs you will get significant
  * speedups in construction and searching as you add threads.
  *
  * <p>The base layer (layer 0) contains all nodes, while higher layers are stored in sparse maps.
@@ -176,11 +187,47 @@ public class OnHeapGraphIndex implements MutableGraphIndex {
         return layers[level].size();
     }
 
+    /** The diversity provider that prunes this graph's neighbor lists, which scores the way the graph was built. */
+    DiversityProvider diversityProvider() {
+        return layers[0].diversityProvider;
+    }
+
+    /**
+     * Returns the similarity function of the score provider this graph is built with, which is empty for a
+     * custom provider that doesn't name one, and for a graph of int8 vectors.
+     */
+    @Override
+    public Optional<VectorSimilarityFunction> similarityFunction() {
+        BuildScoreProvider provider = buildScoreProvider();
+        return provider == null ? Optional.empty() : provider.searchSimilarityFunction();
+    }
+
+    /** As {@link #similarityFunction()}, for a graph of int8 vectors. */
+    @Override
+    public Optional<ByteVectorSimilarityFunction> byteSimilarityFunction() {
+        BuildScoreProvider provider = buildScoreProvider();
+        return provider == null ? Optional.empty() : provider.searchByteSimilarityFunction();
+    }
+
+    /** The score provider this graph is built with, or null if its diversity provider doesn't expose one. */
+    private BuildScoreProvider buildScoreProvider() {
+        DiversityProvider diversity = diversityProvider();
+        return diversity instanceof VamanaDiversityProvider ? ((VamanaDiversityProvider) diversity).scoreProvider : null;
+    }
+
     public void addNode(NodeAtLevel nodeLevel) {
         addNode(nodeLevel.level, nodeLevel.node);
     }
 
     public void addNode(int level, int node) {
+        // Adding a node is a mutation, so the graph is no longer complete. Clear the flag before the
+        // node becomes visible, so every View taken from now on is a ConcurrentGraphIndexView that hides
+        // incomplete nodes; a FrozenView would let an insert find its own half-added node as a neighbor.
+        // Views obtained while the graph was frozen should not be used across new insertions.
+        // Read first, so concurrent inserts don't all write the same volatile field.
+        if (allMutationsCompleted) {
+            allMutationsCompleted = false;
+        }
         ensureLayersExist(level);
 
         // add the node to each layer
@@ -421,6 +468,21 @@ public class OnHeapGraphIndex implements MutableGraphIndex {
         return allMutationsCompleted;
     }
 
+    @Override
+    public OnDiskParallelGraphIndexWriter.Builder getParallelWriterBuilder(Path path) throws FileNotFoundException {
+        return new OnDiskParallelGraphIndexWriter.Builder(this, path);
+    }
+
+    @Override
+    public OnDiskGraphIndexWriter.Builder getWriterBuilder(Path path) throws FileNotFoundException {
+        return new OnDiskGraphIndexWriter.Builder(this, path);
+    }
+
+    @Override
+    public OnDiskSequentialGraphIndexWriter.Builder getWriterBuilder(IndexWriter out) {
+        return new OnDiskSequentialGraphIndexWriter.Builder(this, out);
+    }
+
     /**
      * A concurrent View of the graph that is safe to search concurrently with updates and with other
      * searches. The View provides a limited kind of snapshot isolation: only nodes completely added
@@ -588,6 +650,11 @@ public class OnHeapGraphIndex implements MutableGraphIndex {
         }
 
         out.writeInt(OnHeapGraphIndex.MAGIC); // the magic number
+        // TODO: replace the literal 4 here and in load() with a named constant. It is the version of this
+        //  save/load format (identified by MAGIC), not OnDiskGraphIndex's file-format version
+        //  (OnDiskGraphIndex.CURRENT_VERSION), and it has only ever had this one version. load() accepts
+        //  exactly 4, so changing the layout written below needs a new version and load() support for
+        //  both, or previously saved graphs can no longer be read.
         out.writeInt(4); // The version
 
         // Write graph-level properties.
@@ -635,6 +702,7 @@ public class OnHeapGraphIndex implements MutableGraphIndex {
         }
 
         int version = in.readInt(); // The version
+        // TODO: use the named constant for the save/load format version once it exists; see save().
         if (version != 4) {
             throw new IOException("Unsupported version: " + version);
         }

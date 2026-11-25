@@ -19,7 +19,7 @@ package io.github.jbellis.jvector.graph.disk.feature;
 import io.github.jbellis.jvector.annotations.Experimental;
 import io.github.jbellis.jvector.disk.IndexWriter;
 import io.github.jbellis.jvector.disk.RandomAccessReader;
-import io.github.jbellis.jvector.graph.ImmutableGraphIndex;
+import io.github.jbellis.jvector.graph.GraphIndex;
 import io.github.jbellis.jvector.graph.disk.CommonHeader;
 import io.github.jbellis.jvector.graph.disk.CompactionContext;
 import io.github.jbellis.jvector.graph.disk.OnDiskGraphIndex;
@@ -55,6 +55,8 @@ import java.util.function.Supplier;
  * 16-entry query LUT per group. The other widths are stored as field blocks and
  * their neighborhoods are scored with an INT8-rounded query and integer dot
  * products; see {@link FusedASHLayout}.</p>
+ *
+ * <p>Requires on-disk format version 7 or later and does not support compaction yet.</p>
  */
 @Experimental
 public class FusedASH extends AbstractFeature implements FusedFeature {
@@ -259,6 +261,17 @@ public class FusedASH extends AbstractFeature implements FusedFeature {
         out.write(bytes, 0, length);
     }
 
+    /**
+     * Approximate scores of the fused ASH codes against {@code queryVector}, by {@code vsf}, which must be the model's.
+     *
+     * @deprecated A function passed here isn't checked against the one the graph records. Search with
+     * {@link io.github.jbellis.jvector.graph.GraphSearcher#search(VectorFloat, int, int, io.github.jbellis.jvector.util.Bits)},
+     * which scores by the recorded function, or prepare the query with
+     * {@link io.github.jbellis.jvector.graph.GraphIndex#queryPreparer} and bind it with
+     * {@link io.github.jbellis.jvector.graph.GraphIndex.ScoringView#scoreProviderFor}. Graphs that record no
+     * function (format version 7 and earlier) keep using this path.
+     */
+    @Deprecated
     public ScoreFunction.ApproximateScoreFunction approximateScoreFunctionFor(
             VectorFloat<?> queryVector,
             VectorSimilarityFunction vsf,
@@ -357,24 +370,24 @@ public class FusedASH extends AbstractFeature implements FusedFeature {
     }
 
     public static class State implements Feature.State {
-        public final ImmutableGraphIndex.View view;
+        public final GraphIndex.View view;
         public final IntFunction<AsymmetricHashing.QuantizedVector> compressedVectorFunction;
         public final int nodeId;
         /** When non-null, neighbor codes are copied from here into reusable storage instead. */
         final ASHVectors vectors;
 
-        public State(ImmutableGraphIndex.View view, ASHVectors ashVectors, int nodeId) {
+        public State(GraphIndex.View view, ASHVectors ashVectors, int nodeId) {
             this(view, ashVectors::get, nodeId, ashVectors);
         }
 
         public State(
-                ImmutableGraphIndex.View view,
+                GraphIndex.View view,
                 IntFunction<AsymmetricHashing.QuantizedVector> compressedVectorFunction,
                 int nodeId) {
             this(view, compressedVectorFunction, nodeId, null);
         }
 
-        private State(ImmutableGraphIndex.View view, IntFunction<AsymmetricHashing.QuantizedVector> compressedVectorFunction,
+        private State(GraphIndex.View view, IntFunction<AsymmetricHashing.QuantizedVector> compressedVectorFunction,
                       int nodeId, ASHVectors vectors) {
             this.view = view;
             this.compressedVectorFunction = compressedVectorFunction;

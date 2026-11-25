@@ -18,7 +18,7 @@ package io.github.jbellis.jvector.example;
 import io.github.jbellis.jvector.example.benchmarks.datasets.DataSet;
 import io.github.jbellis.jvector.example.benchmarks.QueuedQueryExecution;
 import io.github.jbellis.jvector.example.benchmarks.datasets.SimpleDataSet;
-import io.github.jbellis.jvector.graph.ImmutableGraphIndex;
+import io.github.jbellis.jvector.graph.GraphIndex;
 import io.github.jbellis.jvector.graph.NodesIterator;
 import io.github.jbellis.jvector.graph.similarity.*;
 import io.github.jbellis.jvector.util.Bits;
@@ -64,7 +64,7 @@ public class TestQueuedResultValidation {
         }
     }
 
-    private static final class Graph implements ImmutableGraphIndex {
+    private static final class Graph implements GraphIndex {
         final AtomicInteger bindings = new AtomicInteger();
         final boolean corrupt;
         Graph(boolean corrupt) { this.corrupt = corrupt; }
@@ -150,7 +150,7 @@ public class TestQueuedResultValidation {
         var data = new SimpleDataSet("direct-validation", VectorSimilarityFunction.DOT_PRODUCT,
                 List.of(vector(1)), queries, java.util.Collections.nCopies(queries.size(), List.of(0)));
         return new Grid.ConfiguredSystem(data, new Graph(false), null, Set.of()) {
-            @Override public SearchScoreProvider scoreProviderFor(VectorFloat<?> query, ImmutableGraphIndex.View view) {
+            @Override public SearchScoreProvider scoreProviderFor(VectorFloat<?> query, GraphIndex.View view) {
                 preparations.incrementAndGet();
                 // Like GEMV/GEMM reduction rounding, preparation on different
                 // caller threads may produce distinct, individually valid math.
