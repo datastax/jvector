@@ -309,13 +309,28 @@ public class TestVectorizationProvider extends RandomizedTest {
                     util.squareDistance(q, targets, count, l2);
                     for (int i = 0; i < count; i++) {
                         String where = provider.getClass().getSimpleName() + " length=" + length + " count=" + count + " i=" + i;
-                        Assert.assertEquals(where, util.dotProduct(q, targets[i]), dot[i], 0.0f);
-                        Assert.assertEquals(where, util.cosine(q, targets[i]), cosine[i], 0.0f);
-                        Assert.assertEquals(where, util.squareDistance(q, targets[i]), l2[i], 0.0f);
+                        double absDot = 0, qq = 0, tt = 0, sq = 0;
+                        for (int j = 0; j < length; j++) {
+                            double a = q.get(j), b = targets[i].get(j);
+                            absDot += Math.abs(a * b); qq += a * a; tt += b * b; sq += (a - b) * (a - b);
+                        }
+                        float cos = util.cosine(q, targets[i]);
+                        assertSameScore(where + " dot", util.dotProduct(q, targets[i]), dot[i], length, absDot);
+                        assertSameScore(where + " cosine", cos, cosine[i], length, absDot / Math.sqrt(qq * tt) + Math.abs(cos));
+                        assertSameScore(where + " l2", util.squareDistance(q, targets[i]), l2[i], length, sq);
                     }
                 }
             }
         }
+    }
+
+    // The Vector API leaves the order of a float lane reduction (reduceLanes(ADD)) unspecified, and the interpreter,
+    // C1 and C2 can reduce in different orders (seen on aarch64 and on x86 with JDK 25), so the same pairwise call can
+    // give different bits depending on which JIT tier runs it; the test passes interpreted only. Allow the worst-case
+    // difference between two summation orders of the same n terms, 2 * n * eps * sum(|term|). A wrong target or
+    // accumulator is off by far more.
+    private static void assertSameScore(String where, float expected, float actual, int n, double scale) {
+        Assert.assertEquals(where, expected, actual, 2.0 * n * Math.ulp(1.0f) * scale);
     }
 
     private static VectorFloat<?> copyOf(VectorTypeSupport vts, VectorFloat<?> v) {
