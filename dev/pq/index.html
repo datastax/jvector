@@ -1740,7 +1740,8 @@ see <a href="../batched-vector-access/">Batched input vector access</a> for trai
 <h2 id="build-and-search">Build and search<a class="headerlink" href="#build-and-search" title="Permanent link">&para;</a></h2>
 <ul>
 <li><strong>Construction:</strong> <code>BuildScoreProvider.pqBuildScoreProvider(similarity, codes)</code> scores codes
-  instead of full vectors; see <a href="../graph-construction/">Graph construction</a>.</li>
+  instead of full vectors; see <a href="../graph-construction/">Graph construction</a>. Diversity scoring
+  compares code pairs straight from the codebooks, in one pass per comparison.</li>
 <li><strong>Search with codes in memory:</strong> <code>codes.precomputedScoreFunctionFor(query, similarity)</code> gives
   the traversal scores; rerank with full or NVQ vectors from the index.
   <a href="../tutorials/3-larger-than-memory-tutorial/">Tutorial 3</a> walks through the whole flow.</li>
@@ -1765,6 +1766,10 @@ see <a href="../batched-vector-access/">Batched input vector access</a> for trai
 <tr>
 <td>Codebooks</td>
 <td>about 4 × 256 × dimension, once per model</td>
+</tr>
+<tr>
+<td>Diversity codebook copy</td>
+<td>about 4 × 256 × dimension, once diversity is first scored</td>
 </tr>
 </tbody>
 </table>
