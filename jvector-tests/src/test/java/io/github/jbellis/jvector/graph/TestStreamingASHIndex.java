@@ -599,4 +599,28 @@ public class TestStreamingASHIndex extends RandomizedTest {
             }
         }
     }
+
+    @Test
+    public void itsSearcherSearchesTheIndexAsItIsNow() throws Exception {
+        var data = vectors(3000, 22);
+        var options = new StreamingASHIndex.Options();
+        options.coldStartSize = 256;
+        var index = StreamingASHIndex.coldStart(new ListRandomAccessVectorValues(data, DIM), DOT, encodedBits(2), 2,
+                builders(), options);
+        for (int i = 0; i < 100; i++) index.add(i);
+        var q = data.get(5);
+        try (var searcher = index.searcher()) {
+            // cold: the recorded vectors, scored exactly
+            var cold = searcher.search(q, 5, 20, Bits.ALL).getNodes();
+            assertEquals(5, cold.length);
+            assertEquals(5, cold[0].node);
+            // the same searcher, once the index has its model
+            for (int i = 100; i < data.size(); i++) index.add(i);
+            while (index.isTraining()) Thread.onSpinWait();
+            assertTrue(index.hasModel());
+            var live = searcher.search(q, 5, 20, Bits.ALL).getNodes();
+            assertEquals(5, live.length);
+            assertEquals(5, live[0].node);
+        }
+    }
 }

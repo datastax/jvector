@@ -657,6 +657,11 @@ public class OnDiskGraphIndex implements PersistableGraphIndex
      * model, or, from format version 8, one for its fused PQ codes, NVQ vectors or inline float vectors. Empty
      * for a graph that records no float similarity function or stores no float scorer, such as an int8 graph;
      * search those through the explicit-function path.
+     * <p>
+     * Reranking a prepared query ({@code scoreProviderFor(prepared, true)}) needs vectors the view can read: inline
+     * vectors or NVQ. A fused-PQ graph whose vectors are stored only as separated features is still offered a
+     * preparer, as its fused codes score prepared queries without reranking, but reranking throws
+     * {@link UnsupportedOperationException}, as {@link View#rerankerFor} does for that graph.
      */
     @Override
     public java.util.Optional<io.github.jbellis.jvector.graph.similarity.QueryPreparer> queryPreparer() {
@@ -887,7 +892,7 @@ public class OnDiskGraphIndex implements PersistableGraphIndex
             reader.seek(offset);
             featureConsumer.accept(reader);
 
-            if (!format.supportsFeature(FeatureId.FUSED_PQ)) {
+            if (!format.supportsFusedFeatures()) {
                 reader.seek(neighborsOffsetFor(0, node));
             }
 
@@ -1017,6 +1022,12 @@ public class OnDiskGraphIndex implements PersistableGraphIndex
             }
         }
 
+        /**
+         * {@inheritDoc}
+         *
+         * @throws UnsupportedOperationException if {@code rerank} is true, or the graph has no fused codes, and
+         *         the graph stores its vectors only as separated features, which this view can't read
+         */
         @Override
         public io.github.jbellis.jvector.graph.similarity.SearchScoreProvider scoreProviderFor(
                 io.github.jbellis.jvector.graph.similarity.PreparedQuery prepared, boolean rerank) {

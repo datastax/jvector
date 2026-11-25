@@ -50,7 +50,8 @@ If you only read one thing, read this!
   function the sources record, and throw `IllegalArgumentException` if one records none or they disagree. Compressed
   vectors given for a source that records another compression type are compacted with a warning by the existing
   constructors, and rejected by the new ones. The output records the type of its fused codes, or of the codes
-  `compact(graphPath, compressedPath)` writes beside it.
+  `compact(graphPath, compressedPath)` writes beside it, or `NONE` when it has neither and every source recorded
+  `NONE`.
 
 ## On-disk format version 7
 - Version 7 of the on-disk graph format adds three features: fused ASH (`FeatureId.FUSED_ASH`), ASH codes

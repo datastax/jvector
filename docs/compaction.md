@@ -47,7 +47,7 @@ From version 8 the output header records the similarity function the compactor w
 
 To compact by the function the sources record, construct the compactor without one: `new OnDiskGraphIndexCompactor(sources, liveNodes, executor)` (or with `sourceCompressed`). It throws `IllegalArgumentException` if a source records no function (written before version 8) or the sources disagree.
 
-Version 8 sources also record the compression of the codes they are searched with (`OnDiskGraphIndex.compressionType()`). Compressed vectors passed as `sourceCompressed` for a source that records another type are compacted with a warning by the constructors that take a function, and rejected by those that don't. The output records the type of its fused codes, or of the codes `compact(graphPath, compressedPath)` writes beside it; `compact(path)` writes no separate codes, so it records none.
+Version 8 sources also record the compression of the codes they are searched with (`OnDiskGraphIndex.compressionType()`). Compressed vectors passed as `sourceCompressed` for a source that records another type are compacted with a warning by the constructors that take a function, and rejected by those that don't. The output records the type of its fused codes, or of the codes `compact(graphPath, compressedPath)` writes beside it; `compact(path)` writes no separate codes, so without fused codes it records `NONE` if every source recorded `NONE`, and nothing otherwise.
 
 ### Handling Deleted Nodes
 

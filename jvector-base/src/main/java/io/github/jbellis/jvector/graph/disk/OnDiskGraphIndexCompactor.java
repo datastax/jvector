@@ -40,6 +40,7 @@ import io.github.jbellis.jvector.graph.disk.feature.FusedPQ;
 import io.github.jbellis.jvector.graph.similarity.DefaultSearchScoreProvider;
 import io.github.jbellis.jvector.graph.similarity.SearchScoreProvider;
 import io.github.jbellis.jvector.util.*;
+import io.github.jbellis.jvector.management.CompressionType;
 import io.github.jbellis.jvector.vector.VectorSimilarityFunction;
 import io.github.jbellis.jvector.vector.VectorUtil;
 import io.github.jbellis.jvector.graph.similarity.ScoreFunction;
@@ -447,10 +448,20 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
         }
     }
 
-    /** The compression type the output records: that of its fused codes, or of the codes written beside it. */
+    /**
+     * The compression type the output records: that of its fused codes, or of the codes written beside it, or
+     * {@code NONE} when it has neither and every source recorded {@code NONE}.
+     */
     private RecordedCompression outputCompression(io.github.jbellis.jvector.graph.disk.feature.FusedFeature fused) {
-        return fused == null ? sidecarCompression
-                : RecordedCompression.of(RecordedCompression.fusedType(Map.of(fused.id(), fused)));
+        if (fused != null) {
+            return RecordedCompression.of(RecordedCompression.fusedType(Map.of(fused.id(), fused)));
+        }
+        if (sidecarCompression != RecordedCompression.UNKNOWN) {
+            return sidecarCompression;
+        }
+        boolean allNone = sources.stream()
+                .allMatch(s -> s.compressionType().equals(Optional.of(CompressionType.NONE)));
+        return allNone ? RecordedCompression.of(CompressionType.NONE) : RecordedCompression.UNKNOWN;
     }
 
     // The output records the compactor's function (format version 8 and above). A source that recorded a

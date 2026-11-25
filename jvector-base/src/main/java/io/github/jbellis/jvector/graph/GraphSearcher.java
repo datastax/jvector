@@ -289,11 +289,7 @@ public class GraphSearcher implements IndexSearcher {
      * than {@code similarityFunction}, the search uses {@code similarityFunction} and logs a warning, once per process.
      */
     public static SearchResult search(VectorFloat<?> queryVector, int topK, RandomAccessVectorValues vectors, VectorSimilarityFunction similarityFunction, GraphIndex graph, Bits acceptOrds) {
-        var recorded = graph.similarityFunction();
-        if (recorded.isPresent() && recorded.get() != similarityFunction && !oneOffMismatchLogged.getAndSet(true)) {
-            logger.warn("The graph records {} similarity but is being searched by {}; its scores use {}. "
-                    + "Logged once per process.", recorded.get(), similarityFunction, similarityFunction);
-        }
+        warnIfNotRecorded(graph, similarityFunction);
         try (var searcher = new GraphSearcher(graph)) {
             var ssp = DefaultSearchScoreProvider.exact(queryVector, similarityFunction, vectors);
             return searcher.search(ssp, topK, acceptOrds);
@@ -304,14 +300,25 @@ public class GraphSearcher implements IndexSearcher {
 
     /**
      * Convenience function for simple one-off searches.  It is caller's responsibility to make sure that it
-     * is the unique owner of the vectors instance passed in here.
+     * is the unique owner of the vectors instance passed in here. If the graph records a similarity function other
+     * than {@code similarityFunction}, the search uses {@code similarityFunction} and logs a warning, once per process.
      */
     public static SearchResult search(VectorFloat<?> queryVector, int topK, int rerankK, RandomAccessVectorValues vectors, VectorSimilarityFunction similarityFunction, GraphIndex graph, Bits acceptOrds) {
+        warnIfNotRecorded(graph, similarityFunction);
         try (var searcher = new GraphSearcher(graph)) {
             var ssp = DefaultSearchScoreProvider.exact(queryVector, similarityFunction, vectors);
             return searcher.search(ssp, topK, rerankK, 0.f, 0.f, acceptOrds);
         } catch (Exception e) {
             throw new RuntimeException(e);
+        }
+    }
+
+    /** Logs, once per process, a one-off search by a function other than the one {@code graph} records. */
+    private static void warnIfNotRecorded(GraphIndex graph, VectorSimilarityFunction similarityFunction) {
+        var recorded = graph.similarityFunction();
+        if (recorded.isPresent() && recorded.get() != similarityFunction && !oneOffMismatchLogged.getAndSet(true)) {
+            logger.warn("The graph records {} similarity but is being searched by {}; its scores use {}. "
+                    + "Logged once per process.", recorded.get(), similarityFunction, similarityFunction);
         }
     }
 

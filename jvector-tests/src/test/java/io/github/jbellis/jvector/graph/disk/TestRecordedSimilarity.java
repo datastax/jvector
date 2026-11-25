@@ -21,6 +21,7 @@ import com.carrotsearch.randomizedtesting.annotations.ThreadLeakScope;
 import io.github.jbellis.jvector.TestUtil;
 import io.github.jbellis.jvector.api.Index;
 import io.github.jbellis.jvector.api.IndexSearcher;
+import io.github.jbellis.jvector.disk.BufferedRandomAccessWriter;
 import io.github.jbellis.jvector.disk.SimpleMappedReader;
 import io.github.jbellis.jvector.graph.GraphIndex;
 import io.github.jbellis.jvector.graph.GraphIndexBuilder;
@@ -32,8 +33,10 @@ import io.github.jbellis.jvector.graph.SearchResult;
 import io.github.jbellis.jvector.graph.disk.feature.Feature;
 import io.github.jbellis.jvector.graph.disk.feature.FeatureId;
 import io.github.jbellis.jvector.graph.disk.feature.FusedASH;
+import io.github.jbellis.jvector.graph.disk.feature.FusedPQ;
 import io.github.jbellis.jvector.graph.disk.feature.InlineByteVectors;
 import io.github.jbellis.jvector.graph.disk.feature.InlineVectors;
+import io.github.jbellis.jvector.graph.disk.feature.SeparatedVectors;
 import io.github.jbellis.jvector.graph.similarity.BuildScoreProvider;
 import io.github.jbellis.jvector.graph.similarity.DefaultSearchScoreProvider;
 import io.github.jbellis.jvector.index.Indexes;
@@ -549,5 +552,74 @@ public class TestRecordedSimilarity extends RandomizedTest {
         var rejected = assertThrows(IllegalArgumentException.class,
                 () -> sidecarCompactor(CompressionType.BQ, false, "mismatch-recorded"));
         assertTrue(rejected.getMessage(), rejected.getMessage().contains("records BQ compression"));
+    }
+
+    @Test
+    public void aFailedBuildLeavesTheCallersOutputOpen() throws Exception {
+        var ravv = unitRavv(300);
+        var graph = build(ravv, VectorSimilarityFunction.COSINE);
+        var pq = ProductQuantization.compute(ravv, 8, 256, false);
+        var ash = AsymmetricHashing.initialize(ravv, VectorSimilarityFunction.COSINE, AsymmetricHashing.RANDOM,
+                AsymmetricHashing.HEADER_BITS + DIMENSION * 2, 1, 2);
+        try (var out = new BufferedRandomAccessWriter(directory.resolve("caller-owned"))) {
+            var builder = new OnDiskGraphIndexWriter.Builder(graph, out)
+                    .with(new InlineVectors(DIMENSION))
+                    .with(new FusedPQ(graph.maxDegree(), pq))
+                    .with(new FusedASH(graph.maxDegree(), ash));
+            assertThrows(IllegalArgumentException.class, builder::build);
+            // the caller owns the output, so it is still open for the caller to use or close
+            out.writeInt(42);
+            out.flush();
+        }
+    }
+
+    @Test
+    public void aFusedPqGraphWithSeparatedVectorsScoresPreparedQueriesWithoutReranking() throws Exception {
+        var ravv = unitRavv(300);
+        var graph = build(ravv, VectorSimilarityFunction.COSINE);
+        var pqv = (PQVectors) ProductQuantization.compute(ravv, 8, 256, false).encodeAll(ravv);
+        var path = directory.resolve("fused-separated");
+        try (var writer = new OnDiskGraphIndexWriter.Builder(graph, path)
+                .with(new SeparatedVectors(DIMENSION, 0L))
+                .with(new FusedPQ(graph.maxDegree(), pqv.getCompressor()))
+                .build()) {
+            var states = new EnumMap<FeatureId, IntFunction<Feature.State>>(FeatureId.class);
+            states.put(FeatureId.FUSED_PQ, node -> new FusedPQ.State(graph.getView(), pqv, node));
+            states.put(FeatureId.SEPARATED_VECTORS, node -> new InlineVectors.State(ravv.getVector(node)));
+            writer.write(states);
+        }
+        try (var onDisk = OnDiskGraphIndex.load(new SimpleMappedReader.Supplier(path));
+             var view = onDisk.getView()) {
+            var preparer = onDisk.queryPreparer().orElseThrow();
+            var prepared = preparer.newState();
+            preparer.prepare(ravv.getVector(0), prepared);
+            view.scoreProviderFor(prepared, false);
+            assertThrows(UnsupportedOperationException.class, () -> view.scoreProviderFor(prepared, true));
+        }
+    }
+
+    @Test
+    public void compactingSourcesThatRecordNoneRecordsNone() throws Exception {
+        var sources = new ArrayList<OnDiskGraphIndex>();
+        var live = new ArrayList<FixedBitSet>();
+        try {
+            for (int s = 0; s < 2; s++) {
+                var ravv = unitRavv(100);
+                sources.add(writeDeclaring(build(ravv, VectorSimilarityFunction.COSINE), ravv, CompressionType.NONE,
+                        "none-source" + s));
+                var all = new FixedBitSet(ravv.size());
+                all.set(0, ravv.size());
+                live.add(all);
+            }
+            var path = directory.resolve("none-out");
+            new OnDiskGraphIndexCompactor(sources, live, ForkJoinPool.commonPool()).compact(path);
+            try (var compacted = OnDiskGraphIndex.load(new SimpleMappedReader.Supplier(path))) {
+                assertEquals(Optional.of(CompressionType.NONE), compacted.compressionType());
+            }
+        } finally {
+            for (var source : sources) {
+                source.close();
+            }
+        }
     }
 }

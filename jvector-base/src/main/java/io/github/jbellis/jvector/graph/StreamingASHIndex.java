@@ -974,6 +974,22 @@ public final class StreamingASHIndex implements ASHGraphIndex {
     // GraphIndex: the structure is the current graph's; see the class comment
 
     /**
+     * A searcher whose {@link GraphSearcher#search(VectorFloat, int, int, Bits) search(query, topK, rerankK, acceptOrds)}
+     * is this index's {@link #search(VectorFloat, int, int, Bits)}: it scores a cold index's recorded vectors exactly,
+     * and searches the current graph with the current model, however long the searcher is kept. Its other searches
+     * search the graph as of the view it was created with, as for any graph searcher.
+     */
+    @Override
+    public GraphSearcher searcher() {
+        return new GraphSearcher(this) {
+            @Override
+            public SearchResult search(VectorFloat<?> queryVector, int topK, int rerankK, Bits acceptOrds) {
+                return StreamingASHIndex.this.search(queryVector, topK, rerankK, acceptOrds);
+            }
+        };
+    }
+
+    /**
      * A view of the current graph that also scores queries: with ASH codes once the index has a model, reranked
      * exactly from the caller's vectors. It scores with the model in use when it was taken; take a new view to see
      * a model fixed since. Before a cold index has its model the graph is empty and the view finds nothing.

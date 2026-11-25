@@ -100,7 +100,7 @@ public abstract class AbstractGraphIndexWriter<T extends IndexWriter> implements
         if (fusedFeaturesCount > 1) {
             throw new IllegalArgumentException("At most one fused feature is allowed");
         }
-        if (fusedFeaturesCount == 1 && !graphIndexFormat.supportsFeature(FeatureId.FUSED_PQ)) {
+        if (fusedFeaturesCount == 1 && !graphIndexFormat.supportsFusedFeatures()) {
             throw new IllegalArgumentException("Fused features require version 6 or higher");
         }
         this.out = out;
@@ -423,10 +423,13 @@ public abstract class AbstractGraphIndexWriter<T extends IndexWriter> implements
                 writer.compression = compression;
                 return writer;
             } catch (IOException | RuntimeException | Error e) {
-                try {
-                    out.close();
-                } catch (IOException closeFailure) {
-                    e.addSuppressed(closeFailure);
+                // An output the caller supplied is the caller's to close
+                if (opener != null) {
+                    try {
+                        out.close();
+                    } catch (IOException closeFailure) {
+                        e.addSuppressed(closeFailure);
+                    }
                 }
                 throw e;
             }
