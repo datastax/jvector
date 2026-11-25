@@ -21,6 +21,10 @@ a loop over its subspaces).
 Not counted: per-thread scratch, the caller's reader supplier, JVM-global objects, and
 memory-mapped file pages or the OS page cache, which are not Java heap.
 
+Totals can grow after loading, as caches are created on first use. A caller that adds a
+total when it opens an index and subtracts it at close must subtract the value it added,
+not a fresh read.
+
 ## Accuracy
 
 Totals match the JVM's measured sizes exactly, except fixed per-index metadata, which is
