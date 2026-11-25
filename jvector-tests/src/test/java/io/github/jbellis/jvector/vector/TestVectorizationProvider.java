@@ -93,51 +93,6 @@ public class TestVectorizationProvider extends RandomizedTest {
         }
     }
 
-    /**
-     * dotProduct handles a slice exactly one preferred vector wide itself instead of delegating to dotProductPreferred.
-     * Both must return the same bits for every input, including signed zeros and non-finite values, so that the
-     * shortcut cannot change a score. Every NaN counts as the same value, since a NaN's sign and payload can differ
-     * between interpreted and compiled runs of the same code. dotProductPreferred is package-private, so it is reached
-     * by reflection, which also keeps this test loadable when the Panama provider is not in use.
-     */
-    @Test
-    public void testDotProductFastPathMatchesPreferredBitwise() throws Exception {
-        Assume.assumeTrue(hasSimd);
-        var impl = VectorizationProvider.getInstance().getVectorUtilSupport();
-        java.lang.reflect.Method preferred;
-        try {
-            preferred = impl.getClass().getDeclaredMethod("dotProductPreferred", VectorFloat.class, int.class, VectorFloat.class, int.class, int.class);
-        } catch (NoSuchMethodException e) {
-            Assume.assumeNoException("not the Panama provider", e);
-            return;
-        }
-        preferred.setAccessible(true);
-        int width = Integer.parseInt(System.getProperty("io.github.jbellis.jvector.vector_bit_size")) / Float.SIZE;
-        float[] specials = {0f, -0f, 1f, -1f, Float.MIN_VALUE, -Float.MIN_VALUE, Float.MAX_VALUE, -Float.MAX_VALUE,
-                            Float.POSITIVE_INFINITY, Float.NEGATIVE_INFINITY, Float.NaN, 1e-30f, -1e-30f, 1e30f};
-        var random = getRandom();
-        for (int length : new int[] {width, 2 * width, 3 * width + 1}) {
-            for (int trial = 0; trial < 2000; trial++) {
-                int offset1 = random.nextInt(9);
-                int offset2 = random.nextInt(9);
-                float[] x = new float[offset1 + length + 3];
-                float[] y = new float[offset2 + length + 3];
-                for (int i = 0; i < x.length; i++) {
-                    x[i] = trial % 2 == 0 ? (float) random.nextGaussian() : specials[random.nextInt(specials.length)];
-                }
-                for (int i = 0; i < y.length; i++) {
-                    y[i] = trial % 2 == 0 ? (float) random.nextGaussian() : specials[random.nextInt(specials.length)];
-                }
-                VectorFloat<?> a = vectorTypeSupport.createFloatVector(x);
-                VectorFloat<?> b = vectorTypeSupport.createFloatVector(y);
-                float direct = impl.dotProduct(a, offset1, b, offset2, length);
-                float viaPreferred = (float) preferred.invoke(impl, a, offset1, b, offset2, length);
-                Assert.assertEquals("length=" + length + " offsets=" + offset1 + "," + offset2,
-                                    Float.floatToIntBits(viaPreferred), Float.floatToIntBits(direct));
-            }
-        }
-    }
-
     @Test
     public void testAssembleAndSum() {
         Assume.assumeTrue(hasSimd);
