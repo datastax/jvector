@@ -76,6 +76,29 @@ public class TestClosestCentroid extends RandomizedTest {
     }
 
     @Test
+    public void testSummationOrderMatchesPerCentroidScan() {
+        // Centroids that permute one difference vector have the same exact squared terms, so only the order the terms
+        // are added in tells their distances apart: a kernel that sums in another order picks another centroid.
+        int[][][] permutations = {{{0, 1}, {1, 0}},
+                {{0, 1, 2}, {0, 2, 1}, {1, 0, 2}, {1, 2, 0}, {2, 0, 1}, {2, 1, 0}}};
+        Random random = getRandom();
+        for (int[][] orders : permutations) {
+            int dim = orders[0].length;
+            var p = vts.createFloatVector(dim);
+            for (int trial = 0; trial < 2000; trial++) {
+                float[] d = new float[dim];
+                for (int i = 0; i < dim; i++) d[i] = (float) random.nextGaussian();
+                float[] codebook = new float[orders.length * dim];
+                for (int c = 0; c < orders.length; c++)
+                    for (int i = 0; i < dim; i++) codebook[c * dim + i] = d[orders[c][i]];
+                var c = vts.createFloatVector(codebook);
+                int actual = active.tryClosestCentroid(p, 0, c, orders.length, dim);
+                if (actual >= 0) assertEquals("dim " + dim + " trial " + trial, scan(p, 0, c, orders.length, dim), actual);
+            }
+        }
+    }
+
+    @Test
     public void testNonFiniteDistancesMatchPerCentroidScan() {
         float[][] codebooks = {{2, -2, 3}, {Float.NaN, 1, -1}, {Float.POSITIVE_INFINITY, Float.NaN},
                 {Float.MAX_VALUE, Float.MAX_VALUE}, {-0.0f, 0.0f}, {Float.NaN, Float.NaN}};
@@ -86,6 +109,14 @@ public class TestClosestCentroid extends RandomizedTest {
                 float[] data = new float[values.length * dim];
                 for (int i = 0; i < data.length; i++) data[i] = values[i / dim];
                 var c = vts.createFloatVector(data);
+                boolean finite = true;
+                for (int i = 0; i < values.length; i++) finite &= Float.isFinite(active.squareDistance(p, 0, c, i * dim, dim));
+                if (!finite && active.closestCentroidChecksFiniteness() && active.getClass().desiredAssertionStatus()) {
+                    // The provider's own scan must assert as the caller's scan did, or VectorUtil would skip the check.
+                    int count = values.length, d = dim;
+                    assertThrows(AssertionError.class, () -> active.tryClosestCentroid(p, 0, c, count, d));
+                    continue;
+                }
                 int actual = active.tryClosestCentroid(p, 0, c, values.length, dim);
                 if (actual >= 0) assertEquals(scan(p, 0, c, values.length, dim), actual);
             }

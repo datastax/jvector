@@ -307,6 +307,14 @@ public interface VectorUtilSupport {
   }
 
   /**
+   * Whether {@link #tryClosestCentroid}, with assertions enabled, itself checks that every distance it
+   * computes is finite. When it does not, {@link VectorUtil#tryClosestCentroid} repeats the scan to check.
+   */
+  default boolean closestCentroidChecksFiniteness() {
+    return false;
+  }
+
+  /**
    * Optionally writes {@code source * multiplier} directly into a destination region.
    * Returns false without modifying the destination when unsupported. The source
    * and destination regions must not overlap.

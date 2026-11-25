@@ -891,12 +891,12 @@ class PanamaVectorUtilSupport implements VectorUtilSupport {
      * two floats leaves SIMD little to do, and the Vector API path reaches these kernels through PQ encoding's deep
      * call chain, where JDK 21's C2 can fail to intrinsify them and run the Java fallback instead. Each distance sums
      * its terms in the order {@link #squareDistance} does, so the result matches the caller's scan exactly.
-     * Wider subspaces return -1 and keep the caller's SIMD scan.
+     * Wider subspaces, and vectors this provider did not create, return -1 and keep the caller's scan.
      */
     @Override
     public int tryClosestCentroid(VectorFloat<?> point, int pointOffset,
                                   VectorFloat<?> centroids, int centroidCount, int dimension) {
-        if (dimension > 3) {
+        if (dimension > 3 || !(point instanceof ArrayVectorFloat) || !(centroids instanceof ArrayVectorFloat)) {
             return -1;
         }
         if (centroidCount <= 0) {
@@ -916,13 +916,20 @@ class PanamaVectorUtilSupport implements VectorUtilSupport {
         }
     }
 
-    // Strict < keeps the first of equal distances, as the caller's scan does.
+    /** The scalar scans assert each distance as they compute it, so -ea needs no second scan. */
+    @Override
+    public boolean closestCentroidChecksFiniteness() {
+        return true;
+    }
+
+    // Strict < keeps the first of equal distances, and the asserts check finiteness, as the caller's scan does.
     private static int closestCentroid1(float p0, float[] c, int count) {
         int nearest = 0;
         float minimum = Float.MAX_VALUE;
         for (int i = 0; i < count; i++) {
             float d0 = p0 - c[i];
             float distance = d0 * d0;
+            assert Float.isFinite(distance);
             if (distance < minimum) {
                 minimum = distance;
                 nearest = i;
@@ -937,6 +944,7 @@ class PanamaVectorUtilSupport implements VectorUtilSupport {
         for (int i = 0, j = 0; i < count; i++, j += 2) {
             float d0 = p0 - c[j], d1 = p1 - c[j + 1];
             float distance = d0 * d0 + d1 * d1;
+            assert Float.isFinite(distance);
             if (distance < minimum) {
                 minimum = distance;
                 nearest = i;
@@ -951,6 +959,7 @@ class PanamaVectorUtilSupport implements VectorUtilSupport {
         for (int i = 0, j = 0; i < count; i++, j += 3) {
             float d0 = p0 - c[j], d1 = p1 - c[j + 1], d2 = p2 - c[j + 2];
             float distance = d0 * d0 + d1 * d1 + d2 * d2;
+            assert Float.isFinite(distance);
             if (distance < minimum) {
                 minimum = distance;
                 nearest = i;

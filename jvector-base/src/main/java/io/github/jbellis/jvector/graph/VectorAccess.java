@@ -22,6 +22,7 @@ import java.util.Arrays;
 import java.util.List;
 import java.util.Objects;
 import java.util.concurrent.ForkJoinPool;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.IntUnaryOperator;
 import java.util.stream.Collectors;
 import java.util.stream.IntStream;
@@ -32,6 +33,8 @@ public final class VectorAccess {
 
     // Bound mapped-request metadata independently of the dataset size.
     private static final int MAX_SELECTION_ORDINALS = 4096;
+    // Positions per claim in a point-access scan: about a millisecond of one thread's PQ encoding at 768 dimensions.
+    private static final int POINT_CHUNK = 16;
 
     @FunctionalInterface
     public interface VectorConsumer {
@@ -166,21 +169,11 @@ public final class VectorAccess {
     public static void forEach(RandomAccessVectorValues source, int count, IntUnaryOperator mapping,
                                ForkJoinPool executor, VectorConsumer consumer) {
         if (count < 0) throw new IllegalArgumentException("Negative vector count");
-        int partitions = Math.min(count, executor.getParallelism());
         if (!(source instanceof BatchedVectorValues)) {
-            var local = source.threadLocalSupplier();
-            // Loop per partition, not one stream callback per vector: the hot loop then sits in this lambda rather
-            // than in the JDK stream frame every IntStream.forEach shares. When that frame is compiled first, C2 can
-            // inline the consumer's vector kernels past its inlining limit, and JDK 21 then runs the Vector API's
-            // Java fallback instead of SIMD.
-            executor.submit(() -> IntStream.range(0, partitions).parallel().forEach(part -> {
-                var values = local.get();
-                int start = (int) ((long) part * count / partitions);
-                int end = (int) ((long) (part + 1) * count / partitions);
-                for (int i = start; i < end; i++) consumer.accept(i, values.getVector(mapping.applyAsInt(i)));
-            })).join();
+            forEachPoint(source, count, mapping, executor, consumer);
             return;
         }
+        int partitions = Math.min(count, executor.getParallelism());
         executor.submit(() -> IntStream.range(0, partitions).parallel().forEach(part -> {
             int start = (int) ((long) part * count / partitions);
             int end = (int) ((long) (part + 1) * count / partitions);
@@ -195,6 +188,35 @@ public final class VectorAccess {
                 }
                 // Closing drains reads before reusing the selection array.
                 first += length;
+            }
+        })).join();
+    }
+
+    /**
+     * Point access in chunks of {@value #POINT_CHUNK} positions, which each worker claims in turn. Each chunk is a
+     * loop in this method's lambda rather than one stream callback per vector: when C2 compiles the JDK stream frame
+     * every IntStream.forEach shares while it has seen only one consumer, it can inline the consumer's vector kernels
+     * past its inlining limit, and JDK 21 then runs the Vector API's Java fallback instead of SIMD. Small chunks keep
+     * the wait for a safepoint short, since C2 can drop the poll from a counted loop, and balance uneven work.
+     */
+    private static void forEachPoint(RandomAccessVectorValues source, int count, IntUnaryOperator mapping,
+                                     ForkJoinPool executor, VectorConsumer consumer) {
+        var local = source.threadLocalSupplier();
+        int chunks = (int) (((long) count + POINT_CHUNK - 1) / POINT_CHUNK);
+        int workers = Math.min(chunks, executor.getParallelism());
+        var nextChunk = new AtomicInteger();
+        executor.submit(() -> IntStream.range(0, workers).parallel().forEach(worker -> {
+            var values = local.get();
+            try {
+                for (int chunk; (chunk = nextChunk.getAndIncrement()) < chunks; ) {
+                    int start = chunk * POINT_CHUNK;
+                    int end = start + Math.min(POINT_CHUNK, count - start);
+                    for (int i = start; i < end; i++) consumer.accept(i, values.getVector(mapping.applyAsInt(i)));
+                }
+            } catch (RuntimeException | Error failure) {
+                // Stop the other workers claiming chunks; the failure propagates from join.
+                nextChunk.set(chunks);
+                throw failure;
             }
         })).join();
     }

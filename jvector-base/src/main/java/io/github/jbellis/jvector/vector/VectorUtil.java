@@ -103,13 +103,15 @@ public final class VectorUtil {
    * Tries a bulk closest-centroid operation by squared L2 distance. Returns -1
    * when unsupported, allowing callers to retain their existing Java scan.
    * Equal distances retain the first centroid. No distance array is allocated.
-   * With assertions enabled, a second distance scan checks that every distance is finite.
+   * With assertions enabled, every distance is checked to be finite: by the provider's scan when
+   * {@link VectorUtilSupport#closestCentroidChecksFiniteness} says it checks, else by a second scan.
    */
   public static int tryClosestCentroid(VectorFloat<?> point, int pointOffset,
                                     VectorFloat<?> centroids, int centroidCount, int dimension) {
     int nearest = impl.tryClosestCentroid(point, pointOffset, centroids, centroidCount, dimension);
     // Preserve the former loop's finite-distance checks; this repeats the scan only with -ea.
-    assert nearest < 0 || centroidDistancesAreFinite(point, pointOffset, centroids, centroidCount, dimension);
+    assert nearest < 0 || impl.closestCentroidChecksFiniteness()
+            || centroidDistancesAreFinite(point, pointOffset, centroids, centroidCount, dimension);
     return nearest;
   }
 

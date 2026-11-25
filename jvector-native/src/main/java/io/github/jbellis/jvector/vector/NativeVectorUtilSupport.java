@@ -538,6 +538,12 @@ class NativeVectorUtilSupport extends PanamaVectorUtilSupport
                 ((MemorySegmentVectorFloat) centroids).get(), centroidCount, dimension);
     }
 
+    /** The native scan cannot assert, so VectorUtil checks its distances with a second scan under -ea. */
+    @Override
+    public boolean closestCentroidChecksFiniteness() {
+        return false;
+    }
+
     @Override
     public boolean tryScaleTo(VectorFloat<?> source, VectorFloat<?> destination,
                               int destinationOffset, float multiplier) {
