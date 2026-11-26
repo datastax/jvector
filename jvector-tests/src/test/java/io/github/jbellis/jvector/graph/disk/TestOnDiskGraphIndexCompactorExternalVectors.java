@@ -328,6 +328,66 @@ public class TestOnDiskGraphIndexCompactorExternalVectors extends RandomizedTest
                      () -> new OnDiskGraphIndexCompactor(inline, narrower, null, live, vsf, null));
     }
 
+    /** Every shard of a sharded compaction stays topology-only, as an ordinary compaction does. */
+    @Test
+    public void testShardedCompactionOfTopologyOnlySources() throws Exception {
+        VectorSimilarityFunction vsf = VectorSimilarityFunction.EUCLIDEAN;
+        List<FixedBitSet> live = allLive();
+        var compactor = new OnDiskGraphIndexCompactor(loadSources(vsf, false, false, "sharded"), sourceRavvs(), null, live, vsf, null);
+
+        List<FixedBitSet> shard = new ArrayList<>();
+        for (int s = 0; s < NUM_SOURCES; s++) {
+            var bits = new FixedBitSet(VECTORS_PER_SOURCE);
+            for (int i = 0; i < VECTORS_PER_SOURCE; i += 2)
+                bits.set(i);
+            shard.add(bits);
+        }
+        Path out = testDirectory.resolve("sharded_out");
+        var mappers = compactor.sharded().compactShard(shard, out);
+
+        OnDiskGraphIndex compacted = load(out);
+        assertEquals(liveCount(shard), compacted.size(0));
+        assertEquals("the shard stays topology-only", 0, compacted.getDimension());
+        assertTrue(recall(compacted, mappers, shard, vsf) >= 0.8);
+    }
+
+    /** Output ordinals number one output, so a sharded compaction refuses them instead of ignoring them. */
+    @Test
+    public void testShardedCompactionRefusesOutputOrdinals() throws Exception {
+        VectorSimilarityFunction vsf = VectorSimilarityFunction.EUCLIDEAN;
+        List<FixedBitSet> live = allLive();
+        List<int[]> ordinals = new ArrayList<>();
+        for (int s = 0; s < NUM_SOURCES; s++) {
+            int[] mine = new int[VECTORS_PER_SOURCE];
+            for (int i = 0; i < VECTORS_PER_SOURCE; i++)
+                mine[i] = s * VECTORS_PER_SOURCE + i;
+            ordinals.add(mine);
+        }
+        var compactor = new OnDiskGraphIndexCompactor(loadSources(vsf, true, false, "sharded_ordinals"), live, vsf, null)
+                .withOutputOrdinals(ordinals);
+
+        assertThrows(IllegalStateException.class,
+                     () -> compactor.sharded().compactShard(live, testDirectory.resolve("sharded_ordinals_out")));
+    }
+
+    /** Scoring in bulk through a view reads the supplied vectors at their dimension, not the stored one. */
+    @Test
+    public void testBulkScoringReadsSuppliedVectors() throws Exception {
+        VectorSimilarityFunction vsf = VectorSimilarityFunction.EUCLIDEAN;
+        OnDiskGraphIndex source = loadSources(vsf, false, false, "bulk").get(0);
+        var supplied = new ExternalVectorsGraphIndex(source, sourceRavvs().get(0), allLive().get(0));
+
+        VectorFloat<?> query = createRandomVectors(1, DIMENSION).get(0);
+        int[] nodes = {5, 0, 17, 3, 11, 2, 9};
+        float[] scores = new float[nodes.length];
+        try (var view = (OnDiskGraphIndex.View) supplied.getView()) {
+            assertEquals(DIMENSION, view.dimension());
+            view.similarityTo(query, vsf, nodes, nodes.length, scores);
+        }
+        for (int i = 0; i < nodes.length; i++)
+            assertEquals(vsf.compare(query, sourceVecs.get(0).get(nodes[i])), scores[i], 1e-5f);
+    }
+
     // ---- helpers ----
 
     /** Vectors of a store that has forgotten its deleted ones: reading one fails the test. */

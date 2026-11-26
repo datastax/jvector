@@ -17,6 +17,7 @@
 package io.github.jbellis.jvector.quantization;
 
 import io.github.jbellis.jvector.vector.VectorizationProvider;
+import io.github.jbellis.jvector.util.RamUsageEstimator;
 import io.github.jbellis.jvector.vector.types.ByteSequence;
 import io.github.jbellis.jvector.vector.types.VectorFloat;
 import io.github.jbellis.jvector.vector.types.VectorTypeSupport;
@@ -36,6 +37,9 @@ public class MutablePQVectors extends PQVectors implements MutableCompressedVect
     private static final float GROWTH_FACTOR = 1.5f;
 
     protected AtomicInteger vectorCount;
+    // Written under the existing allocation lock, published to lock-free memory-limit readers.
+    private volatile long retainedBytes;
+    private int allocatedChunks;
 
     /**
      * Construct a mutable PQVectors instance with the given ProductQuantization.
@@ -47,13 +51,21 @@ public class MutablePQVectors extends PQVectors implements MutableCompressedVect
         this.vectorCount = new AtomicInteger(0);
         this.vectorsPerChunk = VECTORS_PER_CHUNK;
         this.compressedDataChunks = new ByteSequence<?>[INITIAL_CHUNKS];
+        retainedBytes = RamUsageEstimator.shallowSizeOf(this) + RamUsageEstimator.shallowSizeOf(vectorCount)
+                + RamUsageEstimator.shallowSizeOf(compressedDataChunks);
+    }
+
+    /** Cached vector storage plus the model's live total. */
+    @Override
+    public long ramBytesUsed() {
+        return retainedBytes + pq.ramBytesUsed();
     }
 
     @Override
     public void encodeAndSet(int ordinal, VectorFloat<?> vector) {
         ensureChunkCapacity(ordinal);
         // increase count first so get() works
-        vectorCount.updateAndGet(current -> max(current, ordinal + 1));
+        vectorCount.accumulateAndGet(ordinal + 1, Math::max);
         pq.encodeTo(vector, get(ordinal));
     }
 
@@ -61,27 +73,37 @@ public class MutablePQVectors extends PQVectors implements MutableCompressedVect
     public void setZero(int ordinal) {
         ensureChunkCapacity(ordinal);
         // increase count first so get() works
-        vectorCount.updateAndGet(current -> max(current, ordinal + 1));
+        vectorCount.accumulateAndGet(ordinal + 1, Math::max);
         get(ordinal).zero();
+        // A zero code reconstructs to each subspace's first centroid, which searches can reach.
+        pq.recordCode(get(ordinal), 0);
     }
 
     private synchronized void ensureChunkCapacity(int ordinal) {
+        if (ordinal < 0 || ordinal == Integer.MAX_VALUE) {
+            throw new IllegalArgumentException("Ordinal must be between 0 and Integer.MAX_VALUE - 1: " + ordinal);
+        }
         int chunkOrdinal = ordinal / vectorsPerChunk;
+        if (chunkOrdinal < allocatedChunks) return; // Existing storage: no accounting work.
         
         // Grow backing array if needed
         if (chunkOrdinal >= compressedDataChunks.length) {
             int newLength = max(chunkOrdinal + 1, (int)(compressedDataChunks.length * GROWTH_FACTOR));
             ByteSequence<?>[] newChunks = new ByteSequence<?>[newLength];
             System.arraycopy(compressedDataChunks, 0, newChunks, 0, compressedDataChunks.length);
+            long growth = RamUsageEstimator.shallowSizeOf(newChunks)
+                    - RamUsageEstimator.shallowSizeOf(compressedDataChunks);
             compressedDataChunks = newChunks;
+            retainedBytes += growth;
         }
 
         // Allocate all chunks up to and including the required one
-        int chunkBytes = VECTORS_PER_CHUNK * pq.compressedVectorSize();
-        for (int i = validChunkCount(); i <= chunkOrdinal; i++) {
-            if (compressedDataChunks[i] == null) {
-                compressedDataChunks[i] = vectorTypeSupport.createByteSequence(chunkBytes);
-            }
+        int chunkBytes = Math.multiplyExact(VECTORS_PER_CHUNK, pq.compressedVectorSize());
+        while (allocatedChunks <= chunkOrdinal) {
+            var chunk = vectorTypeSupport.createByteSequence(chunkBytes);
+            long bytes = chunk.ramBytesUsed();
+            compressedDataChunks[allocatedChunks++] = chunk;
+            retainedBytes += bytes;
         }
     }
 

@@ -51,6 +51,7 @@ class NodeRecordTask implements Callable<Void> {
     private final List<Feature> inlineFeatures;
     private final Map<FeatureId, IntFunction<Feature.State>> featureStateSuppliers;
     private final int recordSize;
+    private final L0Layout layout;
     private final long baseOffset;   // Base file offset for L0 (offsets calculated per-ordinal)
     private final AsynchronousFileChannel channel;
     private final ByteBuffer buffer; // Thread-local buffer for building record components
@@ -86,6 +87,23 @@ class NodeRecordTask implements Callable<Void> {
                    AsynchronousFileChannel channel,
                    ByteBuffer buffer,
                    BooleanSupplier stopRequested) {
+        this(startOrdinal, endOrdinal, ordinalMapper, graph, view, inlineFeatures, featureStateSuppliers,
+                L0Layout.unaligned(recordSize), baseOffset, channel, buffer, stopRequested);
+    }
+
+    /// As above, placing each record by `layout` and writing the padding that page alignment adds.
+    NodeRecordTask(int startOrdinal,
+                   int endOrdinal,
+                   OrdinalMapper ordinalMapper,
+                   ImmutableGraphIndex graph,
+                   ImmutableGraphIndex.View view,
+                   List<Feature> inlineFeatures,
+                   Map<FeatureId, IntFunction<Feature.State>> featureStateSuppliers,
+                   L0Layout layout,
+                   long baseOffset,
+                   AsynchronousFileChannel channel,
+                   ByteBuffer buffer,
+                   BooleanSupplier stopRequested) {
         this.startOrdinal = startOrdinal;
         this.endOrdinal = endOrdinal;
         this.ordinalMapper = ordinalMapper;
@@ -93,7 +111,8 @@ class NodeRecordTask implements Callable<Void> {
         this.view = view;
         this.inlineFeatures = inlineFeatures;
         this.featureStateSuppliers = featureStateSuppliers;
-        this.recordSize = recordSize;
+        this.layout = layout;
+        this.recordSize = layout.recordBytes;
         this.baseOffset = baseOffset;
         this.channel = channel;
         this.buffer = buffer;
@@ -135,11 +154,16 @@ class NodeRecordTask implements Callable<Void> {
             throw new IllegalArgumentException("Record size must match its serialized payload");
         }
         final boolean completeRecord = inlineFeatures.stream().allMatch(f -> featureStateSuppliers.get(f.id()) != null);
-        final int batch = buffer.capacity() / recordSize;
+        if (buffer.capacity() < layout.groupBytes) {
+            throw new IllegalArgumentException("Record buffer must hold at least one page group");
+        }
+        final byte[] zeros = layout.isAligned() ? new byte[layout.groupBytes] : null;
+        final int lastOrdinal = ordinalMapper.maxOrdinal();
         for (int newOrdinal = startOrdinal; newOrdinal < endOrdinal; newOrdinal++) {
             if (stopRequested.getAsBoolean()) return null;
             var originalOrdinal = ordinalMapper.newToOld(newOrdinal);
-            long recordOffset = baseOffset + (long) newOrdinal * recordSize;
+            long recordOffset = baseOffset + layout.offset(newOrdinal);
+            int padding = layout.paddingAfter(newOrdinal, lastOrdinal);
             long currentPosition = recordOffset;
 
             // A complete record can share one bounded buffer and one positioned write.
@@ -170,7 +194,10 @@ class NodeRecordTask implements Callable<Void> {
                     for (; n < graph.getDegree(0); n++) writer.writeInt(-1);
                 }
                 if (writer.position() != recordBegin + recordSize) throw new IllegalStateException("Wrong serialized record length");
-                if (buffer.position() < recordSize * batch && newOrdinal != endOrdinal - 1) continue;
+                // The buffer mirrors the file, so page-alignment padding follows its record here too.
+                if (padding > 0) writer.write(zeros, 0, padding);
+                // Keep filling while the next record and its largest possible padding still fit.
+                if (buffer.capacity() - buffer.position() >= layout.groupBytes && newOrdinal != endOrdinal - 1) continue;
                 long batchOffset = recordOffset - recordBegin;
                 buffer.flip();
                 // writeFully waits for completion before this worker reuses its buffer.
@@ -262,6 +289,9 @@ class NodeRecordTask implements Callable<Void> {
 
                 ByteBuffer neighborData = writer.cloneBuffer();
                 writeFully(channel, neighborData, currentPosition);
+            }
+            if (padding > 0) {
+                writeFully(channel, ByteBuffer.wrap(zeros, 0, padding), recordOffset + recordSize);
             }
         }
 

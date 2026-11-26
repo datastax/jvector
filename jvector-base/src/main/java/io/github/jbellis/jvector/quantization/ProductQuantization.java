@@ -23,6 +23,7 @@ import io.github.jbellis.jvector.graph.RandomAccessVectorValues;
 import io.github.jbellis.jvector.graph.VectorAccess;
 import io.github.jbellis.jvector.graph.disk.OnDiskGraphIndex;
 import io.github.jbellis.jvector.util.Accountable;
+import io.github.jbellis.jvector.util.RamUsageEstimator;
 import io.github.jbellis.jvector.util.PhysicalCoreExecutor;
 import io.github.jbellis.jvector.vector.VectorSimilarityFunction;
 import io.github.jbellis.jvector.vector.VectorUtil;
@@ -72,8 +73,15 @@ public class ProductQuantization implements VectorCompressor<ByteSequence<?>>, A
     final int[][] subvectorSizesAndOffsets;
     final float anisotropicThreshold; // parallel cost multiplier
     private final float[][] centroidNormsSquared; // precomputed norms of the centroids, for encoding
+    // The largest length of any reconstruction this model has encoded or holds codes for. Unknown for a model loaded
+    // from a format that did not store it, since it cannot know the lengths of the codes encoded before.
+    private final io.github.jbellis.jvector.util.MaxVectorLength maxEncoded = new io.github.jbellis.jvector.util.MaxVectorLength();
+    /** The first on-disk format version that stores {@link #maxEncodedNorm}. */
+    static final int MAX_NORM_VERSION = 7;
     private final ThreadLocal<VectorFloat<?>> partialSums; // for dot product, euclidean, and cosine partials
     private final AtomicReference<VectorFloat<?>> partialSquaredMagnitudes; // for cosine partials
+    // Codebooks back to back with per-dimension lookups, created on first diversity scoring.
+    private final AtomicReference<CodebookLayout> codebookLayout = new AtomicReference<>();
 
     /**
      * Initializes the codebooks by clustering the input data using Product Quantization.
@@ -439,6 +447,72 @@ public class ProductQuantization implements VectorCompressor<ByteSequence<?>>, A
             encodeAnisotropic(vector, dest);
         else
             encodeUnweighted(vector, dest);
+        recordCode(dest, 0);
+    }
+
+    /** Codebooks laid out back to back, with the lookups that code-pair scoring uses. */
+    static final class CodebookLayout {
+        final VectorFloat<?> codebooks;
+        final int[] subspaceOffsets, subspaceWidths, dimBase;
+        final int minWidth, maxWidth;
+
+        CodebookLayout(ProductQuantization pq) {
+            int dim = pq.originalDimension, k = pq.clusterCount;
+            codebooks = vectorTypeSupport.createFloatVector(k * dim);
+            subspaceOffsets = new int[pq.M];
+            subspaceWidths = new int[pq.M];
+            dimBase = new int[dim];
+            int narrowest = Integer.MAX_VALUE, widest = 0;
+            for (int m = 0; m < pq.M; m++) {
+                int width = pq.subvectorSizesAndOffsets[m][0], off = pq.subvectorSizesAndOffsets[m][1];
+                subspaceOffsets[m] = off;
+                subspaceWidths[m] = width;
+                narrowest = Math.min(narrowest, width);
+                widest = Math.max(widest, width);
+                codebooks.copyFrom(pq.codebooks[m], 0, k * off, k * width);
+                for (int t = 0; t < width; t++) dimBase[off + t] = k * off + t;
+            }
+            minWidth = narrowest;
+            maxWidth = widest;
+        }
+
+        long ramBytesUsed() {
+            return RamUsageEstimator.shallowSizeOf(this) + codebooks.ramBytesUsed()
+                    + RamUsageEstimator.sizeOf(subspaceOffsets) + RamUsageEstimator.sizeOf(subspaceWidths)
+                    + RamUsageEstimator.sizeOf(dimBase);
+        }
+    }
+
+    CodebookLayout codebookLayout() {
+        CodebookLayout layout = codebookLayout.get();
+        if (layout != null) return layout;
+        // About the size of the codebooks; a racing duplicate is cheap and only the first is kept.
+        codebookLayout.compareAndSet(null, new CodebookLayout(this));
+        return codebookLayout.get();
+    }
+
+    /** The squared length of the reconstruction of the code at {@code offset}, relative to the global centroid. */
+    float reconstructedSquaredNorm(ByteSequence<?> code, int offset) {
+        float sum = 0;
+        for (int m = 0; m < M; m++) sum += centroidNormsSquared[m][Byte.toUnsignedInt(code.get(offset + m))];
+        return sum;
+    }
+
+    /** Counts the code at {@code offset} in {@link #maxEncodedNorm}. */
+    void recordCode(ByteSequence<?> code, int offset) {
+        maxEncoded.recordSquared(reconstructedSquaredNorm(code, offset));
+    }
+
+    /**
+     * The largest length of the reconstruction, relative to the global centroid if any, of any vector this model has
+     * encoded or holds codes for, including vectors encoded before it was saved and loaded. With the centered query's
+     * length it bounds every dot product PQ scores, which adaptive stopping needs to read PQ scores as distances.
+     * NaN until the model encodes or holds a code; positive infinity when unknown, for a model loaded from a format
+     * older than version {@value #MAX_NORM_VERSION}, which did not store it. In both cases dot-product searches stop
+     * by the standard rule.
+     */
+    public float maxEncodedNorm() {
+        return maxEncoded.get();
     }
 
     /**
@@ -608,6 +682,10 @@ public class ProductQuantization implements VectorCompressor<ByteSequence<?>>, A
             assert codebook.length() == clusterCount * subvectorSizesAndOffsets[i][0];
             vectorTypeSupport.writeFloatVector(out, codebook);
         }
+
+        if (version >= MAX_NORM_VERSION) {
+            out.writeFloat(maxEncodedNorm());
+        }
     }
 
     /**
@@ -641,7 +719,12 @@ public class ProductQuantization implements VectorCompressor<ByteSequence<?>>, A
 
     @Override
     public int compressorSize() {
-        int size = 0;
+        return compressorSize(OnDiskGraphIndex.CURRENT_VERSION);
+    }
+
+    /** The bytes {@link #write} writes at {@code version}, which must be 3 or later. */
+    public int compressorSize(int version) {
+        int size = version >= MAX_NORM_VERSION ? Float.BYTES : 0; // largest encoded length
         size += Integer.BYTES; // MAGIC
         size += Integer.BYTES; // STORAGE_VERSION
         size += Integer.BYTES; // globalCentroidLength
@@ -701,7 +784,14 @@ public class ProductQuantization implements VectorCompressor<ByteSequence<?>>, A
             codebooks[m] = codebook;
         }
 
-        return new ProductQuantization(codebooks, clusters, subvectorSizes, globalCentroid, anisotropicThreshold);
+        var pq = new ProductQuantization(codebooks, clusters, subvectorSizes, globalCentroid, anisotropicThreshold);
+        if (version >= MAX_NORM_VERSION) {
+            pq.maxEncoded.restore(in.readFloat());
+        } else {
+            // Older formats did not store the largest length, so codes encoded with this model have unknown lengths.
+            pq.maxEncoded.markUnknown();
+        }
+        return pq;
     }
 
     @Override
@@ -757,13 +847,26 @@ public class ProductQuantization implements VectorCompressor<ByteSequence<?>>, A
         return codebooks.length;
     }
 
+    /**
+     * Retained model storage: codebooks, centroid, subspace layout, centroid norms and the cosine
+     * magnitude table once created. Per-thread scratch is excluded. Reading this allocates nothing.
+     */
     @Override
     public long ramBytesUsed() {
-        long size = 0;
-        for (VectorFloat<?> codebook : codebooks) {
-            size += codebook.ramBytesUsed();
-        }
-
+        long size = RamUsageEstimator.shallowSizeOf(this) + RamUsageEstimator.shallowSizeOf(codebooks)
+                + RamUsageEstimator.shallowSizeOf(subvectorSizesAndOffsets)
+                + RamUsageEstimator.shallowSizeOf(centroidNormsSquared)
+                + RamUsageEstimator.shallowSizeOf(partialSquaredMagnitudes);
+        for (VectorFloat<?> codebook : codebooks) size += codebook.ramBytesUsed();
+        for (int[] subvector : subvectorSizesAndOffsets) size += RamUsageEstimator.sizeOf(subvector);
+        for (float[] norms : centroidNormsSquared) size += RamUsageEstimator.sizeOf(norms);
+        if (globalCentroid != null) size += globalCentroid.ramBytesUsed();
+        VectorFloat<?> magnitudes = partialSquaredMagnitudes.get();
+        if (magnitudes != null) size += magnitudes.ramBytesUsed();
+        size += RamUsageEstimator.shallowSizeOf(codebookLayout);
+        CodebookLayout layout = codebookLayout.get();
+        if (layout != null) size += layout.ramBytesUsed();
+        size += maxEncoded.ramBytesUsed();
         return size;
     }
 

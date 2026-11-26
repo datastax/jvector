@@ -104,10 +104,9 @@ remains caller-owned and must outlive the write.
 
 ## Dataset prefetching in Grid
 
-When the parallel writer is selected, Grid defers its inline NVQ or FP feature serialization
-until after cleanup. Its final serialization suppliers consume worker-local ranges through
-`VectorAccess.openRange`. With the sequential writer, which calls suppliers on one
-thread, Grid keeps encoding these features on the insertion threads and writing them inline.
+For a parallel write, Grid supplies NVQ or FP32 features after cleanup.
+Final serialization suppliers consume worker-local ranges through
+`VectorAccess.openRange`.
 Sources implementing the buffered-access capability use that implementation;
 ordinary sources retain the ordinary-access fallback. Borrowed vectors are consumed
 before advancing a cursor, and ranges are released after the workers finish.
@@ -119,10 +118,9 @@ final write; their existing vector-source and incremental-write APIs remain vali
 
 ## Running the benchmark writer paths
 
-BenchYAML and AutoBenchYAML select the parallel writer by default. To use the
-sequential writer instead, add `-Djvector.parallel_writer=false` to the Java VM
-options. In that mode, Grid encodes FP/NVQ features during insertion and preserves
-the earlier inline-write path. No YAML setting is needed.
+Select `construction.writerMode` in the
+[BenchYAML index parameters](benchyaml-guide.md#construction). The default is
+`parallel`. Both writer modes serialize the graph after cleanup.
 
 Grid sizes its writer pool from `PhysicalCoreExecutor`; no machine-specific worker
 count is embedded in this change. Dataset prefetching is a separate optional setting

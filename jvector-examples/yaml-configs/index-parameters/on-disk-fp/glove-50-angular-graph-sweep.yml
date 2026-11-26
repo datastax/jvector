@@ -1,0 +1,28 @@
+# glove-50-angular (50 dimensions, angular similarity): sweep graph settings on an
+# uncompressed on-disk graph. Each list value is a separate case; the run covers every
+# combination of degree, build width and hierarchy, each searched with and without pruning.
+yamlSchemaVersion: 3
+onDiskIndexVersion: 7
+
+dataset: glove-50-angular
+
+construction:
+  type: onDisk
+  outDegree: [16, 32]
+  efConstruction: [50, 100]
+  neighborOverflow: [1.2f]
+  addHierarchy: [No, Yes]
+  refineFinalGraph: [Yes]
+  fusedGraph: [No]
+  compression:
+    - type: None
+  reranking:
+    type: None
+  useSavedIndexIfExists: No
+
+search:
+  topKOverquery:
+    10: [1.0, 2.0]
+  useSearchPruning: [No, Yes]
+  compression:
+    - type: None

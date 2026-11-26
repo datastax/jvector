@@ -54,6 +54,10 @@ public interface DataSetProperties {
     /// Canonical key for how benchmark loaders should treat the dataset at load time.
     String KEY_LOAD_BEHAVIOR = "load_behavior";
 
+    /// Canonical key for whether the dataset uses native **signed int8** (-128..127) vectors ({@link Boolean}).
+    /// Unsigned uint8 datasets (e.g. conventional SIFT1B/BIGANN `.bvecs` files) are not supported.
+    String KEY_IS_INT8 = "is_int8";
+
     /**
      * Controls benchmark-loader behavior for this dataset.
      *
@@ -122,6 +126,16 @@ public interface DataSetProperties {
      */
     default LoadBehavior loadBehavior() {
         return LoadBehavior.LEGACY_SCRUB;
+    }
+
+    /**
+     * Returns true if this dataset stores native <b>signed int8</b> (-128..127) vectors.
+     * Unsigned uint8 data (e.g. conventional SIFT1B/BIGANN {@code .bvecs} files, 0..255) is not supported,
+     * because reading it as signed would silently change distances.
+     * When true, loaders must use {@code readInt8Bvecs} and return a {@code ByteSimpleDataSet}.
+     */
+    default boolean isInt8() {
+        return false;
     }
 
     /**
@@ -260,6 +274,11 @@ public interface DataSetProperties {
                 return LoadBehavior.valueOf((String) value);
             }
             return LoadBehavior.LEGACY_SCRUB;
+        }
+
+        @Override
+        public boolean isInt8() {
+            return Boolean.TRUE.equals(properties.get(KEY_IS_INT8));
         }
     }
 }

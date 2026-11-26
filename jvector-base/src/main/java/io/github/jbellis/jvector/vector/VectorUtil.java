@@ -100,16 +100,54 @@ public final class VectorUtil {
   }
 
   /**
+   * Computes {@code dotProduct(q, targets[i])} into {@code results[i]} for each {@code i < count}, with the same
+   * result for each pair as the two-argument method; implementations may score several targets in one pass.
+   *
+   * @throws IllegalArgumentException if a target's dimension differs from the query's.
+   */
+  public static void dotProduct(VectorFloat<?> q, VectorFloat<?>[] targets, int count, float[] results) {
+    checkBulkLengths(q, targets, count, results);
+    impl.dotProduct(q, targets, count, results);
+  }
+
+  /** The bulk form of {@link #cosine(VectorFloat, VectorFloat)}; see {@link #dotProduct(VectorFloat, VectorFloat[], int, float[])}. */
+  public static void cosine(VectorFloat<?> q, VectorFloat<?>[] targets, int count, float[] results) {
+    checkBulkLengths(q, targets, count, results);
+    impl.cosine(q, targets, count, results);
+  }
+
+  /** The bulk form of {@link #squareL2Distance(VectorFloat, VectorFloat)}; see {@link #dotProduct(VectorFloat, VectorFloat[], int, float[])}. */
+  public static void squareL2Distance(VectorFloat<?> q, VectorFloat<?>[] targets, int count, float[] results) {
+    checkBulkLengths(q, targets, count, results);
+    impl.squareDistance(q, targets, count, results);
+  }
+
+  private static void checkBulkLengths(VectorFloat<?> q, VectorFloat<?>[] targets, int count, float[] results) {
+    if (count > targets.length || count > results.length) {
+      throw new IllegalArgumentException("count " + count + " exceeds targets (" + targets.length + ") or results (" + results.length + ")");
+    }
+    int length = q.length();
+    for (int i = 0; i < count; i++) {
+      if (targets[i].length() != length) {
+        throw new IllegalArgumentException("vector dimensions differ: " + length + "!=" + targets[i].length());
+      }
+    }
+  }
+
+  /**
    * Tries a bulk closest-centroid operation by squared L2 distance. Returns -1
    * when unsupported, allowing callers to retain their existing Java scan.
    * Equal distances retain the first centroid. No distance array is allocated.
-   * With assertions enabled, a second distance scan checks that every distance is finite.
+   * Callers must supply finite centroids; with assertions enabled, the selected distance is checked.
+   * Unlike the callers' fallback loops, which assert every distance, this does not fail when finite
+   * inputs overflow to an infinite distance for a centroid that is not selected.
    */
   public static int tryClosestCentroid(VectorFloat<?> point, int pointOffset,
                                     VectorFloat<?> centroids, int centroidCount, int dimension) {
     int nearest = impl.tryClosestCentroid(point, pointOffset, centroids, centroidCount, dimension);
-    // Preserve the former loop's finite-distance checks; this repeats the scan only with -ea.
-    assert nearest < 0 || centroidDistancesAreFinite(point, pointOffset, centroids, centroidCount, dimension);
+    // Hot path, and production runs with -ea: check only the selected distance (O(dimension), no provider
+    // call), which also catches a non-finite point. Centroids are checked where they are built.
+    assert nearest < 0 || Float.isFinite(squareDistanceForAssert(point, pointOffset, centroids, nearest * dimension, dimension));
     return nearest;
   }
 
@@ -144,14 +182,13 @@ public final class VectorUtil {
     return impl.tryUpdateKMeansDistances(points, centroid, minima, scratch);
   }
 
-  private static boolean centroidDistancesAreFinite(VectorFloat<?> point, int pointOffset,
-                                                    VectorFloat<?> centroids, int centroidCount, int dimension) {
-    for (int i = 0; i < centroidCount; i++) {
-      if (!Float.isFinite(impl.squareDistance(point, pointOffset, centroids, i * dimension, dimension))) {
-        return false;
-      }
+  private static float squareDistanceForAssert(VectorFloat<?> a, int aOffset, VectorFloat<?> b, int bOffset, int length) {
+    float sum = 0;
+    for (int i = 0; i < length; i++) {
+      float d = a.get(aOffset + i) - b.get(bOffset + i);
+      sum += d * d;
     }
-    return true;
+    return sum;
   }
 
   /**
@@ -231,8 +268,56 @@ public final class VectorUtil {
     return impl.assembleAndSum(data, dataBase, dataOffsets, dataOffsetsOffset, dataOffsetsLength);
   }
 
+  public static float pqCodePairSimilarity(boolean dot, VectorFloat<?> codebooks, int clusterCount,
+                                          int[] subspaceOffsets, int[] subspaceWidths, int minWidth, int maxWidth, int[] dimBase,
+                                          ByteSequence<?> code1, int offset1, ByteSequence<?> code2, int offset2) {
+    return impl.pqCodePairSimilarity(dot, codebooks, clusterCount, subspaceOffsets, subspaceWidths, minWidth, maxWidth, dimBase,
+                                     code1, offset1, code2, offset2);
+  }
+
   public static float assembleAndSumPQ(VectorFloat<?> data, int subspaceCount, ByteSequence<?> dataOffsets1, int dataOffsetsOffset1, ByteSequence<?> dataOffsets2, int dataOffsetsOffset2, int clusterCount) {
     return impl.assembleAndSumPQ(data, subspaceCount, dataOffsets1, dataOffsetsOffset1, dataOffsets2, dataOffsetsOffset2, clusterCount);
+  }
+
+  /**
+   * Returns the dot product of two signed int8 byte vectors.
+   *
+   * @throws IllegalArgumentException if the vectors' dimensions differ.
+   */
+  public static float dotProduct(ByteSequence<?> a, ByteSequence<?> b) {
+    if (a.length() != b.length()) {
+      throw new IllegalArgumentException("vector dimensions differ: " + a.length() + "!=" + b.length());
+    }
+    return impl.dotProduct(a, b);
+  }
+
+  /**
+   * Returns the sum of squared differences of two signed int8 byte vectors.
+   *
+   * @throws IllegalArgumentException if the vectors' dimensions differ.
+   */
+  public static float squareL2Distance(ByteSequence<?> a, ByteSequence<?> b) {
+    if (a.length() != b.length()) {
+      throw new IllegalArgumentException("vector dimensions differ: " + a.length() + "!=" + b.length());
+    }
+    return impl.squareDistance(a, b);
+  }
+
+  /**
+   * Returns the cosine similarity of two signed int8 byte vectors.
+   * <p>
+   * As with the float overload, zero vectors (all components zero) are not supported: their norm is zero,
+   * so the result is NaN. Callers must not pass zero vectors; this is checked with an assertion.
+   *
+   * @throws IllegalArgumentException if the vectors' dimensions differ.
+   */
+  public static float cosine(ByteSequence<?> a, ByteSequence<?> b) {
+    if (a.length() != b.length()) {
+      throw new IllegalArgumentException("vector dimensions differ: " + a.length() + "!=" + b.length());
+    }
+    float r = impl.cosine(a, b);
+    assert Float.isFinite(r) : String.format("cosine(%s, %s) = %s", a, b, r);
+    return r;
   }
 
   public static int hammingDistance(long[] v1, long[] v2) {

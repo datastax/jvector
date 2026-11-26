@@ -18,10 +18,11 @@ project('jvector_simd_kernels', 'cpp',
   default_options: ['cpp_std=c++17']
 )
 
-# Highway headers are used as an include directory only.
-# HWY_COMPILE_ONLY_STATIC / HWY_COMPILE_ONLY_SCALAR bypass the
+# Highway is fetched at the revision pinned in subprojects/highway.wrap and used
+# header-only: HWY_COMPILE_ONLY_STATIC / HWY_COMPILE_ONLY_SCALAR bypass the
 # dynamic-dispatch runtime, so only headers are needed at compile time.
-hwy_inc = include_directories('third_party/highway')
+highway_proj = subproject('highway')
+hwy_dep = highway_proj.get_variable('highway_dep')
 
 # Each ISA variant: name, JV_ISA namespace, and extra compiler flags.
 # These all compile jvector_simd_kernels.cpp (the generic kernel file).
@@ -114,7 +115,7 @@ foreach isa : isa_variants
   lib = static_library(
     'simdKernels_' + isa['name'],
     sources            : 'src/jvector_simd_kernels.cpp',
-    include_directories: hwy_inc,
+    dependencies       : hwy_dep,
     cpp_args           : isa['args'] + ['-DJV_ISA=' + isa['namespace'], '-fvisibility=hidden']
   )
   isa_libs += lib
@@ -127,7 +128,7 @@ if cpu == 'x86_64'
   avx3_dl_lib = static_library(
     'simdKernels_avx3_dl',
     sources            : 'src/jvector_avx3_dl_kernels.cpp',
-    include_directories: hwy_inc,
+    dependencies       : hwy_dep,
     cpp_args           : [
       '-march=icelake-server',
       '-DHWY_COMPILE_ONLY_STATIC',
@@ -137,13 +138,28 @@ if cpu == 'x86_64'
   )
   isa_libs += avx3_dl_lib
 
+  # AVX3 with AVX-512 VNNI (Cascade Lake, Cooper Lake): only INT8 query projection, which
+  # needs VNNI; every other kernel comes from the AVX3 tier.
+  avx3_vnni_lib = static_library(
+    'simdKernels_avx3_vnni',
+    sources            : 'src/jvector_avx3_vnni_kernels.cpp',
+    dependencies       : hwy_dep,
+    cpp_args           : [
+      '-march=cascadelake',
+      '-DHWY_COMPILE_ONLY_STATIC',
+      '-DJV_REQUIRE_HWY_AVX3',
+      '-fvisibility=hidden',
+    ],
+  )
+  isa_libs += avx3_vnni_lib
+
   # AVX3_SPR (Sapphire Rapids) tier: -march=sapphirerapids adds AVX512FP16 and
   # AVX512BF16 on top of the icelake-server feature set.
   # Requires GCC >= 12 or Clang >= 14.
   avx3_spr_lib = static_library(
     'simdKernels_avx3_spr',
     sources            : 'src/jvector_avx3_spr_kernels.cpp',
-    include_directories: hwy_inc,
+    dependencies       : hwy_dep,
     cpp_args           : [
       '-march=sapphirerapids',
       '-DHWY_COMPILE_ONLY_STATIC',
@@ -163,8 +179,9 @@ endif
 vectorutil_lib = shared_library(
   'jvector',
   sources            : ['src/jvector_simd.cpp',
-                        'third_party/highway/hwy/abort.cc'],
-  include_directories: [include_directories('src'), hwy_inc],
+                        highway_proj.get_variable('highway_abort_src')],
+  include_directories: include_directories('src'),
+  dependencies       : hwy_dep,
   cpp_args           : ['-DJVECTOR_BUILD', '-fvisibility=hidden'] + dispatch_defines,
   link_whole         : isa_libs,
   version            : meson.project_version(),
@@ -198,6 +215,7 @@ if gtest_dep.found()
     sources     : [
       'tests/test_helpers.cpp',
       'tests/test_similarity.cpp',
+      'tests/test_similarity_i8.cpp',
       'tests/test_elementwise.cpp',
       cpu_features_test_src,
     ],
@@ -221,7 +239,10 @@ gbench_dep = dependency('benchmark', required: false)
 if gbench_dep.found()
   executable(
     'bench_simd_kernels',
-    sources     : 'benchmarks/bench_similarity_f32.cpp',
+    sources     : [
+      'benchmarks/bench_similarity_f32.cpp',
+      'benchmarks/bench_similarity_i8.cpp',
+    ],
     dependencies: [vectorutil_dep, gbench_dep],
     cpp_args    : ['-O3'],
   )

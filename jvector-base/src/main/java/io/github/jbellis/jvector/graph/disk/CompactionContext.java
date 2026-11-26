@@ -49,6 +49,14 @@ public final class CompactionContext {
      * {@code null} when the output is numbered by {@link #remappers} itself.
      */
     private final int[] outputToMerged;
+    /** Records announced to the page cache this many nodes ahead of their read (0 = none); see OnDiskGraphIndexCompactor#withRecordAnnounceAhead. */
+    public final int recordAnnounceAhead;
+    /**
+     * The on-disk format version of the output (see OnDiskGraphIndexCompactor#withVersion). Everything a
+     * strategy writes with a version of its own, such as the merged compressor in a sidecar's header, is
+     * written at this one, so the sidecar and the graph it belongs to are always of the same version.
+     */
+    public final int version;
 
     public CompactionContext(
             List<OnDiskGraphIndex> sources,
@@ -58,8 +66,11 @@ public final class CompactionContext {
             int dimension,
             int maxOrdinal,
             ForkJoinPool executor,
-            int taskWindowSize) {
-        this(sources, sourceCompressed, liveNodes, remappers, dimension, maxOrdinal, executor, taskWindowSize, null);
+            int taskWindowSize,
+            int recordAnnounceAhead,
+            int version) {
+        this(sources, sourceCompressed, liveNodes, remappers, dimension, maxOrdinal, executor, taskWindowSize,
+             recordAnnounceAhead, version, null);
     }
 
     /**
@@ -75,6 +86,8 @@ public final class CompactionContext {
             int maxOrdinal,
             ForkJoinPool executor,
             int taskWindowSize,
+            int recordAnnounceAhead,
+            int version,
             int[] outputToMerged) {
         this.outputToMerged = outputToMerged;
         this.sources = Collections.unmodifiableList(sources);
@@ -85,6 +98,8 @@ public final class CompactionContext {
         this.maxOrdinal = maxOrdinal;
         this.executor = executor;
         this.taskWindowSize = taskWindowSize;
+        this.recordAnnounceAhead = recordAnnounceAhead;
+        this.version = version;
     }
 
     /**

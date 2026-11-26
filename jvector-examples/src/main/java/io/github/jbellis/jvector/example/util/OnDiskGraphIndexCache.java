@@ -16,6 +16,7 @@
 
 package io.github.jbellis.jvector.example.util;
 
+import io.github.jbellis.jvector.vector.VectorSimilarityFunction;
 import io.github.jbellis.jvector.annotations.Experimental;
 import io.github.jbellis.jvector.disk.ReaderSupplierFactory;
 import io.github.jbellis.jvector.graph.ImmutableGraphIndex;
@@ -121,6 +122,8 @@ public final class OnDiskGraphIndexCache {
      */
     public static final class CacheKey {
         public final String datasetName;
+        /** The similarity the graph is built and scored by; graphs of one dataset for two similarities differ. */
+        public final VectorSimilarityFunction similarity;
         public final Set<FeatureId> featureSet;
         public final int M;
         public final int efConstruction;
@@ -129,8 +132,16 @@ public final class OnDiskGraphIndexCache {
         public final boolean addHierarchy;
         public final boolean refineFinalGraph;
         public final String compressorId;
+        /** Base vectors in the dataset; two datasets or profiles sharing a name must not share a graph. */
+        public final int baseCount;
+        public final int dimension;
+        /** NVQ subvectors when the feature set stores NVQ vectors, otherwise 0. */
+        public final int nvqSubvectors;
+        /** The upper layers' maximum degree when it differs from the base layer's {@link #M}, otherwise null. */
+        public final Integer upperLayerDegree;
 
         private CacheKey(String datasetName,
+                         VectorSimilarityFunction similarity,
                          Set<FeatureId> featureSet,
                          int M,
                          int efConstruction,
@@ -138,8 +149,13 @@ public final class OnDiskGraphIndexCache {
                          float alpha,
                          boolean addHierarchy,
                          boolean refineFinalGraph,
-                         String compressorId) {
+                         String compressorId,
+                         int baseCount,
+                         int dimension,
+                         int nvqSubvectors,
+                         Integer upperLayerDegree) {
             this.datasetName = datasetName;
+            this.similarity = similarity;
             this.featureSet = featureSet;
             this.M = M;
             this.efConstruction = efConstruction;
@@ -148,6 +164,16 @@ public final class OnDiskGraphIndexCache {
             this.addHierarchy = addHierarchy;
             this.refineFinalGraph = refineFinalGraph;
             this.compressorId = compressorId;
+            this.baseCount = baseCount;
+            this.dimension = dimension;
+            this.nvqSubvectors = nvqSubvectors;
+            this.upperLayerDegree = upperLayerDegree;
+        }
+
+        /** This key for a graph whose upper layers have {@code degree} as their maximum degree (null: {@link #M}). */
+        public CacheKey withUpperLayerDegree(Integer degree) {
+            return new CacheKey(datasetName, similarity, featureSet, M, efConstruction, neighborOverflow, alpha,
+                    addHierarchy, refineFinalGraph, compressorId, baseCount, dimension, nvqSubvectors, degree);
         }
     }
 
@@ -156,6 +182,7 @@ public final class OnDiskGraphIndexCache {
      * as the compressor id, matching existing naming conventions.
      */
     public CacheKey key(String datasetName,
+                        VectorSimilarityFunction similarity,
                         Set<FeatureId> featureSet,
                         int M,
                         int efConstruction,
@@ -163,12 +190,30 @@ public final class OnDiskGraphIndexCache {
                         float alpha,
                         boolean addHierarchy,
                         boolean refineFinalGraph,
-                        VectorCompressor<?> buildCompressor) {
+                        VectorCompressor<?> buildCompressor,
+                        int baseCount,
+                        int dimension,
+                        int nvqSubvectors) {
         Objects.requireNonNull(datasetName, "datasetName");
         Objects.requireNonNull(featureSet, "featureSet");
         Objects.requireNonNull(buildCompressor, "buildCompressor");
         String compressorId = buildCompressor.toString().replaceAll("\\s+", "");
-        return new CacheKey(datasetName, featureSet, M, efConstruction, neighborOverflow, alpha, addHierarchy, refineFinalGraph, compressorId);
+        return keyWithCompressorId(datasetName, similarity, featureSet, M, efConstruction, neighborOverflow, alpha,
+                addHierarchy, refineFinalGraph, compressorId, baseCount, dimension, nvqSubvectors);
+    }
+
+    public CacheKey keyWithCompressorId(String datasetName, VectorSimilarityFunction similarity,
+                                         Set<FeatureId> featureSet, int M,
+                                         int efConstruction, float neighborOverflow, float alpha,
+                                         boolean addHierarchy, boolean refineFinalGraph, String compressorId,
+                                         int baseCount, int dimension, int nvqSubvectors) {
+        if (baseCount <= 0 || dimension <= 0 || nvqSubvectors < 0)
+            throw new IllegalArgumentException("Cache key needs a positive vector count and dimension");
+        if (featureSet.contains(FeatureId.NVQ_VECTORS) != (nvqSubvectors > 0))
+            throw new IllegalArgumentException("NVQ subvectors must be given exactly when NVQ vectors are stored");
+        Objects.requireNonNull(similarity, "similarity");
+        return new CacheKey(datasetName, similarity, featureSet, M, efConstruction, neighborOverflow, alpha,
+                addHierarchy, refineFinalGraph, compressorId, baseCount, dimension, nvqSubvectors, null);
     }
 
     /**
@@ -326,7 +371,6 @@ public final class OnDiskGraphIndexCache {
             return new Entry(true, "", Path.of(""), Path.of(""));
         }
 
-        // TODO include index and quantization version(s) in signature
         static Entry compute(Path cacheDir, CacheKey key) {
             String rawName = Paths.get(key.datasetName).getFileName().toString();
             String datasetBase = rawName.replaceFirst("\\.[^.]+$", "");
@@ -336,10 +380,16 @@ public final class OnDiskGraphIndexCache {
                     .sorted()
                     .collect(Collectors.joining("-"));
 
+            // The on-disk format, the dataset's shape and the NVQ layout all change the file; the
+            // quantizer ids in compressorId carry their own model parameters and versions.
             String signature = String.join("_",
                     datasetBase,
-                    featureSetName,
-                    "M" + key.M,
+                    similarityTag(key.similarity),
+                    "n" + key.baseCount,
+                    "d" + key.dimension,
+                    "fmt" + OnDiskGraphIndex.CURRENT_VERSION,
+                    featureSetName + (key.nvqSubvectors > 0 ? "-nvq" + key.nvqSubvectors : ""),
+                    "M" + key.M + (key.upperLayerDegree == null ? "" : "U" + key.upperLayerDegree),
                     "ef" + key.efConstruction,
                     "of" + key.neighborOverflow,
                     "alpha" + key.alpha,
@@ -352,6 +402,19 @@ public final class OnDiskGraphIndexCache {
             Path finalPath = cacheDir.resolve(finalName);
             Path tmpPath = finalPath.resolveSibling("tmp_" + finalName);
             return new Entry(false, signature, finalPath, tmpPath);
+        }
+    }
+
+    /**
+     * A short name for {@code similarity} in cache file names, which must stay within the file system's name limit:
+     * {@code dot}, {@code l2} or {@code cos}.
+     */
+    public static String similarityTag(VectorSimilarityFunction similarity) {
+        switch (similarity) {
+            case DOT_PRODUCT: return "dot";
+            case EUCLIDEAN: return "l2";
+            case COSINE: return "cos";
+            default: throw new IllegalArgumentException("No cache tag for " + similarity);
         }
     }
 

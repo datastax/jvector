@@ -25,5 +25,6 @@
 package io.github.jbellis.jvector.util;
 
 public interface Accountable {
+    /** Memory retained by this object; the value can grow as caches are created on first use. */
     long ramBytesUsed();
 }

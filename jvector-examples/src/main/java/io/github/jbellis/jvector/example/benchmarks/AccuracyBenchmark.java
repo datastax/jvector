@@ -88,14 +88,7 @@ public class AccuracyBenchmark extends AbstractQueryBenchmark {
             throw new RuntimeException("At least one metric must be displayed");
         }
 
-        int totalQueries = cs.getDataSet().getQueryVectors().size();
-
-        // execute all queries in parallel and collect results
-        List<SearchResult> results = IntStream.range(0, totalQueries)
-                .parallel()
-                .mapToObj(i -> QueryExecutor.executeQuery(
-                        cs, topK, rerankK, usePruning, i))
-                .collect(Collectors.toList());
+        List<SearchResult> results = results(cs, cs.queries(), topK, rerankK, usePruning);
 
         var list = new ArrayList<Metric>();
         if (computeRecall) {
@@ -112,5 +105,18 @@ public class AccuracyBenchmark extends AbstractQueryBenchmark {
         }
         return list;
 
+    }
+
+    /** Every query's result: searched in parallel, or as one queued pass. */
+    private static <Q> List<SearchResult> results(ConfiguredSystem cs, QuerySet<Q> queries, int topK, int rerankK,
+                                                  boolean usePruning) {
+        int totalQueries = queries.size();
+        try (QueuedQueryExecution<Q> queued = cs.usesQueuedExecution()
+                ? new QueuedQueryExecution<>(cs, queries, topK, rerankK, usePruning) : null) {
+            return queued == null ? IntStream.range(0, totalQueries).parallel()
+                    .mapToObj(i -> QueryExecutor.executeQuery(cs, topK, rerankK, usePruning, i))
+                    .collect(Collectors.toList())
+                    : java.util.Arrays.asList(queued.runPass(totalQueries, queries::get, null, true).results);
+        }
     }
 }

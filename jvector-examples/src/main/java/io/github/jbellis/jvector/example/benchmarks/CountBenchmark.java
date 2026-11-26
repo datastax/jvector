@@ -105,19 +105,9 @@ public class CountBenchmark extends AbstractQueryBenchmark {
         LongAdder nodesVisited = new LongAdder();
         LongAdder nodesExpanded = new LongAdder();
         LongAdder nodesExpandedBaseLayer = new LongAdder();
-        int totalQueries = cs.getDataSet().getQueryVectors().size();
+        int totalQueries = cs.queries().size();
 
-        for (int run = 0; run < queryRuns; run++) {
-            IntStream.range(0, totalQueries)
-                    .parallel()
-                    .forEach(i -> {
-                        SearchResult sr = QueryExecutor.executeQuery(
-                                cs, topK, rerankK, usePruning, i);
-                        nodesVisited.add(sr.getVisitedCount());
-                        nodesExpanded.add(sr.getExpandedCount());
-                        nodesExpandedBaseLayer.add(sr.getExpandedCountBaseLayer());
-                    });
-        }
+        count(cs, cs.queries(), topK, rerankK, usePruning, queryRuns, nodesVisited, nodesExpanded, nodesExpandedBaseLayer);
 
         double avgVisited = nodesVisited.sum() / (double) (queryRuns * totalQueries);
         double avgExpanded = nodesExpanded.sum() / (double) (queryRuns * totalQueries);
@@ -134,5 +124,35 @@ public class CountBenchmark extends AbstractQueryBenchmark {
             list.add(Metric.of("search.count.avg_expanded_base_layer", "Avg Expanded Base Layer", formatAvgNodesExpandedBaseLayer, avgBase));
         }
         return list;
+    }
+
+    private static <Q> void count(ConfiguredSystem cs, QuerySet<Q> queries, int topK, int rerankK, boolean usePruning,
+                                  int queryRuns, LongAdder nodesVisited, LongAdder nodesExpanded,
+                                  LongAdder nodesExpandedBaseLayer) {
+        int totalQueries = queries.size();
+        try (QueuedQueryExecution<Q> queued = cs.usesQueuedExecution()
+                ? new QueuedQueryExecution<>(cs, queries, topK, rerankK, usePruning) : null) {
+        for (int run = 0; run < queryRuns; run++) {
+            if (queued != null) {
+                var pass = queued.runPass(totalQueries, queries::get, null, true);
+                for (SearchResult result : pass.results) {
+                    nodesVisited.add(result.getVisitedCount());
+                    nodesExpanded.add(result.getExpandedCount());
+                    nodesExpandedBaseLayer.add(result.getExpandedCountBaseLayer());
+                }
+                continue;
+            }
+            IntStream.range(0, totalQueries)
+                    .parallel()
+                    .forEach(i -> {
+                        SearchResult sr = QueryExecutor.executeQuery(
+                                cs, topK, rerankK, usePruning, i);
+                        nodesVisited.add(sr.getVisitedCount());
+                        nodesExpanded.add(sr.getExpandedCount());
+                        nodesExpandedBaseLayer.add(sr.getExpandedCountBaseLayer());
+                    });
+        }
+
+        }
     }
 }

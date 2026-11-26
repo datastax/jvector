@@ -51,6 +51,16 @@ public interface ImmutableGraphIndex extends AutoCloseable, Accountable {
     /** Marks entry node as absent (fe, empty graph) */
     int ENTRY_NODE_ABSENT = -1;
 
+    /**
+     * Optional numerical query preparation, independent of a mutable graph view.
+     * Obtain and reuse one preparer per loaded model. Returned preparers and query
+     * states belong to the caller; their byte counts exclude shared model weights.
+     * The preparer scores by the similarity the index's model was trained for.
+     */
+    default java.util.Optional<io.github.jbellis.jvector.graph.similarity.QueryPreparer> queryPreparer() {
+        return java.util.Optional.empty();
+    }
+
     /** Returns the number of nodes in the graph */
     @Deprecated
     default int size() {
@@ -145,7 +155,7 @@ public interface ImmutableGraphIndex extends AutoCloseable, Accountable {
     int size(int level);
 
     /**
-     * The steps needed to process a neighbor during a search. That is, adding it to the priority queue, etc.
+     * Receives each neighbor that {@link View#processNeighbors} scores, with its similarity.
      */
     interface NeighborProcessor {
         void process(int friendOrd, float similarity);
@@ -177,6 +187,9 @@ public interface ImmutableGraphIndex extends AutoCloseable, Accountable {
          * Iterates over the neighbors of a given node if they have not been visited yet.
          * For each non-visited neighbor, it computes its similarity and processes it using the given processor.
          */
+        // TODO: replace the per-neighbor callback with a method that fills a caller-supplied NodesUnsorted, so views
+        // that score in batches score straight into it; this removes OnHeapGraphIndex.BatchScratch, OnDiskGraphIndex's
+        // batch arrays and the copy in GraphSearcher.searchOneLayer.
         void processNeighbors(int level, int node, ScoreFunction scoreFunction, IntMarker visited, NeighborProcessor neighborProcessor);
 
         /**
@@ -216,6 +229,16 @@ public interface ImmutableGraphIndex extends AutoCloseable, Accountable {
      * except for OnHeapGraphIndex.ConcurrentGraphIndexView.)
      */
     interface ScoringView extends View {
+        /**
+         * Binds prepared numerical state to this view without projecting again.
+         * Keep the state unchanged through all uses of the provider, including
+         * resumed searches. Providers without this capability reject the call.
+         */
+        default io.github.jbellis.jvector.graph.similarity.SearchScoreProvider scoreProviderFor(
+                io.github.jbellis.jvector.graph.similarity.PreparedQuery query, boolean rerank) {
+            throw new UnsupportedOperationException("Prepared query scoring is unavailable");
+        }
+
         ScoreFunction.ExactScoreFunction rerankerFor(VectorFloat<?> queryVector, VectorSimilarityFunction vsf);
         ScoreFunction.ApproximateScoreFunction approximateScoreFunctionFor(VectorFloat<?> queryVector, VectorSimilarityFunction vsf);
     }

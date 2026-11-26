@@ -22,8 +22,8 @@ import jdk.incubator.vector.FloatVector;
 /** Native operations with a separately typed KMeans scan for narrower JVM vectors. */
 final class NativeVectorUtilSupport128 extends NativeVectorUtilSupport {
     @Override
-    public boolean tryUpdateKMeansDistances(VectorFloat<?>[] points, VectorFloat<?> centroid,
-                                           VectorFloat<?> minima, VectorFloat<?> scratch) {
+    boolean tryVectorKMeansUpdate(VectorFloat<?>[] points, VectorFloat<?> centroid,
+                                  VectorFloat<?> minima, VectorFloat<?> scratch) {
         if (FloatVector.SPECIES_PREFERRED.vectorBitSize() < 128) return false;
         return NativeKMeansInitialization128.update(points, centroid, minima, scratch);
     }

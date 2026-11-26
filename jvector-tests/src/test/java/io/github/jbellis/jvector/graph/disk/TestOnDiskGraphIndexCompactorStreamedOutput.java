@@ -207,6 +207,31 @@ public class TestOnDiskGraphIndexCompactorStreamedOutput extends RandomizedTest 
                 }
     }
 
+    /** The format version the caller asks for applies to a streamed output as to a file, with a footer or without. */
+    @Test
+    public void testStreamedOutputHonoursTheVersion() throws Exception {
+        VectorSimilarityFunction vsf = VectorSimilarityFunction.EUCLIDEAN;
+        List<FixedBitSet> live = liveWithDeletions();
+        List<OnDiskGraphIndex> sources = loadSources(vsf, true, false, "versioned");
+        for (int version : new int[] {4, 6}) {
+            Path file = testDirectory.resolve("versioned_out_" + version);
+            new OnDiskGraphIndexCompactor(sources, live, vsf, null).withVersion(version).compact(file);
+
+            var out = new MemoryIndexWriter(Long.MAX_VALUE);
+            out.write(new byte[PREFIX]);
+            new OnDiskGraphIndexCompactor(sources, live, vsf, null).withVersion(version).compact(out, workDirectory);
+
+            if (version == 4) // header-based: no footer, so no absolute pointer to move with the start
+                assertArrayEquals(Files.readAllBytes(file), out.bytesFrom(PREFIX));
+            else
+                assertSameGraphAt(Files.readAllBytes(file), out.bytesFrom(PREFIX), PREFIX);
+            OnDiskGraphIndex streamed = load(out.toArray(), PREFIX);
+            assertEquals(version, streamed.version);
+            assertEquals(liveCount(live), streamed.size(0));
+            assertWorkDirectoryEmpty();
+        }
+    }
+
     /** A failing output fails the compaction and still leaves nothing behind in the work directory. */
     @Test
     public void testFailingOutputLeavesWorkDirectoryEmpty() throws Exception {

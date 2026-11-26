@@ -29,6 +29,14 @@
 
 namespace hn = hwy::HWY_NAMESPACE;
 
-namespace AVX3_SPR {
+#include <algorithm>
+#include <cmath>
+#include <cstring>
+#include <limits>
 
+namespace AVX3_SPR {
+// INT8 query projection on 512-bit registers (see ash_projection_i8-inl.h).
+#define JV_ASH_I8_WIDE 1
+#include "ash_projection_i8-inl.h"
+#undef JV_ASH_I8_WIDE
 } // namespace AVX3_SPR

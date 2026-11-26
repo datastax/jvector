@@ -251,3 +251,21 @@ target/benchmark-results/compactor-<timestamp>/compactor-results.jsonl
 | `durationMs` | Time in the measured phase only (`compact()` for `COMPACT`); excludes JVM startup and I/O setup |
 | `recall` | Recall@10 (present when `measureRecall=true`) |
 | `avgSearchLatencyMs` / `p99SearchLatencyMs` | Per-query `search()` latency (present when `measureRecall=true`) |
+
+# 9. Sharded compaction: `ShardExp`
+
+`ShardExp`, in the same package, is a plain `main` program (not a JMH benchmark) that measures a
+compaction whose output is split into K shards, as a Cassandra compaction with UCS sharding writes
+K output sstables. It builds S source graphs from a raw `.fvecs` file, then produces the K shards
+three ways and measures recall@10 of each against the dataset's ground truth:
+
+| Command | What it measures |
+|---------|------------------|
+| `shard K merge` | one `OnDiskGraphIndexCompactor` per shard over all sources, live nodes = the shard (Cassandra's merge path today) |
+| `shard K rebuild` | one fresh graph per shard from its vectors (graph merge disabled) |
+| `shard K sharded` (or `sharded K`) | one compactor, one `sharded()` session, `compactShard` per shard |
+| `recall K <mode> NQ` | search every shard, merge the top-10, recall@10 |
+
+The dataset paths are given as system properties (`exp.base`, `exp.query`, `exp.gt`); the class
+comment lists every property and a complete run. Results on tessera-2M are in the "Compacting into
+several outputs (sharding)" section of `docs/compaction.md`.

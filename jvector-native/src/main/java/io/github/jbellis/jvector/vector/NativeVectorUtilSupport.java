@@ -20,8 +20,10 @@ import java.lang.foreign.MemorySegment;
 import java.nio.ByteOrder;
 import java.util.Objects;
 
+import io.github.jbellis.jvector.quantization.ASHQueryProjection;
 import io.github.jbellis.jvector.vector.cnative.NativeSimdOps;
 import io.github.jbellis.jvector.vector.types.ByteSequence;
+import io.github.jbellis.jvector.vector.types.FloatArray;
 import io.github.jbellis.jvector.vector.types.VectorFloat;
 import jdk.incubator.vector.ByteVector;
 import jdk.incubator.vector.FloatVector;
@@ -33,6 +35,8 @@ import jdk.incubator.vector.VectorSpecies;
  */
 class NativeVectorUtilSupport extends PanamaVectorUtilSupport
 {
+    private static final boolean REQUIRE_NATIVE_ASH = "native".equalsIgnoreCase(
+            System.getProperty("jvector.vectorization_provider", "").trim());
     public NativeVectorUtilSupport() {}
 
     /** Select once at provider creation; leave the wide scan and its call site unchanged. */
@@ -43,7 +47,7 @@ class NativeVectorUtilSupport extends PanamaVectorUtilSupport
 
     /**
      * Returns the ISA tier that was selected by the native dispatcher at library
-     * initialisation time.  Possible values: {@code "avx3_spr"}, {@code "avx3_dl"},
+     * initialisation time.  Possible values: {@code "avx3_spr"}, {@code "avx3_dl"}, {@code "avx3_vnni"},
      * {@code "avx3"}, {@code "avx2"}, {@code "sse42"}.
      */
     public String getActiveIsa() {
@@ -52,11 +56,62 @@ class NativeVectorUtilSupport extends PanamaVectorUtilSupport
                 .getString(0);
     }
 
+    @Override
+    public String ashQueryProjectionUnsupportedReason(ASHQueryProjection precision) {
+        if (!NativeASHProjection.isAvailable()) return super.ashQueryProjectionUnsupportedReason(precision);
+        switch (precision) {
+            case AUTO:
+            case FP32: return null;
+            case FP16: return NativeASHFP16Projection.unsupportedReason();
+            case INT8: {
+                // Mirrors NativeASHProjection.int8(): the Highway kernel unless the add-on is forced.
+                boolean forced = System.getenv("JVECTOR_ASH_INT8_ONEDNN") != null;
+                if (!forced && NativeASHInt8HighwayProjection.isAvailable()) return null;
+                return NativeASHInt8Projection.unsupportedReason();
+            }
+            default: throw new AssertionError(precision);
+        }
+    }
+
+    // The bulk kernels inherited from the Panama provider would not reproduce the native single-pair results, so
+    // score one pair at a time with the native kernels.
+
+    @Override
+    public void dotProduct(VectorFloat<?> q, VectorFloat<?>[] targets, int count, float[] results) {
+        for (int i = 0; i < count; i++) {
+            results[i] = dotProduct(q, targets[i]);
+        }
+    }
+
+    @Override
+    public void cosine(VectorFloat<?> q, VectorFloat<?>[] targets, int count, float[] results) {
+        for (int i = 0; i < count; i++) {
+            results[i] = cosine(q, targets[i]);
+        }
+    }
+
+    @Override
+    public void squareDistance(VectorFloat<?> q, VectorFloat<?>[] targets, int count, float[] results) {
+        for (int i = 0; i < count; i++) {
+            results[i] = squareDistance(q, targets[i]);
+        }
+    }
+
+    @Override
+    public int setBlasThreadsLocal(int threads) {
+        return NativeBlasThreads.set(threads);
+    }
+
+    /** How BLAS thread counts are applied: an MKL or OpenBLAS setting, or {@code none}. */
+    public String getBlasThreadControl() {
+        return NativeBlasThreads.description();
+    }
+
     /**
      * Returns the value of {@code JVECTOR_MAX_ISA} that was in effect when the
      * native library was loaded, or {@code null} if the variable was absent or
      * contained an unrecognised value.
-     * Possible non-null return values: {@code "avx3_spr"}, {@code "avx3_dl"},
+     * Possible non-null return values: {@code "avx3_spr"}, {@code "avx3_dl"}, {@code "avx3_vnni"},
      * {@code "avx3"}, {@code "avx2"}, {@code "sse42"}.
      */
     public String getMaxIsaEnv() {
@@ -68,6 +123,19 @@ class NativeVectorUtilSupport extends PanamaVectorUtilSupport
     @Override
     public boolean tryUpdateKMeansDistances(VectorFloat<?>[] points, VectorFloat<?> centroid,
                                            VectorFloat<?> minima, VectorFloat<?> scratch) {
+        if (tryVectorKMeansUpdate(points, centroid, minima, scratch)) return true;
+        // Other dimensions: score in Java. The caller's generic loop would make one native call per
+        // point, and for small PQ subspaces each call costs more than the distance it computes.
+        for (int i = 0; i < points.length; i++) {
+            scratch.set(i, super.squareDistance(points[i], 0, centroid, 0, centroid.length()));
+        }
+        super.minInPlace(minima, scratch);
+        return true;
+    }
+
+    /** The dedicated 8-float update for this JVM's vector width; false, leaving outputs alone, when it can't run. */
+    boolean tryVectorKMeansUpdate(VectorFloat<?>[] points, VectorFloat<?> centroid,
+                                  VectorFloat<?> minima, VectorFloat<?> scratch) {
         return NativeKMeansInitialization.update(points, centroid, minima, scratch);
     }
 
@@ -92,8 +160,200 @@ class NativeVectorUtilSupport extends PanamaVectorUtilSupport
     }
 
     @Override
+    public float dotProduct(ByteSequence<?> a, ByteSequence<?> b) {
+        return NativeSimdOps.dot_product_i8(
+                ((MemorySegmentByteSequence) a).get(), (long) a.offset(),
+                ((MemorySegmentByteSequence) b).get(), (long) b.offset(),
+                (long) a.length());
+    }
+
+    @Override
+    public float squareDistance(ByteSequence<?> a, ByteSequence<?> b) {
+        return NativeSimdOps.euclidean_i8(
+                ((MemorySegmentByteSequence) a).get(), (long) a.offset(),
+                ((MemorySegmentByteSequence) b).get(), (long) b.offset(),
+                (long) a.length());
+    }
+
+    @Override
+    public float cosine(ByteSequence<?> a, ByteSequence<?> b) {
+        return NativeSimdOps.cosine_i8(
+                ((MemorySegmentByteSequence) a).get(), (long) a.offset(),
+                ((MemorySegmentByteSequence) b).get(), (long) b.offset(),
+                (long) a.length());
+    }
+
+    @Override
+    public AshProjection prepareAshProjection(float[][] matrix) {
+        return NativeASHProjection.isAvailable()
+                ? NativeASHFP32BatchProjection.prepare(new NativeASHProjection(matrix)) : super.prepareAshProjection(matrix);
+    }
+
+    @Override
+    public float ashSymmetricDot(long[] aBits, byte[] aCodes, long[] bBits, byte[] bCodes,
+                                 int dimensions, int bits) {
+        return NativeASHSymmetricKernels.hasPairKernel()
+                ? NativeASHSymmetricKernels.dot(aBits, aCodes, bBits, bCodes, dimensions, bits)
+                : super.ashSymmetricDot(aBits, aCodes, bBits, bCodes, dimensions, bits);
+    }
+
+    @Override
+    public float ashSymmetricBinaryDotAt(long[] aBits, int aOffset, long[] bBits, int bOffset, int dimensions) {
+        return NativeASHSymmetricKernels.hasPairKernel()
+                ? NativeASHSymmetricKernels.binaryDotAt(aBits, aOffset, bBits, bOffset, dimensions)
+                : super.ashSymmetricBinaryDotAt(aBits, aOffset, bBits, bOffset, dimensions);
+    }
+
+    @Override
+    public float ashSymmetricDotAt(byte[] aCodes, int aOffset, byte[] bCodes, int bOffset,
+                                   int dimensions, int bits) {
+        // The native kernels take 2- and 4-bit codes; Panama decodes the other widths.
+        return NativeASHSymmetricKernels.hasPairKernel() && (bits == 2 || bits == 4)
+                ? NativeASHSymmetricKernels.dotAt(aCodes, aOffset, bCodes, bOffset, dimensions, bits)
+                : super.ashSymmetricDotAt(aCodes, aOffset, bCodes, bOffset, dimensions, bits);
+    }
+
+    @Override
+    public boolean supportsAshSymmetricDotRows() {
+        return NativeASHSymmetricKernels.hasRowsKernel();
+    }
+
+    @Override
+    public void ashSymmetricDotRows(byte[] query, int queryOffset, byte[] rows, int stride, int count,
+                                    int dimensions, int bits, float[] out) {
+        if (NativeASHSymmetricKernels.hasRowsKernel() && (bits == 2 || bits == 4))
+            NativeASHSymmetricKernels.dotRows(query, queryOffset, rows, stride, count, dimensions, bits, out);
+        else super.ashSymmetricDotRows(query, queryOffset, rows, stride, count, dimensions, bits, out);
+    }
+
+    @Override
+    public void ashSymmetricLutScore(byte[] codes, int groups, int stride, int lane, int count,
+                                     short[] lut, float[] out, int outOffset) {
+        if (NativeASHSymmetricKernels.hasLutKernel())
+            NativeASHSymmetricKernels.scoreLut(codes, groups, stride, lane, count, lut, out, outOffset);
+        else super.ashSymmetricLutScore(codes, groups, stride, lane, count, lut, out, outOffset);
+    }
+
+    @Override
+    public boolean supportsAshNeighborhoodScoring() {
+        return NativeASHKernels.isAvailable();
+    }
+
+    @Override
+    public boolean supportsNativeAshCanonicalLutScoring() { return NativeASHKernels.isCanonicalLutAvailable(); }
+
+    @Override
+    public boolean supportsNativeAshTwoBitProjectionDot() { return NativeASHKernels.isTwoBitDotAvailable(); }
+
+    /** Native 2- and 4-bit dots read the query directly; keep them rather than the Panama prepared kernel. */
+    @Override
+    public float[] ashPrepareProjectionQuery(float[] query, int dimensions, int bitsPerDimension) {
+        boolean nativeDot = bitsPerDimension == 2 ? NativeASHKernels.isTwoBitDotAvailable()
+                : bitsPerDimension == 4 && NativeASHKernels.isFourBitDotAvailable();
+        return nativeDot ? null : super.ashPrepareProjectionQuery(query, dimensions, bitsPerDimension);
+    }
+
+    @Override
+    public void requireNativeAshSingleScoring(int bitsPerDimension) {
+        if (bitsPerDimension == 2
+                && (NativeASHKernels.isTwoBitDotAvailable() || NativeASHKernels.isCanonicalLutAvailable())) return;
+        if (bitsPerDimension == 4 && NativeASHKernels.isFourBitDotAvailable()) return;
+        throw new IllegalStateException("Required native ASH single scorer is unavailable for b="
+                + bitsPerDimension + (bitsPerDimension == 2
+                ? " (ash_canonical_lut_dot_f32)" : " (ash_projection_dot_4bit_f32)"));
+    }
+
+    @Override
+    public float ashProjectionDot(float[] query, byte[] code, int codeOffset, int dimensions, int bitsPerDimension) {
+        if (bitsPerDimension == 4 && NativeASHKernels.isFourBitDotAvailable()) {
+            return NativeASHKernels.dotFourBit(query, code, codeOffset, dimensions);
+        }
+        if (bitsPerDimension == 2 && NativeASHKernels.isTwoBitDotAvailable()) {
+            return NativeASHKernels.dotTwoBit(query, code, codeOffset, dimensions);
+        }
+        if (REQUIRE_NATIVE_ASH) {
+            requireNativeAshSingleScoring(bitsPerDimension);
+            if (bitsPerDimension == 2)
+                throw new IllegalStateException("Native b=2 scoring requires its prepared LUT; use ASHScorer");
+        }
+        return super.ashProjectionDot(query, code, codeOffset, dimensions, bitsPerDimension);
+    }
+
+    @Override
+    public boolean supportsAshCanonicalLutScoring() {
+        return NativeASHKernels.isCanonicalLutAvailable();
+    }
+
+    @Override
+    public float ashCanonicalLutDot(byte[] code, int codeOffset, int groups, float[] lut) {
+        return NativeASHKernels.dotCanonical(code, codeOffset, groups, lut);
+    }
+
+    @Override
+    public String ashKernelDescription() {
+        String neighborhood = supportsAshNeighborhoodScoring()
+                ? "Highway native, ISA=" + getActiveIsa()
+                : "unavailable; using Java LUT";
+        return super.ashKernelDescription() + "; C=1 whole-neighborhood=" + neighborhood
+                + "; dense projection=" + (NativeASHProjection.isAvailable() ? "Highway" : "Java")
+                + "; symmetric pair=" + (NativeASHSymmetricKernels.hasPairKernel() ? "Highway" : "Java")
+                + "; symmetric LUT=" + (NativeASHSymmetricKernels.hasLutKernel() ? "Highway" : "Java")
+                + "; INT8 offset-binary neighborhood=" + (supportsAshInt8NeighborhoodScoring() ? "Highway" : "Java")
+                + "; INT8 query projection=" + (NativeASHInt8HighwayProjection.isAvailable()
+                        ? "Highway" + (System.getenv("JVECTOR_ASH_INT8_ONEDNN") != null ? " (oneDNN forced)" : "")
+                        : "oneDNN add-on if built");
+    }
+
+    @Override
+    public void ashScoreNeighborhood(byte[] codes, int groups, int blockSize, int capacity,
+                                     float[] lut, float landmarkDot, float[] out) {
+        NativeASHKernels.scoreNeighborhood(codes, groups, blockSize, capacity, lut, landmarkDot, 0f, out);
+    }
+
+    @Override
+    public boolean supportsAshInt8NeighborhoodScoring() {
+        return NativeASHKernels.isInt8NeighborhoodAvailable();
+    }
+
+    @Override
+    public void ashScoreNeighborhoodInt8(byte[] codes, int bits, int units, int blockSize, int capacity,
+                                         byte[] q, float invScale, float center, float landmarkDot, float[] out) {
+        NativeASHKernels.scoreNeighborhoodInt8(codes, bits, units, blockSize, capacity, q, invScale, center,
+                landmarkDot, 0f, out);
+    }
+
+    @Override
+    public boolean supportsAshEuclideanNeighborhoodScoring() {
+        return NativeASHKernels.isEuclideanAvailable();
+    }
+
+    @Override
+    public void ashScoreNeighborhoodEuclidean(byte[] codes, int groups, int blockSize, int capacity, float[] lut,
+                                              float landmarkDot, float squaredDistancePerEstimate, float[] out) {
+        NativeASHKernels.scoreNeighborhood(codes, groups, blockSize, capacity, lut, landmarkDot,
+                euclideanFactor(squaredDistancePerEstimate), out);
+    }
+
+    @Override
+    public void ashScoreNeighborhoodInt8Euclidean(byte[] codes, int bits, int units, int blockSize, int capacity,
+                                                  byte[] q, float invScale, float center, float landmarkDot,
+                                                  float squaredDistancePerEstimate, float[] out) {
+        NativeASHKernels.scoreNeighborhoodInt8(codes, bits, units, blockSize, capacity, q, invScale, center,
+                landmarkDot, euclideanFactor(squaredDistancePerEstimate), out);
+    }
+
+    /** Zero selects the DOT_PRODUCT kernels, so a EUCLIDEAN factor must be negative. */
+    private static float euclideanFactor(float squaredDistancePerEstimate) {
+        if (!(squaredDistancePerEstimate < 0f) || Float.isInfinite(squaredDistancePerEstimate)) {
+            throw new IllegalArgumentException("A EUCLIDEAN factor must be negative and finite");
+        }
+        return squaredDistancePerEstimate;
+    }
+
+    @Override
     protected FloatVector fromVectorFloat(VectorSpecies<Float> SPEC, VectorFloat<?> vector, int offset) {
-        return FloatVector.fromMemorySegment(SPEC, ((MemorySegmentVectorFloat) vector).get(), vector.offset(offset), ByteOrder.LITTLE_ENDIAN);
+        // Read the backing array directly so Panama paths never materialize the MemorySegment view.
+        return FloatVector.fromArray(SPEC, ((FloatArray) vector).array(), offset);
     }
 
     @Override
@@ -103,7 +363,9 @@ class NativeVectorUtilSupport extends PanamaVectorUtilSupport
 
     @Override
     protected void intoVectorFloat(FloatVector vector, VectorFloat<?> v, int offset) {
-        vector.intoMemorySegment(((MemorySegmentVectorFloat) v).get(), v.offset(offset), ByteOrder.LITTLE_ENDIAN);
+        // MemorySegmentVectorFloat is heap-backed: use its array store intrinsic directly.
+        // This also avoids the intoMemorySegment compiler failure observed on JDK 22.
+        vector.intoArray(((FloatArray) v).array(), offset);
     }
 
     @Override
@@ -134,8 +396,15 @@ class NativeVectorUtilSupport extends PanamaVectorUtilSupport
         return NativeSimdOps.assemble_and_sum_f32(((MemorySegmentVectorFloat) data).get(), dataBase, ((MemorySegmentByteSequence) baseOffsets).get(), baseOffsetsOffset, (long) baseOffsetsLength);
     }
 
+    private static void checkSameLength(VectorFloat<?> v1, VectorFloat<?> v2) {
+        if (v1.length() != v2.length()) {
+            throw new IllegalArgumentException("Vectors must have the same length");
+        }
+    }
+
     @Override
     public void addInPlace(VectorFloat<?> v1, VectorFloat<?> v2) {
+        checkSameLength(v1, v2);
         NativeSimdOps.add_in_place_f32(((MemorySegmentVectorFloat) v1).get(), ((MemorySegmentVectorFloat) v2).get(), v1.length());
     }
 
@@ -151,6 +420,7 @@ class NativeVectorUtilSupport extends PanamaVectorUtilSupport
 
     @Override
     public void subInPlace(VectorFloat<?> v1, VectorFloat<?> v2) {
+        checkSameLength(v1, v2);
         NativeSimdOps.sub_in_place_f32(((MemorySegmentVectorFloat) v1).get(), ((MemorySegmentVectorFloat) v2).get(), v1.length());
     }
 
@@ -204,6 +474,7 @@ class NativeVectorUtilSupport extends PanamaVectorUtilSupport
 
     @Override
     public void minInPlace(VectorFloat<?> v1, VectorFloat<?> v2) {
+        checkSameLength(v1, v2);
         NativeSimdOps.min_in_place_f32(((MemorySegmentVectorFloat) v1).get(), ((MemorySegmentVectorFloat) v2).get(), v1.length());
     }
 
@@ -252,43 +523,37 @@ class NativeVectorUtilSupport extends PanamaVectorUtilSupport
 
     @Override
     public float squareDistance(VectorFloat<?> v1, VectorFloat<?> v2) {
-        return NativeSimdOps.euclidean_f32(((MemorySegmentVectorFloat) v1).get(), 0,
-                                          ((MemorySegmentVectorFloat) v2).get(), 0,
-                                          v1.length());
+        return squareDistance(v1, 0, v2, 0, v1.length());
     }
 
     @Override
     public float squareDistance(VectorFloat<?> v1, int v1offset, VectorFloat<?> v2, int v2offset, int length) {
-        return NativeSimdOps.euclidean_f32(((MemorySegmentVectorFloat) v1).get(), v1offset,
-                                          ((MemorySegmentVectorFloat) v2).get(), v2offset,
+        return NativeSimdOps.euclidean_f32(MemorySegment.ofArray(((MemorySegmentVectorFloat) v1).array()), v1offset,
+                                          MemorySegment.ofArray(((MemorySegmentVectorFloat) v2).array()), v2offset,
                                           length);
     }
 
     @Override
     public float cosine(VectorFloat<?> v1, VectorFloat<?> v2) {
-        return NativeSimdOps.cosine_f32(((MemorySegmentVectorFloat) v1).get(), 0,
-                                       ((MemorySegmentVectorFloat) v2).get(), 0,
-                                       v1.length());
+        return cosine(v1, 0, v2, 0, v1.length());
     }
 
     @Override
     public float cosine(VectorFloat<?> v1, int v1offset, VectorFloat<?> v2, int v2offset, int length) {
-        return NativeSimdOps.cosine_f32(((MemorySegmentVectorFloat) v1).get(), v1offset,
-                                       ((MemorySegmentVectorFloat) v2).get(), v2offset,
+        return NativeSimdOps.cosine_f32(MemorySegment.ofArray(((MemorySegmentVectorFloat) v1).array()), v1offset,
+                                       MemorySegment.ofArray(((MemorySegmentVectorFloat) v2).array()), v2offset,
                                        length);
     }
 
     @Override
     public float dotProduct(VectorFloat<?> v1, VectorFloat<?> v2) {
-        return NativeSimdOps.dot_product_f32(((MemorySegmentVectorFloat) v1).get(), 0,
-                                             ((MemorySegmentVectorFloat) v2).get(), 0,
-                                             v1.length());
+        return dotProduct(v1, 0, v2, 0, v1.length());
     }
 
     @Override
     public float dotProduct(VectorFloat<?> v1, int v1offset, VectorFloat<?> v2, int v2offset, int length) {
-        return NativeSimdOps.dot_product_f32(((MemorySegmentVectorFloat) v1).get(), v1offset,
-                                             ((MemorySegmentVectorFloat) v2).get(), v2offset,
+        return NativeSimdOps.dot_product_f32(MemorySegment.ofArray(((MemorySegmentVectorFloat) v1).array()), v1offset,
+                                             MemorySegment.ofArray(((MemorySegmentVectorFloat) v2).array()), v2offset,
                                              length);
     }
 

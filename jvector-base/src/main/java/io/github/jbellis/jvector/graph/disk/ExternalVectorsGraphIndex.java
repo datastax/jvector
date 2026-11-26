@@ -61,7 +61,7 @@ final class ExternalVectorsGraphIndex extends OnDiskGraphIndex {
     private final VectorFloat<?> noLiveNode;
 
     ExternalVectorsGraphIndex(OnDiskGraphIndex graph, RandomAccessVectorValues vectors, FixedBitSet live) {
-        super(graph);
+        super(graph, vectors.dimension());
         this.vectors = vectors.threadLocalSupplier();
         this.vectorDimension = vectors.dimension();
         this.live = live;
@@ -120,11 +120,6 @@ final class ExternalVectorsGraphIndex extends OnDiskGraphIndex {
     }
 
     @Override
-    public int getDimension() {
-        return vectorDimension;
-    }
-
-    @Override
     public View getView() {
         try {
             return new ExternalVectorsView(readerSupplier.get());
@@ -139,11 +134,6 @@ final class ExternalVectorsGraphIndex extends OnDiskGraphIndex {
         ExternalVectorsView(RandomAccessReader reader) {
             super(reader);
             this.values = vectors.get();
-        }
-
-        @Override
-        public int dimension() {
-            return vectorDimension;
         }
 
         @Override

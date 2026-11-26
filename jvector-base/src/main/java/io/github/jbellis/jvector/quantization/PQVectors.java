@@ -52,6 +52,15 @@ public abstract class PQVectors implements CompressedVectors {
         this.pq = pq;
     }
 
+    /**
+     * The largest length of any stored vector's reconstruction, relative to the global centroid if any, or more:
+     * the PQ model's {@link ProductQuantization#maxEncodedNorm}, which counts every code it encoded or holds. With the
+     * centered query's length it bounds every dot product PQ scores. NaN when unknown.
+     */
+    public float maxReconstructedNorm() {
+        return pq.maxEncodedNorm();
+    }
+
     public static ImmutablePQVectors load(RandomAccessReader in) throws IOException {
         // pq codebooks
         var pq = ProductQuantization.load(in);
@@ -72,7 +81,7 @@ public abstract class PQVectors implements CompressedVectors {
             chunks[layout.fullSizeChunks] = vectorTypeSupport.readByteSequence(in, layout.lastChunkBytes);
         }
 
-        return new ImmutablePQVectors(pq, chunks, vectorCount, layout.fullChunkVectors);
+        return new ImmutablePQVectors(pq, chunks, vectorCount, layout.fullChunkVectors, false);
     }
 
     public static PQVectors load(RandomAccessReader in, long offset) throws IOException {
@@ -146,7 +155,7 @@ public abstract class PQVectors implements CompressedVectors {
         else
             VectorAccess.forEach(ravv, vectorCount, ordinalsMapping, simdExecutor, encode);
 
-        return new ImmutablePQVectors(pq, chunks, vectorCount, layout.fullChunkVectors);
+        return new ImmutablePQVectors(pq, chunks, vectorCount, layout.fullChunkVectors, false);
     }
 
     @Override
@@ -280,65 +289,40 @@ public abstract class PQVectors implements CompressedVectors {
 
     @Override
     public ScoreFunction.ApproximateScoreFunction diversityFunctionFor(int node1, VectorSimilarityFunction similarityFunction) {
-        final int subspaceCount = pq.getSubspaceCount();
+        // A build creates one of these per candidate and often makes only one or two comparisons with it,
+        // so it does no setup: each comparison reads both codes' centroids straight from the codebooks.
+        var layout = pq.codebookLayout();
         var node1Chunk = getChunk(node1);
         var node1Offset = getOffsetInChunk(node1);
+        int clusterCount = pq.getClusterCount();
 
         switch (similarityFunction) {
             case DOT_PRODUCT:
                 return (node2) -> {
-                    var node2Chunk = getChunk(node2);
-                    var node2Offset = getOffsetInChunk(node2);
-                    // compute the euclidean distance between the query and the codebook centroids corresponding to the encoded points
-                    float dp = 0;
-                    for (int m = 0; m < subspaceCount; m++) {
-                        int centroidIndex1 = Byte.toUnsignedInt(node1Chunk.get(m + node1Offset));
-                        int centroidIndex2 = Byte.toUnsignedInt(node2Chunk.get(m + node2Offset));
-                        int centroidLength = pq.subvectorSizesAndOffsets[m][0];
-                        dp += VectorUtil.dotProduct(pq.codebooks[m], centroidIndex1 * centroidLength, pq.codebooks[m], centroidIndex2 * centroidLength, centroidLength);
-                    }
+                    float dp = VectorUtil.pqCodePairSimilarity(true, layout.codebooks, clusterCount,
+                            layout.subspaceOffsets, layout.subspaceWidths, layout.minWidth, layout.maxWidth, layout.dimBase,
+                            node1Chunk, node1Offset, getChunk(node2), getOffsetInChunk(node2));
                     // scale to [0, 1]
                     return (1 + dp) / 2;
                 };
             case COSINE:
-                float norm1 = 0.0f;
-                for (int m1 = 0; m1 < subspaceCount; m1++) {
-                    int centroidIndex = Byte.toUnsignedInt(node1Chunk.get(m1 + node1Offset));
-                    int centroidLength = pq.subvectorSizesAndOffsets[m1][0];
-                    var codebookOffset = centroidIndex * centroidLength;
-                    norm1 += VectorUtil.dotProduct(pq.codebooks[m1], codebookOffset, pq.codebooks[m1], codebookOffset, centroidLength);
-                }
-                final float norm1final = norm1;
+                float norm1 = pq.reconstructedSquaredNorm(node1Chunk, node1Offset);
                 return (node2) -> {
                     var node2Chunk = getChunk(node2);
                     var node2Offset = getOffsetInChunk(node2);
-                    // compute the dot product of the query and the codebook centroids corresponding to the encoded points
-                    float sum = 0;
-                    float norm2 = 0;
-                    for (int m = 0; m < subspaceCount; m++) {
-                        int centroidIndex1 = Byte.toUnsignedInt(node1Chunk.get(m + node1Offset));
-                        int centroidIndex2 = Byte.toUnsignedInt(node2Chunk.get(m + node2Offset));
-                        int centroidLength = pq.subvectorSizesAndOffsets[m][0];
-                        int codebookOffset = centroidIndex2 * centroidLength;
-                        sum += VectorUtil.dotProduct(pq.codebooks[m], codebookOffset, pq.codebooks[m], centroidIndex1 * centroidLength, centroidLength);
-                        norm2 += VectorUtil.dotProduct(pq.codebooks[m], codebookOffset, pq.codebooks[m], codebookOffset, centroidLength);
-                    }
-                    float cosine = sum / (float) Math.sqrt(norm1final * norm2);
+                    float sum = VectorUtil.pqCodePairSimilarity(true, layout.codebooks, clusterCount,
+                            layout.subspaceOffsets, layout.subspaceWidths, layout.minWidth, layout.maxWidth, layout.dimBase,
+                            node1Chunk, node1Offset, node2Chunk, node2Offset);
+                    float norm2 = pq.reconstructedSquaredNorm(node2Chunk, node2Offset);
+                    float cosine = sum / (float) Math.sqrt(norm1 * norm2);
                     // scale to [0, 1]
                     return (1 + cosine) / 2;
                 };
             case EUCLIDEAN:
                 return (node2) -> {
-                    var node2Chunk = getChunk(node2);
-                    var node2Offset = getOffsetInChunk(node2);
-                    // compute the euclidean distance between the query and the codebook centroids corresponding to the encoded points
-                    float sum = 0;
-                    for (int m = 0; m < subspaceCount; m++) {
-                        int centroidIndex1 = Byte.toUnsignedInt(node1Chunk.get(m + node1Offset));
-                        int centroidIndex2 = Byte.toUnsignedInt(node2Chunk.get(m + node2Offset));
-                        int centroidLength = pq.subvectorSizesAndOffsets[m][0];
-                        sum += VectorUtil.squareL2Distance(pq.codebooks[m], centroidIndex1 * centroidLength, pq.codebooks[m], centroidIndex2 * centroidLength, centroidLength);
-                    }
+                    float sum = VectorUtil.pqCodePairSimilarity(false, layout.codebooks, clusterCount,
+                            layout.subspaceOffsets, layout.subspaceWidths, layout.minWidth, layout.maxWidth, layout.dimBase,
+                            node1Chunk, node1Offset, getChunk(node2), getOffsetInChunk(node2));
                     // scale to [0, 1]
                     return 1 / (1 + sum);
                 };
@@ -426,16 +410,28 @@ public abstract class PQVectors implements CompressedVectors {
         return new io.github.jbellis.jvector.graph.disk.SidecarCompactionStrategy(ctx, this, retrainer);
     }
 
-    /** For compaction use. See {@link CompressedVectors#writeSidecarHeader}. */
+    /** For compaction use. See {@link CompressedVectors#writeSidecarHeader(IndexWriter, VectorCompressor, int)}. */
     @Override
+    @Deprecated
     public void writeSidecarHeader(IndexWriter out, VectorCompressor<?> mergedCompressor, int count) throws IOException {
+        writeSidecarHeader(out, mergedCompressor, count, io.github.jbellis.jvector.graph.disk.OnDiskGraphIndex.CURRENT_VERSION);
+    }
+
+    /**
+     * For compaction use. See {@link CompressedVectors#writeSidecarHeader(IndexWriter, VectorCompressor, int, int)}:
+     * the merged PQ is serialized at {@code version}, the output's format version, so a sidecar reads back with the
+     * layout of the graph it belongs to (versions 3 and above carry the PQ magic and version; 2 writes the older
+     * layout, which cannot hold an anisotropic threshold).
+     */
+    @Override
+    public void writeSidecarHeader(IndexWriter out, VectorCompressor<?> mergedCompressor, int count, int version) throws IOException {
         if (!(mergedCompressor instanceof ProductQuantization)) {
             throw new IllegalArgumentException(
                     "PQVectors sidecar header requires ProductQuantization; got "
                             + mergedCompressor.getClass().getSimpleName());
         }
         ProductQuantization mergedPQ = (ProductQuantization) mergedCompressor;
-        mergedPQ.write(out, io.github.jbellis.jvector.graph.disk.OnDiskGraphIndex.CURRENT_VERSION);
+        mergedPQ.write(out, version);
         out.writeInt(count);
         out.writeInt(mergedPQ.getSubspaceCount());
     }
@@ -447,19 +443,25 @@ public abstract class PQVectors implements CompressedVectors {
         return 1024;
     }
 
+    /**
+     * Retained vector storage plus the compressor's model ({@link ProductQuantization#ramBytesUsed()}).
+     * Built-in subclasses cache the storage part and add their scoring tables once created.
+     */
     @Override
     public long ramBytesUsed() {
-        int REF_BYTES = RamUsageEstimator.NUM_BYTES_OBJECT_REF;
-        int OH_BYTES = RamUsageEstimator.NUM_BYTES_OBJECT_HEADER;
-        int AH_BYTES = RamUsageEstimator.NUM_BYTES_ARRAY_HEADER;
+        return pq.ramBytesUsed() + storageBytes();
+    }
 
-        long codebooksSize = pq.ramBytesUsed();
-        long chunksArraySize = OH_BYTES + AH_BYTES + (long) validChunkCount() * REF_BYTES;
-        long dataSize = 0;
-        for (int i = 0; i < validChunkCount(); i++) {
-            dataSize += compressedDataChunks[i].ramBytesUsed();
+    /**
+     * This object, the chunk array and each chunk's {@link ByteSequence#ramBytesUsed()}. Chunks that
+     * share backing storage are each charged for it.
+     */
+    protected long storageBytes() {
+        long bytes = RamUsageEstimator.shallowSizeOf(this) + RamUsageEstimator.shallowSizeOf(compressedDataChunks);
+        for (var chunk : compressedDataChunks) {
+            if (chunk != null) bytes += chunk.ramBytesUsed();
         }
-        return codebooksSize + chunksArraySize + dataSize;
+        return bytes;
     }
 
     @Override

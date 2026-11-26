@@ -63,7 +63,7 @@ public class TestFinalWriteVectors {
                 };
             }
         };
-        try (var input = new Grid.FinalWriteVectors(source)) {
+        try (var input = new FinalWriteVectors(source)) {
             for (int i = 0; i < source.size(); i++) {
                 var v = input.get(i);
                 assertEquals(i, v.get(0), 0);
@@ -91,7 +91,7 @@ public class TestFinalWriteVectors {
             }
         }
         var pool = Executors.newFixedThreadPool(4);
-        try (var input = new Grid.FinalWriteVectors(new Borrowed())) {
+        try (var input = new FinalWriteVectors(new Borrowed())) {
             var tasks = new ArrayList<Callable<Void>>();
             for (int worker = 0; worker < 8; worker++) tasks.add(() -> {
                 for (int ordinal = 0; ordinal < resident.size(); ordinal++) {
@@ -133,7 +133,7 @@ public class TestFinalWriteVectors {
             }
         };
         var pool = Executors.newFixedThreadPool(2);
-        var input = new Grid.FinalWriteVectors(source);
+        var input = new FinalWriteVectors(source);
         try {
             var barrier = new CyclicBarrier(2);
             for (var future : pool.invokeAll(List.<Callable<Void>>of(

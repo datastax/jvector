@@ -43,14 +43,17 @@ public class ReaderSupplierFactory {
      * @throws IOException if an I/O error occurs
      */
     public static ReaderSupplier open(Path path) throws IOException {
-        try {
-            // prefer MemorySegmentReader (available under JDK 20+)
-            var supplierClass = Class.forName(MEMORY_SEGMENT_READER_CLASSNAME);
-            Constructor<?> ctor = supplierClass.getConstructor(Path.class);
-            return (ReaderSupplier) ctor.newInstance(path);
-        } catch (Exception e) {
-            LOG.log(Level.WARNING, "MemorySegmentReaderSupplier not available, falling back to MMapReaderSupplier. Reason: {0}: {1}",
-                    new Object[]{e.getClass().getName(), e.getMessage()});
+        // Prefer MemorySegmentReader, which is compiled for Java 22. Older runtimes skip it: a flattened jar can
+        // expose the class outside META-INF/versions, and loading it would throw UnsupportedClassVersionError.
+        if (Runtime.version().feature() >= 22) {
+            try {
+                var supplierClass = Class.forName(MEMORY_SEGMENT_READER_CLASSNAME);
+                Constructor<?> ctor = supplierClass.getConstructor(Path.class);
+                return (ReaderSupplier) ctor.newInstance(path);
+            } catch (Exception | LinkageError e) {
+                LOG.log(Level.WARNING, "MemorySegmentReaderSupplier not available, falling back to MMapReaderSupplier. Reason: {0}: {1}",
+                        new Object[]{e.getClass().getName(), e.getMessage()});
+            }
         }
 
         try {
@@ -59,7 +62,7 @@ public class ReaderSupplierFactory {
             var supplierClass = Class.forName(MMAP_READER_CLASSNAME);
             Constructor<?> ctor = supplierClass.getConstructor(Path.class);
             return (ReaderSupplier) ctor.newInstance(path);
-        } catch (Exception e) {
+        } catch (Exception | LinkageError e) {
             LOG.log(Level.WARNING, "MMapReaderSupplier not available, falling back to MappedChunkReader. More details available at level FINE.");
             LOG.log(Level.FINE, "MMapReaderSupplier instantiation exception:", e);
 

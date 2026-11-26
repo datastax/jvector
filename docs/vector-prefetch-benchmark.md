@@ -13,10 +13,10 @@ Each launch compares three arms **one at a time**, in fresh JVMs:
    **outside comparison timing**; the sample is then selected
    from resident vectors inside timing. This is the ideal resident-input baseline.
 2. **demand**: synchronous positional reads of requested records, without a cache,
-   I/O executor, batching or speculative read-ahead. Float decoding matches the PR source.
-3. **prefetch**: unmodified `FvecFileVectorValues.open(path)` defaults from this PR,
+   I/O executor, batching or speculative read-ahead. Float decoding matches `FvecFileVectorValues`.
+3. **prefetch**: unmodified `FvecFileVectorValues.open(path)` defaults,
    through production `VectorAccess` and quantizer APIs. This comparison includes
-   the PR's batching/scheduling as well as prefetching; it is not a read-ahead-only ablation.
+   the source's batching/scheduling as well as prefetching; it is not a read-ahead-only ablation.
 
 Catalog lookup/downloads, selecting ordinal IDs and preparing one query happen
 before timing. Each fresh JVM initially has no resident base vectors in Java. The
@@ -91,7 +91,7 @@ own active child. Start only one microbenchmark configuration at a time.
   default full scan encodes N−1 candidates, and avoids a trivial self-match.
 - `--samples N`, `--seed 42`: training sample count and deterministic ordinal seed; all
   arms use identical ordinals in identical order. The complete ordinal array is
-  supplied to `VectorAccess.copySelected` up front; the PR schedules bounded
+  supplied to `VectorAccess.copySelected` up front; the source schedules bounded
   asynchronous read-ahead across concurrent selection cursors, rather than
   enqueueing the entire set at once. Count must fit the candidate set.
 - `--progress-seconds 30`: phase transitions and infrequent elapsed-time updates;
@@ -135,8 +135,8 @@ function as the sink. Do not treat current quantized results as measurements of 
 future path.
 
 `--loader-options ioThreads=8,batchVectors=64,readAhead=3,maxBufferBytes=67108864`
-configures the existing PR source when using `--mode prefetch`. With no loader
-options, the exact PR defaults are used. Run individual modes when passing loader
+configures the `FvecFileVectorValues` source when using `--mode prefetch`. With no loader
+options, its defaults are used. Run individual modes when passing loader
 options because preload/demand reject unused parameters rather than ignore them.
 
 A future quantizer can supply a public no-argument adapter implementing
