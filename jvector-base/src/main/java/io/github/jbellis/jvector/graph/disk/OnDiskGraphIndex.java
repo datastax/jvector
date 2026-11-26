@@ -148,6 +148,31 @@ public class OnDiskGraphIndex implements ImmutableGraphIndex, AutoCloseable, Acc
                 + (loadedSources == null ? 0 : loadedSources.bytes);
     }
 
+    /**
+     * A second handle on {@code other}'s graph: same reader, header, layout and loaded upper layers,
+     * but declaring {@code dimension} for its vectors, which the subclass supplies itself. No record
+     * offset depends on the declared dimension. Used by {@link ExternalVectorsGraphIndex}.
+     */
+    OnDiskGraphIndex(OnDiskGraphIndex other, int dimension)
+    {
+        this.readerSupplier = other.readerSupplier;
+        this.version = other.version;
+        this.format = other.format;
+        this.layerInfo = other.layerInfo;
+        this.dimension = dimension;
+        this.entryNode = other.entryNode;
+        this.idUpperBound = other.idUpperBound;
+        this.features = other.features;
+        this.featureList = other.featureList;
+        this.neighborsOffset = other.neighborsOffset;
+        this.inlineOffsets = other.inlineOffsets;
+        this.inlineBlockSize = other.inlineBlockSize;
+        this.l0Layout = other.l0Layout;
+        this.inMemoryNeighbors = other.inMemoryNeighbors;
+        this.inMemoryFeatures = other.inMemoryFeatures;
+        this.retainedBytes = other.retainedBytes;
+    }
+
     /** A HashMap or LinkedHashMap node: hash, key, value, next, and the two LinkedHashMap links. */
     private static final long LINKED_NODE_BYTES = RamUsageEstimator.alignObjectSize(
             (long) RamUsageEstimator.NUM_BYTES_OBJECT_HEADER + Integer.BYTES + 5L * RamUsageEstimator.NUM_BYTES_OBJECT_REF);

@@ -44,6 +44,11 @@ public final class CompactionContext {
     public final int maxOrdinal;
     public final ForkJoinPool executor;
     public final int taskWindowSize;
+    /**
+     * The ordinal of {@link #remappers} written at each output ordinal, when the caller chose the output ordinals;
+     * {@code null} when the output is numbered by {@link #remappers} itself.
+     */
+    private final int[] outputToMerged;
     /** Records announced to the page cache this many nodes ahead of their read (0 = none); see OnDiskGraphIndexCompactor#withRecordAnnounceAhead. */
     public final int recordAnnounceAhead;
     /**
@@ -64,6 +69,27 @@ public final class CompactionContext {
             int taskWindowSize,
             int recordAnnounceAhead,
             int version) {
+        this(sources, sourceCompressed, liveNodes, remappers, dimension, maxOrdinal, executor, taskWindowSize,
+             recordAnnounceAhead, version, null);
+    }
+
+    /**
+     * @param outputToMerged the ordinal of {@code remappers} written at each output ordinal, or {@code null} when the
+     *                       output is numbered by {@code remappers}
+     */
+    public CompactionContext(
+            List<OnDiskGraphIndex> sources,
+            List<CompressedVectors> sourceCompressed,
+            List<FixedBitSet> liveNodes,
+            List<OrdinalMapper> remappers,
+            int dimension,
+            int maxOrdinal,
+            ForkJoinPool executor,
+            int taskWindowSize,
+            int recordAnnounceAhead,
+            int version,
+            int[] outputToMerged) {
+        this.outputToMerged = outputToMerged;
         this.sources = Collections.unmodifiableList(sources);
         this.sourceCompressed = sourceCompressed == null ? null : Collections.unmodifiableList(sourceCompressed);
         this.liveNodes = Collections.unmodifiableList(liveNodes);
@@ -74,5 +100,13 @@ public final class CompactionContext {
         this.taskWindowSize = taskWindowSize;
         this.recordAnnounceAhead = recordAnnounceAhead;
         this.version = version;
+    }
+
+    /**
+     * The ordinal of {@link #remappers} written at {@code outputOrdinal}: what an output laid out by ordinal, such as a
+     * compressed sidecar, reads at that position.
+     */
+    public int mergedOrdinalAt(int outputOrdinal) {
+        return outputToMerged == null ? outputOrdinal : outputToMerged[outputOrdinal];
     }
 }
