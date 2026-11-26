@@ -72,7 +72,7 @@ public class TestVectorizationProvider extends RandomizedTest {
         VectorizationProvider scalar = new DefaultVectorizationProvider();
         VectorizationProvider simd = VectorizationProvider.getInstance();
 
-        for (int length : new int[] {1, 2, 3, 4, 5, 7, 8, 9, 15, 16, 17, 31, 32, 33}) {
+        for (int length : new int[] {1, 2, 3, 4, 5, 7, 8, 9, 12, 15, 16, 17, 23, 24, 31, 32, 33, 47, 48, 63, 64}) {
             for (int offset1 : new int[] {0, 1, 4, 13}) {
                 for (int offset2 : new int[] {0, 3, 8}) {
                     VectorFloat<?> simdA = TestUtil.randomVector(getRandom(), offset1 + length + 5);
