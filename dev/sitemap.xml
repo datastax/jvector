@@ -2,450 +2,454 @@
 <urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
     <url>
          <loc>https://datastax.github.io/jvector/dev/</loc>
-         <lastmod>2026-11-25</lastmod>
+         <lastmod>2026-11-26</lastmod>
     </url>
     <url>
          <loc>https://datastax.github.io/jvector/dev/ash-configuration/</loc>
-         <lastmod>2026-11-25</lastmod>
+         <lastmod>2026-11-26</lastmod>
     </url>
     <url>
          <loc>https://datastax.github.io/jvector/dev/ash-pca-native-svd/</loc>
-         <lastmod>2026-11-25</lastmod>
+         <lastmod>2026-11-26</lastmod>
     </url>
     <url>
          <loc>https://datastax.github.io/jvector/dev/ash-performance/</loc>
-         <lastmod>2026-11-25</lastmod>
+         <lastmod>2026-11-26</lastmod>
     </url>
     <url>
          <loc>https://datastax.github.io/jvector/dev/ash-pq-benchmark/</loc>
-         <lastmod>2026-11-25</lastmod>
+         <lastmod>2026-11-26</lastmod>
     </url>
     <url>
          <loc>https://datastax.github.io/jvector/dev/ash-projection-precision/</loc>
-         <lastmod>2026-11-25</lastmod>
+         <lastmod>2026-11-26</lastmod>
     </url>
     <url>
          <loc>https://datastax.github.io/jvector/dev/ash-query-batching-design/</loc>
-         <lastmod>2026-11-25</lastmod>
+         <lastmod>2026-11-26</lastmod>
     </url>
     <url>
          <loc>https://datastax.github.io/jvector/dev/ash-query-integration/</loc>
-         <lastmod>2026-11-25</lastmod>
+         <lastmod>2026-11-26</lastmod>
     </url>
     <url>
          <loc>https://datastax.github.io/jvector/dev/batched-vector-access/</loc>
-         <lastmod>2026-11-25</lastmod>
+         <lastmod>2026-11-26</lastmod>
     </url>
     <url>
          <loc>https://datastax.github.io/jvector/dev/benchmarking/</loc>
-         <lastmod>2026-11-25</lastmod>
+         <lastmod>2026-11-26</lastmod>
     </url>
     <url>
          <loc>https://datastax.github.io/jvector/dev/benchyaml-guide/</loc>
-         <lastmod>2026-11-25</lastmod>
+         <lastmod>2026-11-26</lastmod>
     </url>
     <url>
          <loc>https://datastax.github.io/jvector/dev/bq/</loc>
-         <lastmod>2026-11-25</lastmod>
+         <lastmod>2026-11-26</lastmod>
     </url>
     <url>
          <loc>https://datastax.github.io/jvector/dev/building-and-installing/</loc>
-         <lastmod>2026-11-25</lastmod>
+         <lastmod>2026-11-26</lastmod>
     </url>
     <url>
          <loc>https://datastax.github.io/jvector/dev/choosing-an-index/</loc>
-         <lastmod>2026-11-25</lastmod>
+         <lastmod>2026-11-26</lastmod>
     </url>
     <url>
          <loc>https://datastax.github.io/jvector/dev/compaction/</loc>
-         <lastmod>2026-11-25</lastmod>
+         <lastmod>2026-11-26</lastmod>
     </url>
     <url>
          <loc>https://datastax.github.io/jvector/dev/deferred-batch-writer/</loc>
-         <lastmod>2026-11-25</lastmod>
+         <lastmod>2026-11-26</lastmod>
     </url>
     <url>
          <loc>https://datastax.github.io/jvector/dev/fused-and-separated/</loc>
-         <lastmod>2026-11-25</lastmod>
+         <lastmod>2026-11-26</lastmod>
     </url>
     <url>
          <loc>https://datastax.github.io/jvector/dev/getting-started/</loc>
-         <lastmod>2026-11-25</lastmod>
+         <lastmod>2026-11-26</lastmod>
     </url>
     <url>
          <loc>https://datastax.github.io/jvector/dev/graph-construction/</loc>
-         <lastmod>2026-11-25</lastmod>
+         <lastmod>2026-11-26</lastmod>
     </url>
     <url>
          <loc>https://datastax.github.io/jvector/dev/larger-than-memory-indexes/</loc>
-         <lastmod>2026-11-25</lastmod>
+         <lastmod>2026-11-26</lastmod>
     </url>
     <url>
          <loc>https://datastax.github.io/jvector/dev/native-ash-preparation/</loc>
-         <lastmod>2026-11-25</lastmod>
+         <lastmod>2026-11-26</lastmod>
     </url>
     <url>
          <loc>https://datastax.github.io/jvector/dev/nvq/</loc>
-         <lastmod>2026-11-25</lastmod>
+         <lastmod>2026-11-26</lastmod>
     </url>
     <url>
          <loc>https://datastax.github.io/jvector/dev/pq/</loc>
-         <lastmod>2026-11-25</lastmod>
+         <lastmod>2026-11-26</lastmod>
     </url>
     <url>
          <loc>https://datastax.github.io/jvector/dev/retained-memory-accounting/</loc>
-         <lastmod>2026-11-25</lastmod>
+         <lastmod>2026-11-26</lastmod>
     </url>
     <url>
          <loc>https://datastax.github.io/jvector/dev/sizing/</loc>
-         <lastmod>2026-11-25</lastmod>
+         <lastmod>2026-11-26</lastmod>
     </url>
     <url>
          <loc>https://datastax.github.io/jvector/dev/tuning/</loc>
-         <lastmod>2026-11-25</lastmod>
+         <lastmod>2026-11-26</lastmod>
     </url>
     <url>
          <loc>https://datastax.github.io/jvector/dev/vector-prefetch-benchmark/</loc>
-         <lastmod>2026-11-25</lastmod>
+         <lastmod>2026-11-26</lastmod>
     </url>
     <url>
          <loc>https://datastax.github.io/jvector/dev/legacy/jvector-step-by-step/</loc>
-         <lastmod>2026-11-25</lastmod>
+         <lastmod>2026-11-26</lastmod>
     </url>
     <url>
          <loc>https://datastax.github.io/jvector/dev/release%20notes/</loc>
-         <lastmod>2026-11-25</lastmod>
+         <lastmod>2026-11-26</lastmod>
     </url>
     <url>
          <loc>https://datastax.github.io/jvector/dev/release%20notes/4.0.0-RC.8/4.0.0-RC.8/</loc>
-         <lastmod>2026-11-25</lastmod>
+         <lastmod>2026-11-26</lastmod>
     </url>
     <url>
          <loc>https://datastax.github.io/jvector/dev/release%20notes/4.0.0-RC.8/pr561.feature/</loc>
-         <lastmod>2026-11-25</lastmod>
+         <lastmod>2026-11-26</lastmod>
     </url>
     <url>
          <loc>https://datastax.github.io/jvector/dev/release%20notes/4.0.0-RC.8/pr588.bugfix/</loc>
-         <lastmod>2026-11-25</lastmod>
+         <lastmod>2026-11-26</lastmod>
     </url>
     <url>
          <loc>https://datastax.github.io/jvector/dev/release%20notes/4.0.0-RC.8/pr602.bugfix/</loc>
-         <lastmod>2026-11-25</lastmod>
+         <lastmod>2026-11-26</lastmod>
     </url>
     <url>
          <loc>https://datastax.github.io/jvector/dev/release%20notes/4.0.0-RC.8/pr608.enhancement/</loc>
-         <lastmod>2026-11-25</lastmod>
+         <lastmod>2026-11-26</lastmod>
     </url>
     <url>
          <loc>https://datastax.github.io/jvector/dev/release%20notes/4.0.0-RC.8/pr610.bugfix/</loc>
-         <lastmod>2026-11-25</lastmod>
+         <lastmod>2026-11-26</lastmod>
     </url>
     <url>
          <loc>https://datastax.github.io/jvector/dev/release%20notes/4.0.0-RC.8/pr612.testing/</loc>
-         <lastmod>2026-11-25</lastmod>
+         <lastmod>2026-11-26</lastmod>
     </url>
     <url>
          <loc>https://datastax.github.io/jvector/dev/release%20notes/4.0.0-RC.8/pr613.testing/</loc>
-         <lastmod>2026-11-25</lastmod>
+         <lastmod>2026-11-26</lastmod>
     </url>
     <url>
          <loc>https://datastax.github.io/jvector/dev/release%20notes/4.0.0-RC.8/pr617.docs/</loc>
-         <lastmod>2026-11-25</lastmod>
+         <lastmod>2026-11-26</lastmod>
     </url>
     <url>
          <loc>https://datastax.github.io/jvector/dev/release%20notes/4.0.0-RC.9/4.0.0-RC.9/</loc>
-         <lastmod>2026-11-25</lastmod>
+         <lastmod>2026-11-26</lastmod>
     </url>
     <url>
          <loc>https://datastax.github.io/jvector/dev/release%20notes/4.0.0-RC.9/617.docs/</loc>
-         <lastmod>2026-11-25</lastmod>
+         <lastmod>2026-11-26</lastmod>
     </url>
     <url>
          <loc>https://datastax.github.io/jvector/dev/release%20notes/4.0.0-RC.9/625.testing/</loc>
-         <lastmod>2026-11-25</lastmod>
+         <lastmod>2026-11-26</lastmod>
     </url>
     <url>
          <loc>https://datastax.github.io/jvector/dev/release%20notes/4.0.0-RC.9/631.testing/</loc>
-         <lastmod>2026-11-25</lastmod>
+         <lastmod>2026-11-26</lastmod>
     </url>
     <url>
          <loc>https://datastax.github.io/jvector/dev/release%20notes/4.0.0-RC.9/634.testing/</loc>
-         <lastmod>2026-11-25</lastmod>
+         <lastmod>2026-11-26</lastmod>
     </url>
     <url>
          <loc>https://datastax.github.io/jvector/dev/release%20notes/4.0.0-RC.9/636.testing/</loc>
-         <lastmod>2026-11-25</lastmod>
+         <lastmod>2026-11-26</lastmod>
     </url>
     <url>
          <loc>https://datastax.github.io/jvector/dev/release%20notes/4.0.0-RC.9/637.fix/</loc>
-         <lastmod>2026-11-25</lastmod>
+         <lastmod>2026-11-26</lastmod>
     </url>
     <url>
          <loc>https://datastax.github.io/jvector/dev/release%20notes/4.0.0-RC.9/641.testing/</loc>
-         <lastmod>2026-11-25</lastmod>
+         <lastmod>2026-11-26</lastmod>
     </url>
     <url>
          <loc>https://datastax.github.io/jvector/dev/release%20notes/4.0.0-RC.9/644.docs/</loc>
-         <lastmod>2026-11-25</lastmod>
+         <lastmod>2026-11-26</lastmod>
     </url>
     <url>
          <loc>https://datastax.github.io/jvector/dev/release%20notes/4.0.0-RC.9/645.testing/</loc>
-         <lastmod>2026-11-25</lastmod>
+         <lastmod>2026-11-26</lastmod>
     </url>
     <url>
          <loc>https://datastax.github.io/jvector/dev/release%20notes/4.0.0-RC.9/647.testing/</loc>
-         <lastmod>2026-11-25</lastmod>
+         <lastmod>2026-11-26</lastmod>
     </url>
     <url>
          <loc>https://datastax.github.io/jvector/dev/release%20notes/4.0.0-RC.9/653.testing/</loc>
-         <lastmod>2026-11-25</lastmod>
+         <lastmod>2026-11-26</lastmod>
     </url>
     <url>
          <loc>https://datastax.github.io/jvector/dev/release%20notes/4.0.0-RC.9/654.testing/</loc>
-         <lastmod>2026-11-25</lastmod>
+         <lastmod>2026-11-26</lastmod>
     </url>
     <url>
          <loc>https://datastax.github.io/jvector/dev/release%20notes/4.0.0-RC.9/655.performance/</loc>
-         <lastmod>2026-11-25</lastmod>
+         <lastmod>2026-11-26</lastmod>
     </url>
     <url>
          <loc>https://datastax.github.io/jvector/dev/release%20notes/4.0.0-RC.9/658.testing/</loc>
-         <lastmod>2026-11-25</lastmod>
+         <lastmod>2026-11-26</lastmod>
     </url>
     <url>
          <loc>https://datastax.github.io/jvector/dev/release%20notes/4.0.0-RC.9/659.feature/</loc>
-         <lastmod>2026-11-25</lastmod>
+         <lastmod>2026-11-26</lastmod>
     </url>
     <url>
          <loc>https://datastax.github.io/jvector/dev/release%20notes/4.0.0-RC.9/663.docs/</loc>
-         <lastmod>2026-11-25</lastmod>
+         <lastmod>2026-11-26</lastmod>
     </url>
     <url>
          <loc>https://datastax.github.io/jvector/dev/release%20notes/4.0.0-RC.9/667.testing/</loc>
-         <lastmod>2026-11-25</lastmod>
+         <lastmod>2026-11-26</lastmod>
     </url>
     <url>
          <loc>https://datastax.github.io/jvector/dev/release%20notes/4.0.0-RC.9/669.testing/</loc>
-         <lastmod>2026-11-25</lastmod>
+         <lastmod>2026-11-26</lastmod>
     </url>
     <url>
          <loc>https://datastax.github.io/jvector/dev/release%20notes/4.0.0-RC.9/670.testing/</loc>
-         <lastmod>2026-11-25</lastmod>
+         <lastmod>2026-11-26</lastmod>
     </url>
     <url>
          <loc>https://datastax.github.io/jvector/dev/release%20notes/4.0.0-RC.9/671.testing/</loc>
-         <lastmod>2026-11-25</lastmod>
+         <lastmod>2026-11-26</lastmod>
     </url>
     <url>
          <loc>https://datastax.github.io/jvector/dev/release%20notes/4.0.0-RC.9/681.performance/</loc>
-         <lastmod>2026-11-25</lastmod>
+         <lastmod>2026-11-26</lastmod>
     </url>
     <url>
          <loc>https://datastax.github.io/jvector/dev/release%20notes/4.0.0-RC.9/686.fix/</loc>
-         <lastmod>2026-11-25</lastmod>
+         <lastmod>2026-11-26</lastmod>
     </url>
     <url>
          <loc>https://datastax.github.io/jvector/dev/release%20notes/4.0.0-RC.9/688.testing/</loc>
-         <lastmod>2026-11-25</lastmod>
+         <lastmod>2026-11-26</lastmod>
     </url>
     <url>
          <loc>https://datastax.github.io/jvector/dev/release%20notes/4.0.0-RC.9/693.enhancement/</loc>
-         <lastmod>2026-11-25</lastmod>
+         <lastmod>2026-11-26</lastmod>
     </url>
     <url>
          <loc>https://datastax.github.io/jvector/dev/release%20notes/4.0.0-RC.9/pr685.feature/</loc>
-         <lastmod>2026-11-25</lastmod>
+         <lastmod>2026-11-26</lastmod>
     </url>
     <url>
          <loc>https://datastax.github.io/jvector/dev/release%20notes/4.0.1/4.0.1/</loc>
-         <lastmod>2026-11-25</lastmod>
+         <lastmod>2026-11-26</lastmod>
     </url>
     <url>
          <loc>https://datastax.github.io/jvector/dev/release%20notes/4.0.1/668.performance/</loc>
-         <lastmod>2026-11-25</lastmod>
+         <lastmod>2026-11-26</lastmod>
     </url>
     <url>
          <loc>https://datastax.github.io/jvector/dev/release%20notes/4.0.1/691.enhancement/</loc>
-         <lastmod>2026-11-25</lastmod>
+         <lastmod>2026-11-26</lastmod>
     </url>
     <url>
          <loc>https://datastax.github.io/jvector/dev/release%20notes/4.0.1/692.testing/</loc>
-         <lastmod>2026-11-25</lastmod>
+         <lastmod>2026-11-26</lastmod>
     </url>
     <url>
          <loc>https://datastax.github.io/jvector/dev/release%20notes/4.0.1/694.enhancement/</loc>
-         <lastmod>2026-11-25</lastmod>
+         <lastmod>2026-11-26</lastmod>
     </url>
     <url>
          <loc>https://datastax.github.io/jvector/dev/release%20notes/4.0.1/703.feature/</loc>
-         <lastmod>2026-11-25</lastmod>
+         <lastmod>2026-11-26</lastmod>
     </url>
     <url>
          <loc>https://datastax.github.io/jvector/dev/release%20notes/4.0.1/706.enhancement/</loc>
-         <lastmod>2026-11-25</lastmod>
+         <lastmod>2026-11-26</lastmod>
     </url>
     <url>
          <loc>https://datastax.github.io/jvector/dev/release%20notes/4.0.1/707.enhancement/</loc>
-         <lastmod>2026-11-25</lastmod>
+         <lastmod>2026-11-26</lastmod>
     </url>
     <url>
          <loc>https://datastax.github.io/jvector/dev/release%20notes/4.0.1/708.enhancement/</loc>
-         <lastmod>2026-11-25</lastmod>
+         <lastmod>2026-11-26</lastmod>
     </url>
     <url>
          <loc>https://datastax.github.io/jvector/dev/release%20notes/4.0.1/716.enhancement/</loc>
-         <lastmod>2026-11-25</lastmod>
+         <lastmod>2026-11-26</lastmod>
     </url>
     <url>
          <loc>https://datastax.github.io/jvector/dev/release%20notes/4.0.1/730.fix/</loc>
-         <lastmod>2026-11-25</lastmod>
+         <lastmod>2026-11-26</lastmod>
     </url>
     <url>
          <loc>https://datastax.github.io/jvector/dev/release%20notes/4.0.2/4.0.2/</loc>
-         <lastmod>2026-11-25</lastmod>
+         <lastmod>2026-11-26</lastmod>
     </url>
     <url>
          <loc>https://datastax.github.io/jvector/dev/release%20notes/4.0.2/723.performance/</loc>
-         <lastmod>2026-11-25</lastmod>
+         <lastmod>2026-11-26</lastmod>
     </url>
     <url>
          <loc>https://datastax.github.io/jvector/dev/release%20notes/4.0.2/736.testing/</loc>
-         <lastmod>2026-11-25</lastmod>
+         <lastmod>2026-11-26</lastmod>
     </url>
     <url>
          <loc>https://datastax.github.io/jvector/dev/release%20notes/4.0.2/738.bugfix/</loc>
-         <lastmod>2026-11-25</lastmod>
+         <lastmod>2026-11-26</lastmod>
     </url>
     <url>
          <loc>https://datastax.github.io/jvector/dev/release%20notes/4.0.2/740.performance/</loc>
-         <lastmod>2026-11-25</lastmod>
+         <lastmod>2026-11-26</lastmod>
     </url>
     <url>
          <loc>https://datastax.github.io/jvector/dev/release%20notes/4.0.2/744.feature/</loc>
-         <lastmod>2026-11-25</lastmod>
+         <lastmod>2026-11-26</lastmod>
     </url>
     <url>
          <loc>https://datastax.github.io/jvector/dev/release%20notes/4.0.2/745.bugfix/</loc>
-         <lastmod>2026-11-25</lastmod>
+         <lastmod>2026-11-26</lastmod>
     </url>
     <url>
          <loc>https://datastax.github.io/jvector/dev/release%20notes/4.0.2/747.performance/</loc>
-         <lastmod>2026-11-25</lastmod>
+         <lastmod>2026-11-26</lastmod>
     </url>
     <url>
          <loc>https://datastax.github.io/jvector/dev/release%20notes/4.0.2/751.feature/</loc>
-         <lastmod>2026-11-25</lastmod>
+         <lastmod>2026-11-26</lastmod>
     </url>
     <url>
          <loc>https://datastax.github.io/jvector/dev/release%20notes/4.0.2/753.performance/</loc>
-         <lastmod>2026-11-25</lastmod>
+         <lastmod>2026-11-26</lastmod>
     </url>
     <url>
          <loc>https://datastax.github.io/jvector/dev/release%20notes/4.0.2/761.performance/</loc>
-         <lastmod>2026-11-25</lastmod>
+         <lastmod>2026-11-26</lastmod>
     </url>
     <url>
          <loc>https://datastax.github.io/jvector/dev/release%20notes/4.1.0-rc.1/4.1.0-rc.1/</loc>
-         <lastmod>2026-11-25</lastmod>
+         <lastmod>2026-11-26</lastmod>
     </url>
     <url>
          <loc>https://datastax.github.io/jvector/dev/release%20notes/4.1.0-rc.1/639.performance/</loc>
-         <lastmod>2026-11-25</lastmod>
+         <lastmod>2026-11-26</lastmod>
     </url>
     <url>
          <loc>https://datastax.github.io/jvector/dev/release%20notes/4.1.0-rc.1/709.feature/</loc>
-         <lastmod>2026-11-25</lastmod>
+         <lastmod>2026-11-26</lastmod>
     </url>
     <url>
          <loc>https://datastax.github.io/jvector/dev/release%20notes/4.1.0-rc.1/715.bugfix/</loc>
-         <lastmod>2026-11-25</lastmod>
+         <lastmod>2026-11-26</lastmod>
     </url>
     <url>
          <loc>https://datastax.github.io/jvector/dev/release%20notes/4.1.0-rc.1/776.testing/</loc>
-         <lastmod>2026-11-25</lastmod>
+         <lastmod>2026-11-26</lastmod>
     </url>
     <url>
          <loc>https://datastax.github.io/jvector/dev/release%20notes/4.1.0-rc.1/781.bugfix/</loc>
-         <lastmod>2026-11-25</lastmod>
+         <lastmod>2026-11-26</lastmod>
     </url>
     <url>
          <loc>https://datastax.github.io/jvector/dev/release%20notes/4.1.0-rc.1/796.enhancement/</loc>
-         <lastmod>2026-11-25</lastmod>
+         <lastmod>2026-11-26</lastmod>
     </url>
     <url>
          <loc>https://datastax.github.io/jvector/dev/release%20notes/4.1.0-rc.1/796.feature/</loc>
-         <lastmod>2026-11-25</lastmod>
+         <lastmod>2026-11-26</lastmod>
     </url>
     <url>
          <loc>https://datastax.github.io/jvector/dev/release%20notes/4.1.0-rc.1/798.feature/</loc>
-         <lastmod>2026-11-25</lastmod>
+         <lastmod>2026-11-26</lastmod>
     </url>
     <url>
          <loc>https://datastax.github.io/jvector/dev/release%20notes/4.1.0-rc.1/812.bugfix/</loc>
-         <lastmod>2026-11-25</lastmod>
+         <lastmod>2026-11-26</lastmod>
     </url>
     <url>
          <loc>https://datastax.github.io/jvector/dev/release%20notes/4.1.0-rc.1/814.bugfix/</loc>
-         <lastmod>2026-11-25</lastmod>
+         <lastmod>2026-11-26</lastmod>
     </url>
     <url>
          <loc>https://datastax.github.io/jvector/dev/release%20notes/4.1.0-rc.1/820.bugfix/</loc>
-         <lastmod>2026-11-25</lastmod>
+         <lastmod>2026-11-26</lastmod>
     </url>
     <url>
          <loc>https://datastax.github.io/jvector/dev/release%20notes/4.1.0-rc.1/823.bugfix/</loc>
-         <lastmod>2026-11-25</lastmod>
+         <lastmod>2026-11-26</lastmod>
     </url>
     <url>
          <loc>https://datastax.github.io/jvector/dev/release%20notes/4.1.0-rc.1/825.docs/</loc>
-         <lastmod>2026-11-25</lastmod>
+         <lastmod>2026-11-26</lastmod>
     </url>
     <url>
          <loc>https://datastax.github.io/jvector/dev/release%20notes/4.1.0-rc.2/810.performance/</loc>
-         <lastmod>2026-11-25</lastmod>
+         <lastmod>2026-11-26</lastmod>
     </url>
     <url>
          <loc>https://datastax.github.io/jvector/dev/release%20notes/4.1.0-rc.2/816.performance/</loc>
-         <lastmod>2026-11-25</lastmod>
+         <lastmod>2026-11-26</lastmod>
     </url>
     <url>
          <loc>https://datastax.github.io/jvector/dev/release%20notes/4.1.0-rc.2/819.performance/</loc>
-         <lastmod>2026-11-25</lastmod>
+         <lastmod>2026-11-26</lastmod>
     </url>
     <url>
          <loc>https://datastax.github.io/jvector/dev/release%20notes/4.1.0-rc.2/831.bugfix/</loc>
-         <lastmod>2026-11-25</lastmod>
+         <lastmod>2026-11-26</lastmod>
     </url>
     <url>
          <loc>https://datastax.github.io/jvector/dev/release%20notes/4.1.0-rc.2/831.performance/</loc>
-         <lastmod>2026-11-25</lastmod>
+         <lastmod>2026-11-26</lastmod>
     </url>
     <url>
          <loc>https://datastax.github.io/jvector/dev/release%20notes/4.1.0-rc.2/832.docs/</loc>
-         <lastmod>2026-11-25</lastmod>
+         <lastmod>2026-11-26</lastmod>
     </url>
     <url>
          <loc>https://datastax.github.io/jvector/dev/release%20notes/4.1.0-rc.2/833.performance/</loc>
-         <lastmod>2026-11-25</lastmod>
+         <lastmod>2026-11-26</lastmod>
     </url>
     <url>
          <loc>https://datastax.github.io/jvector/dev/release%20notes/4.1.0-rc.2/834.performance/</loc>
-         <lastmod>2026-11-25</lastmod>
+         <lastmod>2026-11-26</lastmod>
     </url>
     <url>
          <loc>https://datastax.github.io/jvector/dev/release%20notes/4.1.0-rc.2/836.performance/</loc>
-         <lastmod>2026-11-25</lastmod>
+         <lastmod>2026-11-26</lastmod>
+    </url>
+    <url>
+         <loc>https://datastax.github.io/jvector/dev/release%20notes/4.1.0-rc.2/842.performance/</loc>
+         <lastmod>2026-11-26</lastmod>
     </url>
     <url>
          <loc>https://datastax.github.io/jvector/dev/tutorials/1-intro-tutorial/</loc>
-         <lastmod>2026-11-25</lastmod>
+         <lastmod>2026-11-26</lastmod>
     </url>
     <url>
          <loc>https://datastax.github.io/jvector/dev/tutorials/2-disk-tutorial/</loc>
-         <lastmod>2026-11-25</lastmod>
+         <lastmod>2026-11-26</lastmod>
     </url>
     <url>
          <loc>https://datastax.github.io/jvector/dev/tutorials/3-larger-than-memory-tutorial/</loc>
-         <lastmod>2026-11-25</lastmod>
+         <lastmod>2026-11-26</lastmod>
     </url>
 </urlset>
