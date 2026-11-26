@@ -36,6 +36,7 @@ import io.github.jbellis.jvector.vector.ByteVectorSimilarityFunction;
 import io.github.jbellis.jvector.vector.VectorSimilarityFunction;
 import io.github.jbellis.jvector.vector.types.ByteSequence;
 import io.github.jbellis.jvector.vector.types.VectorFloat;
+import org.agrona.collections.IntArrayList;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -915,6 +916,9 @@ public class GraphIndexBuilder implements Closeable, Accountable {
             });
         }).join();
 
+        // a node whose last in-edge was pruned is unreachable from the entry node, so searches could never find it
+        reconnectOrphanedNodes();
+
         graph.setAllMutationsCompleted();
     }
 
@@ -945,6 +949,165 @@ public class GraphIndexBuilder implements Closeable, Accountable {
                     gs.searchOneLayer(ssp, 1, Float.NEGATIVE_INFINITY, lvl, acceptedBits);
                 }
                 gs.setEntryPointsFromPreviousLayer();
+            }
+        } catch (IOException e) {
+            throw new UncheckedIOException(e);
+        }
+    }
+
+    /** Reconnection is best-effort: linking one orphan evicts another node's worst edge, which can orphan that node. */
+    private static final int MAX_RECONNECT_PASSES = 5;
+
+    /** the reconnection could not find a node to connect the orphan to */
+    private static final int NO_EDGE_ADDED = -1;
+    /** the reconnection added an edge without evicting another one */
+    private static final int NO_EVICTION = -2;
+
+    /**
+     * Repairs nodes that are unreachable from the entry node in layer 0 once degrees have been enforced.
+     * <p>
+     * Neighbor pruning during insertion and {@link #cleanup()} can drop the last in-edge of a node. Such a node has
+     * outgoing edges but no path from the entry node, so no search can ever return it. For each such node we add an
+     * in-edge from the closest reachable neighbor (or, failing that, from the closest node found by searching),
+     * evicting that neighbor's worst edge so the degree cap still holds.
+     * <p>
+     * Adding such an edge evicts the worst edge of the node we connect from, which may leave the evicted node --
+     * and everything that was only reachable through it -- unreachable.  We therefore recompute the reachable nodes
+     * whenever an eviction happened, so that we never connect an orphan from a node that has itself become
+     * unreachable, and so that we notice the orphans that an eviction created.
+     */
+    private void reconnectOrphanedNodes() {
+        int upper = graph.getIdUpperBound();
+        // Nodes already used as connection targets. A reconnection edge is usually the worst one in its target's
+        // neighborhood, so reusing a target would just overwrite the previous reconnection.
+        var connectionTargets = new AtomicFixedBitSet(upper);
+        connectionTargets.set(graph.entryNode().node);
+
+        var connected = new FixedBitSet(upper);
+        var unreachable = new AtomicInteger();
+        // The reconnection runs in the SIMD executor because it scores vectors with the search provider.
+        simdExecutor.submit(() -> {
+            for (int pass = 0; pass < MAX_RECONNECT_PASSES; pass++) {
+                findConnectedNodes(connected);
+                var orphans = new IntArrayList();
+                for (int node = 0; node < upper; node++) {
+                    if (graph.contains(0, node) && !connected.get(node)) {
+                        orphans.addInt(node);
+                    }
+                }
+                if (orphans.isEmpty()) {
+                    return;
+                }
+
+                var reconnected = new AtomicInteger();
+                for (int i = 0; i < orphans.size(); i++) {
+                    int orphan = orphans.getInt(i);
+                    if (connected.get(orphan)) {
+                        continue; // reached through an orphan that was linked in earlier in this pass
+                    }
+                    int result = reconnectOrphan(orphan, connected, connectionTargets);
+                    if (result == NO_EDGE_ADDED) {
+                        continue;
+                    }
+                    reconnected.incrementAndGet();
+                    if (result != NO_EVICTION) {
+                        // The eviction may have disconnected the evicted node and everything that was only reachable
+                        // through it, so the reachable set has to be recomputed before we connect the next orphan.
+                        findConnectedNodes(connected);
+                    }
+                }
+                logger.debug("Reconnect pass {}: {} unreachable nodes, {} reconnected", pass, orphans.size(), reconnected.get());
+                if (reconnected.get() == 0) {
+                    break;
+                }
+            }
+
+            findConnectedNodes(connected);
+            for (int node = 0; node < upper; node++) {
+                if (graph.contains(0, node) && !connected.get(node)) {
+                    unreachable.incrementAndGet();
+                }
+            }
+        }).join();
+
+        if (unreachable.get() > 0) {
+            logger.warn("{} of {} nodes are still unreachable from the entry node after {} reconnect passes; "
+                            + "searches will never return them",
+                        unreachable.get(), graph.size(0), MAX_RECONNECT_PASSES);
+        }
+    }
+
+    /** Sets {@code connected} to the nodes of layer 0 that are reachable from the entry node. */
+    private void findConnectedNodes(FixedBitSet connected) {
+        connected.clear();
+        var stack = new IntArrayList();
+        int entry = graph.entryNode().node;
+        connected.set(entry);
+        stack.addInt(entry);
+        while (!stack.isEmpty()) {
+            int node = stack.removeAt(stack.size() - 1);
+            for (var it = graph.getNeighborsIterator(0, node); it.hasNext(); ) {
+                int neighbor = it.nextInt();
+                if (!connected.getAndSet(neighbor)) {
+                    stack.addInt(neighbor);
+                }
+            }
+        }
+    }
+
+    /**
+     * Adds an in-edge to the unreachable {@code node} from a reachable node that has not been used as a
+     * connection target yet.
+     *
+     * @return the node that was evicted to make room for the new edge, {@link #NO_EVICTION} if no edge was
+     * evicted, or {@link #NO_EDGE_ADDED} if no edge could be added at all
+     */
+    private int reconnectOrphan(int node, Bits connected, AtomicFixedBitSet connectionTargets) {
+        var sf = scoreProvider.searchProviderFor(node).scoreFunction();
+
+        // First choice: the closest of our own neighbors that is reachable. It already considered us close enough
+        // to link to, and restricting to reachable neighbors matters when the orphans form a large partition.
+        int bestNeighbor = -1;
+        float bestScore = Float.NEGATIVE_INFINITY;
+        for (var it = graph.getNeighborsIterator(0, node); it.hasNext(); ) {
+            int neighbor = it.nextInt();
+            if (!connected.get(neighbor) || connectionTargets.get(neighbor)) {
+                continue;
+            }
+            float score = sf.similarityTo(neighbor);
+            if (score > bestScore) {
+                bestScore = score;
+                bestNeighbor = neighbor;
+            }
+        }
+        if (bestNeighbor >= 0 && !connectionTargets.getAndSet(bestNeighbor)) {
+            int evicted = graph.insertEdgeNotDiverse(0, bestNeighbor, node, bestScore);
+            return evicted >= 0 ? evicted : NO_EVICTION;
+        }
+
+        // Otherwise search for nearby reachable nodes, resuming a bounded number of times to find an unused target.
+        try (var gs = searchers.get()) {
+            gs.setView(graph.getView()); // the thread-local searcher may hold a snapshot from before late insertions
+            var ssp = scoreProvider.searchProviderFor(node);
+            // Only reachable nodes are acceptable. With a hierarchy the search enters layer 0 from the upper layers,
+            // so it can return other unreachable nodes, and linking from one of those reconnects nothing.
+            Bits reachableOthers = other -> other != node && connected.get(other);
+            // The threshold must be NEGATIVE_INFINITY, not 0.0f: DOT_PRODUCT scores are (1 + dot) / 2, which is
+            // negative for non-normalized vectors, and a 0.0f floor would discard the only reachable candidates
+            // of a node that is dissimilar to everything else.
+            // The same goes for the rerank floor, which only matters for a score provider that has a reranker.
+            var result = gs.search(ssp, beamWidth, beamWidth, Float.NEGATIVE_INFINITY, Float.NEGATIVE_INFINITY, reachableOthers);
+            for (int resumes = 0; ; resumes++) {
+                for (var candidate : result.getNodes()) {
+                    if (!connectionTargets.getAndSet(candidate.node)) {
+                        int evicted = graph.insertEdgeNotDiverse(0, candidate.node, node, candidate.score);
+                        return evicted >= 0 ? evicted : NO_EVICTION;
+                    }
+                }
+                if (result.getNodes().length == 0 || resumes >= 2 * graph.maxDegree()) {
+                    return NO_EDGE_ADDED;
+                }
+                result = gs.resume(beamWidth, beamWidth, Float.NEGATIVE_INFINITY, Float.NEGATIVE_INFINITY);
             }
         } catch (IOException e) {
             throw new UncheckedIOException(e);

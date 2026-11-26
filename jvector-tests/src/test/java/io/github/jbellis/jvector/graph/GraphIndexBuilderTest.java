@@ -517,4 +517,107 @@ public class GraphIndexBuilderTest extends LuceneTestCase {
         }
         assertTrue("only " + refined + " of " + positions.length + " builds refined the node", refined >= 4);
     }
+
+    /**
+     * Neighbor pruning during insertion and cleanup() can drop the last in-edge of a node. That node is then
+     * unreachable from the entry node, so no search can ever return it. cleanup() must repair such nodes.
+     */
+    @Test
+    public void testCleanupLeavesEveryNodeReachable() throws IOException {
+        for (boolean addHierarchy : new boolean[] {false, true}) {
+            for (int seed = 0; seed < 6; seed++) {
+                var ravv = MockVectorValues.fromValues(createRandomFloatVectors(600, 32, new Random(seed)));
+                var bsp = BuildScoreProvider.randomAccessScoreProvider(ravv, VectorSimilarityFunction.EUCLIDEAN);
+                try (var builder = new GraphIndexBuilder(bsp, ravv.dimension(), 8, 16, 1.2f, 1.2f, addHierarchy)) {
+                    for (int node = 0; node < ravv.size(); node++) {
+                        builder.addGraphNode(node, ravv.getVector(node));
+                    }
+                    builder.cleanup();
+                    assertEquals("unreachable nodes (hierarchy=" + addHierarchy + ", seed=" + seed + ")",
+                                 ravv.size(), countReachableFromEntry(builder.getGraph()));
+                }
+            }
+        }
+    }
+
+    /**
+     * Well-separated clusters leave whole partitions unreachable, not just single nodes. Reconnecting must link one
+     * node per partition from the reachable side, including in a hierarchical graph, where a search enters layer 0
+     * through the upper layers and can otherwise return other unreachable nodes.
+     */
+    @Test
+    public void testCleanupReconnectsDisconnectedClusters() throws IOException {
+        int clusters = 8;
+        for (boolean addHierarchy : new boolean[] {false, true}) {
+            for (int seed = 0; seed < 6; seed++) {
+                var random = new Random(seed);
+                float[][] centers = new float[clusters][2];
+                for (var center : centers) {
+                    center[0] = (float) (random.nextGaussian() * 5);
+                    center[1] = (float) (random.nextGaussian() * 5);
+                }
+                var vectors = new ArrayList<VectorFloat<?>>();
+                for (int i = 0; i < 1200; i++) {
+                    var center = centers[i % clusters];
+                    vectors.add(vts.createFloatVector(new float[] {
+                            center[0] + (float) (random.nextGaussian() * 0.2),
+                            center[1] + (float) (random.nextGaussian() * 0.2)}));
+                }
+                var ravv = new ListRandomAccessVectorValues(vectors, 2);
+                var bsp = BuildScoreProvider.randomAccessScoreProvider(ravv, VectorSimilarityFunction.EUCLIDEAN);
+                try (var builder = new GraphIndexBuilder(bsp, 2, 8, 30, 1.2f, 1.2f, addHierarchy)) {
+                    for (int node = 0; node < ravv.size(); node++) {
+                        builder.addGraphNode(node, ravv.getVector(node));
+                    }
+                    builder.cleanup();
+                    assertEquals("unreachable nodes (hierarchy=" + addHierarchy + ", seed=" + seed + ")",
+                                 ravv.size(), countReachableFromEntry(builder.getGraph()));
+                }
+            }
+        }
+    }
+
+    /**
+     * DOT_PRODUCT scores are (1 + dot) / 2, which is negative for non-normalized vectors. A vector that is dissimilar
+     * to all the others must still be reconnected: the repair search must not use a threshold of 0.
+     */
+    @Test
+    public void testCleanupReconnectsNodeWithOnlyNegativeSimilarities() throws IOException {
+        var random = new Random(1);
+        var vectors = new ArrayList<VectorFloat<?>>();
+        for (int i = 0; i < 200; i++) {
+            vectors.add(vts.createFloatVector(new float[] {10f + (float) random.nextGaussian(), (float) random.nextGaussian()}));
+        }
+        vectors.add(50, vts.createFloatVector(new float[] {-10f, 0f}));
+        var ravv = new ListRandomAccessVectorValues(vectors, 2);
+        var bsp = BuildScoreProvider.randomAccessScoreProvider(ravv, VectorSimilarityFunction.DOT_PRODUCT);
+        try (var builder = new GraphIndexBuilder(bsp, 2, 8, 40, 1.2f, 1.2f, false)) {
+            for (int node = 0; node < ravv.size(); node++) {
+                builder.addGraphNode(node, ravv.getVector(node));
+            }
+            builder.cleanup();
+            assertEquals(ravv.size(), countReachableFromEntry(builder.getGraph()));
+        }
+    }
+
+    private static int countReachableFromEntry(ImmutableGraphIndex graph) throws IOException {
+        try (var view = graph.getView()) {
+            var seen = new java.util.BitSet(view.getIdUpperBound());
+            var stack = new java.util.ArrayDeque<Integer>();
+            int entry = view.entryNode().node;
+            seen.set(entry);
+            stack.push(entry);
+            while (!stack.isEmpty()) {
+                var neighbors = view.getNeighborsIterator(0, stack.pop());
+                while (neighbors.hasNext()) {
+                    int neighbor = neighbors.nextInt();
+                    if (!seen.get(neighbor)) {
+                        seen.set(neighbor);
+                        stack.push(neighbor);
+                    }
+                }
+            }
+            return seen.cardinality();
+        }
+    }
 }

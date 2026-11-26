@@ -62,14 +62,36 @@ public class ConcurrentNeighborMap {
         }
     }
 
-    public void insertEdgeNotDiverse(int fromId, int toId, float score) {
+    /**
+     * Insert an edge without running the diversity check, evicting the worst neighbor of {@code fromId} if it is
+     * already at its maximum degree.
+     *
+     * @return the node that was evicted to make room for {@code toId}, or -1 if no edge was evicted
+     */
+    public int insertEdgeNotDiverse(int fromId, int toId, float score) {
         while (true) {
             var old = neighbors.get(fromId);
             var next = old.insertNotDiverse(toId, score, this);
-            if (next == old || neighbors.compareAndPut(fromId, old, next)) {
-                break;
+            if (next == old) {
+                return -1; // the edge was already there
+            }
+            if (neighbors.compareAndPut(fromId, old, next)) {
+                return evictedNode(old, next);
             }
         }
+    }
+
+    /**
+     * @return the node present in {@code old} but not in {@code next}, or -1 if none was dropped
+     */
+    private static int evictedNode(NodeArray old, NodeArray next) {
+        for (int i = 0; i < old.size(); i++) {
+            int node = old.getNode(i);
+            if (!next.contains(node)) {
+                return node;
+            }
+        }
+        return -1;
     }
 
     /**
