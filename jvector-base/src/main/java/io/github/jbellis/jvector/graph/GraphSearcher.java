@@ -677,7 +677,6 @@ public class GraphSearcher implements Closeable {
         return bestScored.size() < rerankK || !(score < expandBar);
     }
 
-    @SuppressWarnings("StatementWithEmptyBody")
     private void addTopCandidate(int topCandidateNode, float topCandidateScore, int rerankK) {
         // add the new node to the results queue, and any evicted node to evictedResults in case we resume later
         // (push() can't tell us what node was evicted when the queue was already full, so we examine that manually)
@@ -689,9 +688,10 @@ public class GraphSearcher implements Closeable {
             evictedResults.add(evictedNode, evictedScore);
             approximateResults.push(topCandidateNode, topCandidateScore);
         } else {
-            // score is exactly equal to the worst candidate in our results, so we don't bother
-            // changing the results queue.  (We still want to check its neighbors to see if one of them
-            // is better.)
+            // The score is not above the worst result: a tie, or with adaptive stopping a lower score. The node has
+            // left the candidate queue and is marked visited, so keep it for resume(), which could not return it
+            // otherwise. (We still check its neighbors.)
+            evictedResults.add(topCandidateNode, topCandidateScore);
         }
     }
 

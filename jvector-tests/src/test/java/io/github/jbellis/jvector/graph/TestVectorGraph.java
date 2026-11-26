@@ -29,12 +29,14 @@ import com.carrotsearch.randomizedtesting.annotations.ThreadLeakScope;
 import io.github.jbellis.jvector.LuceneTestCase;
 import io.github.jbellis.jvector.TestUtil;
 import io.github.jbellis.jvector.graph.similarity.DefaultSearchScoreProvider;
+import io.github.jbellis.jvector.graph.similarity.SearchScoreProvider;
 import io.github.jbellis.jvector.quantization.ProductQuantization;
 import io.github.jbellis.jvector.util.Bits;
 import io.github.jbellis.jvector.util.BoundedLongHeap;
 import io.github.jbellis.jvector.util.FixedBitSet;
 import io.github.jbellis.jvector.vector.ByteVectorSimilarityFunction;
 import io.github.jbellis.jvector.vector.VectorSimilarityFunction;
+import io.github.jbellis.jvector.vector.VectorUtil;
 import io.github.jbellis.jvector.vector.VectorizationProvider;
 import io.github.jbellis.jvector.vector.types.ByteSequence;
 import io.github.jbellis.jvector.vector.types.VectorFloat;
@@ -211,6 +213,92 @@ public class TestVectorGraph extends LuceneTestCase {
 
         var resumed = searcher.resume(topK, rerankK);
         assert resumed.getRerankedCount() < rerankK;
+    }
+
+    @Test
+    // search() and then resume() until no results remain return every node of a connected graph once, however many
+    // scores tie at the rerankK cutoff
+    public void testResumeReturnsEveryNode() throws IOException {
+        // six vectors pointing the same way all score 1.0 under COSINE: one more tie than rerankK holds
+        var ones = vectorTypeSupport.createFloatVector(new float[] {1f, 1f, 1f});
+        var sameDirection = MockVectorValues.fromValues(IntStream.range(0, 6).mapToObj(i -> {
+            float v = 1.0f + 0.1f * i;
+            return vectorTypeSupport.createFloatVector(new float[] {v, v, v});
+        }).toArray(VectorFloat<?>[]::new));
+        var cosine = DefaultSearchScoreProvider.exact(ones, VectorSimilarityFunction.COSINE, sameDirection);
+        assertResumeReturnsEveryNode("same direction COSINE", cosine, 6, 1, 5, false);
+
+        // vectors with small positive integer coordinates often repeat, share a direction or share a PQ code
+        var random = getRandom();
+        for (int trial = 0; trial < 20; trial++) {
+            int size = 2 + random.nextInt(99);
+            int dim = 2 + random.nextInt(3);
+            int rerankK = 1 + random.nextInt(10);
+            int topK = 1 + random.nextInt(rerankK);
+            var vectors = MockVectorValues.fromValues(IntStream.range(0, size)
+                                                               .mapToObj(i -> smallIntegerVector(random, dim))
+                                                               .toArray(VectorFloat<?>[]::new));
+            var query = smallIntegerVector(random, dim);
+            int subspaces = 1 + random.nextInt(dim);
+            int clusters = 1 + random.nextInt(Math.min(size, 4));
+            var pqv = ProductQuantization.compute(vectors, subspaces, clusters, false).encodeAll(vectors);
+            for (var vsf : VectorSimilarityFunction.values()) {
+                String what = String.format("trial %d %s, topK %d, rerankK %d", trial, vsf, topK, rerankK);
+                assertResumeReturnsEveryNode(what + ", exact", DefaultSearchScoreProvider.exact(query, vsf, vectors),
+                                             size, topK, rerankK, false);
+                var pq = new DefaultSearchScoreProvider(pqv.scoreFunctionFor(query, vsf),
+                                                        vectors.rerankerFor(query, vsf));
+                assertResumeReturnsEveryNode(what + ", PQ", pq, size, topK, rerankK, false);
+            }
+        }
+    }
+
+    @Test
+    // with adaptive stopping, nodes expanded below the rerankK cutoff are still returned by a later resume()
+    public void testResumeReturnsEveryNodeWithAdaptiveStopping() throws IOException {
+        int size = 50;
+        var vectors = MockVectorValues.fromValues(IntStream.range(0, size).mapToObj(i -> unitVector(3))
+                                                           .toArray(VectorFloat<?>[]::new));
+        var query = unitVector(3);
+        for (var vsf : VectorSimilarityFunction.values()) {
+            var sf = DefaultSearchScoreProvider.exact(query, vsf, vectors).scoreFunction();
+            // unit vectors: the dot product is at most 1
+            var ssp = new DefaultSearchScoreProvider(sf, null, vsf, 1f);
+            assertResumeReturnsEveryNode("adaptive " + vsf, ssp, size, 1, 5, true);
+        }
+    }
+
+    private static VectorFloat<?> smallIntegerVector(Random random, int dim) {
+        var v = vectorTypeSupport.createFloatVector(dim);
+        for (int i = 0; i < dim; i++) {
+            v.set(i, 1 + random.nextInt(3));
+        }
+        return v;
+    }
+
+    private VectorFloat<?> unitVector(int dim) {
+        var v = randomVector(dim);
+        VectorUtil.l2normalize(v);
+        return v;
+    }
+
+    private static void assertResumeReturnsEveryNode(String what, SearchScoreProvider ssp, int size, int topK,
+                                                     int rerankK, boolean adaptive) throws IOException {
+        try (var searcher = new GraphSearcher(new TestUtil.FullyConnectedGraphIndex(0, size))) {
+            if (adaptive) {
+                // a wide margin, so adaptive stopping expands nodes below the cutoff
+                searcher.useAdaptiveTermination(true, 1f);
+            }
+            Set<Integer> returned = new HashSet<>();
+            var result = searcher.search(ssp, topK, rerankK, 0.0f, 0.0f, Bits.ALL);
+            while (result.getNodes().length > 0) {
+                for (var ns : result.getNodes()) {
+                    assertTrue(what + ": returned twice: " + ns.node, returned.add(ns.node));
+                }
+                result = searcher.resume(topK, rerankK);
+            }
+            assertEquals(what + ", " + size + " nodes", size, returned.size());
+        }
     }
 
     @Test
