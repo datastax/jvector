@@ -170,7 +170,7 @@ class KMeansInitializationTest {
     }
 
     @Test
-    void otherDimensionsUseJavaOnNativeAndLeaveOutputsAloneOnPanama() {
+    void otherDimensionsUseJavaOnNativeAndPanama() {
         var nativeTypes = new MemorySegmentVectorProvider();
         var support = NativeVectorUtilSupport.create();
         var point = nativeTypes.createFloatVector(new float[4]);
@@ -183,10 +183,16 @@ class KMeansInitializationTest {
         assertEquals(5, minimum.get(0));
         minimum.set(0, 17);
         scratch.set(0, 23);
-        var javaSupport = new PanamaVectorizationProvider().getVectorUtilSupport();
-        assertFalse(javaSupport.tryUpdateKMeansDistances(new VectorFloat<?>[]{point}, point, minimum, scratch));
-        assertEquals(17, minimum.get(0));
-        assertEquals(23, scratch.get(0));
+        // Panama scores the points in one method too, on its own vector types.
+        var javaProvider = new PanamaVectorizationProvider();
+        var javaTypes = javaProvider.getVectorTypeSupport();
+        var javaMinimum = javaTypes.createFloatVector(new float[]{17});
+        var javaScratch = javaTypes.createFloatVector(new float[]{23});
+        assertTrue(javaProvider.getVectorUtilSupport().tryUpdateKMeansDistances(
+                new VectorFloat<?>[]{javaTypes.createFloatVector(new float[4])}, javaTypes.createFloatVector(new float[]{1, 2, 0, 0}),
+                javaMinimum, javaScratch));
+        assertEquals(5, javaScratch.get(0));
+        assertEquals(5, javaMinimum.get(0));
     }
 
     private static float distanceOracle(VectorFloat<?> point, VectorFloat<?> centroid) {
