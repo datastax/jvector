@@ -895,6 +895,10 @@ class PanamaVectorUtilSupport implements VectorUtilSupport {
         return dotProduct(v1, 0, v2, 0, v1.length());
     }
 
+    // Whether a short dot product's leftover can fill a 128-bit vector (never on 128-bit SIMD; the check folds away).
+    private static final boolean NARROW_TAILS =
+            FloatVector.SPECIES_PREFERRED.length() > FloatVector.SPECIES_128.length();
+
     @Override
     public float dotProduct(VectorFloat<?> v1, int v1offset, VectorFloat<?> v2, int v2offset, final int length) {
         // Exactly one vector wide (the PQ subvector size on 128-bit hardware): handle it here. dotProductPreferred is
@@ -910,13 +914,17 @@ class PanamaVectorUtilSupport implements VectorUtilSupport {
         if (length > FloatVector.SPECIES_PREFERRED.length())
             return dotProductShort(v1, v1offset, v2, v2offset, length);
 
+        return dotProductNarrow(v1, v1offset, v2, v2offset, length);
+    }
+
+    /** Fewer floats than one preferred vector, on the widest narrower shape that fits. */
+    float dotProductNarrow(VectorFloat<?> v1, int v1offset, VectorFloat<?> v2, int v2offset, int length) {
         if (length < FloatVector.SPECIES_128.length())
             return dotProduct64(v1, v1offset, v2, v2offset, length);
         else if (length < FloatVector.SPECIES_256.length())
             return dotProduct128(v1, v1offset, v2, v2offset, length);
         else
             return dotProduct256(v1, v1offset, v2, v2offset, length);
-
     }
 
     float dotProduct64(VectorFloat<?> v1, int v1offset, VectorFloat<?> v2, int v2offset, int length) {
@@ -1017,10 +1025,13 @@ class PanamaVectorUtilSupport implements VectorUtilSupport {
         }
 
         float resVec = sum0.reduceLanes(VectorOperators.ADD);
+        // A partial vector of four or more floats (8 of 24 on AVX-512, say) runs on narrower vectors. Shorter ones
+        // stay scalar: 64-bit float vectors are slower than scalar code on some CPUs, such as 128-bit ARM.
+        if (NARROW_TAILS && length - i >= FloatVector.SPECIES_128.length())
+            return resVec + dotProductNarrow(va, vaoffset + i, vb, vboffset + i, length - i);
         float resTail = 0;
         for (; i < length; i++)
             resTail += va.get(vaoffset + i) * vb.get(vboffset + i);
-
         return resVec + resTail;
     }
 
