@@ -19,7 +19,11 @@ package io.github.jbellis.jvector.vector;
 import io.github.jbellis.jvector.vector.types.VectorFloat;
 import org.junit.jupiter.api.Test;
 
+import java.io.PrintWriter;
+import java.io.StringWriter;
+import java.nio.file.Path;
 import java.util.Random;
+import java.util.spi.ToolProvider;
 
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -139,6 +143,39 @@ class PanamaClosestCentroidTest {
         VectorFloat<?>[] mixed = {vectors.createFloatVector(4), vectors.createFloatVector(5)};
         assertThrows(IllegalArgumentException.class,
                 () -> panama.tryUpdateKMeansDistances(mixed, centroid, vectors.createFloatVector(2), vectors.createFloatVector(2)));
+    }
+
+    @Test
+    void scansStayTooLargeToInline() throws Exception {
+        // The fix depends on C2 compiling these methods on their own: see the javadoc of tryClosestCentroid.
+        var location = PanamaVectorUtilSupport.class.getProtectionDomain().getCodeSource().getLocation();
+        String classPath = Path.of(location.toURI()).toString();
+        var out = new StringWriter();
+        var javap = ToolProvider.findFirst("javap").orElseThrow();
+        assertEquals(0, javap.run(new PrintWriter(out), new PrintWriter(out), "-c", "-p", "-cp", classPath,
+                PanamaVectorUtilSupport.class.getName()), out::toString);
+        for (String method : new String[]{"tryClosestCentroid", "tryUpdateKMeansDistances"}) {
+            int size = bytecodeSize(out.toString(), method);
+            assertTrue(size > 325, method + " is " + size + " bytecodes; it must stay above C2's FreqInlineSize (325) "
+                    + "or callers inline it and JDK 22 PQ training and encoding can slow down up to 15x");
+        }
+    }
+
+    /** Offset of the method's last instruction from javap, a lower bound on its bytecode size. */
+    private static int bytecodeSize(String javap, String method) {
+        String[] lines = javap.split("\\R");
+        int i = 0;
+        while (i < lines.length && !lines[i].contains(" " + method + "(")) i++;
+        assertTrue(i < lines.length, method + " not found");
+        int last = -1;
+        for (i++; i < lines.length && !lines[i].isBlank(); i++) {
+            String line = lines[i].trim();
+            int colon = line.indexOf(':');
+            if (colon > 0 && line.substring(0, colon).chars().allMatch(Character::isDigit)) {
+                last = Math.max(last, Integer.parseInt(line.substring(0, colon)));
+            }
+        }
+        return last;
     }
 
     private static void closeDistance(float expected, float actual, int dim, String where) {
