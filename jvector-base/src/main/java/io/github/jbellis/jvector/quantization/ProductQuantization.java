@@ -41,6 +41,7 @@ import java.util.SplittableRandom;
 import java.util.concurrent.Callable;
 import java.util.concurrent.ForkJoinPool;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.concurrent.atomic.AtomicReferenceArray;
 import java.util.logging.Logger;
 import java.util.stream.Collectors;
 import java.util.stream.IntStream;
@@ -82,6 +83,14 @@ public class ProductQuantization implements VectorCompressor<ByteSequence<?>>, A
     private final AtomicReference<VectorFloat<?>> partialSquaredMagnitudes; // for cosine partials
     // Codebooks back to back with per-dimension lookups, created on first diversity scoring.
     private final AtomicReference<CodebookLayout> codebookLayout = new AtomicReference<>();
+    // Centroid-pair tables for diversity scoring, created on first use and only when small enough: index 0 serves
+    // dot product and cosine, index 1 squared Euclidean distance.
+    private final AtomicReferenceArray<VectorFloat<?>> pairTables = new AtomicReferenceArray<>(2);
+    /**
+     * The largest centroid-pair table, in bytes, that a model keeps for diversity scoring; models that would need a
+     * bigger one score code pairs straight from the codebooks instead. Set with {@code jvector.pq.pair_table_max_bytes}.
+     */
+    static final long PAIR_TABLE_MAX_BYTES = Long.getLong("jvector.pq.pair_table_max_bytes", 24L << 20);
 
     /**
      * Initializes the codebooks by clustering the input data using Product Quantization.
@@ -491,6 +500,31 @@ public class ProductQuantization implements VectorCompressor<ByteSequence<?>>, A
         return codebookLayout.get();
     }
 
+    /** The bytes of the centroid-pair table: M blocks of k * (k + 1) / 2 floats. */
+    long pairTableBytes() {
+        return (long) M * clusterCount * (clusterCount + 1) / 2 * Float.BYTES;
+    }
+
+    /**
+     * The centroid-pair table that scores two codes with one lookup per subspace, or null when it would take more
+     * than {@link #PAIR_TABLE_MAX_BYTES}. The table depends only on the codebooks, so every {@link PQVectors} over this
+     * model, mutable or not, shares one; it is built on first use and kept for the model's lifetime. Cosine uses the
+     * dot-product table.
+     */
+    VectorFloat<?> pairTableIfSmall(VectorSimilarityFunction similarityFunction) {
+        return pairTableIfSmall(similarityFunction, PAIR_TABLE_MAX_BYTES);
+    }
+
+    VectorFloat<?> pairTableIfSmall(VectorSimilarityFunction similarityFunction, long maxBytes) {
+        if (pairTableBytes() > maxBytes) return null;
+        int slot = similarityFunction == VectorSimilarityFunction.EUCLIDEAN ? 1 : 0;
+        VectorFloat<?> table = pairTables.get(slot);
+        if (table != null) return table;
+        // Concurrent first callers may each build a table; only the first is kept.
+        pairTables.compareAndSet(slot, null, createCodebookPartialSums(similarityFunction));
+        return pairTables.get(slot);
+    }
+
     /** The squared length of the reconstruction of the code at {@code offset}, relative to the global centroid. */
     float reconstructedSquaredNorm(ByteSequence<?> code, int offset) {
         float sum = 0;
@@ -866,6 +900,12 @@ public class ProductQuantization implements VectorCompressor<ByteSequence<?>>, A
         size += RamUsageEstimator.shallowSizeOf(codebookLayout);
         CodebookLayout layout = codebookLayout.get();
         if (layout != null) size += layout.ramBytesUsed();
+        size += RamUsageEstimator.shallowSizeOf(pairTables)
+                + RamUsageEstimator.sizeOfArray(pairTables.length(), RamUsageEstimator.NUM_BYTES_OBJECT_REF);
+        for (int i = 0; i < pairTables.length(); i++) {
+            VectorFloat<?> table = pairTables.get(i);
+            if (table != null) size += table.ramBytesUsed();
+        }
         size += maxEncoded.ramBytesUsed();
         return size;
     }

@@ -289,6 +289,14 @@ public abstract class PQVectors implements CompressedVectors {
 
     @Override
     public ScoreFunction.ApproximateScoreFunction diversityFunctionFor(int node1, VectorSimilarityFunction similarityFunction) {
+        // A model with few enough subspaces keeps a centroid-pair table, which scores a pair with one lookup per
+        // subspace. Wider models would need too big a table, so they score pairs straight from the codebooks.
+        // The table belongs to the model, so this holds for mutable and immutable vectors alike.
+        var pairTable = pq.pairTableIfSmall(similarityFunction);
+        if (pairTable != null) {
+            return tableDiversityFunctionFor(node1, similarityFunction, pairTable);
+        }
+
         // A build creates one of these per candidate and often makes only one or two comparisons with it,
         // so it does no setup: each comparison reads both codes' centroids straight from the codebooks.
         var layout = pq.codebookLayout();
@@ -323,6 +331,48 @@ public abstract class PQVectors implements CompressedVectors {
                     float sum = VectorUtil.pqCodePairSimilarity(false, layout.codebooks, clusterCount,
                             layout.subspaceOffsets, layout.subspaceWidths, layout.minWidth, layout.maxWidth, layout.dimBase,
                             node1Chunk, node1Offset, getChunk(node2), getOffsetInChunk(node2));
+                    // scale to [0, 1]
+                    return 1 / (1 + sum);
+                };
+            default:
+                throw new IllegalArgumentException("Unsupported similarity function " + similarityFunction);
+        }
+    }
+
+    /** Scores code pairs with the model's centroid-pair table: one lookup per subspace. */
+    private ScoreFunction.ApproximateScoreFunction tableDiversityFunctionFor(int node1, VectorSimilarityFunction similarityFunction,
+                                                                             VectorFloat<?> table) {
+        final int subspaceCount = pq.getSubspaceCount();
+        final int clusterCount = pq.getClusterCount();
+        var node1Chunk = getChunk(node1);
+        var node1Offset = getOffsetInChunk(node1);
+
+        switch (similarityFunction) {
+            case DOT_PRODUCT:
+                return (node2) -> {
+                    float sum = VectorUtil.assembleAndSumPQ(table, subspaceCount, node1Chunk, node1Offset,
+                            getChunk(node2), getOffsetInChunk(node2), clusterCount);
+                    // scale to [0, 1]
+                    return (1 + sum) / 2;
+                };
+            case COSINE:
+                float norm1 = VectorUtil.assembleAndSumPQ(table, subspaceCount, node1Chunk, node1Offset,
+                        node1Chunk, node1Offset, clusterCount);
+                return (node2) -> {
+                    var node2Chunk = getChunk(node2);
+                    var node2Offset = getOffsetInChunk(node2);
+                    float sum = VectorUtil.assembleAndSumPQ(table, subspaceCount, node1Chunk, node1Offset,
+                            node2Chunk, node2Offset, clusterCount);
+                    float norm2 = VectorUtil.assembleAndSumPQ(table, subspaceCount, node2Chunk, node2Offset,
+                            node2Chunk, node2Offset, clusterCount);
+                    float cosine = sum / (float) Math.sqrt(norm1 * norm2);
+                    // scale to [0, 1]
+                    return (1 + cosine) / 2;
+                };
+            case EUCLIDEAN:
+                return (node2) -> {
+                    float sum = VectorUtil.assembleAndSumPQ(table, subspaceCount, node1Chunk, node1Offset,
+                            getChunk(node2), getOffsetInChunk(node2), clusterCount);
                     // scale to [0, 1]
                     return 1 / (1 + sum);
                 };
