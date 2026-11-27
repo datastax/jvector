@@ -53,11 +53,11 @@ public class ConstructionParameters extends CommonParameters {
      */
     public Boolean streaming;
     /**
-     * streaming only: vectors scored exactly before a cold index fixes a random-projection model, or 0 to start with
-     * the construction compressor's model.
+     * ASH streaming only: vectors scored exactly before a cold index fixes a random-projection model, or 0 to start
+     * with the construction compressor's model. PQ and None streaming builds omit it or use 0.
      */
     public List<Integer> coldStartSize;
-    /** streaming only: whether a cold index trains its first model on its sample while vectors arrive. */
+    /** ASH streaming only: whether a cold index trains its first model on its sample while vectors arrive. */
     public List<Boolean> trainWhileStreaming;
 
     /** The construction worker count, or null when the YAML leaves it to the platform default. */
@@ -76,9 +76,16 @@ public class ConstructionParameters extends CommonParameters {
             throw new IllegalArgumentException("construction.writerMode, pageAlignment, and fusedGraph require onDisk");
         }
         if (Boolean.TRUE.equals(streaming)) {
-            validateSweep("coldStartSize", coldStartSize, value -> value >= 0);
-            if (compression == null || compression.size() != 1 || !"ASH".equals(compression.get(0).type)) {
-                throw new IllegalArgumentException("construction.streaming requires a single ASH construction.compression");
+            if (compression == null || compression.size() != 1 || compression.get(0) == null
+                    || !List.of("ASH", "PQ", "None").contains(compression.get(0).type)) {
+                throw new IllegalArgumentException("construction.streaming requires a single ASH, PQ or None construction.compression");
+            }
+            if ("ASH".equals(compression.get(0).type)) {
+                validateSweep("coldStartSize", coldStartSize, value -> value >= 0);
+            } else if ((coldStartSize != null && coldStartSize.stream().anyMatch(value -> value == null || value != 0))
+                    || (trainWhileStreaming != null && trainWhileStreaming.contains(Boolean.TRUE))) {
+                throw new IllegalArgumentException("Only ASH streaming builds start cold or train while streaming:"
+                        + " use coldStartSize [0] and trainWhileStreaming No, or omit them");
             }
             if ("inMemory".equals(type) && "NVQ".equals(rerankingType())) {
                 throw new IllegalArgumentException("An inMemory streaming index reranks with the source vectors: use reranking FP32 or None");

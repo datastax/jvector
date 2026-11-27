@@ -29,6 +29,9 @@ import io.github.jbellis.jvector.example.yaml.SearchParameters;
 import io.github.jbellis.jvector.graph.disk.OnDiskGraphIndex;
 import io.github.jbellis.jvector.graph.disk.feature.FeatureId;
 import io.github.jbellis.jvector.quantization.AsymmetricHashing;
+import io.github.jbellis.jvector.quantization.MutablePQVectors;
+import io.github.jbellis.jvector.quantization.PQVectors;
+import io.github.jbellis.jvector.quantization.ProductQuantization;
 import io.github.jbellis.jvector.util.Bits;
 import io.github.jbellis.jvector.vector.VectorUtil;
 import io.github.jbellis.jvector.vector.VectorSimilarityFunction;
@@ -271,6 +274,79 @@ public class TestGridASHIntegration {
         assertTrue(text, text.contains("an inherited model"));
         assertTrue(text, text.contains("a cold-start (after 64 vectors) model"));
         assertEquals(text, 2, text.split(java.util.regex.Pattern.quote("codes the index built as vectors arrived ["), -1).length - 1);
+    }
+
+    @Test(timeout = 120_000)
+    public void streamingPQEncodesEachVectorOnArrivalAsOnePassEncodingDoes() {
+        var data = schema3Data();
+        var pq = ProductQuantization.compute(data.getBaseRavv(), 4, 32, false);
+        var build = BuildConfig.builder().M(8).efConstruction(32).neighborOverflow(1.2f).alpha(1.2f)
+                .addHierarchy(false).refineFinalGraph(false).indexType("inMemory").streaming(true).workers(4).build();
+        var params = new CompressorParameters.PQParameters(4, 32, false, -1.0f);
+        var index = StreamingBuild.stream(build, data, params, () -> pq, true);
+        var expected = (PQVectors) pq.encodeAll(data.getBaseRavv());
+        var codes = (PQVectors) index.codes();
+        assertTrue(codes instanceof MutablePQVectors);
+        assertEquals(expected.count(), codes.count());
+        for (int i = 0; i < expected.count(); i++) assertEquals("code " + i, expected.get(i), codes.get(i));
+        assertEquals(data.getBaseRavv().size(), index.graph().size(0));
+        assertNotNull("NVQ needs the mean kept as vectors arrive", index.mean());
+
+        var exact = StreamingBuild.stream(build, data, CompressorParameters.NONE, () -> {
+            throw new AssertionError("an exact streaming build trains no model");
+        }, false);
+        assertNull(exact.codes());
+        assertNull(exact.mean());
+        assertEquals(data.getBaseRavv().size(), exact.graph().size(0));
+    }
+
+    @Test(timeout = 120_000)
+    public void streamingPQAndFullPrecisionBuildAndSearch() throws Exception {
+        var data = schema3Data();
+        String pq = "- type: PQ\n  parameters: {m: 4, k: 32}";
+        for (String type : List.of("streamingWarm", "streamingWarmOnDisk")) {
+            for (String construction : List.of(pq, "- type: None")) {
+                var config = schema3Config(type, "parallel", false, type.endsWith("OnDisk") ? "NVQ" : "FP32",
+                        construction, pq);
+                var out = new ByteArrayOutputStream();
+                var console = System.out;
+                System.setOut(new PrintStream(out, true, StandardCharsets.UTF_8));
+                try {
+                    var artifacts = RunArtifacts.open(csvRunConfig(), List.of(config));
+                    Grid.run(data, GridSpec.fromConfig(config), artifacts);
+                    var lines = Files.readAllLines(artifacts.experimentsWriter().path());
+                    assertEquals("One build, one search", 2, lines.size());
+                } finally {
+                    System.setOut(console);
+                    Files.deleteIfExists(Path.of("compressor_cache").resolve(
+                            config.search.getCompressorParameters().get(0).apply(data).idStringFor(data)));
+                }
+                String text = out.toString(StandardCharsets.UTF_8);
+                String label = type + " " + construction;
+                assertTrue(label + "\n" + text, text.contains("streamed 288 vectors"));
+                boolean inMemoryPQ = construction.equals(pq) && !type.endsWith("OnDisk");
+                assertTrue(label + "\n" + text, text.contains(construction.equals(pq) ? "an inherited model" : "with exact scores"));
+                assertEquals(label + "\n" + text, inMemoryPQ, text.contains("codes the index built as vectors arrived ["));
+            }
+        }
+    }
+
+    @Test
+    public void streamingPQExampleParses() throws Exception {
+        Path path = Path.of("jvector-examples", "yaml-configs", "index-parameters", "streaming-pq", "cohere-english-v3-1M.yml");
+        if (!Files.exists(path)) path = Path.of("..").resolve(path);
+        var spec = GridSpec.fromConfig(MultiConfig.getConfig(path.toAbsolutePath().toString()));
+        assertTrue(spec.buildPoints().stream().allMatch(build -> build.streaming && build.coldStartSize == null));
+    }
+
+    @Test
+    public void streamingRejectsColdStartsOutsideASHAndUnsupportedCodecs() {
+        var pq = assertThrows(IllegalArgumentException.class, () -> schema3Config("streaming", null, false, "FP32",
+                "- type: PQ\n  parameters: {m: 4, k: 32}", "- type: None"));
+        assertTrue(pq.getMessage(), pq.getMessage().contains("Only ASH streaming builds start cold"));
+        var bq = assertThrows(IllegalArgumentException.class, () -> schema3Config("streamingWarm", null, false, "FP32",
+                "- type: BQ", "- type: None"));
+        assertTrue(bq.getMessage(), bq.getMessage().contains("requires a single ASH, PQ or None"));
     }
 
     @Test
@@ -600,11 +676,13 @@ public class TestGridASHIntegration {
                                       String construction, String search) throws Exception {
         var path = temporary.newFile().toPath();
         // "streaming" streams into an in-memory index; "streamingOnDisk" also writes and reloads it, as a flush does.
+        // "streamingWarm" and "streamingWarmOnDisk" set no coldStartSize, as PQ and None streaming builds may.
         boolean streaming = type.startsWith("streaming");
-        if (streaming) type = "streamingOnDisk".equals(type) ? "onDisk" : "inMemory";
+        boolean warmOnly = type.startsWith("streamingWarm");
+        if (streaming) type = type.endsWith("OnDisk") ? "onDisk" : "inMemory";
         String diskSettings = ("onDisk".equals(type)
                 ? "  writerMode: " + writer + "\n  fusedGraph: [" + fused + "]\n" : "")
-                + (streaming ? "  streaming: Yes\n  coldStartSize: [0, 64]\n" : "");
+                + (streaming ? "  streaming: Yes\n" + (warmOnly ? "" : "  coldStartSize: [0, 64]\n") : "");
         String yaml = String.join("\n",
                 "yamlSchemaVersion: 3",
                 "onDiskIndexVersion: " + OnDiskGraphIndex.CURRENT_VERSION,

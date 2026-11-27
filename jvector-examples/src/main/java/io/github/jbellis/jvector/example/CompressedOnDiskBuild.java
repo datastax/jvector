@@ -334,12 +334,13 @@ final class CompressedOnDiskBuild implements IndexBuildStrategy {
             // and NVQ centers with the mean the index kept as vectors arrived.
             mean = null;
             buildVectors = vectors;
-            var params = (CompressorParameters.ASHParameters) build.buildCompressor.apply(ds);
+            var params = build.buildCompressor == null ? CompressorParameters.NONE : build.buildCompressor.apply(ds);
             var model = buildCompressor;
+            boolean nvq = featureSets.stream().anyMatch(features -> features.contains(FeatureId.NVQ_VECTORS));
             start = System.nanoTime();
-            var index = StreamingBuild.stream(build, ds, params, () -> model);
+            var index = StreamingBuild.stream(build, ds, params, () -> model, nvq);
             builtGraph = index.graph();
-            encoded = index.codes().snapshot();
+            encoded = index.writtenCodes();
             streamedMean = index.mean();
         } else {
             mean = featureSets.stream().anyMatch(features -> features.contains(FeatureId.NVQ_VECTORS))

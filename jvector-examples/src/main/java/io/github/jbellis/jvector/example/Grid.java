@@ -245,7 +245,7 @@ public class Grid {
 
     /** A streaming build's graph and codes depend on how it started and on its insert threads; empty otherwise. */
     private static String streamingIdentity(BuildConfig build) {
-        return build.streaming ? ":streaming:cold" + build.coldStartSize
+        return build.streaming ? ":streaming:cold" + Objects.requireNonNullElse(build.coldStartSize, 0)
                 + ":train" + Boolean.TRUE.equals(build.trainWhileStreaming)
                 + ":inserts" + GraphBuilderFactory.constructionThreads(build) : "";
     }
@@ -364,9 +364,14 @@ public class Grid {
                         fusedCodec, cacheIdentity);
             } else if (build.streaming) {
                 // The index encodes as vectors arrive; a model is trained up front only for a warm start.
-                Supplier<IndexBuildStrategy> fresh = () -> new StreamingBuild((CompressorParameters.ASHParameters) buildParams,
+                Supplier<IndexBuildStrategy> fresh = () -> new StreamingBuild(buildParams,
                         () -> GraphBuilderFactory.inConstructionPool(build, buildCodec::get));
-                strategy = cache.isEnabled()
+                // Saved indexes keep only ASH codes, so a PQ index that searches with its own codes is not saved.
+                boolean savable = buildParams == CompressorParameters.NONE
+                        || buildParams instanceof CompressorParameters.ASHParameters;
+                if (cache.isEnabled() && !savable)
+                    System.out.printf("%s: saved indexes keep only ASH codes; building the streaming index fresh%n", ds.getName());
+                strategy = cache.isEnabled() && savable
                         ? new SavedInMemoryBuild(cache, inMemoryIdentity(build, buildParams, ds), fresh, () -> null, true)
                         : fresh.get();
             } else if ("inMemory".equals(build.indexType) && cache.isEnabled()) {
