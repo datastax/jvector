@@ -61,6 +61,7 @@ REQUIRED_SYMBOLS=(
   sum_f32
   assemble_and_sum_f32
   assemble_and_sum_pq_f32
+  pq_code_pair_f32
   pq_decoded_cosine_similarity_f32
   calculate_partial_sums_dot_f32
   calculate_partial_sums_euclidean_f32

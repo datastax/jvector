@@ -268,6 +268,14 @@ public final class VectorUtil {
     return impl.assembleAndSum(data, dataBase, dataOffsets, dataOffsetsOffset, dataOffsetsLength);
   }
 
+  public static int pqCodePairStride(int minWidth, int maxWidth) {
+    return impl.pqCodePairStride(minWidth, maxWidth);
+  }
+
+  public static boolean pqCodePairUsesTable(int minWidth) {
+    return impl.pqCodePairUsesTable(minWidth);
+  }
+
   public static float pqCodePairSimilarity(boolean dot, VectorFloat<?> codebooks, int clusterCount,
                                           int[] subspaceOffsets, int[] subspaceWidths, int minWidth, int maxWidth, int[] dimBase,
                                           ByteSequence<?> code1, int offset1, ByteSequence<?> code2, int offset2) {

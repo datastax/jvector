@@ -452,6 +452,22 @@ public interface VectorUtilSupport {
   float assembleAndSum(VectorFloat<?> data, int baseIndex, ByteSequence<?> baseOffsets, int baseOffsetsOffset, int baseOffsetsLength);
 
   /**
+   * The centroid slot width, in floats, for the codebook layout {@link #pqCodePairSimilarity} reads, given the
+   * narrowest and widest subspace; 0 keeps each subspace's own width.
+   */
+  default int pqCodePairStride(int minWidth, int maxWidth) {
+    return 0;
+  }
+
+  /**
+   * Whether a centroid-pair table ({@link #assembleAndSumPQ}) scores PQ code pairs faster than
+   * {@link #pqCodePairSimilarity} when the narrowest subspace is {@code minWidth} floats.
+   */
+  default boolean pqCodePairUsesTable(int minWidth) {
+    return false;
+  }
+
+  /**
    * Scores the vectors two PQ codes encode against each other, reading centroids straight from codebooks
    * laid out back to back (subspace m's centroids start at {@code clusterCount * subspaceOffsets[m]}).
    * Returns the dot product when {@code dot} is true, else the squared distance. {@code dimBase[j]} is

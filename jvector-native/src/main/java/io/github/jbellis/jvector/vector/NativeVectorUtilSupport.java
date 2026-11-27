@@ -489,6 +489,49 @@ class NativeVectorUtilSupport extends PanamaVectorUtilSupport
         return super.hammingDistance(a, b);
     }
 
+    /**
+     * Pads odd and mixed widths to 2, 4 or a multiple of 8 floats, so {@code pq_code_pair_f32} sees one even width.
+     * Equal even widths and 1-float layouts are left as they are. Multiples of 8 keep padding small; the kernel
+     * scores them in 8-float registers.
+     */
+    @Override
+    public int pqCodePairStride(int minWidth, int maxWidth) {
+        if (maxWidth <= 1) return 0;
+        if (minWidth == maxWidth && (maxWidth & 1) == 0) return maxWidth;
+        return maxWidth <= 2 ? 2 : maxWidth <= 4 ? 4 : (maxWidth + 7) & ~7;
+    }
+
+    /**
+     * A table costs one lookup per subspace, while scoring from the codebooks grows with the width: the table wins
+     * from 16 floats (measured with AVX-512 and AVX2).
+     */
+    @Override
+    public boolean pqCodePairUsesTable(int minWidth) {
+        return minWidth >= 16;
+    }
+
+    @Override
+    public float pqCodePairSimilarity(boolean dot, VectorFloat<?> codebooks, int clusterCount,
+                                      int[] subspaceOffsets, int[] subspaceWidths, int minWidth, int maxWidth, int[] dimBase,
+                                      ByteSequence<?> code1, int offset1, ByteSequence<?> code2, int offset2) {
+        // Padded layouts take one native call per pair; 1-float layouts keep the Panama gather, which is as fast.
+        // The type checks are defensive: this provider's own codes are always segment-backed.
+        if (minWidth != maxWidth || (minWidth & 1) != 0
+                || !(code1 instanceof MemorySegmentByteSequence) || !(code2 instanceof MemorySegmentByteSequence)) {
+            return super.pqCodePairSimilarity(dot, codebooks, clusterCount, subspaceOffsets, subspaceWidths,
+                    minWidth, maxWidth, dimBase, code1, offset1, code2, offset2);
+        }
+        // Cheap checks: the native loop reads subspaceOffsets.length bytes of each code.
+        assert offset1 >= 0 && offset1 + subspaceOffsets.length <= code1.length() : "code1 too short";
+        assert offset2 >= 0 && offset2 + subspaceOffsets.length <= code2.length() : "code2 too short";
+        // The codebooks live with the model, so their cached view is made once.
+        return NativeSimdOps.pq_code_pair_f32(((MemorySegmentVectorFloat) codebooks).get(),
+                clusterCount, minWidth, subspaceOffsets.length,
+                ((MemorySegmentByteSequence) code1).get(), offset1,
+                ((MemorySegmentByteSequence) code2).get(), offset2,
+                dot ? 1 : 0);
+    }
+
     @Override
     public float assembleAndSumPQ(
             VectorFloat<?> codebookPartialSums,
@@ -567,9 +610,11 @@ class NativeVectorUtilSupport extends PanamaVectorUtilSupport
         if ((long) centroidCount * dimension > centroids.length()) {
             throw new IndexOutOfBoundsException("centroids do not contain centroidCount vectors");
         }
+        // Uncached heap segments, as for the f32 distances, so encoding retains no views. The JIT removes these
+        // short-lived views (measured: no allocation per encode).
         return NativeSimdOps.closest_centroid_f32(
-                ((MemorySegmentVectorFloat) point).get(), pointOffset,
-                ((MemorySegmentVectorFloat) centroids).get(), centroidCount, dimension);
+                MemorySegment.ofArray(((MemorySegmentVectorFloat) point).array()), pointOffset,
+                MemorySegment.ofArray(((MemorySegmentVectorFloat) centroids).array()), centroidCount, dimension);
     }
 
     @Override

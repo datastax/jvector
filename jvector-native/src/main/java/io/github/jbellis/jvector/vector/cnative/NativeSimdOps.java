@@ -2356,6 +2356,72 @@ public class NativeSimdOps {
         }
     }
 
+    private static class pq_code_pair_f32 {
+        public static final FunctionDescriptor DESC = FunctionDescriptor.of(
+            NativeSimdOps.C_FLOAT,
+            NativeSimdOps.C_POINTER,
+            NativeSimdOps.C_INT,
+            NativeSimdOps.C_INT,
+            NativeSimdOps.C_LONG,
+            NativeSimdOps.C_POINTER,
+            NativeSimdOps.C_INT,
+            NativeSimdOps.C_POINTER,
+            NativeSimdOps.C_INT,
+            NativeSimdOps.C_INT
+        );
+
+        public static final MemorySegment ADDR = NativeSimdOps.findOrThrow("pq_code_pair_f32");
+
+        public static final MethodHandle HANDLE = Linker.nativeLinker().downcallHandle(ADDR, DESC, Linker.Option.critical(true));
+    }
+
+    /**
+     * Function descriptor for:
+     * {@snippet lang=c :
+     * float pq_code_pair_f32(const float *codebooks, int clusterCount, int width, size_t subspaceCount, const unsigned char *code1, int offset1, const unsigned char *code2, int offset2, int dot)
+     * }
+     */
+    public static FunctionDescriptor pq_code_pair_f32$descriptor() {
+        return pq_code_pair_f32.DESC;
+    }
+
+    /**
+     * Downcall method handle for:
+     * {@snippet lang=c :
+     * float pq_code_pair_f32(const float *codebooks, int clusterCount, int width, size_t subspaceCount, const unsigned char *code1, int offset1, const unsigned char *code2, int offset2, int dot)
+     * }
+     */
+    public static MethodHandle pq_code_pair_f32$handle() {
+        return pq_code_pair_f32.HANDLE;
+    }
+
+    /**
+     * Address for:
+     * {@snippet lang=c :
+     * float pq_code_pair_f32(const float *codebooks, int clusterCount, int width, size_t subspaceCount, const unsigned char *code1, int offset1, const unsigned char *code2, int offset2, int dot)
+     * }
+     */
+    public static MemorySegment pq_code_pair_f32$address() {
+        return pq_code_pair_f32.ADDR;
+    }
+
+    /**
+     * {@snippet lang=c :
+     * float pq_code_pair_f32(const float *codebooks, int clusterCount, int width, size_t subspaceCount, const unsigned char *code1, int offset1, const unsigned char *code2, int offset2, int dot)
+     * }
+     */
+    public static float pq_code_pair_f32(MemorySegment codebooks, int clusterCount, int width, long subspaceCount, MemorySegment code1, int offset1, MemorySegment code2, int offset2, int dot) {
+        var mh$ = pq_code_pair_f32.HANDLE;
+        try {
+            if (TRACE_DOWNCALLS) {
+                traceDowncall("pq_code_pair_f32", codebooks, clusterCount, width, subspaceCount, code1, offset1, code2, offset2, dot);
+            }
+            return (float)mh$.invokeExact(codebooks, clusterCount, width, subspaceCount, code1, offset1, code2, offset2, dot);
+        } catch (Throwable ex$) {
+           throw new AssertionError("should not reach here", ex$);
+        }
+    }
+
     private static class pq_decoded_cosine_similarity_f32 {
         public static final FunctionDescriptor DESC = FunctionDescriptor.of(
             NativeSimdOps.C_FLOAT,

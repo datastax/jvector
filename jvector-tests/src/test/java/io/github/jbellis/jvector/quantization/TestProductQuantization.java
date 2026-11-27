@@ -44,7 +44,9 @@ import static io.github.jbellis.jvector.quantization.ProductQuantization.DEFAULT
 import static io.github.jbellis.jvector.quantization.ProductQuantization.getSubvectorSizesAndOffsets;
 import static org.junit.Assert.assertArrayEquals;
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertNotSame;
 import static org.junit.Assert.assertNull;
+import static org.junit.Assert.assertSame;
 import static org.junit.Assert.assertThrows;
 import static org.junit.Assert.assertTrue;
 
@@ -435,9 +437,12 @@ public class TestProductQuantization extends RandomizedTest {
     }
 
     @Test
-    public void testDiversityMatchesDecodedVectorsForSmallSubspaces() {
-        // Uneven and tiny shapes, then 1-, 2-, 4- and 8-float subspaces wide enough to fill SIMD registers.
-        int[][] shapes = {{7, 4}, {7, 7}, {32, 32}, {64, 32}, {128, 64}, {64, 16}, {128, 16}};
+    public void testDiversityMatchesDecodedVectorsForEveryShape() {
+        // Uneven, tiny, 1-, 2-, 4- and 8-float, odd, mixed and wide shapes, and subspace counts that leave the
+        // unrolled loop a remainder. Wide ones (128/8, 256/8, 136/8) use the pair table where the provider asks.
+        int[][] shapes = {{7, 4}, {7, 7}, {32, 32}, {64, 32}, {128, 64}, {64, 16}, {128, 16},
+                {37, 37}, {120, 40}, {72, 12}, {96, 8}, {104, 13}, {24, 3}, {80, 5}, {96, 3}, {52, 13},
+                {128, 8}, {160, 10}, {256, 8}, {136, 8}, {100, 32}, {60, 7}};
         for (int[] shape : shapes) {
             int dim = shape[0], m = shape[1];
             var vectors = createRandomVectors(2000, dim);
@@ -456,11 +461,35 @@ public class TestProductQuantization extends RandomizedTest {
                     pq.decode(mutable.get(i), b);
                     float expected = vsf.compare(a, b);
                     String where = vsf + " dim=" + dim + " m=" + m + " node=" + i;
+                    // Native and Java add in different orders, so the last bits may differ.
                     double tolerance = 1e-5 * Math.max(1, Math.abs(expected));
                     assertEquals(where, expected, fromMutable.similarityTo(i), tolerance);
                     assertEquals(where, expected, fromImmutable.similarityTo(i), tolerance);
                 }
             }
+        }
+    }
+
+    @Test
+    public void testPairTableFollowsProviderAndIsCounted() {
+        // 16 and 32 floats per subspace: a table where the provider asks for one.
+        for (int m : new int[] {8, 4}) {
+            int dim = 128;
+            var vectors = createRandomVectors(1000, dim);
+            var pq = ProductQuantization.compute(new ListRandomAccessVectorValues(vectors, dim), m, 256, false);
+            long before = pq.ramBytesUsed();
+            var dot = pq.pairTable(VectorSimilarityFunction.DOT_PRODUCT);
+            if (!VectorUtil.pqCodePairUsesTable(dim / m)) {
+                assertNull(dot);
+                assertEquals(before, pq.ramBytesUsed());
+                continue;
+            }
+            assertEquals((long) m * 256 * 257 / 2, dot.length());
+            assertSame("kept with the model", dot, pq.pairTable(VectorSimilarityFunction.DOT_PRODUCT));
+            assertSame("cosine uses the dot-product table", dot, pq.pairTable(VectorSimilarityFunction.COSINE));
+            var euclidean = pq.pairTable(VectorSimilarityFunction.EUCLIDEAN);
+            assertNotSame(dot, euclidean);
+            assertEquals(before + dot.ramBytesUsed() + euclidean.ramBytesUsed(), pq.ramBytesUsed());
         }
     }
 

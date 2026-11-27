@@ -1086,6 +1086,87 @@ HWY_FLATTEN float assemble_and_sum_pq_f32(
                                 k, blockSize, hn::ScalableTag<float>{});
 }
 
+// ---------------------------------------------------------------------------
+// pq_code_pair_f32: the dot product (dot != 0) or squared distance of the
+// vectors two PQ codes encode, read from the codebooks. Every subspace is
+// `width` floats (Java pads with zeros) and subspace m starts at
+// codebooks + m * clusterCount * width. One loop for every width: registers of
+// the largest power of two dividing the width, up to the hardware width, and
+// four subspaces at a time with separate totals so the multiply-adds overlap.
+// ---------------------------------------------------------------------------
+template <bool kDot, class V>
+HWY_INLINE void PQPairStep(V x, V y, V &acc)
+{
+    if constexpr (kDot) {
+        acc = hn::MulAdd(x, y, acc);
+    } else {
+        const auto t = hn::Sub(x, y);
+        acc = hn::MulAdd(t, t, acc);
+    }
+}
+
+template <bool kDot, class D>
+HWY_INLINE float PQPairLoop(D d, const float *HWY_RESTRICT cb, size_t stride, size_t width, size_t subspaces,
+                            const uint8_t *HWY_RESTRICT c1, const uint8_t *HWY_RESTRICT c2)
+{
+    const size_t N = hn::Lanes(d);
+    auto a0 = hn::Zero(d), a1 = hn::Zero(d), a2 = hn::Zero(d), a3 = hn::Zero(d);
+    size_t m = 0;
+    for (; m + 4 <= subspaces; m += 4) {
+        const float *base = cb + m * stride;
+        const float *x0 = base + c1[m] * width, *y0 = base + c2[m] * width;
+        base += stride;
+        const float *x1 = base + c1[m + 1] * width, *y1 = base + c2[m + 1] * width;
+        base += stride;
+        const float *x2 = base + c1[m + 2] * width, *y2 = base + c2[m + 2] * width;
+        base += stride;
+        const float *x3 = base + c1[m + 3] * width, *y3 = base + c2[m + 3] * width;
+        for (size_t t = 0; t < width; t += N) {
+            PQPairStep<kDot>(hn::LoadU(d, x0 + t), hn::LoadU(d, y0 + t), a0);
+            PQPairStep<kDot>(hn::LoadU(d, x1 + t), hn::LoadU(d, y1 + t), a1);
+            PQPairStep<kDot>(hn::LoadU(d, x2 + t), hn::LoadU(d, y2 + t), a2);
+            PQPairStep<kDot>(hn::LoadU(d, x3 + t), hn::LoadU(d, y3 + t), a3);
+        }
+    }
+    // The last 1-3 subspaces add into a0.
+    for (; m < subspaces; m++) {
+        const float *x = cb + m * stride + c1[m] * width, *y = cb + m * stride + c2[m] * width;
+        for (size_t t = 0; t < width; t += N) PQPairStep<kDot>(hn::LoadU(d, x + t), hn::LoadU(d, y + t), a0);
+    }
+    return hn::ReduceSum(d, hn::Add(hn::Add(a0, a1), hn::Add(a2, a3)));
+}
+
+template <bool kDot>
+HWY_INLINE float PQCodePair(const float *HWY_RESTRICT cb, int k, size_t width, size_t subspaces,
+                            const uint8_t *HWY_RESTRICT c1, const uint8_t *HWY_RESTRICT c2)
+{
+    const size_t stride = static_cast<size_t>(k) * width;
+    // width & (0 - width) is the largest power of two that divides width, so registers never cross a centroid.
+    const size_t lanes = std::min(hn::Lanes(hn::ScalableTag<float>{}), width & (0 - width));
+    // Only the register width differs between branches; the loop is the same.
+    if (lanes >= 16) return PQPairLoop<kDot>(HWY_CAPPED(float, 16){}, cb, stride, width, subspaces, c1, c2);
+    if (lanes >= 8) return PQPairLoop<kDot>(HWY_CAPPED(float, 8){}, cb, stride, width, subspaces, c1, c2);
+    if (lanes >= 4) return PQPairLoop<kDot>(HWY_CAPPED(float, 4){}, cb, stride, width, subspaces, c1, c2);
+    if (lanes >= 2) return PQPairLoop<kDot>(HWY_CAPPED(float, 2){}, cb, stride, width, subspaces, c1, c2);
+    return PQPairLoop<kDot>(HWY_CAPPED(float, 1){}, cb, stride, width, subspaces, c1, c2);
+}
+
+HWY_FLATTEN float pq_code_pair_f32(
+        const float    *HWY_RESTRICT codebooks,
+        int             clusterCount,
+        int             width,
+        size_t          subspaceCount,
+        const uint8_t  *HWY_RESTRICT code1, int offset1,
+        const uint8_t  *HWY_RESTRICT code2, int offset2,
+        int             dot)
+{
+    code1 += offset1;
+    code2 += offset2;
+    const size_t w = static_cast<size_t>(width);
+    return dot ? PQCodePair<true>(codebooks, clusterCount, w, subspaceCount, code1, code2)
+               : PQCodePair<false>(codebooks, clusterCount, w, subspaceCount, code1, code2);
+}
+
 // HWY_RESTRICT is not needed here: `baseOffsets` (unsigned char*) is a different type
 // from `partialSums` and `aMagnitude` (float*), so strict-aliasing already guarantees
 // the compiler that writes through one cannot affect loads from the other. All three

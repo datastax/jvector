@@ -41,6 +41,7 @@ import java.util.SplittableRandom;
 import java.util.concurrent.Callable;
 import java.util.concurrent.ForkJoinPool;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.concurrent.atomic.AtomicReferenceArray;
 import java.util.logging.Logger;
 import java.util.stream.Collectors;
 import java.util.stream.IntStream;
@@ -82,6 +83,12 @@ public class ProductQuantization implements VectorCompressor<ByteSequence<?>>, A
     private final AtomicReference<VectorFloat<?>> partialSquaredMagnitudes; // for cosine partials
     // Codebooks back to back with per-dimension lookups, created on first diversity scoring.
     private final AtomicReference<CodebookLayout> codebookLayout = new AtomicReference<>();
+    // Centroid-pair tables, for providers that score wide subspaces faster from one; built on first use.
+    // Index 0 serves dot product and cosine, index 1 squared distance.
+    private final boolean scoresPairsByTable;
+    // The narrowest and widest subspace, in floats.
+    private final int minSubspaceWidth, maxSubspaceWidth;
+    private final AtomicReferenceArray<VectorFloat<?>> pairTables = new AtomicReferenceArray<>(2);
 
     /**
      * Initializes the codebooks by clustering the input data using Product Quantization.
@@ -237,7 +244,9 @@ public class ProductQuantization implements VectorCompressor<ByteSequence<?>>, A
         this.anisotropicThreshold = anisotropicThreshold;
         this.partialSums = ThreadLocal.withInitial(() -> vectorTypeSupport.createFloatVector(getSubspaceCount() * getClusterCount()));
         this.partialSquaredMagnitudes = new AtomicReference<>(null);
-
+        this.minSubspaceWidth = Arrays.stream(subvectorSizesAndOffsets).mapToInt(m -> m[0]).min().orElse(0);
+        this.maxSubspaceWidth = Arrays.stream(subvectorSizesAndOffsets).mapToInt(m -> m[0]).max().orElse(0);
+        this.scoresPairsByTable = VectorUtil.pqCodePairUsesTable(minSubspaceWidth);
 
         centroidNormsSquared = new float[M][clusterCount];
         for (int i = 0; i < M; i++) {
@@ -450,7 +459,11 @@ public class ProductQuantization implements VectorCompressor<ByteSequence<?>>, A
         recordCode(dest, 0);
     }
 
-    /** Codebooks laid out back to back, with the lookups that code-pair scoring uses. */
+    /**
+     * Codebooks back to back for code-pair scoring. If the provider asks for a stride
+     * ({@link VectorUtil#pqCodePairStride}), each centroid is zero-padded to it, so every subspace has one width;
+     * the zeros do not change dot products or squared distances.
+     */
     static final class CodebookLayout {
         final VectorFloat<?> codebooks;
         final int[] subspaceOffsets, subspaceWidths, dimBase;
@@ -458,17 +471,30 @@ public class ProductQuantization implements VectorCompressor<ByteSequence<?>>, A
 
         CodebookLayout(ProductQuantization pq) {
             int dim = pq.originalDimension, k = pq.clusterCount;
-            codebooks = vectorTypeSupport.createFloatVector(k * dim);
+            int narrowest = pq.minSubspaceWidth, widest = pq.maxSubspaceWidth;
+            int stride = VectorUtil.pqCodePairStride(narrowest, widest);
             subspaceOffsets = new int[pq.M];
             subspaceWidths = new int[pq.M];
+            if (stride > 0 && (stride != narrowest || stride != widest)) {
+                codebooks = vectorTypeSupport.createFloatVector(k * pq.M * stride);
+                dimBase = new int[0]; // only 1-float layouts use it, and those are never padded
+                for (int m = 0; m < pq.M; m++) {
+                    int width = pq.subvectorSizesAndOffsets[m][0];
+                    subspaceOffsets[m] = m * stride;
+                    subspaceWidths[m] = stride;
+                    for (int c = 0; c < k; c++) {
+                        codebooks.copyFrom(pq.codebooks[m], c * width, (m * k + c) * stride, width);
+                    }
+                }
+                minWidth = maxWidth = stride;
+                return;
+            }
+            codebooks = vectorTypeSupport.createFloatVector(k * dim);
             dimBase = new int[dim];
-            int narrowest = Integer.MAX_VALUE, widest = 0;
             for (int m = 0; m < pq.M; m++) {
                 int width = pq.subvectorSizesAndOffsets[m][0], off = pq.subvectorSizesAndOffsets[m][1];
                 subspaceOffsets[m] = off;
                 subspaceWidths[m] = width;
-                narrowest = Math.min(narrowest, width);
-                widest = Math.max(widest, width);
                 codebooks.copyFrom(pq.codebooks[m], 0, k * off, k * width);
                 for (int t = 0; t < width; t++) dimBase[off + t] = k * off + t;
             }
@@ -486,9 +512,36 @@ public class ProductQuantization implements VectorCompressor<ByteSequence<?>>, A
     CodebookLayout codebookLayout() {
         CodebookLayout layout = codebookLayout.get();
         if (layout != null) return layout;
-        // About the size of the codebooks; a racing duplicate is cheap and only the first is kept.
-        codebookLayout.compareAndSet(null, new CodebookLayout(this));
-        return codebookLayout.get();
+        // Built once; concurrent first callers wait for it.
+        synchronized (codebookLayout) {
+            layout = codebookLayout.get();
+            if (layout == null) {
+                layout = new CodebookLayout(this);
+                codebookLayout.set(layout);
+            }
+            return layout;
+        }
+    }
+
+    /**
+     * The model's centroid-pair table for this similarity ({@link #createCodebookPartialSums}), built on first use, or
+     * null when the provider scores from the codebooks ({@link VectorUtil#pqCodePairUsesTable}). Cosine shares the
+     * dot-product table.
+     */
+    VectorFloat<?> pairTable(VectorSimilarityFunction similarityFunction) {
+        if (!scoresPairsByTable) return null;
+        int slot = similarityFunction == VectorSimilarityFunction.EUCLIDEAN ? 1 : 0;
+        VectorFloat<?> table = pairTables.get(slot);
+        if (table != null) return table;
+        // Built once; concurrent first callers wait for it.
+        synchronized (pairTables) {
+            table = pairTables.get(slot);
+            if (table == null) {
+                table = createCodebookPartialSums(similarityFunction);
+                pairTables.set(slot, table);
+            }
+            return table;
+        }
     }
 
     /** The squared length of the reconstruction of the code at {@code offset}, relative to the global centroid. */
@@ -848,8 +901,9 @@ public class ProductQuantization implements VectorCompressor<ByteSequence<?>>, A
     }
 
     /**
-     * Retained model storage: codebooks, centroid, subspace layout, centroid norms and the cosine
-     * magnitude table once created. Per-thread scratch is excluded. Reading this allocates nothing.
+     * Retained model storage: codebooks, centroid, subspace layout, centroid norms and, once created, the cosine
+     * magnitudes, codebook layout and centroid-pair tables. Per-thread scratch is excluded. Reading this allocates
+     * nothing.
      */
     @Override
     public long ramBytesUsed() {
@@ -866,6 +920,12 @@ public class ProductQuantization implements VectorCompressor<ByteSequence<?>>, A
         size += RamUsageEstimator.shallowSizeOf(codebookLayout);
         CodebookLayout layout = codebookLayout.get();
         if (layout != null) size += layout.ramBytesUsed();
+        size += RamUsageEstimator.shallowSizeOf(pairTables)
+                + RamUsageEstimator.sizeOfArray(pairTables.length(), RamUsageEstimator.NUM_BYTES_OBJECT_REF);
+        for (int i = 0; i < pairTables.length(); i++) {
+            VectorFloat<?> table = pairTables.get(i);
+            if (table != null) size += table.ramBytesUsed();
+        }
         size += maxEncoded.ramBytesUsed();
         return size;
     }
