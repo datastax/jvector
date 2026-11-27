@@ -70,6 +70,8 @@ public class GraphSearcher implements Closeable {
     private Bits acceptOrds;
     private SearchScoreProvider scoreProvider;
     private CachingReranker cachingReranker;
+    // the layer-0 threshold of the last search, which resume() also applies
+    private float threshold = Float.NEGATIVE_INFINITY;
 
     private boolean pruneSearch;
     private boolean boundCandidates = true;
@@ -212,7 +214,8 @@ public class GraphSearcher implements Closeable {
     public static SearchResult search(VectorFloat<?> queryVector, int topK, int rerankK, RandomAccessVectorValues vectors, VectorSimilarityFunction similarityFunction, ImmutableGraphIndex graph, Bits acceptOrds) {
         try (var searcher = new GraphSearcher(graph)) {
             var ssp = DefaultSearchScoreProvider.exact(queryVector, similarityFunction, vectors);
-            return searcher.search(ssp, topK, rerankK, 0.f, 0.f, acceptOrds);
+            // NEGATIVE_INFINITY, not 0.0f: DOT_PRODUCT scores of non-unit vectors can be negative
+            return searcher.search(ssp, topK, rerankK, Float.NEGATIVE_INFINITY, Float.NEGATIVE_INFINITY, acceptOrds);
         } catch (Exception e) {
             throw new RuntimeException(e);
         }
@@ -342,7 +345,8 @@ public class GraphSearcher implements Closeable {
         }
 
         // Now do the main search at layer 0
-        searchLayer0(topK, rerankK, threshold);;
+        this.threshold = threshold;
+        searchLayer0(topK, rerankK, threshold);
     }
 
     /**
@@ -365,7 +369,8 @@ public class GraphSearcher implements Closeable {
                                int topK,
                                float threshold,
                                Bits acceptOrds) {
-        return search(scoreProvider, topK, topK, threshold, 0.0f, acceptOrds);
+        // a rerank floor of NEGATIVE_INFINITY, not 0.0f: DOT_PRODUCT scores of non-unit vectors can be negative
+        return search(scoreProvider, topK, topK, threshold, Float.NEGATIVE_INFINITY, acceptOrds);
     }
 
 
@@ -401,6 +406,7 @@ public class GraphSearcher implements Closeable {
         // save search parameters for potential later resume
         initializeScoreProvider(scoreProvider);
         this.acceptOrds = Bits.intersectionOf(rawAcceptOrds, view.liveNodes());
+        this.threshold = Float.NEGATIVE_INFINITY;
 
         // reset the scratch data structures
         approximateResults.clear();
@@ -699,6 +705,7 @@ public class GraphSearcher implements Closeable {
      * Experimental!
      * <p>
      * Resume the previous search where it left off and search for the best `additionalK` neighbors.
+     * The threshold of that search still applies; its rerankFloor does not.
      * It is NOT valid to call this method before calling
      * `search`, but `resume` may be called as many times as desired once the search is initialized.
      * <p>
@@ -709,7 +716,8 @@ public class GraphSearcher implements Closeable {
         visitedCount = 0;
         expandedCount = 0;
         expandedCountBaseLayer = 0;
-        return resume(additionalK, rerankK, 0.0f, 0.0f);
+        // the rerank floor is NEGATIVE_INFINITY, not 0.0f: DOT_PRODUCT scores of non-unit vectors can be negative
+        return resume(additionalK, rerankK, threshold, Float.NEGATIVE_INFINITY);
     }
 
     @Override

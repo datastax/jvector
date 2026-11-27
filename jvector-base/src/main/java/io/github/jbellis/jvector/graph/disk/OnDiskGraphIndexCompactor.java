@@ -1911,8 +1911,11 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
         if (level == 0) {
             // rerankK = searchTopK: a wider beam's extra candidates are largely pruned by
             // diversity selection, so the doubled approximate-phase cost buys almost no recall.
+            // The threshold and rerank floor are NEGATIVE_INFINITY, not 0.0f, here and in the upper-layer
+            // searches below: DOT_PRODUCT scores of non-unit vectors can be negative, and a 0.0f floor would
+            // drop every candidate of a node that is dissimilar to everything else.
             SearchResult results = scratch.gs[sourceIdx].search(
-                    ssp, params.searchTopK, params.searchTopK, 0f, 0f, indexAlive
+                    ssp, params.searchTopK, params.searchTopK, Float.NEGATIVE_INFINITY, Float.NEGATIVE_INFINITY, indexAlive
             );
             for (var r : results.getNodes()) {
                 scratch.candSrc[candSize] = sourceIdx;
@@ -1932,12 +1935,12 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
             // `level` starts from the best-known region rather than the global entry node.
             // This mirrors how GraphSearcher.searchInternal navigates the hierarchy.
             for (int l = entry.level; l > level; l--) {
-                scratch.gs[sourceIdx].searchOneLayer(ssp, 1, 0f, l, Bits.ALL);
+                scratch.gs[sourceIdx].searchOneLayer(ssp, 1, Float.NEGATIVE_INFINITY, l, Bits.ALL);
                 scratch.gs[sourceIdx].setEntryPointsFromPreviousLayer();
             }
 
             scratch.gs[sourceIdx].searchOneLayer(
-                    ssp, params.searchTopK, 0f, level, indexAlive
+                    ssp, params.searchTopK, Float.NEGATIVE_INFINITY, level, indexAlive
             );
 
             int prev_candSize = candSize;
