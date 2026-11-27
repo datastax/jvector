@@ -810,9 +810,13 @@ public class GraphIndexBuilder implements Closeable, Accountable {
         }
         try {
             ((AutoCloseable) supplier).close();
-        } catch (Exception e) {
+        } catch (Exception | Error e) {
             if (failure != null) {
-                failure.addSuppressed(e);
+                if (failure != e) {
+                    failure.addSuppressed(e);
+                }
+            } else if (e instanceof Error) {
+                throw (Error) e;
             } else {
                 throw new RuntimeException(e);
             }

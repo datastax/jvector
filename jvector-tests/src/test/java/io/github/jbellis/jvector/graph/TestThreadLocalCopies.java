@@ -33,6 +33,7 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertNotSame;
 import static org.junit.Assert.assertSame;
 import static org.junit.Assert.assertThrows;
 import static org.junit.Assert.assertTrue;
@@ -106,6 +107,34 @@ public class TestThreadLocalCopies {
 
         ((AutoCloseable) supplier).close();
         assertEquals(2, closed.get());
+    }
+
+    @Test
+    public void throwingCopiesAreAllClosedAndDropped() throws Exception {
+        var closed = new AtomicInteger();
+        var source = new CloseTrackingRavv(closed) {
+            @Override
+            public RandomAccessVectorValues copy() {
+                return new CloseTrackingRavv(closed, false) {
+                    @Override
+                    public void close() {
+                        super.close();
+                        throw new IllegalStateException("close failed");
+                    }
+                };
+            }
+        };
+        var supplier = source.threadLocalSupplier();
+        var first = supplier.get();
+        var worker = new Thread(supplier::get);
+        worker.start();
+        worker.join();
+
+        var failure = assertThrows(IllegalStateException.class, ((AutoCloseable) supplier)::close);
+        assertEquals(2, closed.get());
+        assertEquals(1, failure.getSuppressed().length);
+        assertTrue(failure.getSuppressed()[0] instanceof IllegalStateException);
+        assertNotSame(first, supplier.get());
     }
 
     @Test
@@ -237,6 +266,7 @@ public class TestThreadLocalCopies {
         @Override
         public void close() {
             closed = true;
+            throw new AssertionError("simulated close failure");
         }
     }
 
@@ -263,7 +293,10 @@ public class TestThreadLocalCopies {
                 .withSimdExecutor(pool)
                 .withParallelExecutor(pool)
                 .build()) {
-            assertThrows(RuntimeException.class, () -> builder.build(ravv));
+            var failure = assertThrows(IllegalStateException.class, () -> builder.build(ravv));
+            assertTrue(failure.toString(), failure.toString().contains("simulated read failure"));
+            assertEquals(1, failure.getSuppressed().length);
+            assertTrue(failure.getSuppressed()[0] instanceof AssertionError);
             assertEquals("workers still reading after build() returned", 0, activeReads.get());
             assertEquals("copy closed during an active read", 0, readsAfterClose.get());
         } finally {
