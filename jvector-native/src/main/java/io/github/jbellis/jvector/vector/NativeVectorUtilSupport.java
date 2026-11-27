@@ -509,6 +509,34 @@ class NativeVectorUtilSupport extends PanamaVectorUtilSupport
                 clusterCount);
     }
 
+    /**
+     * One native call per code pair; the native side picks its loop from {@code minWidth} and {@code maxWidth}.
+     * The kernel trusts that every code byte is below {@code clusterCount}, as {@link #assembleAndSumPQ} does;
+     * the bounds that are cheap to check are checked here, so a short code or codebook fails instead of
+     * reading past it.
+     */
+    @Override
+    public float pqCodePairSimilarity(boolean dot, VectorFloat<?> codebooks, int clusterCount,
+                                      int[] subspaceOffsets, int[] subspaceWidths, int minWidth, int maxWidth, int[] dimBase,
+                                      ByteSequence<?> code1, int offset1, ByteSequence<?> code2, int offset2) {
+        final int subspaceCount = subspaceOffsets.length;
+        Objects.checkFromIndexSize(offset1, subspaceCount, code1.length());
+        Objects.checkFromIndexSize(offset2, subspaceCount, code2.length());
+        if (subspaceCount > 0
+                && (long) clusterCount * ((long) subspaceOffsets[subspaceCount - 1] + subspaceWidths[subspaceCount - 1]) > codebooks.length()) {
+            throw new IllegalArgumentException("Codebooks are shorter than clusterCount * the last subspace's end");
+        }
+        final MemorySegment cb = ((MemorySegmentVectorFloat) codebooks).get();
+        final MemorySegment c1 = ((MemorySegmentByteSequence) code1).get();
+        final MemorySegment c2 = ((MemorySegmentByteSequence) code2).get();
+        // When every subspace is one float wide the native side never reads the tables, so skip wrapping them.
+        final boolean tables = maxWidth != 1;
+        return NativeSimdOps.pq_code_pair_f32(dot ? 1 : 0, cb, clusterCount,
+                tables ? MemorySegment.ofArray(subspaceOffsets) : MemorySegment.NULL,
+                tables ? MemorySegment.ofArray(subspaceWidths) : MemorySegment.NULL,
+                subspaceCount, minWidth, maxWidth, c1, offset1, c2, offset2);
+    }
+
     @Override
     public float pqDecodedCosineSimilarity(ByteSequence<?> encoded, int clusterCount, VectorFloat<?> partialSums, VectorFloat<?> aMagnitude, float bMagnitude) {
         return pqDecodedCosineSimilarity(encoded, 0, encoded.length(), clusterCount, partialSums, aMagnitude, bMagnitude);

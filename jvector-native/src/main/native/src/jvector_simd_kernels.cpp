@@ -1086,6 +1086,210 @@ HWY_FLATTEN float assemble_and_sum_pq_f32(
                                 k, blockSize, hn::ScalableTag<float>{});
 }
 
+// ---------------------------------------------------------------------------
+// PQ code-pair similarity.
+//
+// Scores the vectors two PQ codes encode against each other, reading both
+// centroids of every subspace straight from the codebooks. The codebooks are
+// laid out back to back: subspace m's centroids start at k * subspaceOffsets[m]
+// and centroid c is at + c * subspaceWidths[m]. kDot selects the dot product,
+// else the squared distance; it is a template parameter so no loop branches on
+// it. pq_code_pair_f32, below, is the only exported function; it picks one of
+// these loops by subspace width, so each loop's vector width is a compile-time
+// constant:
+//   gather      every subspace is one float: a gather per register of subspaces
+//   contiguous  every subspace is at least 2/4/8/16 floats wide: load both
+//               centroids contiguously; floats past the last full register of a
+//               subspace are summed in scalar
+//   scalar      anything else (a mix of 1-float and wider subspaces)
+// The contiguous loops keep four independent accumulators, one per subspace
+// of a group of four, so the FMA chain does not wait on its own latency.
+// ---------------------------------------------------------------------------
+
+template <bool kDot>
+HWY_INLINE float PQPairTerm(float x, float y)
+{
+    if constexpr (kDot) {
+        return x * y;
+    } else {
+        const float d = x - y;
+        return d * d;
+    }
+}
+
+template <bool kDot>
+HWY_INLINE float PQPairScalarImpl(const float *HWY_RESTRICT codebooks, int k,
+                                  const int *HWY_RESTRICT offsets, const int *HWY_RESTRICT widths,
+                                  size_t subspaceCount,
+                                  const uint8_t *HWY_RESTRICT code1, const uint8_t *HWY_RESTRICT code2)
+{
+    float sum = 0.0f;
+    for (size_t m = 0; m < subspaceCount; ++m) {
+        const size_t width = static_cast<size_t>(widths[m]);
+        const size_t base  = static_cast<size_t>(k) * static_cast<size_t>(offsets[m]);
+        const float *a = codebooks + base + static_cast<size_t>(code1[m]) * width;
+        const float *b = codebooks + base + static_cast<size_t>(code2[m]) * width;
+        for (size_t t = 0; t < width; ++t) sum += PQPairTerm<kDot>(a[t], b[t]);
+    }
+    return sum;
+}
+
+// One subspace of the contiguous kernels: full registers into `acc`, the rest into `tail`.
+template <bool kDot, class FloatTag, class Vec>
+HWY_INLINE void PQPairSubspace(FloatTag d, size_t lanes, const float *codebooks, int k,
+                               const int *offsets, const int *widths,
+                               const uint8_t *code1, const uint8_t *code2, size_t m,
+                               Vec &acc, float &tail)
+{
+    const size_t width = static_cast<size_t>(widths[m]);
+    const size_t base  = static_cast<size_t>(k) * static_cast<size_t>(offsets[m]);
+    const float *a = codebooks + base + static_cast<size_t>(code1[m]) * width;
+    const float *b = codebooks + base + static_cast<size_t>(code2[m]) * width;
+    size_t t = 0;
+    for (; t + lanes <= width; t += lanes) {
+        const auto x = hn::LoadU(d, a + t);
+        const auto y = hn::LoadU(d, b + t);
+        if constexpr (kDot) {
+            acc = hn::MulAdd(x, y, acc);
+        } else {
+            const auto diff = hn::Sub(x, y);
+            acc = hn::MulAdd(diff, diff, acc);
+        }
+    }
+    for (; t < width; ++t) tail += PQPairTerm<kDot>(a[t], b[t]);
+}
+
+template <bool kDot, class FloatTag>
+HWY_INLINE float PQPairContiguousImpl(FloatTag d, const float *codebooks, int k,
+                                      const int *offsets, const int *widths, size_t subspaceCount,
+                                      const uint8_t *code1, const uint8_t *code2)
+{
+    const size_t lanes = hn::Lanes(d);
+    auto acc0 = hn::Zero(d);
+    auto acc1 = hn::Zero(d);
+    auto acc2 = hn::Zero(d);
+    auto acc3 = hn::Zero(d);
+    float tail = 0.0f;
+
+    size_t m = 0;
+    for (; m + 4 <= subspaceCount; m += 4) {
+        PQPairSubspace<kDot>(d, lanes, codebooks, k, offsets, widths, code1, code2, m,     acc0, tail);
+        PQPairSubspace<kDot>(d, lanes, codebooks, k, offsets, widths, code1, code2, m + 1, acc1, tail);
+        PQPairSubspace<kDot>(d, lanes, codebooks, k, offsets, widths, code1, code2, m + 2, acc2, tail);
+        PQPairSubspace<kDot>(d, lanes, codebooks, k, offsets, widths, code1, code2, m + 3, acc3, tail);
+    }
+    for (; m < subspaceCount; ++m) {
+        PQPairSubspace<kDot>(d, lanes, codebooks, k, offsets, widths, code1, code2, m, acc0, tail);
+    }
+    return hn::ReduceSum(d, hn::Add(hn::Add(acc0, acc1), hn::Add(acc2, acc3))) + tail;
+}
+
+template <class FloatTag>
+HWY_INLINE float PQPairContiguous(FloatTag d, int dot, const float *codebooks, int k,
+                                  const int *offsets, const int *widths, size_t subspaceCount,
+                                  const uint8_t *code1, const uint8_t *code2)
+{
+    return dot ? PQPairContiguousImpl<true>(d, codebooks, k, offsets, widths, subspaceCount, code1, code2)
+               : PQPairContiguousImpl<false>(d, codebooks, k, offsets, widths, subspaceCount, code1, code2);
+}
+
+// Subspace i is dimension i, so its centroids start at i * k and the gather index
+// of a lane is (ii + lane) * k + code: no offset or width tables are read.
+template <bool kDot, class FloatTag>
+HWY_INLINE float PQPairW1Impl(FloatTag d_f, const float *HWY_RESTRICT codebooks, int k, size_t subspaceCount,
+                              const uint8_t *HWY_RESTRICT code1, const uint8_t *HWY_RESTRICT code2)
+{
+    const hn::RebindToSigned<FloatTag>                       d_i;
+    const hn::Rebind<uint16_t, hn::RebindToSigned<FloatTag>> d_u16;
+    const hn::Rebind<uint8_t,  hn::RebindToSigned<FloatTag>> d_u8;
+    const size_t lanes = hn::Lanes(d_f);
+
+    auto laneBase = hn::Mul(hn::Iota(d_i, 0), hn::Set(d_i, k));
+    const auto laneInc = hn::Set(d_i, static_cast<int32_t>(lanes) * k);
+    auto acc = hn::Zero(d_f);
+
+    size_t ii = 0;
+    for (; ii + lanes <= subspaceCount; ii += lanes) {
+        const auto idx1 = hn::Add(laneBase, hn::PromoteTo(d_i, hn::PromoteTo(d_u16, hn::LoadU(d_u8, code1 + ii))));
+        const auto idx2 = hn::Add(laneBase, hn::PromoteTo(d_i, hn::PromoteTo(d_u16, hn::LoadU(d_u8, code2 + ii))));
+        const auto x = hn::GatherIndex(d_f, codebooks, idx1);
+        const auto y = hn::GatherIndex(d_f, codebooks, idx2);
+        if constexpr (kDot) {
+            acc = hn::MulAdd(x, y, acc);
+        } else {
+            const auto diff = hn::Sub(x, y);
+            acc = hn::MulAdd(diff, diff, acc);
+        }
+        laneBase = hn::Add(laneBase, laneInc);
+    }
+
+    float sum = hn::ReduceSum(d_f, acc);
+    for (; ii < subspaceCount; ++ii) {
+        const size_t base = ii * static_cast<size_t>(k);
+        sum += PQPairTerm<kDot>(codebooks[base + code1[ii]], codebooks[base + code2[ii]]);
+    }
+    return sum;
+}
+
+template <class FloatTag>
+HWY_INLINE float PQPairW1(FloatTag d, int dot, const float *codebooks, int k, size_t subspaceCount,
+                          const uint8_t *code1, const uint8_t *code2)
+{
+    return dot ? PQPairW1Impl<true>(d, codebooks, k, subspaceCount, code1, code2)
+               : PQPairW1Impl<false>(d, codebooks, k, subspaceCount, code1, code2);
+}
+
+// The one exported entry point: picks the loop for the codebook's subspace widths, so callers
+// pass the widths' minimum and maximum and need no knowledge of the kernels behind it.
+//   maxWidth == 1  the gather loop; subspaceOffsets and subspaceWidths are not read and may be null
+//   minWidth >= 16 contiguous, full registers
+//   minWidth >= 8  contiguous, 8-float registers
+//   minWidth >= 4  contiguous, 4-float registers
+//   minWidth >= 2  contiguous, 2-float registers
+//   otherwise      a plain loop (a mix of 1-float and wider subspaces)
+HWY_FLATTEN float pq_code_pair_f32(int dot, const float *codebooks, int clusterCount,
+                                   const int *subspaceOffsets, const int *subspaceWidths, size_t subspaceCount,
+                                   int minWidth, int maxWidth,
+                                   const unsigned char *code1, int offset1,
+                                   const unsigned char *code2, int offset2)
+{
+    code1 += offset1;
+    code2 += offset2;
+    if (minWidth >= 2) {
+        if (minWidth >= 16) {
+            return PQPairContiguous(hn::ScalableTag<float>{}, dot, codebooks, clusterCount, subspaceOffsets,
+                                    subspaceWidths, subspaceCount, code1, code2);
+        }
+        if (minWidth >= 8) {
+            return PQPairContiguous(HWY_CAPPED(float, 8){}, dot, codebooks, clusterCount, subspaceOffsets,
+                                    subspaceWidths, subspaceCount, code1, code2);
+        }
+        if (minWidth >= 4) {
+            return PQPairContiguous(HWY_CAPPED(float, 4){}, dot, codebooks, clusterCount, subspaceOffsets,
+                                    subspaceWidths, subspaceCount, code1, code2);
+        }
+        return PQPairContiguous(HWY_CAPPED(float, 2){}, dot, codebooks, clusterCount, subspaceOffsets,
+                                subspaceWidths, subspaceCount, code1, code2);
+    }
+    if (maxWidth == 1) {
+#if HWY_MAX_BYTES > 16
+        if (subspaceCount <= 4) {
+            return PQPairW1(HWY_CAPPED(float, 4){}, dot, codebooks, clusterCount, subspaceCount, code1, code2);
+        }
+#if HWY_MAX_BYTES > 32
+        if (subspaceCount <= 8) {
+            return PQPairW1(HWY_CAPPED(float, 8){}, dot, codebooks, clusterCount, subspaceCount, code1, code2);
+        }
+#endif
+#endif
+        return PQPairW1(hn::ScalableTag<float>{}, dot, codebooks, clusterCount, subspaceCount, code1, code2);
+    }
+    return dot ? PQPairScalarImpl<true>(codebooks, clusterCount, subspaceOffsets, subspaceWidths, subspaceCount,
+                                        code1, code2)
+               : PQPairScalarImpl<false>(codebooks, clusterCount, subspaceOffsets, subspaceWidths, subspaceCount,
+                                         code1, code2);
+}
+
 // HWY_RESTRICT is not needed here: `baseOffsets` (unsigned char*) is a different type
 // from `partialSums` and `aMagnitude` (float*), so strict-aliasing already guarantees
 // the compiler that writes through one cannot affect loads from the other. All three
