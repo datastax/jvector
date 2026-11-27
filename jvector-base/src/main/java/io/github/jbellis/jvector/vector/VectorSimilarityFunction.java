@@ -50,11 +50,13 @@ public enum VectorSimilarityFunction {
   },
 
   /**
-   * Dot product. NOTE: this similarity is intended as an optimized way to perform cosine
-   * similarity. In order to use it, all vectors must be normalized, including both document and
-   * query vectors. Using dot product with vectors that are not normalized can result in errors or
-   * poor search results. Floating point vectors must be normalized to be of unit length, while byte
-   * vectors should simply all have the same norm.
+   * Dot product, scored as {@code (1 + dot) / 2}. With vectors normalized to unit length, including
+   * the query, this ranks like cosine similarity and scores fall in [0, 1].
+   * <p>
+   * Vectors need not be unit length. The score is then unbounded and is negative whenever the dot
+   * product is below -1, so 0 does not accept every node: pass {@code Float.NEGATIVE_INFINITY} as the
+   * threshold or rerank floor of a search that should. Graphs of vectors that are not unit length
+   * may give lower recall, and binary quantization approximates cosine similarity, not the dot product.
    */
   DOT_PRODUCT {
     @Override

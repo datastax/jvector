@@ -2276,4 +2276,61 @@ public class TestOnDiskGraphIndexCompactor extends RandomizedTest {
         @Override public void close() throws IOException { r.close(); }
         @Override public long length() throws IOException { return r.length(); }
     }
+
+    /**
+     * With DOT_PRODUCT and non-unit vectors, scores are (1 + dot) / 2 and can be negative. A node that scores
+     * negative against every node of the other source is still linked to its best match there when compacted.
+     */
+    @Test
+    public void testCompactLinksNodeWithOnlyNegativeSimilarities() throws Exception {
+        int dim = 2;
+        var vsf = VectorSimilarityFunction.DOT_PRODUCT;
+        // the larger source lies on an arc of radius 10 from angle 1 radian down to 0; the smaller holds one vector at
+        // (-10, 0), whose dot product with each vector of the larger source is -100 cos(angle), so between -54 and
+        // -100, best for the larger source's node 0. At level 0 a node searches the larger sources, and only that
+        // search scores the odd node against them.
+        List<VectorFloat<?>> large = new ArrayList<>();
+        for (int i = 0; i < 50; i++) {
+            double angle = 1 - i / 49.0;
+            large.add(vectorTypeSupport.createFloatVector(new float[] {(float) (10 * Math.cos(angle)),
+                                                                       (float) (10 * Math.sin(angle))}));
+        }
+        List<VectorFloat<?>> small = List.of(vectorTypeSupport.createFloatVector(new float[] {-10f, 0f}));
+
+        Path largePath = buildSimpleSourceGraph(large, dim, vsf, "negative_large");
+        Path smallPath = buildSimpleSourceGraph(small, dim, vsf, "negative_small");
+        try (ReaderSupplier largeRs = ReaderSupplierFactory.open(largePath);
+             ReaderSupplier smallRs = ReaderSupplierFactory.open(smallPath)) {
+            List<OnDiskGraphIndex> graphs = new ArrayList<>(List.of(OnDiskGraphIndex.load(largeRs),
+                                                                    OnDiskGraphIndex.load(smallRs)));
+            List<FixedBitSet> live = new ArrayList<>();
+            for (var vecs : List.of(large, small)) {
+                var bits = new FixedBitSet(vecs.size());
+                bits.set(0, vecs.size());
+                live.add(bits);
+            }
+            var outputPath = testDirectory.resolve("negative_compacted");
+            new OnDiskGraphIndexCompactor(graphs, live, vsf, null).compact(outputPath);
+
+            try (ReaderSupplier rs = ReaderSupplierFactory.open(outputPath);
+                 var merged = OnDiskGraphIndex.load(rs);
+                 var view = merged.getView()) {
+                // find both nodes by their vectors: the merge may renumber them
+                int odd = -1, best = -1;
+                var v = vectorTypeSupport.createFloatVector(dim);
+                for (int n = 0; n < merged.size(0); n++) {
+                    view.getVectorInto(n, v, 0);
+                    if (v.get(0) == -10f) odd = n;
+                    if (v.equals(large.get(0))) best = n;
+                }
+                boolean linksBest = false;
+                var it = view.getNeighborsIterator(0, odd);
+                while (it.hasNext()) {
+                    linksBest |= it.nextInt() == best;
+                }
+                assertTrue("the odd node has no edge to its best match", linksBest);
+            }
+            for (var g : graphs) g.close();
+        }
+    }
 }
