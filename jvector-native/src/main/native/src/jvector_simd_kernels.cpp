@@ -1094,7 +1094,7 @@ HWY_FLATTEN float assemble_and_sum_pq_f32(
 // laid out back to back: subspace m's centroids start at k * subspaceOffsets[m]
 // and centroid c is at + c * subspaceWidths[m]. kDot selects the dot product,
 // else the squared distance; it is a template parameter so no loop branches on
-// it. pq_code_pair_f32 and pq_code_pair_batch_f32, below, are the exported functions; they pick one of
+// it. pq_code_pair_f32, below, is the only exported function; it picks one of
 // these loops by subspace width, so each loop's vector width is a compile-time
 // constant:
 //   gather      every subspace is one float: a gather per register of subspaces
@@ -1247,14 +1247,11 @@ HWY_INLINE float PQPairW1(FloatTag d, int dot, const float *codebooks, int k, si
 //   minWidth >= 4  contiguous, 4-float registers
 //   minWidth >= 2  contiguous, 2-float registers
 //   otherwise      a plain loop (a mix of 1-float and wider subspaces)
-// Not inlined into its callers: pq_code_pair_f32 and pq_code_pair_batch_f32 both call it, so a pair is
-// scored by the same machine code either way and the two return bit-identical scores (inlined into a loop the
-// compiler may contract the scalar tail's multiply-adds differently).
-static HWY_NOINLINE HWY_FLATTEN float PQCodePairOne(int dot, const float *codebooks, int clusterCount,
-                                                    const int *subspaceOffsets, const int *subspaceWidths, size_t subspaceCount,
-                                                    int minWidth, int maxWidth,
-                                                    const unsigned char *code1, int offset1,
-                                                    const unsigned char *code2, int offset2)
+HWY_FLATTEN float pq_code_pair_f32(int dot, const float *codebooks, int clusterCount,
+                                   const int *subspaceOffsets, const int *subspaceWidths, size_t subspaceCount,
+                                   int minWidth, int maxWidth,
+                                   const unsigned char *code1, int offset1,
+                                   const unsigned char *code2, int offset2)
 {
     code1 += offset1;
     code2 += offset2;
@@ -1291,32 +1288,6 @@ static HWY_NOINLINE HWY_FLATTEN float PQCodePairOne(int dot, const float *codebo
                                         code1, code2)
                : PQPairScalarImpl<false>(codebooks, clusterCount, subspaceOffsets, subspaceWidths, subspaceCount,
                                          code1, code2);
-}
-
-HWY_FLATTEN float pq_code_pair_f32(int dot, const float *codebooks, int clusterCount,
-                                   const int *subspaceOffsets, const int *subspaceWidths, size_t subspaceCount,
-                                   int minWidth, int maxWidth,
-                                   const unsigned char *code1, int offset1,
-                                   const unsigned char *code2, int offset2)
-{
-    return PQCodePairOne(dot, codebooks, clusterCount, subspaceOffsets, subspaceWidths, subspaceCount,
-                         minWidth, maxWidth, code1, offset1, code2, offset2);
-}
-
-// Scores code1 against `count` codes of one buffer in a single call: out[i] is what
-// pq_code_pair_f32 returns for the code at codes2 + offsets2[i], so every result is identical to the
-// single-pair call and a caller that scores several pairs pays the call overhead once.
-HWY_FLATTEN void pq_code_pair_batch_f32(int dot, const float *codebooks, int clusterCount,
-                                        const int *subspaceOffsets, const int *subspaceWidths, size_t subspaceCount,
-                                        int minWidth, int maxWidth,
-                                        const unsigned char *code1, int offset1,
-                                        const unsigned char *codes2, const int *offsets2, int count,
-                                        float *out)
-{
-    for (int i = 0; i < count; ++i) {
-        out[i] = PQCodePairOne(dot, codebooks, clusterCount, subspaceOffsets, subspaceWidths, subspaceCount,
-                               minWidth, maxWidth, code1, offset1, codes2, offsets2[i]);
-    }
 }
 
 // HWY_RESTRICT is not needed here: `baseOffsets` (unsigned char*) is a different type

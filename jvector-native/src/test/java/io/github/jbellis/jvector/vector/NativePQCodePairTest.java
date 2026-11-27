@@ -128,69 +128,6 @@ class NativePQCodePairTest {
     }
 
     @Test
-    void batchGivesTheSingleCallResultForEveryWidthClass() {
-        var support = NativeTestSupport.requireNativeProvider().getVectorUtilSupport();
-        var random = new Random(11);
-        for (int[] widths : shapes()) {
-            int[] offsets = new int[widths.length];
-            int dim = 0;
-            for (int m = 0; m < widths.length; m++) {
-                offsets[m] = dim;
-                dim += widths[m];
-            }
-            float[] codebooks = new float[K * dim];
-            for (int i = 0; i < codebooks.length; i++) codebooks[i] = random.nextFloat() * 2 - 1;
-            var codebookVector = new MemorySegmentVectorFloat(codebooks);
-
-            // a buffer of 40 codes laid out one after another, after a few bytes of padding
-            int pad = random.nextInt(5);
-            byte[] codes = new byte[pad + 40 * widths.length];
-            random.nextBytes(codes);
-            var sequence = new MemorySegmentByteSequence(codes);
-
-            for (boolean dot : new boolean[] {true, false}) {
-                for (int count : new int[] {1, 2, 5, 16, 40}) {
-                    int[] at = new int[count];
-                    for (int i = 0; i < count; i++) at[i] = pad + random.nextInt(40) * widths.length;
-                    float[] out = new float[count + 3];
-                    Arrays.fill(out, Float.NaN);
-                    int offset1 = pad + random.nextInt(40) * widths.length;
-                    support.pqCodePairSimilarityBatch(dot, codebookVector, K, offsets, widths, min(widths), max(widths),
-                            new int[dim], sequence, offset1, sequence, at, count, out);
-                    String where = (dot ? "dot " : "l2 ") + Arrays.toString(widths) + " count " + count;
-                    for (int i = 0; i < count; i++) {
-                        float single = support.pqCodePairSimilarity(dot, codebookVector, K, offsets, widths, min(widths), max(widths),
-                                new int[dim], sequence, offset1, sequence, at[i]);
-                        assertEquals(single, out[i], where + " pair " + i);
-                    }
-                    // nothing past count is written
-                    for (int i = count; i < out.length; i++) assertEquals(Float.NaN, out[i], where);
-                }
-            }
-        }
-    }
-
-    @Test
-    void batchFailsInsteadOfReadingPastShortCodesOrArrays() {
-        var support = NativeTestSupport.requireNativeProvider().getVectorUtilSupport();
-        int[] widths = fill(8, 4), offsets = new int[8];
-        for (int m = 0; m < 8; m++) offsets[m] = 4 * m;
-        var codebooks = new MemorySegmentVectorFloat(new float[K * 32]);
-        var code = new MemorySegmentByteSequence(new byte[16]);
-        // the second code starts at 9, so it would need bytes 9..16
-        assertThrows(IndexOutOfBoundsException.class, () -> support.pqCodePairSimilarityBatch(true, codebooks, K, offsets, widths,
-                4, 4, new int[32], code, 0, code, new int[] {0, 9}, 2, new float[2]));
-        assertThrows(IndexOutOfBoundsException.class, () -> support.pqCodePairSimilarityBatch(true, codebooks, K, offsets, widths,
-                4, 4, new int[32], code, 9, code, new int[] {0}, 1, new float[1]));
-        assertThrows(IndexOutOfBoundsException.class, () -> support.pqCodePairSimilarityBatch(true, codebooks, K, offsets, widths,
-                4, 4, new int[32], code, 0, code, new int[] {0}, 1, new float[0]));
-        assertThrows(IndexOutOfBoundsException.class, () -> support.pqCodePairSimilarityBatch(true, codebooks, K, offsets, widths,
-                4, 4, new int[32], code, 0, code, new int[] {0}, 2, new float[2]));
-        // an empty batch is a no-op
-        support.pqCodePairSimilarityBatch(true, codebooks, K, offsets, widths, 4, 4, new int[32], code, 0, code, new int[0], 0, new float[0]);
-    }
-
-    @Test
     void shortCodesAndCodebooksFailInsteadOfReadingPastThem() {
         var support = NativeTestSupport.requireNativeProvider().getVectorUtilSupport();
         int[] widths = fill(8, 4), offsets = new int[8];

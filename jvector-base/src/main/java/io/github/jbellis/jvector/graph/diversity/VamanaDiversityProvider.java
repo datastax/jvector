@@ -25,9 +25,6 @@ import io.github.jbellis.jvector.util.DocIdSetIterator;
 import static java.lang.Math.min;
 
 public class VamanaDiversityProvider implements DiversityProvider {
-    /** the most selected neighbours scored in one batch; a node has at most this many in a typical degree-32 graph */
-    private static final int MAX_BATCH = 16;
-
     /** the diversity threshold; 1.0 is equivalent to HNSW; Vamana uses 1.2 or more */
     public final float alpha;
 
@@ -86,9 +83,6 @@ public class VamanaDiversityProvider implements DiversityProvider {
     private static boolean isDiverse(int node, float score, NodeArray others, ScoreFunction sf, BitSet selected, float alpha) {
         assert others.size() > 0;
 
-        if (sf.supportsBatchScoring()) {
-            return isDiverseBatched(node, score, others, sf, selected, alpha);
-        }
         for (int i = selected.nextSetBit(0); i != DocIdSetIterator.NO_MORE_DOCS; i = selected.nextSetBit(i + 1)) {
             int otherNode = others.getNode(i);
             if (node == otherNode) {
@@ -97,44 +91,6 @@ public class VamanaDiversityProvider implements DiversityProvider {
             if (sf.similarityTo(otherNode) > score * alpha) {
                 return false;
             }
-        }
-        return true;
-    }
-
-    // Same answer as the loop in isDiverse, scoring the selected neighbours together. The loop stops at the first
-    // neighbour that rejects the candidate, and most candidates are rejected by one of the first few, so the
-    // batches start at one node and double: a candidate rejected at once scores no extra pairs, and one compared
-    // with every neighbour takes a handful of calls instead of one per neighbour.
-    private static boolean isDiverseBatched(int node, float score, NodeArray others, ScoreFunction sf, BitSet selected, float alpha) {
-        final float threshold = score * alpha;
-        int[] nodes = new int[MAX_BATCH];
-        float[] scores = new float[MAX_BATCH];
-        int limit = 1;
-        int i = selected.nextSetBit(0);
-        while (i != DocIdSetIterator.NO_MORE_DOCS) {
-            int count = 0;
-            boolean reachedNode = false;
-            while (i != DocIdSetIterator.NO_MORE_DOCS && count < limit) {
-                int otherNode = others.getNode(i);
-                if (node == otherNode) {
-                    reachedNode = true;
-                    break;
-                }
-                nodes[count++] = otherNode;
-                i = selected.nextSetBit(i + 1);
-            }
-            if (count > 0) {
-                sf.similarityTo(nodes, count, scores);
-                for (int j = 0; j < count; j++) {
-                    if (scores[j] > threshold) {
-                        return false;
-                    }
-                }
-            }
-            if (reachedNode) {
-                return true;
-            }
-            limit = Math.min(limit * 2, MAX_BATCH);
         }
         return true;
     }
