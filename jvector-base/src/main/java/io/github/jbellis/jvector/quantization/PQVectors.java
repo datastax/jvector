@@ -291,43 +291,92 @@ public abstract class PQVectors implements CompressedVectors {
     public ScoreFunction.ApproximateScoreFunction diversityFunctionFor(int node1, VectorSimilarityFunction similarityFunction) {
         // A build creates one of these per candidate and often makes only one or two comparisons with it,
         // so it does no setup: each comparison reads both codes' centroids straight from the codebooks.
-        var layout = pq.codebookLayout();
-        var node1Chunk = getChunk(node1);
-        var node1Offset = getOffsetInChunk(node1);
-        int clusterCount = pq.getClusterCount();
-
         switch (similarityFunction) {
             case DOT_PRODUCT:
-                return (node2) -> {
-                    float dp = VectorUtil.pqCodePairSimilarity(true, layout.codebooks, clusterCount,
-                            layout.subspaceOffsets, layout.subspaceWidths, layout.minWidth, layout.maxWidth, layout.dimBase,
-                            node1Chunk, node1Offset, getChunk(node2), getOffsetInChunk(node2));
-                    // scale to [0, 1]
-                    return (1 + dp) / 2;
-                };
             case COSINE:
-                float norm1 = pq.reconstructedSquaredNorm(node1Chunk, node1Offset);
-                return (node2) -> {
-                    var node2Chunk = getChunk(node2);
-                    var node2Offset = getOffsetInChunk(node2);
-                    float sum = VectorUtil.pqCodePairSimilarity(true, layout.codebooks, clusterCount,
-                            layout.subspaceOffsets, layout.subspaceWidths, layout.minWidth, layout.maxWidth, layout.dimBase,
-                            node1Chunk, node1Offset, node2Chunk, node2Offset);
-                    float norm2 = pq.reconstructedSquaredNorm(node2Chunk, node2Offset);
-                    float cosine = sum / (float) Math.sqrt(norm1 * norm2);
-                    // scale to [0, 1]
-                    return (1 + cosine) / 2;
-                };
             case EUCLIDEAN:
-                return (node2) -> {
-                    float sum = VectorUtil.pqCodePairSimilarity(false, layout.codebooks, clusterCount,
-                            layout.subspaceOffsets, layout.subspaceWidths, layout.minWidth, layout.maxWidth, layout.dimBase,
-                            node1Chunk, node1Offset, getChunk(node2), getOffsetInChunk(node2));
-                    // scale to [0, 1]
-                    return 1 / (1 + sum);
-                };
+                return new DiversityFunction(node1, similarityFunction);
             default:
                 throw new IllegalArgumentException("Unsupported similarity function " + similarityFunction);
+        }
+    }
+
+    /**
+     * Scores one node's code against other nodes' codes straight from the codebooks. It scores several nodes in
+     * one call when asked to, so a provider that can do that, such as native, pays its call overhead once.
+     * Not thread-safe: it keeps scratch arrays, and a build uses each one on a single thread.
+     */
+    private final class DiversityFunction implements ScoreFunction.ApproximateScoreFunction {
+        private final ProductQuantization.CodebookLayout layout = pq.codebookLayout();
+        private final int clusterCount = pq.getClusterCount();
+        private final boolean dot;
+        private final boolean cosine;
+        private final ByteSequence<?> node1Chunk;
+        private final int node1Offset;
+        private final float norm1;
+        private int[] offsets = new int[0];
+        private float[] raw = new float[0];
+
+        DiversityFunction(int node1, VectorSimilarityFunction similarityFunction) {
+            this.dot = similarityFunction != VectorSimilarityFunction.EUCLIDEAN;
+            this.cosine = similarityFunction == VectorSimilarityFunction.COSINE;
+            this.node1Chunk = getChunk(node1);
+            this.node1Offset = getOffsetInChunk(node1);
+            this.norm1 = cosine ? pq.reconstructedSquaredNorm(node1Chunk, node1Offset) : 0;
+        }
+
+        @Override
+        public float similarityTo(int node2) {
+            var node2Chunk = getChunk(node2);
+            var node2Offset = getOffsetInChunk(node2);
+            float sum = VectorUtil.pqCodePairSimilarity(dot, layout.codebooks, clusterCount,
+                    layout.subspaceOffsets, layout.subspaceWidths, layout.minWidth, layout.maxWidth, layout.dimBase,
+                    node1Chunk, node1Offset, node2Chunk, node2Offset);
+            return scale(sum, node2Chunk, node2Offset);
+        }
+
+        @Override
+        public boolean supportsBatchScoring() {
+            return true;
+        }
+
+        @Override
+        public void similarityTo(int[] nodes, int count, float[] scores) {
+            if (count == 1) {
+                scores[0] = similarityTo(nodes[0]);
+                return;
+            }
+            if (offsets.length < count) {
+                offsets = new int[count];
+                raw = new float[count];
+            }
+            // The codes of a run of nodes in one chunk are scored together; nearly always that is every node.
+            int start = 0;
+            while (start < count) {
+                var chunk = getChunk(nodes[start]);
+                int end = start;
+                while (end < count && getChunk(nodes[end]) == chunk) {
+                    offsets[end - start] = getOffsetInChunk(nodes[end]);
+                    end++;
+                }
+                int n = end - start;
+                VectorUtil.pqCodePairSimilarityBatch(dot, layout.codebooks, clusterCount,
+                        layout.subspaceOffsets, layout.subspaceWidths, layout.minWidth, layout.maxWidth, layout.dimBase,
+                        node1Chunk, node1Offset, chunk, offsets, n, raw);
+                for (int i = 0; i < n; i++) {
+                    scores[start + i] = scale(raw[i], chunk, offsets[i]);
+                }
+                start = end;
+            }
+        }
+
+        // maps the raw sum (dot product or squared distance) to a score in [0, 1]
+        private float scale(float sum, ByteSequence<?> node2Chunk, int node2Offset) {
+            if (cosine) {
+                float norm2 = pq.reconstructedSquaredNorm(node2Chunk, node2Offset);
+                return (1 + sum / (float) Math.sqrt(norm1 * norm2)) / 2;
+            }
+            return dot ? (1 + sum) / 2 : 1 / (1 + sum);
         }
     }
 

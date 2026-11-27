@@ -475,6 +475,21 @@ public interface VectorUtilSupport {
   }
 
   /**
+   * Scores {@code code1} against {@code count} codes of one buffer: {@code out[i]} is what
+   * {@link #pqCodePairSimilarity} returns for the code at {@code offsets2[i]} of {@code codes2}. Providers that
+   * can score the codes together, such as one native call, override this; the default scores them one by one.
+   */
+  default void pqCodePairSimilarityBatch(boolean dot, VectorFloat<?> codebooks, int clusterCount,
+                                         int[] subspaceOffsets, int[] subspaceWidths, int minWidth, int maxWidth, int[] dimBase,
+                                         ByteSequence<?> code1, int offset1, ByteSequence<?> codes2, int[] offsets2, int count,
+                                         float[] out) {
+    for (int i = 0; i < count; i++) {
+      out[i] = pqCodePairSimilarity(dot, codebooks, clusterCount, subspaceOffsets, subspaceWidths, minWidth, maxWidth, dimBase,
+                                    code1, offset1, codes2, offsets2[i]);
+    }
+  }
+
+  /**
    * Calculates the distance between 2 vectors, which were quantized using Product Quantization, using a precomputed table of partial results
    *
    * See {@link ProductQuantization#createCodebookPartialSums(VectorSimilarityFunction)}

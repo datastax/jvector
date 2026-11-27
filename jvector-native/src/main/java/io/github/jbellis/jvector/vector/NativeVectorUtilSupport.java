@@ -537,6 +537,40 @@ class NativeVectorUtilSupport extends PanamaVectorUtilSupport
                 subspaceCount, minWidth, maxWidth, c1, offset1, c2, offset2);
     }
 
+    /**
+     * One native call for all {@code count} pairs, with the checks of {@link #pqCodePairSimilarity} applied to
+     * every code, so a short code or codebook fails instead of reading past it.
+     */
+    @Override
+    public void pqCodePairSimilarityBatch(boolean dot, VectorFloat<?> codebooks, int clusterCount,
+                                          int[] subspaceOffsets, int[] subspaceWidths, int minWidth, int maxWidth, int[] dimBase,
+                                          ByteSequence<?> code1, int offset1, ByteSequence<?> codes2, int[] offsets2, int count,
+                                          float[] out) {
+        if (count == 0) {
+            return;
+        }
+        final int subspaceCount = subspaceOffsets.length;
+        Objects.checkFromIndexSize(0, count, offsets2.length);
+        Objects.checkFromIndexSize(0, count, out.length);
+        Objects.checkFromIndexSize(offset1, subspaceCount, code1.length());
+        for (int i = 0; i < count; i++) {
+            Objects.checkFromIndexSize(offsets2[i], subspaceCount, codes2.length());
+        }
+        if (subspaceCount > 0
+                && (long) clusterCount * ((long) subspaceOffsets[subspaceCount - 1] + subspaceWidths[subspaceCount - 1]) > codebooks.length()) {
+            throw new IllegalArgumentException("Codebooks are shorter than clusterCount * the last subspace's end");
+        }
+        final MemorySegment cb = ((MemorySegmentVectorFloat) codebooks).get();
+        final MemorySegment c1 = ((MemorySegmentByteSequence) code1).get();
+        final MemorySegment c2 = ((MemorySegmentByteSequence) codes2).get();
+        final boolean tables = maxWidth != 1;
+        NativeSimdOps.pq_code_pair_batch_f32(dot ? 1 : 0, cb, clusterCount,
+                tables ? MemorySegment.ofArray(subspaceOffsets) : MemorySegment.NULL,
+                tables ? MemorySegment.ofArray(subspaceWidths) : MemorySegment.NULL,
+                subspaceCount, minWidth, maxWidth, c1, offset1, c2, MemorySegment.ofArray(offsets2), count,
+                MemorySegment.ofArray(out));
+    }
+
     @Override
     public float pqDecodedCosineSimilarity(ByteSequence<?> encoded, int clusterCount, VectorFloat<?> partialSums, VectorFloat<?> aMagnitude, float bMagnitude) {
         return pqDecodedCosineSimilarity(encoded, 0, encoded.length(), clusterCount, partialSums, aMagnitude, bMagnitude);
