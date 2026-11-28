@@ -29,7 +29,7 @@ ready-to-run file per layout.
 | Quantizer | Choose it when | Notes |
 | --- | --- | --- |
 | **[PQ](pq.md)** | You want the stable, widely deployed default | Any similarity; optional anisotropic weighting; fused PQ requires 256 clusters per subspace |
-| **[ASH](ash-configuration.md)** (experimental) | You want the best accuracy for a given code size, or faster builds | Any similarity (chosen when the model is trained); fused or in memory; API may change between releases |
+| **[ASH](ash-configuration.md)** (experimental) | You want the best accuracy for a given code size, or faster builds | Any similarity (chosen when the model is trained); fused or in memory; native provider recommended (Java 22+ on Linux x86-64 or AArch64); API may change between releases |
 | **[BQ](bq.md)** | Dimension is very high, vectors are normalized, and a coarse first pass is enough | One bit per dimension, scored by Hamming distance as an approximation of cosine similarity; not fused |
 | **None** | The collection is small or low-dimensional | Scores full vectors; no training |
 

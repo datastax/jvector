@@ -55,10 +55,12 @@ float sum_f32(const float *v, size_t n) {
 }
 void assemble_and_sum_f32(void) {}
 void assemble_and_sum_pq_f32(void) {}
+void pq_code_pair_f32(void) {}
 void pq_decoded_cosine_similarity_f32(void) {}
 void calculate_partial_sums_dot_f32(void) {}
 void calculate_partial_sums_euclidean_f32(void) {}
 void calculate_partial_sums_self_magnitude_f32(void) {}
+void calculate_partial_sums_transposed_f32(void) {}
 void nvq_quantize_8bit(void) {}
 void nvq_uniform_loss(void) {}
 void nvq_square_l2_distance_8bit(void) {}

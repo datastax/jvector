@@ -5,6 +5,10 @@ and query execution. This reference covers library parameters and BenchYAML
 controls. The [BenchYAML Guide](benchyaml-guide.md) defines the index YAML
 fields. Recipes specify their own graph and compression values.
 
+ASH runs on every vectorization provider. The native provider (the jvector-native library, Java 22 or later on
+Linux x86-64 or AArch64) is recommended: it supports the computations ASH relies on best, such as neighborhood scoring and
+batched, INT8 and FP16 query projection, which the Panama and scalar providers run more slowly.
+
 Set JVM properties before the affected model, provider or executor is initialized.
 Query views and pools are cached; changing a property later does not reconfigure
 existing objects. CPU-count properties do not pin threads.
@@ -230,9 +234,9 @@ depends on the bit width. 1-bit codes use a SIMD masked add over their sign bits
 Highway kernels, or with Panama a contiguous-query kernel on JDK 25+ and a
 field-decode kernel on earlier JDKs. The other widths (3 and 5 to 9 bits) use
 the field-decode kernel with either provider. Fused graphs score base-layer
-neighborhoods with whole-block kernels at every width; with Panama, or with more
-than one landmark, 3 and 5 to 9-bit neighborhoods sum each neighbor's INT8 dot
-product in SIMD.
+neighborhoods with whole-block kernels at every width, with either provider; with
+more than one landmark, 3 and 5 to 9-bit neighborhoods sum each neighbor's INT8
+dot product in SIMD.
 
 To choose these per model in code, call `setQueryOptions` before the model
 projects its first query, for example right after opening an index. Later calls
