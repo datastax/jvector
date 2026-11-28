@@ -22,15 +22,16 @@ import jdk.incubator.vector.VectorOperators;
 
 /** Array SIMD for NVQ's inherited Java arithmetic, without creating native views. */
 final class NativeNVQArithmetic {
+    // A constant, not a local, so every compile (OSR included) sees the exact vector class.
+    private static final Class<?> PREFERRED_CLASS = FloatVector.SPECIES_PREFERRED.vectorType();
+
     static float min(VectorFloat<?> vector) {
         float[] data = ((MemorySegmentVectorFloat)vector).array();
-        var species = FloatVector.SPECIES_PREFERRED;
-        var type = species.vectorType();
-        var accum = (FloatVector)type.cast(FloatVector.broadcast(species, Float.MAX_VALUE));
-        int bound = species.loopBound(data.length), i = 0;
-        for (; i < bound; i += species.length()) {
-            var a = (FloatVector)type.cast(FloatVector.fromArray(species, data, i));
-            accum = (FloatVector)type.cast(accum.min(a));
+        var accum = (FloatVector)PREFERRED_CLASS.cast(FloatVector.broadcast(FloatVector.SPECIES_PREFERRED, Float.MAX_VALUE));
+        int bound = FloatVector.SPECIES_PREFERRED.loopBound(data.length), i = 0;
+        for (; i < bound; i += FloatVector.SPECIES_PREFERRED.length()) {
+            var a = (FloatVector)PREFERRED_CLASS.cast(FloatVector.fromArray(FloatVector.SPECIES_PREFERRED, data, i));
+            accum = (FloatVector)PREFERRED_CLASS.cast(accum.lanewise(VectorOperators.MIN, a));
         }
         float result = accum.reduceLanes(VectorOperators.MIN);
         for (; i < data.length; i++) result = Math.min(result, data[i]);
@@ -39,13 +40,11 @@ final class NativeNVQArithmetic {
 
     static void scale(VectorFloat<?> vector, float multiplier) {
         float[] data = ((MemorySegmentVectorFloat)vector).array();
-        var species = FloatVector.SPECIES_PREFERRED;
-        var type = species.vectorType();
-        var factor = (FloatVector)type.cast(FloatVector.broadcast(species, multiplier));
-        int bound = species.loopBound(data.length), i = 0;
-        for (; i < bound; i += species.length()) {
-            var a = (FloatVector)type.cast(FloatVector.fromArray(species, data, i));
-            ((FloatVector)type.cast(a.mul(factor))).intoArray(data, i);
+        var factor = (FloatVector)PREFERRED_CLASS.cast(FloatVector.broadcast(FloatVector.SPECIES_PREFERRED, multiplier));
+        int bound = FloatVector.SPECIES_PREFERRED.loopBound(data.length), i = 0;
+        for (; i < bound; i += FloatVector.SPECIES_PREFERRED.length()) {
+            var a = (FloatVector)PREFERRED_CLASS.cast(FloatVector.fromArray(FloatVector.SPECIES_PREFERRED, data, i));
+            ((FloatVector)PREFERRED_CLASS.cast(a.lanewise(VectorOperators.MUL, factor))).intoArray(data, i);
         }
         for (; i < data.length; i++) data[i] *= multiplier;
     }
@@ -54,13 +53,11 @@ final class NativeNVQArithmetic {
         float[] lhs = ((MemorySegmentVectorFloat)a).array(), rhs = ((MemorySegmentVectorFloat)b).array();
         var result = new MemorySegmentVectorFloat(length);
         float[] data = result.array();
-        var species = FloatVector.SPECIES_PREFERRED;
-        var type = species.vectorType();
-        int bound = species.loopBound(length), i = 0;
-        for (; i < bound; i += species.length()) {
-            var x = (FloatVector)type.cast(FloatVector.fromArray(species, lhs, aOffset+i));
-            var y = (FloatVector)type.cast(FloatVector.fromArray(species, rhs, bOffset+i));
-            ((FloatVector)type.cast(x.sub(y))).intoArray(data, i);
+        int bound = FloatVector.SPECIES_PREFERRED.loopBound(length), i = 0;
+        for (; i < bound; i += FloatVector.SPECIES_PREFERRED.length()) {
+            var x = (FloatVector)PREFERRED_CLASS.cast(FloatVector.fromArray(FloatVector.SPECIES_PREFERRED, lhs, aOffset+i));
+            var y = (FloatVector)PREFERRED_CLASS.cast(FloatVector.fromArray(FloatVector.SPECIES_PREFERRED, rhs, bOffset+i));
+            ((FloatVector)PREFERRED_CLASS.cast(x.lanewise(VectorOperators.SUB, y))).intoArray(data, i);
         }
         for (; i < length; i++) data[i] = lhs[aOffset+i] - rhs[bOffset+i];
         return result;

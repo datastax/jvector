@@ -2549,6 +2549,71 @@ public class NativeSimdOps {
         }
     }
 
+    private static class calculate_partial_sums_transposed_f32 {
+        public static final FunctionDescriptor DESC = FunctionDescriptor.ofVoid(
+            NativeSimdOps.C_POINTER,
+            NativeSimdOps.C_POINTER,
+            NativeSimdOps.C_POINTER,
+            NativeSimdOps.C_INT,
+            NativeSimdOps.C_INT,
+            NativeSimdOps.C_POINTER,
+            NativeSimdOps.C_POINTER,
+            NativeSimdOps.C_INT,
+            NativeSimdOps.C_POINTER
+        );
+
+        public static final MemorySegment ADDR = NativeSimdOps.findOrThrow("calculate_partial_sums_transposed_f32");
+
+        public static final MethodHandle HANDLE = Linker.nativeLinker().downcallHandle(ADDR, DESC, Linker.Option.critical(true));
+    }
+
+    /**
+     * Function descriptor for:
+     * {@snippet lang=c :
+     * void calculate_partial_sums_transposed_f32(const float *transposed, const int *subspaceSizes, const int *subspaceOffsets, int subspaceCount, int clusterCount, const float *query, const float *center, int dot, float *partialSums)
+     * }
+     */
+    public static FunctionDescriptor calculate_partial_sums_transposed_f32$descriptor() {
+        return calculate_partial_sums_transposed_f32.DESC;
+    }
+
+    /**
+     * Downcall method handle for:
+     * {@snippet lang=c :
+     * void calculate_partial_sums_transposed_f32(const float *transposed, const int *subspaceSizes, const int *subspaceOffsets, int subspaceCount, int clusterCount, const float *query, const float *center, int dot, float *partialSums)
+     * }
+     */
+    public static MethodHandle calculate_partial_sums_transposed_f32$handle() {
+        return calculate_partial_sums_transposed_f32.HANDLE;
+    }
+
+    /**
+     * Address for:
+     * {@snippet lang=c :
+     * void calculate_partial_sums_transposed_f32(const float *transposed, const int *subspaceSizes, const int *subspaceOffsets, int subspaceCount, int clusterCount, const float *query, const float *center, int dot, float *partialSums)
+     * }
+     */
+    public static MemorySegment calculate_partial_sums_transposed_f32$address() {
+        return calculate_partial_sums_transposed_f32.ADDR;
+    }
+
+    /**
+     * {@snippet lang=c :
+     * void calculate_partial_sums_transposed_f32(const float *transposed, const int *subspaceSizes, const int *subspaceOffsets, int subspaceCount, int clusterCount, const float *query, const float *center, int dot, float *partialSums)
+     * }
+     */
+    public static void calculate_partial_sums_transposed_f32(MemorySegment transposed, MemorySegment subspaceSizes, MemorySegment subspaceOffsets, int subspaceCount, int clusterCount, MemorySegment query, MemorySegment center, int dot, MemorySegment partialSums) {
+        var mh$ = calculate_partial_sums_transposed_f32.HANDLE;
+        try {
+            if (TRACE_DOWNCALLS) {
+                traceDowncall("calculate_partial_sums_transposed_f32", transposed, subspaceSizes, subspaceOffsets, subspaceCount, clusterCount, query, center, dot, partialSums);
+            }
+            mh$.invokeExact(transposed, subspaceSizes, subspaceOffsets, subspaceCount, clusterCount, query, center, dot, partialSums);
+        } catch (Throwable ex$) {
+           throw new AssertionError("should not reach here", ex$);
+        }
+    }
+
     private static class calculate_partial_sums_euclidean_f32 {
         public static final FunctionDescriptor DESC = FunctionDescriptor.ofVoid(
             NativeSimdOps.C_POINTER,

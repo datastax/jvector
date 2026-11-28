@@ -2180,4 +2180,87 @@ HWY_FLATTEN float cosine_i8(const int8_t *HWY_RESTRICT a, size_t aoffset,
     return (float)(dotResult / sqrt((double)normAResult * (double)normBResult));
 }
 
+// Query table for one PQ subspace from its transposed codebook: transposed[t * clusterCount + c] is dimension t of
+// centroid c, so each vector holds one dimension of consecutive centroids and every centroid's score builds up lane
+// by lane with multiply-adds against the broadcast query value, with no horizontal reductions. Four vectors of
+// centroids are in flight; the last centroids use a partial vector. The query is centered here, query[t] - center[t].
+// Writes clusterCount floats to out.
+template <DistanceType DT>
+HWY_INLINE void calculate_partial_sums_transposed(const float *HWY_RESTRICT transposed,
+                                                  size_t size,
+                                                  int clusterCount,
+                                                  const float *HWY_RESTRICT query,
+                                                  const float *HWY_RESTRICT center,
+                                                  float *HWY_RESTRICT out)
+{
+    const hn::ScalableTag<float> df;
+    const size_t N = hn::Lanes(df);
+    const size_t k = static_cast<size_t>(clusterCount);
+    size_t c = 0;
+    for (; c + 4 * N <= k; c += 4 * N) {
+        auto a0 = hn::Zero(df), a1 = hn::Zero(df), a2 = hn::Zero(df), a3 = hn::Zero(df);
+        const float *row = transposed + c;
+        for (size_t t = 0; t < size; ++t, row += k) {
+            const auto x = hn::Set(df, query[t] - center[t]);
+            if constexpr (DT == DistanceType::DotProduct) {
+                a0 = hn::MulAdd(hn::LoadU(df, row), x, a0);
+                a1 = hn::MulAdd(hn::LoadU(df, row + N), x, a1);
+                a2 = hn::MulAdd(hn::LoadU(df, row + 2 * N), x, a2);
+                a3 = hn::MulAdd(hn::LoadU(df, row + 3 * N), x, a3);
+            } else {
+                const auto d0 = hn::Sub(hn::LoadU(df, row), x);
+                const auto d1 = hn::Sub(hn::LoadU(df, row + N), x);
+                const auto d2 = hn::Sub(hn::LoadU(df, row + 2 * N), x);
+                const auto d3 = hn::Sub(hn::LoadU(df, row + 3 * N), x);
+                a0 = hn::MulAdd(d0, d0, a0);
+                a1 = hn::MulAdd(d1, d1, a1);
+                a2 = hn::MulAdd(d2, d2, a2);
+                a3 = hn::MulAdd(d3, d3, a3);
+            }
+        }
+        hn::StoreU(a0, df, out + c);
+        hn::StoreU(a1, df, out + c + N);
+        hn::StoreU(a2, df, out + c + 2 * N);
+        hn::StoreU(a3, df, out + c + 3 * N);
+    }
+    for (; c < k; c += N) {
+        const size_t n = std::min(N, k - c);
+        auto a = hn::Zero(df);
+        const float *row = transposed + c;
+        for (size_t t = 0; t < size; ++t, row += k) {
+            const auto x = hn::Set(df, query[t] - center[t]);
+            if constexpr (DT == DistanceType::DotProduct) {
+                a = hn::MulAdd(hn::LoadN(df, row, n), x, a);
+            } else {
+                const auto diff = hn::Sub(hn::LoadN(df, row, n), x);
+                a = hn::MulAdd(diff, diff, a);
+            }
+        }
+        hn::StoreN(a, df, out + c, n);
+    }
+}
+
+HWY_FLATTEN void calculate_partial_sums_transposed_f32(const float *transposed,
+                                                       const int *subspaceSizes,
+                                                       const int *subspaceOffsets,
+                                                       int subspaceCount,
+                                                       int clusterCount,
+                                                       const float *query,
+                                                       const float *center,
+                                                       int dot,
+                                                       float *partialSums)
+{
+    // The whole table in one call: subspace m starts at clusterCount * subspaceOffsets[m] in transposed.
+    for (int m = 0; m < subspaceCount; ++m) {
+        const size_t size = static_cast<size_t>(subspaceSizes[m]);
+        const size_t offset = static_cast<size_t>(subspaceOffsets[m]);
+        const float *t = transposed + static_cast<size_t>(clusterCount) * offset;
+        float *out = partialSums + static_cast<size_t>(m) * static_cast<size_t>(clusterCount);
+        if (dot)
+            calculate_partial_sums_transposed<DistanceType::DotProduct>(t, size, clusterCount, query + offset, center + offset, out);
+        else
+            calculate_partial_sums_transposed<DistanceType::Euclidean>(t, size, clusterCount, query + offset, center + offset, out);
+    }
+}
+
 }  // namespace JV_ISA

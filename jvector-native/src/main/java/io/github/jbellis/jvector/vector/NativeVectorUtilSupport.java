@@ -17,6 +17,7 @@
 package io.github.jbellis.jvector.vector;
 
 import java.lang.foreign.MemorySegment;
+import java.lang.foreign.ValueLayout;
 import java.nio.ByteOrder;
 import java.util.Objects;
 
@@ -27,7 +28,9 @@ import io.github.jbellis.jvector.vector.types.FloatArray;
 import io.github.jbellis.jvector.vector.types.VectorFloat;
 import jdk.incubator.vector.ByteVector;
 import jdk.incubator.vector.FloatVector;
+import jdk.incubator.vector.IntVector;
 import jdk.incubator.vector.VectorMask;
+import jdk.incubator.vector.VectorOperators;
 import jdk.incubator.vector.VectorSpecies;
 
 /**
@@ -489,27 +492,6 @@ class NativeVectorUtilSupport extends PanamaVectorUtilSupport
         return super.hammingDistance(a, b);
     }
 
-    /**
-     * Pads odd and mixed widths to 2, 4 or a multiple of 8 floats, so {@code pq_code_pair_f32} sees one even width.
-     * Equal even widths and 1-float layouts are left as they are. Multiples of 8 keep padding small; the kernel
-     * scores them in 8-float registers.
-     */
-    @Override
-    public int pqCodePairStride(int minWidth, int maxWidth) {
-        if (maxWidth <= 1) return 0;
-        if (minWidth == maxWidth && (maxWidth & 1) == 0) return maxWidth;
-        return maxWidth <= 2 ? 2 : maxWidth <= 4 ? 4 : (maxWidth + 7) & ~7;
-    }
-
-    /**
-     * A table costs one lookup per subspace, while scoring from the codebooks grows with the width: the table wins
-     * from 16 floats (measured with AVX-512 and AVX2).
-     */
-    @Override
-    public boolean pqCodePairUsesTable(int minWidth) {
-        return minWidth >= 16;
-    }
-
     @Override
     public float pqCodePairSimilarity(boolean dot, VectorFloat<?> codebooks, int clusterCount,
                                       int[] subspaceOffsets, int[] subspaceWidths, int minWidth, int maxWidth, int[] dimBase,
@@ -530,6 +512,49 @@ class NativeVectorUtilSupport extends PanamaVectorUtilSupport
                 ((MemorySegmentByteSequence) code1).get(), offset1,
                 ((MemorySegmentByteSequence) code2).get(), offset2,
                 dot ? 1 : 0);
+    }
+
+    /** 1-float subspaces: the Panama gather, loading this provider's memory-segment codes in its own body. */
+    @Override
+    protected float pairOneFloat(boolean dot, float[] cb, int[] dimBase,
+                                 ByteSequence<?> code1, int offset1, ByteSequence<?> code2, int offset2) {
+        if (!(code1 instanceof MemorySegmentByteSequence) || !(code2 instanceof MemorySegmentByteSequence)) {
+            return super.pairOneFloat(dot, cb, dimBase, code1, offset1, code2, offset2);
+        }
+        return pairGatherOneFloat(dot, cb, dimBase, PAIR_INDICES.get(), ((MemorySegmentByteSequence) code1).get(), offset1,
+                                  ((MemorySegmentByteSequence) code2).get(), offset2);
+    }
+
+    /** As Panama's 1-float gather, with the codes loaded from memory segments. */
+    private static float pairGatherOneFloat(boolean dot, float[] cb, int[] dimBase, int[] indices,
+                                            MemorySegment c1, int o1, MemorySegment c2, int o2) {
+        int dim = dimBase.length;
+        FloatVector acc = FloatVector.zero(PAIR_FLOATS), d;
+        int j = 0;
+        for (; j + PAIR_LANES <= dim; j += PAIR_LANES) {
+            IntVector lanesBase = IntVector.fromArray(PAIR_INTS, dimBase, j);
+            ((IntVector) ByteVector.fromMemorySegment(PAIR_BYTES, c1, o1 + j, ByteOrder.LITTLE_ENDIAN)
+                    .convertShape(VectorOperators.B2I, PAIR_INTS, 0))
+                    .lanewise(VectorOperators.AND, 0xff).lanewise(VectorOperators.ADD, lanesBase).intoArray(indices, 0);
+            ((IntVector) ByteVector.fromMemorySegment(PAIR_BYTES, c2, o2 + j, ByteOrder.LITTLE_ENDIAN)
+                    .convertShape(VectorOperators.B2I, PAIR_INTS, 0))
+                    .lanewise(VectorOperators.AND, 0xff).lanewise(VectorOperators.ADD, lanesBase).intoArray(indices, PAIR_LANES);
+            FloatVector x = FloatVector.fromArray(PAIR_FLOATS, cb, 0, indices, 0);
+            FloatVector y = FloatVector.fromArray(PAIR_FLOATS, cb, 0, indices, PAIR_LANES);
+            if (dot) {
+                acc = x.lanewise(VectorOperators.FMA, y, acc);
+            } else {
+                d = x.lanewise(VectorOperators.SUB, y);
+                acc = d.lanewise(VectorOperators.FMA, d, acc);
+            }
+        }
+        float tail = 0;
+        for (; j < dim; j++) {
+            float x = cb[dimBase[j] + Byte.toUnsignedInt(c1.get(ValueLayout.JAVA_BYTE, o1 + j))];
+            float y = cb[dimBase[j] + Byte.toUnsignedInt(c2.get(ValueLayout.JAVA_BYTE, o2 + j))];
+            tail += dot ? x * y : (x - y) * (x - y);
+        }
+        return acc.reduceLanes(VectorOperators.ADD) + tail;
     }
 
     @Override
@@ -611,7 +636,7 @@ class NativeVectorUtilSupport extends PanamaVectorUtilSupport
             throw new IndexOutOfBoundsException("centroids do not contain centroidCount vectors");
         }
         // Uncached heap segments, as for the f32 distances, so encoding retains no views. The JIT removes these
-        // short-lived views (measured: no allocation per encode).
+        // short-lived views.
         return NativeSimdOps.closest_centroid_f32(
                 MemorySegment.ofArray(((MemorySegmentVectorFloat) point).array()), pointOffset,
                 MemorySegment.ofArray(((MemorySegmentVectorFloat) centroids).array()), centroidCount, dimension);
@@ -646,6 +671,41 @@ class NativeVectorUtilSupport extends PanamaVectorUtilSupport
         }
         NativeSimdOps.subtract_add_in_place_f32(oldSegment, newSegment, pointSegment, point.length());
         return true;
+    }
+
+    @Override
+    public boolean supportsTransposedPartialSums() {
+        return true;
+    }
+
+    /** The whole table in one downcall, with the same transposed-codebook kernel as Panama's, written in C. */
+    @Override
+    public void calculatePartialSumsTransposed(VectorFloat<?> transposed, int[] subspaceSizes, int[] subspaceOffsets,
+                                               int clusterCount, VectorFloat<?> query, VectorFloat<?> center,
+                                               VectorSimilarityFunction vsf, VectorFloat<?> partialSums) {
+        int dot;
+        switch (vsf) {
+            case DOT_PRODUCT: dot = 1; break;
+            case EUCLIDEAN: dot = 0; break;
+            default: throw new UnsupportedOperationException("Unsupported similarity function " + vsf);
+        }
+        int subspaces = subspaceSizes.length;
+        long dimension = 0; // long, so a huge size plus offset cannot wrap past the checks below
+        if (subspaceOffsets.length != subspaces) throw new IllegalArgumentException("subspace sizes and offsets differ in length");
+        for (int m = 0; m < subspaces; m++) {
+            if (subspaceSizes[m] < 0 || subspaceOffsets[m] < 0) throw new IllegalArgumentException("negative subspace size or offset");
+            dimension = Math.max(dimension, (long) subspaceSizes[m] + subspaceOffsets[m]);
+        }
+        Objects.checkFromIndexSize(0, dimension, query.length());
+        Objects.checkFromIndexSize(0, dimension, center.length());
+        Objects.checkFromIndexSize(0, (long) clusterCount * dimension, transposed.length());
+        Objects.checkFromIndexSize(0, (long) clusterCount * subspaces, partialSums.length());
+        // A critical downcall, like every binding here, so a GC safepoint waits until it returns. This one runs
+        // clusterCount * dimension multiply-adds per query, still far shorter than a GC pause.
+        NativeSimdOps.calculate_partial_sums_transposed_f32(((MemorySegmentVectorFloat) transposed).get(),
+                MemorySegment.ofArray(subspaceSizes), MemorySegment.ofArray(subspaceOffsets), subspaces, clusterCount,
+                ((MemorySegmentVectorFloat) query).get(), ((MemorySegmentVectorFloat) center).get(), dot,
+                ((MemorySegmentVectorFloat) partialSums).get());
     }
 
     @Override

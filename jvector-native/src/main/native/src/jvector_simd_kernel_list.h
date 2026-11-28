@@ -84,6 +84,8 @@
     KERNEL_ENTRY(void, calculate_partial_sums_dot_f32, (const float *codebook, int codebookIndex, size_t size, int clusterCount, const float *query, int queryOffset, float *partialSums), (codebook, codebookIndex, size, clusterCount, query, queryOffset, partialSums)) \
     KERNEL_ENTRY(void, calculate_partial_sums_euclidean_f32, (const float *codebook, int codebookIndex, size_t size, int clusterCount, const float *query, int queryOffset, float *partialSums), (codebook, codebookIndex, size, clusterCount, query, queryOffset, partialSums)) \
     KERNEL_ENTRY(void, calculate_partial_sums_self_magnitude_f32, (const float *codebook, int codebookIndex, size_t size, int clusterCount, float *partialSums), (codebook, codebookIndex, size, clusterCount, partialSums)) \
+    /* The whole PQ query table from transposed codebooks (dot != 0: dot product, else squared distance). */ \
+    KERNEL_ENTRY(void, calculate_partial_sums_transposed_f32, (const float *transposed, const int *subspaceSizes, const int *subspaceOffsets, int subspaceCount, int clusterCount, const float *query, const float *center, int dot, float *partialSums), (transposed, subspaceSizes, subspaceOffsets, subspaceCount, clusterCount, query, center, dot, partialSums)) \
     /* ASH preparation and exact packed construction scoring; synchronous leaf calls. */ \
     KERNEL_ENTRY(void, ash_project_f32, (const float *matrix, const float *query, int rows, int cols, float *out), (matrix, query, rows, cols, out)) \
     KERNEL_ENTRY(void, ash_project_batch_f32, (const float *matrix, const float *inputs, int rows, int cols, int count, float *out), (matrix, inputs, rows, cols, count, out)) \
