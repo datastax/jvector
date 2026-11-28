@@ -1,0 +1,39 @@
+# cohere-english-v3-1M (1024 dimensions): in-memory graph built as vectors arrive, as an index under
+# construction in a database is. The PQ model (D/8 subspaces) is trained first; each arriving vector is
+# encoded into mutable PQ codes and added to the graph. The second case also refines the model once
+# after 128,000 vectors, as a compaction that inherits a codebook does. Searches use the index's codes
+# and rescore with full-precision vectors. streaming-fp streams the same graph with exact scores.
+yamlSchemaVersion: 3
+onDiskIndexVersion: 7
+
+dataset: cohere-english-v3-1M
+
+construction:
+  type: inMemory
+  streaming: Yes
+  refineAfter: [0, 128000]
+  outDegree: [32]
+  efConstruction: [100]
+  neighborOverflow: [1.2f]
+  addHierarchy: [Yes]
+  refineFinalGraph: [Yes]
+  compression:
+    - type: PQ
+      parameters:
+        mFactor: 8
+        k: 256
+        anisotropicThreshold: -1.0
+  reranking:
+    type: FP32
+  useSavedIndexIfExists: No
+
+search:
+  topKOverquery:
+    10: [1.0, 2.0, 4.0]
+  useSearchPruning: [No]
+  compression:
+    - type: PQ
+      parameters:
+        mFactor: 8
+        k: 256
+        anisotropicThreshold: -1.0

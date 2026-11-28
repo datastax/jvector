@@ -44,8 +44,9 @@ Each `compression` list entry has a `type` and its own settings.
 | --- | --- | --- |
 | `type` | `inMemory`, `onDisk` | `inMemory` keeps the graph in memory for search. `onDisk` serializes the completed graph and reopens it for search. |
 | `streaming` | `Yes`, `No` | Optional scalar. `Yes` builds the index as a live index is built, inserting vectors as they arrive; see [Streaming builds](#streaming-builds). Defaults to `No`. |
-| `coldStartSize` | Integers ≥ 0 | Required with `streaming: Yes`, which it sweeps. `0` starts the index with the construction compressor's model. A positive count starts it cold; see [Streaming builds](#streaming-builds). |
-| `trainWhileStreaming` | `Yes`, `No` | Optional with `streaming: Yes`, swept. `Yes` lets a cold index train its first model, with the construction compressor's optimizer, once its sample holds 20 × the dimension vectors. `No` fixes a random projection after `coldStartSize` vectors instead. Defaults to `No`. |
+| `coldStartSize` | Integers ≥ 0 | Required with `streaming: Yes` and ASH construction, which it sweeps. `0` starts the index with the construction compressor's model. A positive count starts it cold; see [Streaming builds](#streaming-builds). PQ and `None` streaming builds omit it or use `[0]`. |
+| `trainWhileStreaming` | `Yes`, `No` | Optional with `streaming: Yes` and ASH construction, swept. `Yes` lets a cold index train its first model, with the construction compressor's optimizer, once its sample holds 20 × the dimension vectors. `No` fixes a random projection after `coldStartSize` vectors instead. Defaults to `No`. |
+| `refineAfter` | Integers ≥ 0 | Optional with `streaming: Yes` and PQ construction, swept. After this many vectors the index refines its PQ model once; see [Streaming builds](#streaming-builds). `0` never refines; otherwise at least the PQ `k`. |
 | `writerMode` | `sequential`, `parallel` | Selects the writer after graph cleanup for `onDisk`. Defaults to `parallel`. |
 | `pageAlignment` | Power of two from 512 to 1048576 | Optional, `onDisk` only. Places base-layer node records so none crosses a page boundary of this size, typically `4096`; see [Page-aligned records](larger-than-memory-indexes.md#page-aligned-records). Omitted, records are packed back to back. Part of the saved-index identity. |
 | `useSavedIndexIfExists` | `Yes`, `No` | Controls reuse of a compatible index, `inMemory` or `onDisk`, batch or streaming. `Yes` saves each built index, with the traversal codes it stores, in the working directory's `index_cache` and reuses it on later runs; an `inMemory` index is reloaded into memory. A cache hit skips fresh construction and serialization measurements. Saved indexes are never deleted automatically, so starting-point configurations use `No`; recipes that query an index from a later JVM, such as the ASH/PQ comparison, use `Yes`. |
@@ -66,30 +67,45 @@ Each `compression` list entry has a `type` and its own settings.
 
 A streaming case adds the base vectors one at a time, in file order, from one
 thread per construction worker, to an index that keeps no copy of the vectors,
-as a database's live index would. The case needs a single ASH `compression`
-entry. Searches use the codes the index built, whatever `search.compression`
-says, with the search case's query settings.
+as a database's live index would. The case needs a single `compression`
+entry of type `ASH`, `PQ` or `None`. Each defines how the index starts and what
+an insert does. Searches of an `inMemory` ASH or PQ index use the codes it
+built, whatever `search.compression` says, with the search case's query
+settings; a `None` index is searched with `search.compression`.
 
-- **Warm start.** With `coldStartSize: [0]` the index starts with the
+- **ASH warm start.** With `coldStartSize: [0]` the index starts with the
   construction compressor's model and encodes each vector as it arrives. Train
   that model on a window with the ASH `trainingStart` and `trainingCount`
   parameters to stand in for a model inherited from an earlier index.
-- **Cold start.** With a positive `coldStartSize` the index first builds and
-  searches its graph with exact scores, as an uncompressed index does. When its
-  first model is ready, trained with `trainWhileStreaming: [Yes]` or a random
-  projection without it, the index encodes the vectors it holds, rescores the
-  graph's edges with ASH scores and continues with ASH. While the first model
-  trains, inserts run on at most half the logical CPUs, so the training gets
-  the CPU it needs.
-- **The flush.** At the end, the build readies the index as a flush does: every
-  vector ends on the newest model.
+- **ASH cold start.** With a positive `coldStartSize` the index has no graph at
+  first: it records the vectors that arrive and searches them with exact
+  scores. When its first model is ready, trained with
+  `trainWhileStreaming: [Yes]` or a random projection without it, the index
+  encodes the recorded vectors and inserts them into a new graph with ASH
+  scores while vectors keep arriving, then continues with ASH. While the first
+  model trains, inserts run on at most half the logical CPUs, so the training
+  gets the CPU it needs.
+- **PQ.** The construction compressor's PQ model is trained before the first
+  vector arrives. Each vector is then encoded into mutable PQ codes and added
+  to the graph, which scores with those codes, as an index under construction
+  in a database does. PQ has no cold start. With `refineAfter: [N]`, once N
+  vectors have arrived, inserts wait while the index fine-tunes the model on
+  those vectors, re-encodes the codes so far and rescores the graph's edges
+  with the new model, as a compaction that inherits a codebook does.
+- **None.** Each vector is added to the graph with exact scores.
+- **The flush.** At the end, the build readies the index as a flush does: an
+  ASH index ends every vector on its newest model.
 
 `inMemory` streaming indexes rerank from the source vectors, so `reranking` is
 `FP32` or `None`. `onDisk` streaming indexes are then written and reopened for
-search, with `fusedGraph: [No]`: the index's codes are stored beside it, and `NVQ` reranking is centered with the mean the
-index kept as vectors arrived, so writing reads each vector once. The console
-reports the streaming timeline, the insertion rate, how long fixing the first
-model held inserts and the memory the index holds. Build time covers insertion,
+search, with `fusedGraph: [No]`. An ASH or PQ index's codes are stored beside
+it and searched after reloading; a `None` index is searched with
+`search.compression`, as other `onDisk` builds are. `NVQ` reranking is centered
+with the mean the index kept as vectors arrived, so writing reads each vector
+once. The console
+reports the insertion rate and the memory the index holds; for ASH, also the
+streaming timeline and how long fixing the first model held inserts; for PQ,
+how long a refinement held inserts. Build time covers insertion,
 the flush preparation and graph cleanup, plus writing for `onDisk`. With
 `useSavedIndexIfExists: Yes`, a saved streaming index is reused, with its
 codes, only by a case with the same streaming settings and insert threads, so

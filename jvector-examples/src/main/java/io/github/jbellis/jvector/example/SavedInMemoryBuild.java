@@ -93,7 +93,7 @@ final class SavedInMemoryBuild implements IndexBuildStrategy {
             }
             // The codes are in place before the graph is committed, so a committed graph never sits beside codes
             // from an earlier build.
-            if (codes != null && StoredCodes.supports(codes)) {
+            if (codes != null && StoredCodes.supports(codes, codesBuiltByIndex)) {
                 StoredCodes.write(codes, handle.writePath());
                 StoredCodes.move(handle.writePath(), handle.finalPath());
             } else {

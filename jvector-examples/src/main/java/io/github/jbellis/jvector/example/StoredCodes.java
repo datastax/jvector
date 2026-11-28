@@ -21,6 +21,7 @@ import io.github.jbellis.jvector.disk.ReaderSupplierFactory;
 import io.github.jbellis.jvector.graph.disk.OnDiskGraphIndex;
 import io.github.jbellis.jvector.quantization.ASHVectors;
 import io.github.jbellis.jvector.quantization.CompressedVectors;
+import io.github.jbellis.jvector.quantization.PQVectors;
 
 import java.io.IOException;
 import java.nio.file.Files;
@@ -34,7 +35,10 @@ import java.nio.file.StandardCopyOption;
  */
 final class StoredCodes {
     private static final int MAGIC = 0x4A56_4344; // "JVCD"
+    /** ASH codes, the only codes a batch build stores. */
     private static final int FORMAT = 1;
+    /** PQ codes, stored only by a streaming index, which searches with the codes it built. */
+    private static final int PQ_FORMAT = 2;
 
     private StoredCodes() {}
 
@@ -71,9 +75,12 @@ final class StoredCodes {
         return index.resolveSibling(index.getFileName() + ".codes");
     }
 
-    /** Whether codes of this type can be stored; only ASH codes are for now. */
-    static boolean supports(CompressedVectors codes) {
-        return codes instanceof ASHVectors;
+    /**
+     * Whether codes of this type can be stored: ASH codes, and also PQ codes when the index built them itself, as a
+     * streaming index does.
+     */
+    static boolean supports(CompressedVectors codes, boolean builtByIndex) {
+        return codes instanceof ASHVectors || builtByIndex && codes instanceof PQVectors;
     }
 
     /** Writes {@code codes} beside {@code index} and returns the seconds it took. */
@@ -82,7 +89,7 @@ final class StoredCodes {
         Path path = pathFor(index);
         try (var out = new BufferedRandomAccessWriter(path)) {
             out.writeInt(MAGIC);
-            out.writeInt(FORMAT);
+            out.writeInt(codes instanceof PQVectors ? PQ_FORMAT : FORMAT);
             codes.write(out, OnDiskGraphIndex.CURRENT_VERSION);
         }
         double seconds = (System.nanoTime() - start) / 1e9;
@@ -113,11 +120,12 @@ final class StoredCodes {
         if (!Files.exists(path)) return null;
         long start = System.nanoTime();
         try (var supplier = ReaderSupplierFactory.open(path); var in = supplier.get()) {
-            if (in.readInt() != MAGIC || in.readInt() != FORMAT) {
+            int format = in.readInt() == MAGIC ? in.readInt() : -1;
+            if (format != FORMAT && format != PQ_FORMAT) {
                 System.out.printf("Ignoring %s: not a codes file this version reads%n", path.getFileName());
                 return null;
             }
-            var codes = ASHVectors.load(in);
+            CompressedVectors codes = format == FORMAT ? ASHVectors.load(in) : PQVectors.load(in);
             if (codes.count() != nodes) {
                 System.out.printf("Ignoring %s: %d codes for an index of %d nodes%n", path.getFileName(), codes.count(), nodes);
                 return null;
