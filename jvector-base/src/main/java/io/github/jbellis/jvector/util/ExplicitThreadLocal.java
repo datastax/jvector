@@ -55,8 +55,8 @@ public abstract class ExplicitThreadLocal<U> implements AutoCloseable {
     /**
      * Invoke the close() method on all AutoCloseable values in the map, and then clear the map.
      * <p>
-     * If closing a value fails, close the remaining values and rethrow the first failure
-     * with subsequent failures suppressed.
+     * If closing any value throws an {@link Error}, rethrow the first Error after cleanup.
+     * Otherwise, rethrow the first Exception. Attach other failures as suppressed exceptions.
      * <p>
      * Not threadsafe.
      */
@@ -69,6 +69,9 @@ public abstract class ExplicitThreadLocal<U> implements AutoCloseable {
                     ((AutoCloseable) value).close();
                 } catch (Exception | Error e) {
                     if (failure == null) {
+                        failure = e;
+                    } else if (e instanceof Error && !(failure instanceof Error)) {
+                        e.addSuppressed(failure);
                         failure = e;
                     } else if (failure != e) {
                         failure.addSuppressed(e);

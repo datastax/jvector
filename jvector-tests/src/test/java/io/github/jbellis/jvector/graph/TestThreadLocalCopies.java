@@ -17,6 +17,7 @@
 package io.github.jbellis.jvector.graph;
 
 import io.github.jbellis.jvector.graph.similarity.BuildScoreProvider;
+import io.github.jbellis.jvector.util.ExplicitThreadLocal;
 import io.github.jbellis.jvector.vector.ByteVectorSimilarityFunction;
 import io.github.jbellis.jvector.vector.VectorSimilarityFunction;
 import io.github.jbellis.jvector.vector.VectorizationProvider;
@@ -25,13 +26,17 @@ import io.github.jbellis.jvector.vector.types.VectorFloat;
 import io.github.jbellis.jvector.vector.types.VectorTypeSupport;
 import org.junit.Test;
 
+import java.io.IOException;
 import java.util.ArrayList;
+import java.util.List;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ForkJoinPool;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.function.Supplier;
 
+import static org.junit.Assert.assertArrayEquals;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertNotSame;
 import static org.junit.Assert.assertSame;
@@ -109,21 +114,25 @@ public class TestThreadLocalCopies {
         assertEquals(2, closed.get());
     }
 
-    @Test
-    public void throwingCopiesAreAllClosedAndDropped() throws Exception {
-        var closed = new AtomicInteger();
-        var source = new CloseTrackingRavv(closed) {
+    private static CloseTrackingRavv copiesThatFailOnClose(AtomicInteger closed, Supplier<RuntimeException> failure) {
+        return new CloseTrackingRavv(closed) {
             @Override
             public RandomAccessVectorValues copy() {
                 return new CloseTrackingRavv(closed, false) {
                     @Override
                     public void close() {
                         super.close();
-                        throw new IllegalStateException("close failed");
+                        throw failure.get();
                     }
                 };
             }
         };
+    }
+
+    @Test
+    public void throwingCopiesAreAllClosedAndDropped() throws Exception {
+        var closed = new AtomicInteger();
+        var source = copiesThatFailOnClose(closed, () -> new IllegalStateException("close failed"));
         var supplier = source.threadLocalSupplier();
         var first = supplier.get();
         var worker = new Thread(supplier::get);
@@ -135,6 +144,46 @@ public class TestThreadLocalCopies {
         assertEquals(1, failure.getSuppressed().length);
         assertTrue(failure.getSuppressed()[0] instanceof IllegalStateException);
         assertNotSame(first, supplier.get());
+    }
+
+    @Test
+    public void laterErrorTakesPrecedenceDuringClose() throws Exception {
+        var closed = new AtomicInteger();
+        var exception = new IOException("first close");
+        var error = new AssertionError("second close");
+        var copies = ExplicitThreadLocal.<AutoCloseable>withInitial(() -> () -> {
+            if (closed.getAndIncrement() == 0) {
+                throw exception;
+            }
+            throw error;
+        });
+        copies.get();
+        var worker = new Thread(copies::get);
+        worker.start();
+        worker.join();
+
+        assertSame(error, assertThrows(AssertionError.class, copies::close));
+        assertArrayEquals(new Throwable[] {exception}, error.getSuppressed());
+        assertEquals(2, closed.get());
+    }
+
+    @Test
+    public void successfulBuildPropagatesUncheckedCloseFailure() throws Exception {
+        var closed = new AtomicInteger();
+        var failure = new IllegalStateException("close failed");
+        var source = copiesThatFailOnClose(closed, () -> failure);
+        var scores = BuildScoreProvider.randomAccessScoreProvider(
+                new ListRandomAccessVectorValues(List.of(source.getVector(0)), 1),
+                VectorSimilarityFunction.EUCLIDEAN);
+        try (var builder = GraphIndexBuilder.builder(scores, 1, 8)
+                .withBeamWidth(16)
+                .withNeighborOverflow(1.2f)
+                .withAlpha(1.2f)
+                .build()) {
+            assertSame(failure, assertThrows(IllegalStateException.class, () -> builder.build(source)));
+            assertEquals(1, builder.getGraph().size(0));
+            assertEquals(1, closed.get());
+        }
     }
 
     @Test

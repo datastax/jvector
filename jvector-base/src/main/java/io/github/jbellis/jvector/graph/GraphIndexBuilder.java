@@ -817,6 +817,8 @@ public class GraphIndexBuilder implements Closeable, Accountable {
                 }
             } else if (e instanceof Error) {
                 throw (Error) e;
+            } else if (e instanceof RuntimeException) {
+                throw (RuntimeException) e;
             } else {
                 throw new RuntimeException(e);
             }
