@@ -1,0 +1,29 @@
+# cohere-english-v3-1M (1024 dimensions): in-memory graph built as vectors arrive, as an index under
+# construction in a database is. Each arriving vector is added to the graph with exact scores, and the
+# graph is searched with full-precision vectors. Compare with streaming-pq, which builds the same graph
+# from PQ codes.
+yamlSchemaVersion: 3
+onDiskIndexVersion: 7
+
+dataset: cohere-english-v3-1M
+
+construction:
+  type: inMemory
+  streaming: Yes
+  outDegree: [32]
+  efConstruction: [100]
+  neighborOverflow: [1.2f]
+  addHierarchy: [Yes]
+  refineFinalGraph: [Yes]
+  compression:
+    - type: None
+  reranking:
+    type: None
+  useSavedIndexIfExists: No
+
+search:
+  topKOverquery:
+    10: [1.0, 2.0]
+  useSearchPruning: [No]
+  compression:
+    - type: None

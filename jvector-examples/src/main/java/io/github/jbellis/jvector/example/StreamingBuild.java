@@ -22,26 +22,34 @@ import io.github.jbellis.jvector.graph.GraphIndexBuilder;
 import io.github.jbellis.jvector.graph.ImmutableGraphIndex;
 import io.github.jbellis.jvector.graph.OnHeapGraphIndex;
 import io.github.jbellis.jvector.graph.RandomAccessVectorValues;
+import io.github.jbellis.jvector.graph.RemappedRandomAccessVectorValues;
 import io.github.jbellis.jvector.graph.StreamingASHIndex;
 import io.github.jbellis.jvector.graph.VectorMean;
 import io.github.jbellis.jvector.graph.disk.feature.FeatureId;
 import io.github.jbellis.jvector.graph.similarity.BuildScoreProvider;
 import io.github.jbellis.jvector.quantization.AsymmetricHashing;
 import io.github.jbellis.jvector.quantization.CompressedVectors;
+import io.github.jbellis.jvector.quantization.KMeansPlusPlusClusterer;
 import io.github.jbellis.jvector.quantization.MutablePQVectors;
 import io.github.jbellis.jvector.quantization.ProductQuantization;
 import io.github.jbellis.jvector.quantization.VectorCompressor;
+import io.github.jbellis.jvector.vector.VectorSimilarityFunction;
 import io.github.jbellis.jvector.vector.types.VectorFloat;
 
+import java.io.IOException;
+import java.io.UncheckedIOException;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.ForkJoinPool;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Function;
+import java.util.concurrent.locks.ReentrantReadWriteLock;
 import java.util.function.Supplier;
+import java.util.stream.IntStream;
 
 /**
  * Builds an in-memory index the way a streaming index is built: base vectors are added in arrival order, from
@@ -242,12 +250,16 @@ final class StreamingBuild implements IndexBuildStrategy {
                     : StreamingASHIndex.withModel(vectors, (AsymmetricHashing) model.get(), builders, options);
             return new ASHIndex(index, coldStartSize);
         }
+        if (build.refineAfter != null && build.refineAfter > 0 && !(params instanceof CompressorParameters.PQParameters)) {
+            throw new IllegalArgumentException("Only PQ streaming builds refine their model");
+        }
         if (coldStartSize > 0 || Boolean.TRUE.equals(build.trainWhileStreaming)) {
             throw new IllegalArgumentException("Only ASH streaming builds start cold or train while streaming");
         }
         if (params == CompressorParameters.NONE) {
             return new ArrivalIndex(vectors, null,
-                    GraphBuilderFactory.forFullPrecision(vectors, ds.getSimilarityFunction(), build), keepMean);
+                    GraphBuilderFactory.forFullPrecision(vectors, ds.getSimilarityFunction(), build), keepMean, build,
+                    ds.getSimilarityFunction());
         }
         var compressor = model.get();
         if (!(compressor instanceof ProductQuantization)) {
@@ -255,7 +267,8 @@ final class StreamingBuild implements IndexBuildStrategy {
         }
         var codes = new MutablePQVectors((ProductQuantization) compressor);
         var scores = GraphBuilderFactory.compressedScores(codes, ds.getSimilarityFunction(), null);
-        return new ArrivalIndex(vectors, codes, GraphBuilderFactory.forCompressed(scores, dimension, build), keepMean);
+        return new ArrivalIndex(vectors, codes, GraphBuilderFactory.forCompressed(scores, dimension, build), keepMean,
+                build, ds.getSimilarityFunction());
     }
 
     /** A {@link StreamingASHIndex}, which starts warm or cold and may train while vectors arrive. */
@@ -295,29 +308,85 @@ final class StreamingBuild implements IndexBuildStrategy {
     }
 
     /**
-     * An index whose model, if any, is fixed before the first vector arrives: each vector is encoded into the
+     * An index whose model, if any, is chosen before the first vector arrives: each vector is encoded into the
      * mutable codes on arrival, then added to the graph, which scores with those codes, or exactly without them.
+     * With {@code refineAfter}, the insert of that ordinal first refines the PQ model on the vectors before it, as a
+     * database compacting into an index fine-tunes an inherited codebook: inserts wait while the codes so far are
+     * re-encoded and the graph's edges rescored with the new model.
      */
     private static final class ArrivalIndex implements Index {
+        private final RandomAccessVectorValues source;
         private final Supplier<RandomAccessVectorValues> vectors;
-        private final MutablePQVectors codes;
-        private final GraphIndexBuilder builder;
         private final VectorMean.Running mean;
+        private final BuildConfig build;
+        private final VectorSimilarityFunction similarity;
+        private final int refineAfter;
+        /** Held by inserts and exclusively by the refinement; null without one. */
+        private final ReentrantReadWriteLock refineLock;
+        private volatile MutablePQVectors codes;
+        private volatile GraphIndexBuilder builder;
+        private volatile long refinePauseNanos = -1;
 
         ArrivalIndex(RandomAccessVectorValues vectors, MutablePQVectors codes, GraphIndexBuilder builder,
-                     boolean keepMean) {
+                     boolean keepMean, BuildConfig build, VectorSimilarityFunction similarity) {
+            this.source = vectors;
             this.vectors = vectors.threadLocalSupplier();
             this.codes = codes;
             this.builder = builder;
             this.mean = keepMean ? new VectorMean.Running(vectors.dimension()) : null;
+            this.build = build;
+            this.similarity = similarity;
+            this.refineAfter = codes == null || build.refineAfter == null ? 0 : build.refineAfter;
+            this.refineLock = refineAfter > 0 ? new ReentrantReadWriteLock() : null;
         }
 
         @Override
         public void add(int ordinal) {
+            if (refineLock == null) {
+                insert(ordinal);
+                return;
+            }
+            if (ordinal == refineAfter) refine();
+            refineLock.readLock().lock();
+            try {
+                insert(ordinal);
+            } finally {
+                refineLock.readLock().unlock();
+            }
+        }
+
+        private void insert(int ordinal) {
             VectorFloat<?> v = vectors.get().getVector(ordinal);
             if (mean != null) mean.accept(v);
             if (codes != null) codes.encodeAndSet(ordinal, v);
             builder.addGraphNode(ordinal, v);
+        }
+
+        /** Refines the model on the first {@code refineAfter} vectors, re-encodes the codes and rescores the graph. */
+        private void refine() {
+            var sample = new RemappedRandomAccessVectorValues(source, IntStream.range(0, refineAfter).toArray());
+            var pool = GraphBuilderFactory.constructionPool(build);
+            // Timed from the request, so the pause includes waiting for inserts in progress to finish.
+            long start = System.nanoTime();
+            refineLock.writeLock().lock();
+            try {
+                var refined = GraphBuilderFactory.inConstructionPool(build, () -> ((ProductQuantization) codes.getCompressor())
+                        .refine(sample, 1, KMeansPlusPlusClusterer.UNWEIGHTED, pool, ForkJoinPool.commonPool()));
+                // Every ordinal taken so far gets a code from the new model, including any whose insert waits here.
+                var next = new MutablePQVectors(refined);
+                int count = codes.count();
+                pool.submit(() -> IntStream.range(0, count).parallel()
+                        .forEach(i -> next.encodeAndSet(i, vectors.get().getVector(i)))).join();
+                codes = next;
+                var old = builder;
+                builder = GraphIndexBuilder.rescore(old, GraphBuilderFactory.compressedScores(next, similarity, null));
+                old.close();
+            } catch (IOException e) {
+                throw new UncheckedIOException(e);
+            } finally {
+                refinePauseNanos = System.nanoTime() - start;
+                refineLock.writeLock().unlock();
+            }
         }
 
         @Override public GraphIndexBuilder builder() { return builder; }
@@ -332,7 +401,12 @@ final class StreamingBuild implements IndexBuildStrategy {
 
         @Override
         public String start() {
-            return codes == null ? "exact scores" : "an inherited model " + codes.getCompressor();
+            if (codes == null) return "exact scores";
+            String refined = refineAfter == 0 ? ""
+                    : refinePauseNanos < 0 ? " (not refined: fewer than " + refineAfter + " vectors)"
+                    : String.format(Locale.ROOT, " (refined after %d vectors; inserts waited %.2f s)",
+                            refineAfter, refinePauseNanos / 1e9);
+            return "an inherited model " + codes.getCompressor() + refined;
         }
     }
 }

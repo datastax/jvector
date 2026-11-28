@@ -301,13 +301,71 @@ public class TestGridASHIntegration {
     }
 
     @Test(timeout = 120_000)
+    public void streamingPQRefinesItsModelAndKeepsTheGraphNavigable() {
+        var data = schema3Data();
+        var vectors = data.getBaseRavv();
+        var pq = ProductQuantization.compute(vectors, 4, 32, false);
+        var build = BuildConfig.builder().M(8).efConstruction(32).neighborOverflow(1.2f).alpha(1.2f)
+                .addHierarchy(false).refineFinalGraph(false).indexType("inMemory").streaming(true).workers(4)
+                .refineAfter(144).build();
+        var index = StreamingBuild.stream(build, data, new CompressorParameters.PQParameters(4, 32, false, -1.0f),
+                () -> pq, false);
+        assertTrue(index.start(), index.start().contains("refined after 144 vectors"));
+        var codes = (PQVectors) index.codes();
+        var refined = (ProductQuantization) codes.getCompressor();
+        assertNotSame("the model was refined", pq, refined);
+        // Every vector, before and after the refinement, carries the refined model's code.
+        var expected = (PQVectors) refined.encodeAll(vectors);
+        for (int i = 0; i < vectors.size(); i++) assertEquals("code " + i, expected.get(i), codes.get(i));
+        // Nodes placed before the refinement stay reachable: base vectors find themselves about as often as in the
+        // same build without a refinement, both those placed before it and those placed after.
+        var unrefined = StreamingBuild.stream(BuildConfig.builder().M(8).efConstruction(32).neighborOverflow(1.2f)
+                        .alpha(1.2f).addHierarchy(false).refineFinalGraph(false).indexType("inMemory").streaming(true)
+                        .workers(4).build(), data, new CompressorParameters.PQParameters(4, 32, false, -1.0f),
+                () -> pq, false);
+        int[] refinedFound = selfFound(index.graph(), data, 144);
+        int[] baselineFound = selfFound(unrefined.graph(), data, 144);
+        String found = "refined " + Arrays.toString(refinedFound) + " vs unrefined " + Arrays.toString(baselineFound);
+        for (int half = 0; half < 2; half++) assertTrue(found, refinedFound[half] >= baselineFound[half] - 15);
+    }
+
+    /** Base vectors among their own 10 nearest results, for ordinals before {@code split} and from it on. */
+    private static int[] selfFound(io.github.jbellis.jvector.graph.ImmutableGraphIndex graph, SimpleDataSet data,
+                                   int split) {
+        var vectors = data.getBaseRavv();
+        int[] found = new int[2];
+        for (int i = 0; i < vectors.size(); i++) {
+            var result = io.github.jbellis.jvector.graph.GraphSearcher.search(vectors.getVector(i), 10, vectors,
+                    data.getSimilarityFunction(), graph, Bits.ALL);
+            for (var node : result.getNodes()) if (node.node == i) found[i < split ? 0 : 1]++;
+        }
+        return found;
+    }
+
+    @Test
+    public void storedCodesKeepPQCodesOnlyForIndexesThatBuiltThem() throws Exception {
+        var data = schema3Data();
+        var pq = ProductQuantization.compute(data.getBaseRavv(), 4, 32, false);
+        var codes = (PQVectors) pq.encodeAll(data.getBaseRavv());
+        assertFalse("batch builds keep storing only ASH codes", StoredCodes.supports(codes, false));
+        assertTrue(StoredCodes.supports(codes, true));
+        var index = temporary.newFolder().toPath().resolve("graph");
+        StoredCodes.write(codes, index);
+        var loaded = StoredCodes.load(index, codes.count());
+        assertNotNull(loaded);
+        assertTrue(loaded.codes instanceof PQVectors);
+        for (int i = 0; i < codes.count(); i++) assertEquals(codes.get(i), ((PQVectors) loaded.codes).get(i));
+    }
+
+    @Test(timeout = 120_000)
     public void streamingPQAndFullPrecisionBuildAndSearch() throws Exception {
         var data = schema3Data();
         String pq = "- type: PQ\n  parameters: {m: 4, k: 32}";
         for (String type : List.of("streamingWarm", "streamingWarmOnDisk")) {
             for (String construction : List.of(pq, "- type: None")) {
+                // PQ refines its model halfway, as a compaction that inherits a codebook does.
                 var config = schema3Config(type, "parallel", false, type.endsWith("OnDisk") ? "NVQ" : "FP32",
-                        construction, pq);
+                        construction, pq, construction.equals(pq) ? "  refineAfter: [144]\n" : "");
                 var out = new ByteArrayOutputStream();
                 var console = System.out;
                 System.setOut(new PrintStream(out, true, StandardCharsets.UTF_8));
@@ -324,19 +382,28 @@ public class TestGridASHIntegration {
                 String text = out.toString(StandardCharsets.UTF_8);
                 String label = type + " " + construction;
                 assertTrue(label + "\n" + text, text.contains("streamed 288 vectors"));
-                boolean inMemoryPQ = construction.equals(pq) && !type.endsWith("OnDisk");
-                assertTrue(label + "\n" + text, text.contains(construction.equals(pq) ? "an inherited model" : "with exact scores"));
-                assertEquals(label + "\n" + text, inMemoryPQ, text.contains("codes the index built as vectors arrived ["));
+                boolean streamedPQ = construction.equals(pq);
+                assertTrue(label + "\n" + text, text.contains(streamedPQ ? "refined after 144 vectors" : "with exact scores"));
+                // A PQ index is searched with the codes it built; on disk, they are stored beside it and reloaded.
+                assertEquals(label + "\n" + text, streamedPQ, text.contains(type.endsWith("OnDisk")
+                        ? "codes the index built as vectors arrived, loaded with the index"
+                        : "codes the index built as vectors arrived ["));
             }
         }
     }
 
     @Test
-    public void streamingPQExampleParses() throws Exception {
-        Path path = Path.of("jvector-examples", "yaml-configs", "index-parameters", "streaming-pq", "cohere-english-v3-1M.yml");
+    public void streamingExamplesParse() throws Exception {
+        assertStreamingExample("streaming-pq", 2);
+        assertStreamingExample("streaming-fp", 1);
+    }
+
+    private static void assertStreamingExample(String folder, int buildPoints) throws Exception {
+        Path path = Path.of("jvector-examples", "yaml-configs", "index-parameters", folder, "cohere-english-v3-1M.yml");
         if (!Files.exists(path)) path = Path.of("..").resolve(path);
         var spec = GridSpec.fromConfig(MultiConfig.getConfig(path.toAbsolutePath().toString()));
-        assertTrue(spec.buildPoints().stream().allMatch(build -> build.streaming && build.coldStartSize == null));
+        assertEquals(folder, buildPoints, spec.buildPoints().size());
+        assertTrue(folder, spec.buildPoints().stream().allMatch(build -> build.streaming && build.coldStartSize == null));
     }
 
     @Test
@@ -347,6 +414,14 @@ public class TestGridASHIntegration {
         var bq = assertThrows(IllegalArgumentException.class, () -> schema3Config("streamingWarm", null, false, "FP32",
                 "- type: BQ", "- type: None"));
         assertTrue(bq.getMessage(), bq.getMessage().contains("requires a single ASH, PQ or None"));
+        String ash = "- type: ASH\n  parameters: {optimizer: ITQ, encodedBits: 72, bitsPerDimension: 2}";
+        var refineASH = assertThrows(IllegalArgumentException.class, () -> schema3Config("streaming", null, false,
+                "FP32", ash, ash, "  refineAfter: [64]\n"));
+        assertTrue(refineASH.getMessage(), refineASH.getMessage().contains("refineAfter requires PQ"));
+        String pqCodes = "- type: PQ\n  parameters: {m: 4, k: 32}";
+        var tooFew = assertThrows(IllegalArgumentException.class, () -> schema3Config("streamingWarm", null, false,
+                "FP32", pqCodes, pqCodes, "  refineAfter: [0, 16]\n"));
+        assertTrue(tooFew.getMessage(), tooFew.getMessage().contains("at least the PQ k (32)"));
     }
 
     @Test
@@ -674,6 +749,12 @@ public class TestGridASHIntegration {
 
     private MultiConfig schema3Config(String type, String writer, boolean fused, String reranker,
                                       String construction, String search) throws Exception {
+        return schema3Config(type, writer, fused, reranker, construction, search, "");
+    }
+
+    /** {@code settings} adds construction lines, each indented and ending in a newline. */
+    private MultiConfig schema3Config(String type, String writer, boolean fused, String reranker,
+                                      String construction, String search, String settings) throws Exception {
         var path = temporary.newFile().toPath();
         // "streaming" streams into an in-memory index; "streamingOnDisk" also writes and reloads it, as a flush does.
         // "streamingWarm" and "streamingWarmOnDisk" set no coldStartSize, as PQ and None streaming builds may.
@@ -682,7 +763,7 @@ public class TestGridASHIntegration {
         if (streaming) type = type.endsWith("OnDisk") ? "onDisk" : "inMemory";
         String diskSettings = ("onDisk".equals(type)
                 ? "  writerMode: " + writer + "\n  fusedGraph: [" + fused + "]\n" : "")
-                + (streaming ? "  streaming: Yes\n" + (warmOnly ? "" : "  coldStartSize: [0, 64]\n") : "");
+                + (streaming ? "  streaming: Yes\n" + (warmOnly ? "" : "  coldStartSize: [0, 64]\n") : "") + settings;
         String yaml = String.join("\n",
                 "yamlSchemaVersion: 3",
                 "onDiskIndexVersion: " + OnDiskGraphIndex.CURRENT_VERSION,

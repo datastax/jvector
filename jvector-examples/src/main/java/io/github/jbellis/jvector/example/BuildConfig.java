@@ -61,6 +61,8 @@ public final class BuildConfig {
     public final Integer coldStartSize;
     /** Streaming builds: whether the index trains a model while vectors arrive and moves to it. */
     public final Boolean trainWhileStreaming;
+    /** PQ streaming builds: vectors after which the index refines its PQ model once, or null or 0 for never. */
+    public final Integer refineAfter;
 
     private BuildConfig(Builder b) {
         this.M = b.M;
@@ -80,6 +82,7 @@ public final class BuildConfig {
         this.streaming = b.streaming;
         this.coldStartSize = b.coldStartSize;
         this.trainWhileStreaming = b.trainWhileStreaming;
+        this.refineAfter = b.refineAfter;
     }
 
     /** The graph builder's per-layer maximum degrees: the base layer's first, then the upper layers'. */
@@ -117,6 +120,7 @@ public final class BuildConfig {
         if (streaming) params.put("streaming", true);
         if (coldStartSize != null) params.put("coldStartSize", coldStartSize);
         if (trainWhileStreaming != null) params.put("trainWhileStreaming", trainWhileStreaming);
+        if (refineAfter != null) params.put("refineAfter", refineAfter);
         return Collections.unmodifiableMap(params);
     }
 
@@ -142,6 +146,7 @@ public final class BuildConfig {
         private boolean streaming;
         private Integer coldStartSize;
         private Boolean trainWhileStreaming;
+        private Integer refineAfter;
 
         private Builder() {}
 
@@ -162,6 +167,7 @@ public final class BuildConfig {
         public Builder streaming(boolean streaming) { this.streaming = streaming; return this; }
         public Builder coldStartSize(Integer coldStartSize) { this.coldStartSize = coldStartSize; return this; }
         public Builder trainWhileStreaming(Boolean train) { this.trainWhileStreaming = train; return this; }
+        public Builder refineAfter(Integer refineAfter) { this.refineAfter = refineAfter; return this; }
 
         /** @throws IllegalStateException if a parameter without a default was not set */
         public BuildConfig build() {

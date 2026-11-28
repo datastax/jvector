@@ -80,6 +80,8 @@ public final class GridSpec {
                 if (construction.trainWhileStreaming != null)
                     sweeps.sweep("construction.trainWhileStreaming", construction.trainWhileStreaming,
                             BuildConfig.Builder::trainWhileStreaming);
+                if (construction.refineAfter != null)
+                    sweeps.sweep("construction.refineAfter", construction.refineAfter, BuildConfig.Builder::refineAfter);
             }
             return sweeps
                     .featureSets(List.of())

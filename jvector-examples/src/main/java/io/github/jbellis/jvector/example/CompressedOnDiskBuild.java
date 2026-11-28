@@ -110,8 +110,9 @@ final class CompressedOnDiskBuild implements IndexBuildStrategy {
     }
 
     /** Writes the build's codes beside an index that does not fuse them, and removes stale codes otherwise. */
-    private void storeCodes(Set<FeatureId> features, CompressedVectors codes, Path indexFile) throws IOException {
-        if (fusesCodes(features) || !StoredCodes.supports(codes)) {
+    private void storeCodes(Set<FeatureId> features, CompressedVectors codes, Path indexFile, boolean builtByIndex)
+            throws IOException {
+        if (fusesCodes(features) || !StoredCodes.supports(codes, builtByIndex)) {
             StoredCodes.delete(indexFile);
             return;
         }
@@ -307,7 +308,7 @@ final class CompressedOnDiskBuild implements IndexBuildStrategy {
                 throw new UncheckedIOException(e);
             }
         });
-        for (var entry : graphPaths.entrySet()) storeCodes(entry.getKey(), encoded, entry.getValue());
+        for (var entry : graphPaths.entrySet()) storeCodes(entry.getKey(), encoded, entry.getValue(), false);
         builder.close();
         double totalTime = (System.nanoTime() - startTime) / 1_000_000_000.0;
         System.out.printf("Graph phases: insertion=%.6f cleanup=%.6f flush=%.6f seconds%n",
@@ -377,7 +378,7 @@ final class CompressedOnDiskBuild implements IndexBuildStrategy {
                     writer.write(ctx.completedSuppliers(view, input::get));
                 }
                 // An index without fused codes keeps the build's codes beside it, as a deployed index would.
-                storeCodes(features, encoded, path);
+                storeCodes(features, encoded, path, build.streaming);
                 flushSeconds += (System.nanoTime() - start) / 1e9;
             }
             double totalTime = buildSeconds + flushSeconds;
