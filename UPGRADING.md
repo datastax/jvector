@@ -55,6 +55,10 @@
   diversity checks, which took `subspaces × clusters × (clusters + 1) / 2` floats each (17 MB at 128 subspaces of
   256 clusters). Diversity scoring now reads one codebook copy per model, about 4 × clusters × dimension bytes, made
   on first use. `ramBytesUsed()` drops accordingly.
+- `MutableBQVectors` is now safe for concurrent `encodeAndSet` and `setZero` calls
+  ([#851](https://github.com/datastax/jvector/pull/851)). `setZero` now stores a code of the right length
+  (it was 8× too long), and invalid ordinals throw `IllegalArgumentException`, as in `MutablePQVectors`.
+  For subclasses, the protected `vectorCount` field is now an `AtomicInteger`.
 
 # Upgrading from 3.0.x to 4.0.x
 
