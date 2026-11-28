@@ -104,8 +104,9 @@ public class TestBinaryQuantization extends RandomizedTest
         var zero = new long[bq.compressedVectorSize() / Long.BYTES];
         for (int i = 0; i < size; i++)
         {
+            int ordinal = i;
             long[] expected = i % 7 == 0 ? zero : bq.encode(vectors.get(i));
-            assertArrayEquals(expected, mutable.get(i), "ordinal " + i);
+            assertArrayEquals(expected, mutable.get(i), () -> "ordinal " + ordinal);
         }
     }
 
