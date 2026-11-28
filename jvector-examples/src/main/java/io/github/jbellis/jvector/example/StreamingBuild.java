@@ -20,38 +20,59 @@ import io.github.jbellis.jvector.example.benchmarks.datasets.DataSet;
 import io.github.jbellis.jvector.example.util.CompressorParameters;
 import io.github.jbellis.jvector.graph.GraphIndexBuilder;
 import io.github.jbellis.jvector.graph.ImmutableGraphIndex;
+import io.github.jbellis.jvector.graph.OnHeapGraphIndex;
+import io.github.jbellis.jvector.graph.RandomAccessVectorValues;
+import io.github.jbellis.jvector.graph.RemappedRandomAccessVectorValues;
 import io.github.jbellis.jvector.graph.StreamingASHIndex;
+import io.github.jbellis.jvector.graph.VectorMean;
 import io.github.jbellis.jvector.graph.disk.feature.FeatureId;
 import io.github.jbellis.jvector.graph.similarity.BuildScoreProvider;
 import io.github.jbellis.jvector.quantization.AsymmetricHashing;
+import io.github.jbellis.jvector.quantization.CompressedVectors;
+import io.github.jbellis.jvector.quantization.KMeansPlusPlusClusterer;
+import io.github.jbellis.jvector.quantization.MutablePQVectors;
+import io.github.jbellis.jvector.quantization.ProductQuantization;
 import io.github.jbellis.jvector.quantization.VectorCompressor;
+import io.github.jbellis.jvector.vector.VectorSimilarityFunction;
+import io.github.jbellis.jvector.vector.types.VectorFloat;
 
+import java.io.IOException;
+import java.io.UncheckedIOException;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.ForkJoinPool;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Function;
+import java.util.concurrent.locks.ReentrantReadWriteLock;
 import java.util.function.Supplier;
+import java.util.stream.IntStream;
 
 /**
  * Builds an in-memory index the way a streaming index is built: base vectors are added in arrival order, from
- * one thread per construction worker, to a {@link StreamingASHIndex} that encodes each one as it arrives and keeps
- * no copy of the vectors. Searches then use the index's own codes, reranked from the dataset's vectors. An
- * {@code onDisk} streaming build uses {@link #stream} and then writes and reloads the index, as a flush does.
- *
- * <p>With {@code coldStartSize} zero the index starts with the construction compressor's model, standing in for
- * a model inherited from an earlier index (a training window can stand in for that index's data). Otherwise it
- * starts cold: it builds with exact scores until its first model is ready, trained on its sample with
- * {@code trainWhileStreaming}, else a random projection fixed after {@code coldStartSize} vectors.</p>
+ * one thread per construction worker, to an index that keeps no copy of the vectors. How the index starts and
+ * what each insert does depend on the construction compression:
+ * <ul>
+ *   <li>ASH: a {@link StreamingASHIndex}, which encodes each vector as it arrives. With {@code coldStartSize} zero
+ *   it starts with the construction compressor's model, standing in for a model inherited from an earlier index (a
+ *   training window can stand in for that index's data). Otherwise it starts cold: it builds with exact scores until
+ *   its first model is ready, trained on its sample with {@code trainWhileStreaming}, else a random projection
+ *   fixed after {@code coldStartSize} vectors.</li>
+ *   <li>PQ: starts with the construction compressor's model; each arriving vector is encoded into mutable PQ codes
+ *   and then added to the graph, as an index under construction in a database does.</li>
+ *   <li>None: each arriving vector is added to the graph with exact scores.</li>
+ * </ul>
+ * Searches then use the index's own codes, reranked from the dataset's vectors. An {@code onDisk} streaming build
+ * uses {@link #stream} and then writes and reloads the index, as a flush does.
  */
 final class StreamingBuild implements IndexBuildStrategy {
-    private final CompressorParameters.ASHParameters params;
+    private final CompressorParameters params;
     private final Supplier<VectorCompressor<?>> model;
 
-    StreamingBuild(CompressorParameters.ASHParameters params, Supplier<VectorCompressor<?>> model) {
+    StreamingBuild(CompressorParameters params, Supplier<VectorCompressor<?>> model) {
         this.params = params;
         this.model = model;
     }
@@ -59,37 +80,72 @@ final class StreamingBuild implements IndexBuildStrategy {
     @Override
     public BuiltIndexes build(List<? extends Set<FeatureId>> featureSets, BuildConfig build, DataSet ds) {
         long start = System.nanoTime();
-        var index = stream(build, ds, params, model);
+        var index = stream(build, ds, params, model, false);
         double buildS = (System.nanoTime() - start) / 1e9;
         Map<Set<FeatureId>, ImmutableGraphIndex> indexes = Map.of(Set.of(), index.graph());
-        return new BuiltIndexes(indexes, Map.of(), buildS, Map.of(Set.of(), StoredCodes.Loaded.built(index.codes())));
+        return new BuiltIndexes(indexes, Map.of(), buildS, index.codes() == null ? Map.of()
+                : Map.of(Set.of(), StoredCodes.Loaded.built(index.codes())));
+    }
+
+    /** A streaming index: how it starts is its codec's, and each arriving vector is added with {@link #add}. */
+    interface Index {
+        /** Adds the vector at {@code ordinal}, read from the caller's vectors. */
+        void add(int ordinal);
+
+        /** Readies the index to be written, as a flush does; call only while no vectors are being added. */
+        default void prepareForFlush() {}
+
+        GraphIndexBuilder builder();
+
+        OnHeapGraphIndex graph();
+
+        /** The codes the index built as vectors arrived, or null for an index scored exactly. */
+        CompressedVectors codes();
+
+        /** The codes to write beside the index, or null for an index scored exactly. */
+        default CompressedVectors writtenCodes() {
+            return codes();
+        }
+
+        /** The mean of the vectors added, kept as they arrived, or null when the index was not asked to keep it. */
+        VectorFloat<?> mean();
+
+        long ramBytesUsed();
+
+        /** How the index started and scores, for the console. */
+        String start();
+
+        /** What the flush preparation did, for the console; null when it does nothing. */
+        default String flushReport() {
+            return null;
+        }
+
+        /** True while the index trains a model while vectors arrive; see {@code trainWhileStreaming}. */
+        default boolean isTraining() {
+            return false;
+        }
+
+        /** True while the index moves its codes to a newer model. */
+        default boolean isChangingModel() {
+            return false;
+        }
     }
 
     /**
-     * Streams the dataset's base vectors into a new {@link StreamingASHIndex}, readies it as a flush does and cleans
-     * up its graph, so it can be searched in memory or written. Reports the streaming timeline, timings and memory.
+     * Streams the dataset's base vectors into a new streaming index, readies it as a flush does and cleans up its
+     * graph, so it can be searched in memory or written. Reports the streaming timeline, timings and memory.
      *
-     * @param model the inherited model for a warm start ({@code coldStartSize} zero); not called for a cold start
+     * @param model    the inherited model for a warm start; not called for a cold start or without compression
+     * @param keepMean whether the index keeps the mean of the vectors as they arrive, as NVQ needs to write it; an
+     *                 ASH index always does
      */
-    static StreamingASHIndex stream(BuildConfig build, DataSet ds, CompressorParameters.ASHParameters params,
-                                    Supplier<VectorCompressor<?>> model) {
+    static Index stream(BuildConfig build, DataSet ds, CompressorParameters params,
+                        Supplier<VectorCompressor<?>> model, boolean keepMean) {
         var vectors = ds.getBaseRavv();
         int n = vectors.size();
         int dimension = ds.getDimension();
-        int reservoir = 20 * dimension;
-        Function<BuildScoreProvider, GraphIndexBuilder> builders =
-                scores -> GraphBuilderFactory.forCompressed(scores, dimension, build);
-        int coldStartSize = build.coldStartSize == null ? 0 : build.coldStartSize;
-        var options = new StreamingASHIndex.Options();
-        options.reservoirSize = reservoir;
-        if (coldStartSize > 0) options.coldStartSize = coldStartSize;
         boolean train = Boolean.TRUE.equals(build.trainWhileStreaming);
-        options.train = train;
-        StreamingASHIndex index = coldStartSize > 0
-                ? StreamingASHIndex.coldStart(vectors, ds.getSimilarityFunction(), params.encodedBits(),
-                        params.bitsPerDimension(), builders, options)
-                : StreamingASHIndex.withModel(vectors, (AsymmetricHashing) model.get(),
-                        builders, options);
+        Index index = start(build, ds, params, model, keepMean);
 
         // Inserts come from their own threads, one per construction worker, as a database's writes do, so the
         // library's pool stays free for training. Each thread takes the next ordinal: arrival order is file order.
@@ -143,7 +199,7 @@ final class StreamingBuild implements IndexBuildStrategy {
         }
         if (failure.get() != null) throw new RuntimeException("Streaming insertion failed", failure.get());
         double insertS = (System.nanoTime() - start) / 1e9;
-        // The flush: every vector ends on a trained model, as a written index needs.
+        // The flush: an ASH index ends every vector on a trained model, as a written index needs.
         long flushStart = System.nanoTime();
         index.prepareForFlush();
         double flushS = (System.nanoTime() - flushStart) / 1e9;
@@ -157,22 +213,200 @@ final class StreamingBuild implements IndexBuildStrategy {
             System.out.format("%s: streaming timeline: ingest ended at %.2f s%s%n", ds.getName(), insertS,
                     timeline.length() == 0 ? "; no training seen" : timeline);
         }
-        System.out.format(Locale.ROOT, "%s: flush preparation took %.2f s; model %s trained at %d vectors; "
-                        + "%d zero codes for missing vectors; the first model held inserts for %.3f s%n",
-                ds.getName(), flushS, index.model(), index.vectorsAtLastTraining(), index.codes().reencodedMissing(),
-                index.firstModelPauseNanos() / 1e9);
+        var flushReport = index.flushReport();
+        if (flushReport != null) {
+            System.out.format(Locale.ROOT, "%s: flush preparation took %.2f s; %s%n", ds.getName(), flushS, flushReport);
+        }
         try (var progress = PhaseProgress.timed("Graph cleanup")) {
             index.builder().cleanup();
         }
         var codes = index.codes();
         System.out.format(Locale.ROOT,
-                "%s: streamed %d vectors in %.1f s (%.0f vectors/s, %d threads) with %s model %s%n",
-                ds.getName(), n, insertS, n / insertS, threads,
-                coldStartSize > 0 ? "a cold-start (after " + coldStartSize + " vectors)" : "an inherited",
-                index.model());
+                "%s: streamed %d vectors in %.1f s (%.0f vectors/s, %d threads) with %s%n",
+                ds.getName(), n, insertS, n / insertS, threads, index.start());
         System.out.format(Locale.ROOT, "%s: index holds %.1f MB (codes %.1f MB, graph %.1f MB); the vectors, read in place, are %.1f MB%n",
-                ds.getName(), index.ramBytesUsed() / 1048576.0, codes.ramBytesUsed() / 1048576.0,
+                ds.getName(), index.ramBytesUsed() / 1048576.0, codes == null ? 0 : codes.ramBytesUsed() / 1048576.0,
                 index.graph().ramBytesUsed() / 1048576.0, (double) n * dimension * Float.BYTES / 1048576.0);
         return index;
+    }
+
+    /** Starts the index the construction compression streams with; see the class comment. */
+    private static Index start(BuildConfig build, DataSet ds, CompressorParameters params,
+                               Supplier<VectorCompressor<?>> model, boolean keepMean) {
+        var vectors = ds.getBaseRavv();
+        int dimension = ds.getDimension();
+        int coldStartSize = build.coldStartSize == null ? 0 : build.coldStartSize;
+        if (params instanceof CompressorParameters.ASHParameters) {
+            var ash = (CompressorParameters.ASHParameters) params;
+            Function<BuildScoreProvider, GraphIndexBuilder> builders =
+                    scores -> GraphBuilderFactory.forCompressed(scores, dimension, build);
+            var options = new StreamingASHIndex.Options();
+            options.reservoirSize = 20 * dimension;
+            if (coldStartSize > 0) options.coldStartSize = coldStartSize;
+            options.train = Boolean.TRUE.equals(build.trainWhileStreaming);
+            StreamingASHIndex index = coldStartSize > 0
+                    ? StreamingASHIndex.coldStart(vectors, ds.getSimilarityFunction(), ash.encodedBits(),
+                            ash.bitsPerDimension(), builders, options)
+                    : StreamingASHIndex.withModel(vectors, (AsymmetricHashing) model.get(), builders, options);
+            return new ASHIndex(index, coldStartSize);
+        }
+        if (build.refineAfter != null && build.refineAfter > 0 && !(params instanceof CompressorParameters.PQParameters)) {
+            throw new IllegalArgumentException("Only PQ streaming builds refine their model");
+        }
+        if (coldStartSize > 0 || Boolean.TRUE.equals(build.trainWhileStreaming)) {
+            throw new IllegalArgumentException("Only ASH streaming builds start cold or train while streaming");
+        }
+        if (params == CompressorParameters.NONE) {
+            return new ArrivalIndex(vectors, null,
+                    GraphBuilderFactory.forFullPrecision(vectors, ds.getSimilarityFunction(), build), keepMean, build,
+                    ds.getSimilarityFunction());
+        }
+        var compressor = model.get();
+        if (!(compressor instanceof ProductQuantization)) {
+            throw new IllegalArgumentException("Streaming builds support ASH, PQ or no construction compression");
+        }
+        var codes = new MutablePQVectors((ProductQuantization) compressor);
+        var scores = GraphBuilderFactory.compressedScores(codes, ds.getSimilarityFunction(), null);
+        return new ArrivalIndex(vectors, codes, GraphBuilderFactory.forCompressed(scores, dimension, build), keepMean,
+                build, ds.getSimilarityFunction());
+    }
+
+    /** A {@link StreamingASHIndex}, which starts warm or cold and may train while vectors arrive. */
+    private static final class ASHIndex implements Index {
+        private final StreamingASHIndex index;
+        private final int coldStartSize;
+
+        ASHIndex(StreamingASHIndex index, int coldStartSize) {
+            this.index = index;
+            this.coldStartSize = coldStartSize;
+        }
+
+        @Override public void add(int ordinal) { index.add(ordinal); }
+        @Override public void prepareForFlush() { index.prepareForFlush(); }
+        @Override public GraphIndexBuilder builder() { return index.builder(); }
+        @Override public OnHeapGraphIndex graph() { return index.graph(); }
+        @Override public CompressedVectors codes() { return index.codes(); }
+        @Override public CompressedVectors writtenCodes() { return index.codes().snapshot(); }
+        @Override public VectorFloat<?> mean() { return index.mean(); }
+        @Override public long ramBytesUsed() { return index.ramBytesUsed(); }
+        @Override public boolean isTraining() { return index.isTraining(); }
+        @Override public boolean isChangingModel() { return index.isChangingModel(); }
+
+        @Override
+        public String start() {
+            return (coldStartSize > 0 ? "a cold-start (after " + coldStartSize + " vectors)" : "an inherited")
+                    + " model " + index.model();
+        }
+
+        @Override
+        public String flushReport() {
+            return String.format(Locale.ROOT, "model %s trained at %d vectors; "
+                            + "%d zero codes for missing vectors; the first model held inserts for %.3f s",
+                    index.model(), index.vectorsAtLastTraining(), index.codes().reencodedMissing(),
+                    index.firstModelPauseNanos() / 1e9);
+        }
+    }
+
+    /**
+     * An index whose model, if any, is chosen before the first vector arrives: each vector is encoded into the
+     * mutable codes on arrival, then added to the graph, which scores with those codes, or exactly without them.
+     * With {@code refineAfter}, the insert of that ordinal first refines the PQ model on the vectors before it, as a
+     * database compacting into an index fine-tunes an inherited codebook: inserts wait while the codes so far are
+     * re-encoded and the graph's edges rescored with the new model.
+     */
+    private static final class ArrivalIndex implements Index {
+        private final RandomAccessVectorValues source;
+        private final Supplier<RandomAccessVectorValues> vectors;
+        private final VectorMean.Running mean;
+        private final BuildConfig build;
+        private final VectorSimilarityFunction similarity;
+        private final int refineAfter;
+        /** Held by inserts and exclusively by the refinement; null without one. */
+        private final ReentrantReadWriteLock refineLock;
+        private volatile MutablePQVectors codes;
+        private volatile GraphIndexBuilder builder;
+        private volatile long refinePauseNanos = -1;
+
+        ArrivalIndex(RandomAccessVectorValues vectors, MutablePQVectors codes, GraphIndexBuilder builder,
+                     boolean keepMean, BuildConfig build, VectorSimilarityFunction similarity) {
+            this.source = vectors;
+            this.vectors = vectors.threadLocalSupplier();
+            this.codes = codes;
+            this.builder = builder;
+            this.mean = keepMean ? new VectorMean.Running(vectors.dimension()) : null;
+            this.build = build;
+            this.similarity = similarity;
+            this.refineAfter = codes == null || build.refineAfter == null ? 0 : build.refineAfter;
+            this.refineLock = refineAfter > 0 ? new ReentrantReadWriteLock() : null;
+        }
+
+        @Override
+        public void add(int ordinal) {
+            if (refineLock == null) {
+                insert(ordinal);
+                return;
+            }
+            if (ordinal == refineAfter) refine();
+            refineLock.readLock().lock();
+            try {
+                insert(ordinal);
+            } finally {
+                refineLock.readLock().unlock();
+            }
+        }
+
+        private void insert(int ordinal) {
+            VectorFloat<?> v = vectors.get().getVector(ordinal);
+            if (mean != null) mean.accept(v);
+            if (codes != null) codes.encodeAndSet(ordinal, v);
+            builder.addGraphNode(ordinal, v);
+        }
+
+        /** Refines the model on the first {@code refineAfter} vectors, re-encodes the codes and rescores the graph. */
+        private void refine() {
+            var sample = new RemappedRandomAccessVectorValues(source, IntStream.range(0, refineAfter).toArray());
+            var pool = GraphBuilderFactory.constructionPool(build);
+            // Timed from the request, so the pause includes waiting for inserts in progress to finish.
+            long start = System.nanoTime();
+            refineLock.writeLock().lock();
+            try {
+                var refined = GraphBuilderFactory.inConstructionPool(build, () -> ((ProductQuantization) codes.getCompressor())
+                        .refine(sample, 1, KMeansPlusPlusClusterer.UNWEIGHTED, pool, ForkJoinPool.commonPool()));
+                // Every ordinal taken so far gets a code from the new model, including any whose insert waits here.
+                var next = new MutablePQVectors(refined);
+                int count = codes.count();
+                pool.submit(() -> IntStream.range(0, count).parallel()
+                        .forEach(i -> next.encodeAndSet(i, vectors.get().getVector(i)))).join();
+                codes = next;
+                var old = builder;
+                builder = GraphIndexBuilder.rescore(old, GraphBuilderFactory.compressedScores(next, similarity, null));
+                old.close();
+            } catch (IOException e) {
+                throw new UncheckedIOException(e);
+            } finally {
+                refinePauseNanos = System.nanoTime() - start;
+                refineLock.writeLock().unlock();
+            }
+        }
+
+        @Override public GraphIndexBuilder builder() { return builder; }
+        @Override public OnHeapGraphIndex graph() { return (OnHeapGraphIndex) builder.getGraph(); }
+        @Override public CompressedVectors codes() { return codes; }
+        @Override public VectorFloat<?> mean() { return mean == null ? null : mean.mean(); }
+
+        @Override
+        public long ramBytesUsed() {
+            return graph().ramBytesUsed() + (codes == null ? 0 : codes.ramBytesUsed());
+        }
+
+        @Override
+        public String start() {
+            if (codes == null) return "exact scores";
+            String refined = refineAfter == 0 ? ""
+                    : refinePauseNanos < 0 ? " (not refined: fewer than " + refineAfter + " vectors)"
+                    : String.format(Locale.ROOT, " (refined after %d vectors; inserts waited %.2f s)",
+                            refineAfter, refinePauseNanos / 1e9);
+            return "an inherited model " + codes.getCompressor() + refined;
+        }
     }
 }

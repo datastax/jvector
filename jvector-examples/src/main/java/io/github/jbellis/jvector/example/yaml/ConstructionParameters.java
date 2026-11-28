@@ -53,12 +53,18 @@ public class ConstructionParameters extends CommonParameters {
      */
     public Boolean streaming;
     /**
-     * streaming only: vectors scored exactly before a cold index fixes a random-projection model, or 0 to start with
-     * the construction compressor's model.
+     * ASH streaming only: vectors scored exactly before a cold index fixes a random-projection model, or 0 to start
+     * with the construction compressor's model. PQ and None streaming builds omit it or use 0.
      */
     public List<Integer> coldStartSize;
-    /** streaming only: whether a cold index trains its first model on its sample while vectors arrive. */
+    /** ASH streaming only: whether a cold index trains its first model on its sample while vectors arrive. */
     public List<Boolean> trainWhileStreaming;
+    /**
+     * PQ streaming only: vectors after which the index refines its PQ model once on the vectors so far, re-encodes
+     * them and rescores the graph's edges while inserts wait; 0 never refines. Otherwise at least the PQ cluster
+     * count {@code k}, so every centroid can be refined from its own vectors.
+     */
+    public List<Integer> refineAfter;
 
     /** The construction worker count, or null when the YAML leaves it to the platform default. */
     public Integer resolvedWorkers() {
@@ -76,9 +82,27 @@ public class ConstructionParameters extends CommonParameters {
             throw new IllegalArgumentException("construction.writerMode, pageAlignment, and fusedGraph require onDisk");
         }
         if (Boolean.TRUE.equals(streaming)) {
-            validateSweep("coldStartSize", coldStartSize, value -> value >= 0);
-            if (compression == null || compression.size() != 1 || !"ASH".equals(compression.get(0).type)) {
-                throw new IllegalArgumentException("construction.streaming requires a single ASH construction.compression");
+            if (compression == null || compression.size() != 1 || compression.get(0) == null
+                    || !List.of("ASH", "PQ", "None").contains(compression.get(0).type)) {
+                throw new IllegalArgumentException("construction.streaming requires a single ASH, PQ or None construction.compression");
+            }
+            if ("ASH".equals(compression.get(0).type)) {
+                validateSweep("coldStartSize", coldStartSize, value -> value >= 0);
+            } else if ((coldStartSize != null && coldStartSize.stream().anyMatch(value -> value == null || value != 0))
+                    || (trainWhileStreaming != null && trainWhileStreaming.contains(Boolean.TRUE))) {
+                throw new IllegalArgumentException("Only ASH streaming builds start cold or train while streaming:"
+                        + " use coldStartSize [0] and trainWhileStreaming No, or omit them");
+            }
+            if (refineAfter != null) {
+                if (!"PQ".equals(compression.get(0).type))
+                    throw new IllegalArgumentException("construction.refineAfter requires PQ construction.compression");
+                var pq = compression.get(0).parameters;
+                int k = Integer.parseInt(pq == null ? "256" : pq.getOrDefault("k", "256"));
+                validateSweep("refineAfter", refineAfter, value -> value >= 0);
+                if (refineAfter.stream().anyMatch(value -> value > 0 && value < k)) {
+                    throw new IllegalArgumentException("construction.refineAfter " + refineAfter + " must be 0 or at"
+                            + " least the PQ k (" + k + "), so every centroid is refined from its own vectors");
+                }
             }
             if ("inMemory".equals(type) && "NVQ".equals(rerankingType())) {
                 throw new IllegalArgumentException("An inMemory streaming index reranks with the source vectors: use reranking FP32 or None");
@@ -87,8 +111,8 @@ public class ConstructionParameters extends CommonParameters {
                 throw new IllegalArgumentException("construction.streaming writes its codes beside the index: use fusedGraph No");
             }
             if (trainWhileStreaming != null) validateSweep("trainWhileStreaming", trainWhileStreaming, value -> true);
-        } else if (coldStartSize != null || trainWhileStreaming != null) {
-            throw new IllegalArgumentException("construction.coldStartSize and trainWhileStreaming require construction.streaming Yes");
+        } else if (coldStartSize != null || trainWhileStreaming != null || refineAfter != null) {
+            throw new IllegalArgumentException("construction.coldStartSize, trainWhileStreaming and refineAfter require construction.streaming Yes");
         }
         if (pageAlignment != null && (pageAlignment < 512 || pageAlignment > (1 << 20) || Integer.bitCount(pageAlignment) != 1)) {
             throw new IllegalArgumentException("construction.pageAlignment must be a power of two from 512 to 1048576");

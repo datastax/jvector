@@ -75,10 +75,13 @@ public final class GridSpec {
                             .workers(construction.resolvedWorkers())
                             .streaming(Boolean.TRUE.equals(construction.streaming)));
             if (Boolean.TRUE.equals(construction.streaming)) {
-                sweeps.sweep("construction.coldStartSize", construction.coldStartSize, BuildConfig.Builder::coldStartSize);
+                if (construction.coldStartSize != null)
+                    sweeps.sweep("construction.coldStartSize", construction.coldStartSize, BuildConfig.Builder::coldStartSize);
                 if (construction.trainWhileStreaming != null)
                     sweeps.sweep("construction.trainWhileStreaming", construction.trainWhileStreaming,
                             BuildConfig.Builder::trainWhileStreaming);
+                if (construction.refineAfter != null)
+                    sweeps.sweep("construction.refineAfter", construction.refineAfter, BuildConfig.Builder::refineAfter);
             }
             return sweeps
                     .featureSets(List.of())
