@@ -18,12 +18,17 @@ package io.github.jbellis.jvector.quantization;
 
 import io.github.jbellis.jvector.vector.types.VectorFloat;
 
+import java.util.concurrent.atomic.AtomicInteger;
+
+/**
+ * A threadsafe mutable BQVectors implementation that grows dynamically as needed.
+ */
 @SuppressWarnings("unused")
 public class MutableBQVectors extends BQVectors implements MutableCompressedVectors<VectorFloat<?>> {
     private static final int INITIAL_CAPACITY = 1024;
     private static final float GROWTH_FACTOR = 1.5f;
     
-    protected int vectorCount;
+    protected final AtomicInteger vectorCount;
 
     /**
      * Construct a mutable BQVectors instance with the given BinaryQuantization.
@@ -33,34 +38,36 @@ public class MutableBQVectors extends BQVectors implements MutableCompressedVect
     public MutableBQVectors(BinaryQuantization bq) {
         super(bq);
         this.compressedVectors = new long[INITIAL_CAPACITY][];
-        this.vectorCount = 0;
+        this.vectorCount = new AtomicInteger(0);
     }
 
-    private void ensureCapacity(int ordinal) {
+    // Growth copies the array, so the store must happen under the same lock or a concurrent copy can drop it.
+    private synchronized void set(int ordinal, long[] encoded) {
+        if (ordinal < 0 || ordinal == Integer.MAX_VALUE) {
+            throw new IllegalArgumentException("Ordinal must be between 0 and Integer.MAX_VALUE - 1: " + ordinal);
+        }
         if (ordinal >= compressedVectors.length) {
             int newCapacity = Math.max(ordinal + 1, (int)(compressedVectors.length * GROWTH_FACTOR));
             long[][] newVectors = new long[newCapacity][];
             System.arraycopy(compressedVectors, 0, newVectors, 0, compressedVectors.length);
             compressedVectors = newVectors;
         }
+        compressedVectors[ordinal] = encoded;
+        vectorCount.accumulateAndGet(ordinal + 1, Math::max);
     }
 
     @Override
     public void encodeAndSet(int ordinal, VectorFloat<?> vector) {
-        ensureCapacity(ordinal);
-        compressedVectors[ordinal] = bq.encode(vector);
-        vectorCount = Math.max(vectorCount, ordinal + 1);
+        set(ordinal, bq.encode(vector));
     }
 
     @Override
     public void setZero(int ordinal) {
-        ensureCapacity(ordinal);
-        compressedVectors[ordinal] = new long[bq.compressedVectorSize()];
-        vectorCount = Math.max(vectorCount, ordinal + 1);
+        set(ordinal, new long[bq.compressedVectorSize() / Long.BYTES]);
     }
 
     @Override
     public int count() {
-        return vectorCount;
+        return vectorCount.get();
     }
 }
