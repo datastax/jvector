@@ -43,14 +43,7 @@ abstract class PQDecoder implements ScoreFunction.ApproximateScoreFunction {
             var pq = this.cv.pq;
             partialSums = cv.reusablePartialSums();
 
-            VectorFloat<?> center = pq.globalCentroid;
-            var centeredQuery = center == null ? query : VectorUtil.sub(query, center);
-            for (var i = 0; i < pq.getSubspaceCount(); i++) {
-                int offset = pq.subvectorSizesAndOffsets[i][1];
-                int size = pq.subvectorSizesAndOffsets[i][0];
-                var codebook = pq.codebooks[i];
-                VectorUtil.calculatePartialSums(codebook, i, size, pq.getClusterCount(), centeredQuery, offset, vsf, partialSums);
-            }
+            pq.calculateCenteredPartialSums(query, vsf, partialSums);
         }
 
         protected float decodedSimilarity(ByteSequence<?> encoded, int offset, int length) {
@@ -125,12 +118,7 @@ abstract class PQDecoder implements ScoreFunction.ApproximateScoreFunction {
             VectorFloat<?> center = pq.globalCentroid;
             VectorFloat<?> centeredQuery = center == null ? query : VectorUtil.sub(query, center);
 
-            for (int m = 0; m < pq.getSubspaceCount(); ++m) {
-                int offset = pq.subvectorSizesAndOffsets[m][1];
-                int size = pq.subvectorSizesAndOffsets[m][0];
-                var codebook = pq.codebooks[m];
-                VectorUtil.calculatePartialSums(codebook, m, size, pq.getClusterCount(), centeredQuery, offset, VectorSimilarityFunction.DOT_PRODUCT, partialSums);
-            }
+            pq.calculatePartialSums(centeredQuery, VectorSimilarityFunction.DOT_PRODUCT, partialSums);
 
             this.bMagnitude = VectorUtil.dotProduct(centeredQuery, centeredQuery);
         }

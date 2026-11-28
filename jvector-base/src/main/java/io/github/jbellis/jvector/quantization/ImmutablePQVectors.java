@@ -51,10 +51,10 @@ public class ImmutablePQVectors extends PQVectors {
         retainedBytes = storageBytes();
     }
 
-    /** Cached vector storage, plus the model and the scoring tables created so far. Allocates nothing. */
+    /** Cached vector storage, the centroid-pair tables created so far, and the model. Allocates nothing. */
     @Override
     public long ramBytesUsed() {
-        return retainedBytes + pq.ramBytesUsed();
+        return retainedBytes + pairTableBytes() + pq.ramBytesUsed();
     }
 
     @Override

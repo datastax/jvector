@@ -336,6 +336,17 @@ public final class VectorUtil {
     impl.calculatePartialSums(codebook, codebookIndex, size, clusterCount, query, offset, vsf, partialSums);
   }
 
+  public static boolean supportsTransposedPartialSums() {
+    return impl.supportsTransposedPartialSums();
+  }
+
+  public static void calculatePartialSumsTransposed(VectorFloat<?> transposed, int[] subspaceSizes, int[] subspaceOffsets,
+                                                    int clusterCount, VectorFloat<?> query, VectorFloat<?> center,
+                                                    VectorSimilarityFunction vsf, VectorFloat<?> partialSums) {
+    impl.calculatePartialSumsTransposed(transposed, subspaceSizes, subspaceOffsets, clusterCount, query, center, vsf,
+                                        partialSums);
+  }
+
   public static void calculatePartialSelfMagnitudes(VectorFloat<?> codebook, int codebookIndex, int size, int clusterCount, VectorFloat<?> partialMagnitudes) {
     impl.calculatePartialSelfMagnitudes(codebook, codebookIndex, size, clusterCount, partialMagnitudes);
   }

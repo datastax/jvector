@@ -65,14 +65,7 @@ public abstract class FusedPQDecoder implements ScoreFunction.ApproximateScoreFu
         // in the same loop, so we skip this and compute it in the cosine constructor
         partialSums = pq.reusablePartialSums();
         if (vsf != VectorSimilarityFunction.COSINE) {
-            VectorFloat<?> center = pq.globalCentroid;
-            var centeredQuery = center == null ? query : VectorUtil.sub(query, center);
-            for (var i = 0; i < pq.getSubspaceCount(); i++) {
-                int offset = pq.subvectorSizesAndOffsets[i][1];
-                int size = pq.subvectorSizesAndOffsets[i][0];
-                var codebook = pq.codebooks[i];
-                VectorUtil.calculatePartialSums(codebook, i, size, pq.getClusterCount(), centeredQuery, offset, vsf, partialSums);
-            }
+            pq.calculateCenteredPartialSums(query, vsf, partialSums);
         }
     }
 
@@ -190,12 +183,11 @@ public abstract class FusedPQDecoder implements ScoreFunction.ApproximateScoreFu
             VectorFloat<?> center = pq.globalCentroid;
             float queryMagSum = 0.0f;
             var centeredQuery = center == null ? query : VectorUtil.sub(query, center);
+            // cosine numerator is the same partial sums as if we were using DOT_PRODUCT
+            pq.calculatePartialSums(centeredQuery, VectorSimilarityFunction.DOT_PRODUCT, partialSums);
             for (var i = 0; i < pq.getSubspaceCount(); i++) {
                 int offset = pq.subvectorSizesAndOffsets[i][1];
                 int size = pq.subvectorSizesAndOffsets[i][0];
-                var codebook = pq.codebooks[i];
-                // cosine numerator is the same partial sums as if we were using DOT_PRODUCT
-                VectorUtil.calculatePartialSums(codebook, i, size, pq.getClusterCount(), centeredQuery, offset, VectorSimilarityFunction.DOT_PRODUCT, partialSums);
                 queryMagSum += VectorUtil.dotProduct(centeredQuery, offset, centeredQuery, offset, size);
             }
 

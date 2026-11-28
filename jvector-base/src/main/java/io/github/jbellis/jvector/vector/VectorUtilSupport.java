@@ -453,7 +453,7 @@ public interface VectorUtilSupport {
 
   /**
    * The centroid slot width, in floats, for the codebook layout {@link #pqCodePairSimilarity} reads, given the
-   * narrowest and widest subspace; 0 keeps each subspace's own width.
+   * narrowest and widest subspace; 0 keeps each subspace's own width. A nonzero stride is at least {@code maxWidth}.
    */
   default int pqCodePairStride(int minWidth, int maxWidth) {
     return 0;
@@ -549,6 +549,44 @@ public interface VectorUtilSupport {
   int hammingDistance(long[] v1, long[] v2);
 
   void calculatePartialSums(VectorFloat<?> codebook, int codebookIndex, int size, int clusterCount, VectorFloat<?> query, int offset, VectorSimilarityFunction vsf, VectorFloat<?> partialSums);
+
+  /**
+   * Whether {@link #calculatePartialSumsTransposed} builds query tables faster than calling
+   * {@link #calculatePartialSums} once per subspace.
+   */
+  default boolean supportsTransposedPartialSums() {
+    return false;
+  }
+
+  /**
+   * The whole query table from transposed codebooks: for subspace {@code m}, with {@code subspaceSizes[m]} dimensions
+   * starting at {@code subspaceOffsets[m]}, and centroid {@code c}, {@code partialSums[m * clusterCount + c]} is the
+   * dot product (DOT_PRODUCT) or squared distance (EUCLIDEAN) of the centroid and the query's slice. In
+   * {@code transposed}, subspace {@code m} starts at {@code clusterCount * subspaceOffsets[m]}, and dimension
+   * {@code t} of its centroid {@code c} is at {@code t * clusterCount + c} from there. The query is centered first:
+   * dimension {@code i} is {@code query[i] - center[i]} (pass zeros for an uncentered query).
+   */
+  default void calculatePartialSumsTransposed(VectorFloat<?> transposed, int[] subspaceSizes, int[] subspaceOffsets,
+                                              int clusterCount, VectorFloat<?> query, VectorFloat<?> center,
+                                              VectorSimilarityFunction vsf, VectorFloat<?> partialSums) {
+    boolean dot;
+    switch (vsf) {
+      case DOT_PRODUCT: dot = true; break;
+      case EUCLIDEAN: dot = false; break;
+      default: throw new UnsupportedOperationException("Unsupported similarity function " + vsf);
+    }
+    for (int m = 0; m < subspaceSizes.length; m++) {
+      int size = subspaceSizes[m], offset = subspaceOffsets[m], base = clusterCount * offset;
+      for (int c = 0; c < clusterCount; c++) {
+        float sum = 0;
+        for (int t = 0; t < size; t++) {
+          float x = transposed.get(base + t * clusterCount + c), y = query.get(offset + t) - center.get(offset + t);
+          sum += dot ? x * y : (x - y) * (x - y);
+        }
+        partialSums.set(m * clusterCount + c, sum);
+      }
+    }
+  }
 
   default void calculatePartialSelfMagnitudes(VectorFloat<?> codebook, int codebookIndex, int size, int clusterCount, VectorFloat<?> partialMagnitudes) {
     int codebookBase = codebookIndex * clusterCount;

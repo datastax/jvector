@@ -37,6 +37,7 @@ import java.io.IOException;
 import java.util.Objects;
 import java.util.concurrent.ForkJoinPool;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.concurrent.atomic.AtomicReferenceArray;
 import java.util.function.IntUnaryOperator;
 import java.util.stream.IntStream;
 
@@ -47,9 +48,44 @@ public abstract class PQVectors implements CompressedVectors {
     final ProductQuantization pq;
     protected ByteSequence<?>[] compressedDataChunks;
     protected int vectorsPerChunk;
+    // Centroid-pair tables for diversity scoring in builds, where the model scores pairs by table: index 0 serves dot
+    // product and cosine, index 1 squared distance. Created on first use and kept with these vectors, not the model,
+    // so a model shared with searchers does not keep a build's tables.
+    private final AtomicReferenceArray<VectorFloat<?>> pairTables = new AtomicReferenceArray<>(2);
 
     protected PQVectors(ProductQuantization pq) {
         this.pq = pq;
+    }
+
+    /**
+     * The centroid-pair table for this similarity ({@link ProductQuantization#createCodebookPartialSums}), built on
+     * first use, or null when the model scores pairs from its codebooks.
+     */
+    VectorFloat<?> pairTable(VectorSimilarityFunction similarityFunction) {
+        if (!pq.scoresPairsByTable()) return null;
+        int slot = similarityFunction == VectorSimilarityFunction.EUCLIDEAN ? 1 : 0;
+        VectorFloat<?> table = pairTables.get(slot);
+        if (table != null) return table;
+        // Built once; concurrent first callers wait for it.
+        synchronized (pairTables) {
+            table = pairTables.get(slot);
+            if (table == null) {
+                table = pq.createCodebookPartialSums(similarityFunction);
+                pairTables.set(slot, table);
+            }
+            return table;
+        }
+    }
+
+    /** The centroid-pair tables created so far, with their holder. Allocates nothing. */
+    protected long pairTableBytes() {
+        long bytes = RamUsageEstimator.shallowSizeOf(pairTables)
+                + RamUsageEstimator.sizeOfArray(pairTables.length(), RamUsageEstimator.NUM_BYTES_OBJECT_REF);
+        for (int i = 0; i < pairTables.length(); i++) {
+            VectorFloat<?> table = pairTables.get(i);
+            if (table != null) bytes += table.ramBytesUsed();
+        }
+        return bytes;
     }
 
     /**
@@ -290,12 +326,12 @@ public abstract class PQVectors implements CompressedVectors {
     @Override
     public ScoreFunction.ApproximateScoreFunction diversityFunctionFor(int node1, VectorSimilarityFunction similarityFunction) {
         // A build makes one of these per candidate for a few comparisons, so it does no setup: each comparison
-        // reads the model's centroid-pair table (wide subspaces) or its codebooks.
+        // reads these vectors' centroid-pair table (wide subspaces) or the model's codebooks.
         var node1Chunk = getChunk(node1);
         var node1Offset = getOffsetInChunk(node1);
         // The table path is a separate copy of the switch below, so each lambda calls one scorer and stays small
         // enough for the JIT to inline.
-        var table = pq.pairTable(similarityFunction);
+        var table = pairTable(similarityFunction);
         if (table != null) return tableDiversityFunctionFor(node1Chunk, node1Offset, similarityFunction, table);
         var layout = pq.codebookLayout();
         int clusterCount = pq.getClusterCount();
@@ -335,7 +371,7 @@ public abstract class PQVectors implements CompressedVectors {
         }
     }
 
-    /** The same scores from the model's centroid-pair table: one lookup per subspace for each pair. */
+    /** The same scores from a centroid-pair table: one lookup per subspace for each pair. */
     private ScoreFunction.ApproximateScoreFunction tableDiversityFunctionFor(ByteSequence<?> node1Chunk, int node1Offset,
                                                                              VectorSimilarityFunction similarityFunction,
                                                                              VectorFloat<?> table) {
@@ -487,12 +523,12 @@ public abstract class PQVectors implements CompressedVectors {
     }
 
     /**
-     * Retained vector storage plus the compressor's model ({@link ProductQuantization#ramBytesUsed()}).
-     * Built-in subclasses cache the storage part and add their scoring tables once created.
+     * Retained vector storage, the centroid-pair tables created so far and the compressor's model
+     * ({@link ProductQuantization#ramBytesUsed()}). Built-in subclasses cache the storage part.
      */
     @Override
     public long ramBytesUsed() {
-        return pq.ramBytesUsed() + storageBytes();
+        return pq.ramBytesUsed() + storageBytes() + pairTableBytes();
     }
 
     /**
