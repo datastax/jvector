@@ -45,7 +45,13 @@ abstract class ASHScoreScale {
      */
     abstract float squaredDistancePerEstimate();
 
+    /**
+     * @param unit the model's distance unit; positive and finite, so the factor kernels receive is negative and finite
+     *             (checked once here rather than on each neighborhood call)
+     */
     static ASHScoreScale euclidean(float unit) {
+        if (!(unit > 0f) || Float.isInfinite(unit))
+            throw new IllegalArgumentException("A EUCLIDEAN unit must be positive and finite, got " + unit);
         return new Euclidean(unit);
     }
 

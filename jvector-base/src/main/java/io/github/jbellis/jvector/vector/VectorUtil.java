@@ -268,6 +268,14 @@ public final class VectorUtil {
     return impl.assembleAndSum(data, dataBase, dataOffsets, dataOffsetsOffset, dataOffsetsLength);
   }
 
+  public static int pqCodePairStride(int minWidth, int maxWidth) {
+    return impl.pqCodePairStride(minWidth, maxWidth);
+  }
+
+  public static boolean pqCodePairUsesTable(int minWidth) {
+    return impl.pqCodePairUsesTable(minWidth);
+  }
+
   public static float pqCodePairSimilarity(boolean dot, VectorFloat<?> codebooks, int clusterCount,
                                           int[] subspaceOffsets, int[] subspaceWidths, int minWidth, int maxWidth, int[] dimBase,
                                           ByteSequence<?> code1, int offset1, ByteSequence<?> code2, int offset2) {
@@ -326,6 +334,17 @@ public final class VectorUtil {
 
   public static void calculatePartialSums(VectorFloat<?> codebook, int codebookIndex, int size, int clusterCount, VectorFloat<?> query, int offset, VectorSimilarityFunction vsf, VectorFloat<?> partialSums) {
     impl.calculatePartialSums(codebook, codebookIndex, size, clusterCount, query, offset, vsf, partialSums);
+  }
+
+  public static boolean supportsTransposedPartialSums() {
+    return impl.supportsTransposedPartialSums();
+  }
+
+  public static void calculatePartialSumsTransposed(VectorFloat<?> transposed, int[] subspaceSizes, int[] subspaceOffsets,
+                                                    int clusterCount, VectorFloat<?> query, VectorFloat<?> center,
+                                                    VectorSimilarityFunction vsf, VectorFloat<?> partialSums) {
+    impl.calculatePartialSumsTransposed(transposed, subspaceSizes, subspaceOffsets, clusterCount, query, center, vsf,
+                                        partialSums);
   }
 
   public static void calculatePartialSelfMagnitudes(VectorFloat<?> codebook, int codebookIndex, int size, int clusterCount, VectorFloat<?> partialMagnitudes) {

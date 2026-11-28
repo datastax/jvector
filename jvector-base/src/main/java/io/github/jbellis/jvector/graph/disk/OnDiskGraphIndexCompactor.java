@@ -2281,7 +2281,7 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
 
     /**
      * Per-query PQ lookup-table scorer over the merged pre-encode cache: the query's partial sums
-     * over the codebooks ({@link VectorUtil#calculatePartialSums}), assembled per source-graph
+     * over the codebooks ({@link ProductQuantization#calculatePartialSums}), assembled per source-graph
      * node from its cached code. Similarity conversion mirrors {@link VectorSimilarityFunction}:
      * DOT_PRODUCT (1+dot)/2, EUCLIDEAN 1/(1+d^2).
      */
@@ -2308,12 +2308,7 @@ public final class OnDiskGraphIndexCompactor implements Accountable {
             }
         }
         final VectorFloat<?> partialSums = vectorTypeSupport.createFloatVector(msub * clusters);
-        int queryOffset = 0;
-        for (int m = 0; m < msub; m++) {
-            int sz = pq.getSubvectorSize(m);
-            VectorUtil.calculatePartialSums(pq.getCodebookVector(m), m, sz, clusters, q, queryOffset, f, partialSums);
-            queryOffset += sz;
-        }
+        pq.calculatePartialSums(q, f, partialSums);
         final ByteSequence<?> code = vectorTypeSupport.createByteSequence(cache.codeSize());
         final byte[] codeBytes = code.get() instanceof byte[] ? (byte[]) code.get() : new byte[cache.codeSize()];
         final float constant = dotConstant;

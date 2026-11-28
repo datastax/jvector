@@ -55,10 +55,10 @@ public class MutablePQVectors extends PQVectors implements MutableCompressedVect
                 + RamUsageEstimator.shallowSizeOf(compressedDataChunks);
     }
 
-    /** Cached vector storage plus the model's live total. */
+    /** Cached vector storage, the centroid-pair tables created so far and the model's live total. */
     @Override
     public long ramBytesUsed() {
-        return retainedBytes + pq.ramBytesUsed();
+        return retainedBytes + pairTableBytes() + pq.ramBytesUsed();
     }
 
     @Override

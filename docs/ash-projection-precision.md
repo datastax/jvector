@@ -19,6 +19,7 @@ instructions the processor supports:
 | x86-64 with AVX-VNNI, without AVX-512 | INT8 through the oneDNN add-on | Without the add-on, `auto` uses FP32. |
 | x86-64 without VNNI | FP32 | |
 | AArch64 | FP32 | |
+| Panama or scalar provider | FP32 | `int8` and `fp16` run in Java there, more slowly than FP32; the native provider is recommended for ASH. |
 
 To require INT8 and fail if it is unavailable, rather than fall back:
 

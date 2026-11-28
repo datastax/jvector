@@ -26,6 +26,10 @@ import jdk.incubator.vector.VectorOperators;
  * a native call per tiny distance and generic vector load/return boundaries.
  */
 final class NativeKMeansInitialization {
+    // Constants, not locals, so every compile (OSR included) sees the exact vector classes.
+    private static final Class<?> FLOAT_256_CLASS = FloatVector.SPECIES_256.vectorType();
+    private static final Class<?> PREFERRED_CLASS = FloatVector.SPECIES_PREFERRED.vectorType();
+
     static boolean update(VectorFloat<?>[] points, VectorFloat<?> centroid,
                                  VectorFloat<?> minima, VectorFloat<?> scratch) {
         if (!(centroid instanceof MemorySegmentVectorFloat c) || c.length() != 8
@@ -34,24 +38,21 @@ final class NativeKMeansInitialization {
         if (m.length() != points.length || s.length() != points.length)
             throw new IllegalArgumentException("Distance vector lengths");
         float[] center = c.array(), distances = m.array(), next = s.array();
-        var type = FloatVector.SPECIES_256.vectorType();
         // Match the Panama 8D arithmetic: subtraction, multiplication and reduceLanes.
         // Reduction order can differ from Highway's native distance kernel.
         for (int i = 0; i < points.length; i++) {
             float[] point = ((MemorySegmentVectorFloat) points[i]).array();
             if (point.length != 8) throw new IllegalArgumentException("Point dimensions differ from centroid");
-            var a = (FloatVector) type.cast(FloatVector.fromArray(FloatVector.SPECIES_256, point, 0));
-            var b = (FloatVector) type.cast(FloatVector.fromArray(FloatVector.SPECIES_256, center, 0));
-            var diff = (FloatVector) type.cast(a.sub(b));
-            next[i] = ((FloatVector) type.cast(diff.mul(diff))).reduceLanes(VectorOperators.ADD);
+            var a = (FloatVector) FLOAT_256_CLASS.cast(FloatVector.fromArray(FloatVector.SPECIES_256, point, 0));
+            var b = (FloatVector) FLOAT_256_CLASS.cast(FloatVector.fromArray(FloatVector.SPECIES_256, center, 0));
+            var diff = (FloatVector) FLOAT_256_CLASS.cast(a.lanewise(VectorOperators.SUB, b));
+            next[i] = ((FloatVector) FLOAT_256_CLASS.cast(diff.lanewise(VectorOperators.MUL, diff))).reduceLanes(VectorOperators.ADD);
         }
-        var preferred = FloatVector.SPECIES_PREFERRED;
-        var preferredType = preferred.vectorType();
-        int bound = preferred.loopBound(points.length), i = 0;
-        for (; i < bound; i += preferred.length()) {
-            var a = (FloatVector) preferredType.cast(FloatVector.fromArray(preferred, distances, i));
-            var b = (FloatVector) preferredType.cast(FloatVector.fromArray(preferred, next, i));
-            ((FloatVector) preferredType.cast(a.min(b))).intoArray(distances, i);
+        int bound = FloatVector.SPECIES_PREFERRED.loopBound(points.length), i = 0;
+        for (; i < bound; i += FloatVector.SPECIES_PREFERRED.length()) {
+            var a = (FloatVector) PREFERRED_CLASS.cast(FloatVector.fromArray(FloatVector.SPECIES_PREFERRED, distances, i));
+            var b = (FloatVector) PREFERRED_CLASS.cast(FloatVector.fromArray(FloatVector.SPECIES_PREFERRED, next, i));
+            ((FloatVector) PREFERRED_CLASS.cast(a.lanewise(VectorOperators.MIN, b))).intoArray(distances, i);
         }
         for (; i < points.length; i++) distances[i] = Math.min(distances[i], next[i]);
         return true;

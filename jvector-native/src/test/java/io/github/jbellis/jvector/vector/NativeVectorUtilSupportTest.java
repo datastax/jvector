@@ -190,4 +190,91 @@ class NativeVectorUtilSupportTest {
             assertEquals(expected[i], actual.get(i));
         }
     }
+
+    /** The C transposed-codebook table matches the scalar per-subspace table, for even and uneven splits. */
+    @Test
+    void transposedPartialSumsMatchScalar() {
+        requireNativeProvider();
+        var scalar = new DefaultVectorUtilSupport();
+        var heap = new ArrayVectorProvider();
+        java.util.Random random = new java.util.Random(1701);
+        int[][] splits = {{2, 2, 2, 2}, {4, 4, 4}, {8, 8, 8}, {16, 16}, {32}, {3, 3, 2}, {7, 9, 1}, {24, 25}, {1}};
+        for (int[] split : splits) {
+            for (int k : new int[]{256, 64, 16, 10, 100, 1}) {
+                for (var vsf : new VectorSimilarityFunction[]{VectorSimilarityFunction.DOT_PRODUCT, VectorSimilarityFunction.EUCLIDEAN}) {
+                    int dimension = java.util.Arrays.stream(split).sum();
+                    int[][] sizesAndOffsets = new int[split.length][];
+                    for (int m = 0, offset = 0; m < split.length; offset += split[m], m++) sizesAndOffsets[m] = new int[]{split[m], offset};
+                    int[] sizes = java.util.Arrays.stream(sizesAndOffsets).mapToInt(x -> x[0]).toArray();
+                    int[] offsets = java.util.Arrays.stream(sizesAndOffsets).mapToInt(x -> x[1]).toArray();
+                    float[] transposed = new float[k * dimension];
+                    var codebooks = new VectorFloat<?>[split.length];
+                    for (int m = 0; m < split.length; m++) {
+                        int size = split[m], base = k * sizesAndOffsets[m][1];
+                        codebooks[m] = heap.createFloatVector(k * size);
+                        for (int c = 0; c < k; c++) {
+                            for (int d = 0; d < size; d++) {
+                                float x = (float) random.nextGaussian();
+                                codebooks[m].set(c * size + d, x);
+                                transposed[base + d * k + c] = x;
+                            }
+                        }
+                    }
+                    float[] query = new float[dimension], center = new float[dimension], centered = new float[dimension];
+                    for (int i = 0; i < dimension; i++) {
+                        query[i] = (float) random.nextGaussian();
+                        center[i] = (float) random.nextGaussian();
+                        centered[i] = query[i] - center[i];
+                    }
+                    var expected = heap.createFloatVector(split.length * k);
+                    for (int m = 0; m < split.length; m++) {
+                        scalar.calculatePartialSums(codebooks[m], m, split[m], k, heap.createFloatVector(centered),
+                                                    sizesAndOffsets[m][1], vsf, expected);
+                    }
+                    var actual = types.createFloatVector(split.length * k);
+                    support.calculatePartialSumsTransposed(types.createFloatVector(transposed), sizes, offsets, k,
+                                                           types.createFloatVector(query), types.createFloatVector(center),
+                                                           vsf, actual);
+                    for (int i = 0; i < actual.length(); i++) {
+                        float e = expected.get(i);
+                        assertEquals(e, actual.get(i), 1e-5f * Math.max(1f, Math.abs(e)),
+                                     vsf + " split=" + java.util.Arrays.toString(split) + " k=" + k + " i=" + i);
+                    }
+                }
+            }
+        }
+    }
+
+    /** The table kernel reads no bounds itself, so every argument is checked before the downcall. */
+    @Test
+    void transposedPartialSumsRejectBadArguments() {
+        int k = 4;
+        var transposed = types.createFloatVector(k * 8);
+        var query = types.createFloatVector(8);
+        var center = types.createFloatVector(8);
+        var out = types.createFloatVector(k * 2);
+        var dot = VectorSimilarityFunction.DOT_PRODUCT;
+        int[] sizes = {4, 4}, offsets = {0, 4};
+        // Valid arguments pass the checks (the call itself needs the native library, as every test here does).
+        support.calculatePartialSumsTransposed(transposed, sizes, offsets, k, query, center, dot, out);
+        assertThrows(IllegalArgumentException.class, () -> support.calculatePartialSumsTransposed(
+                transposed, sizes, new int[]{0}, k, query, center, dot, out));
+        assertThrows(IllegalArgumentException.class, () -> support.calculatePartialSumsTransposed(
+                transposed, new int[]{4, -1}, offsets, k, query, center, dot, out));
+        assertThrows(IllegalArgumentException.class, () -> support.calculatePartialSumsTransposed(
+                transposed, sizes, new int[]{0, -4}, k, query, center, dot, out));
+        // A size plus offset past Integer.MAX_VALUE must not wrap around the length checks.
+        assertThrows(IndexOutOfBoundsException.class, () -> support.calculatePartialSumsTransposed(
+                transposed, new int[]{4, Integer.MAX_VALUE}, new int[]{0, 4}, k, query, center, dot, out));
+        assertThrows(IndexOutOfBoundsException.class, () -> support.calculatePartialSumsTransposed(
+                transposed, sizes, offsets, k, types.createFloatVector(7), center, dot, out));
+        assertThrows(IndexOutOfBoundsException.class, () -> support.calculatePartialSumsTransposed(
+                transposed, sizes, offsets, k, query, types.createFloatVector(7), dot, out));
+        assertThrows(IndexOutOfBoundsException.class, () -> support.calculatePartialSumsTransposed(
+                types.createFloatVector(k * 8 - 1), sizes, offsets, k, query, center, dot, out));
+        assertThrows(IndexOutOfBoundsException.class, () -> support.calculatePartialSumsTransposed(
+                transposed, sizes, offsets, k, query, center, dot, types.createFloatVector(k * 2 - 1)));
+        assertThrows(UnsupportedOperationException.class, () -> support.calculatePartialSumsTransposed(
+                transposed, sizes, offsets, k, query, center, VectorSimilarityFunction.COSINE, out));
+    }
 }
